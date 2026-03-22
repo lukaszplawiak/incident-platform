@@ -1,0 +1,45 @@
+# Maven
+target/
+*.jar
+*.war
+*.ear
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+*.iws
+.classpath
+.project
+.settings/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Spring Boot
+application-local.yml
+application-secrets.yml
+
+# Env files — nigdy nie commituj sekretów
+.env
+.env.local
+*.env
+
+# Docker
+docker/data/
+
+# Node (frontend)
+frontend/node_modules/
+frontend/dist/
+frontend/.next/
+
+# GCP credentials — NIGDY nie commituj
+*.json
+!*-schema.json
+!package*.json
