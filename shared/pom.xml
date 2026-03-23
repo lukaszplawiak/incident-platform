@@ -15,39 +15,28 @@
     <packaging>jar</packaging>
     <name>Shared — common domain events, security utils, test base classes</name>
 
-    <!-- ================================================================
-         UWAGA: shared to biblioteka, NIE Spring Boot aplikacja
-         Dlatego NIE ma spring-boot-maven-plugin ani @SpringBootApplication
-         Każdy serwis importuje shared jako zależność
-    ================================================================ -->
-
     <dependencies>
 
-        <!-- Spring context — dla @Component, @Configuration itp. -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-context</artifactId>
         </dependency>
 
-        <!-- Spring Web — dla FilterChain, HttpServletRequest w filtrach -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-web</artifactId>
         </dependency>
 
-        <!-- Spring Security Core — dla SecurityContextHolder w filtrach -->
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-core</artifactId>
         </dependency>
 
-        <!-- Spring Security Web — dla OncePerRequestFilter -->
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-web</artifactId>
         </dependency>
 
-        <!-- Jackson — serializacja/deserializacja eventów Kafki -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
@@ -57,7 +46,6 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
 
-        <!-- JWT — utils do walidacji tokenów -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>
@@ -73,28 +61,20 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Kafka — dla ProducerInterceptor, ConsumerInterceptor -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka</artifactId>
         </dependency>
 
-        <!-- Validation API — @NotNull, @NotBlank na Records -->
         <dependency>
             <groupId>jakarta.validation</groupId>
             <artifactId>jakarta.validation-api</artifactId>
         </dependency>
 
-        <!-- ============================================================
-             TEST dependencies
-        ============================================================ -->
-
-        <!-- Testcontainers — base classes dla testów integracyjnych -->
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
             <scope>compile</scope>
-            <!-- compile scope bo serwisy dziedziczą base class w test scope -->
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
@@ -107,7 +87,6 @@
             <scope>compile</scope>
         </dependency>
 
-        <!-- Spring Kafka Test — EmbeddedKafka dla szybkich testów -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka-test</artifactId>
@@ -118,7 +97,6 @@
 
     <build>
         <plugins>
-            <!-- shared to biblioteka — nie budujemy fat JAR -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
