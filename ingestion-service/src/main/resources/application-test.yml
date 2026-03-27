@@ -1,0 +1,27 @@
+spring:
+  kafka:
+    producer:
+      properties:
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 10000
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      connect-timeout: 1s
+      timeout: 500ms
+
+logging:
+  level:
+    com.incidentplatform: DEBUG
+    org.springframework.security: WARN
+    org.apache.kafka: WARN
+    org.testcontainers: INFO
+    com.github.dockerjava: WARN
+
+deduplication:
+  ttl-minutes: 1
+
+server:
+  port: 0
