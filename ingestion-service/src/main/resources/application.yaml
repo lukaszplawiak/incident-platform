@@ -40,6 +40,12 @@ jwt:
 kafka:
   topics:
     alerts-raw: alerts.raw
+    alerts-resolved: alerts.resolved
+    alerts-dead-letter: alerts.dead-letter
+
+ingestion:
+  prometheus:
+    max-batch-size: ${PROMETHEUS_MAX_BATCH_SIZE:500}
 
 deduplication:
   ttl-minutes: ${DEDUP_TTL_MINUTES:5}
