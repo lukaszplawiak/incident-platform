@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_normalizer;
+package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
@@ -41,6 +41,8 @@ public class WazuhNormalizer extends BaseNormalizer {
         final Map<String, String> metadata = buildMetadata(
                 ruleId, agentName, agentId, rule, rawPayload);
 
+        final String fingerprint = buildFingerprint(ruleId, agentId);
+
         log.info("Wazuh alert normalized: ruleId={}, level={}, severity={}, " +
                 "agent={}, tenant={}", ruleId, level, severity, agentName, tenantId);
 
@@ -53,6 +55,7 @@ public class WazuhNormalizer extends BaseNormalizer {
                 title,
                 ruleDescription,
                 firedAt,
+                fingerprint,
                 metadata
         )));
     }

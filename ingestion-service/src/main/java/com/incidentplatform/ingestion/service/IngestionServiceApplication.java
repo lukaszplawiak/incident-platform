@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_service;
+package com.incidentplatform.ingestion.service;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
