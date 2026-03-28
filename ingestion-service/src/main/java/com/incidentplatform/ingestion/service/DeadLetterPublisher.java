@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_service;
+package com.incidentplatform.ingestion.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;

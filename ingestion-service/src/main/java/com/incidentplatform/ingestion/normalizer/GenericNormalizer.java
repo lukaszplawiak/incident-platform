@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_normalizer;
+package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
@@ -39,6 +39,8 @@ public class GenericNormalizer extends BaseNormalizer {
         log.info("Generic alert normalized: source={}, severity={}, tenant={}",
                 source, severity, tenantId);
 
+        final String fingerprint = buildFingerprint(title);
+
         return NormalizationResult.firingOnly(List.of(new UnifiedAlertDto(
                 UUID.randomUUID(),
                 tenantId,
@@ -48,6 +50,7 @@ public class GenericNormalizer extends BaseNormalizer {
                 title,
                 description,
                 firedAt,
+                fingerprint,
                 metadata
         )));
     }
