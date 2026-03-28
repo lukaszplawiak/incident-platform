@@ -49,26 +49,19 @@ public record UnifiedAlertDto(
         @NotNull
         Instant firedAt,
 
+        @JsonProperty("fingerprint")
+        @NotBlank
+        String fingerprint,
+
         @JsonProperty("metadata")
         Map<String, String> metadata
 
 ) {
     public UnifiedAlertDto {
-        if (alertId == null) {
-            alertId = UUID.randomUUID();
-        }
-
-        if (title != null) {
-            title = title.trim();
-        }
-
-        if (severity != null) {
-            severity = severity.toUpperCase();
-        }
-
-        if (source != null) {
-            source = source.toLowerCase();
-        }
+        if (alertId == null) alertId = UUID.randomUUID();
+        if (title != null) title = title.trim();
+        if (severity != null) severity = severity.toUpperCase();
+        if (source != null) source = source.toLowerCase();
 
         if (metadata != null) {
             metadata = Collections.unmodifiableMap(Map.copyOf(metadata));

@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_normalizer;
+package com.incidentplatform.ingestion.normalizer;
 
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
