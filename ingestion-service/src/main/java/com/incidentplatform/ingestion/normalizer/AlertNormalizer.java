@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_normalizer;
+package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
