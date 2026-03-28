@@ -62,11 +62,44 @@ public class GlobalExceptionHandler {
                 ));
     }
 
+    @ExceptionHandler(RuntimeException.class)
+    public ResponseEntity<ErrorResponse> handleIngestionExceptions(
+            RuntimeException ex) {
+
+        final String className = ex.getClass().getSimpleName();
+
+        if ("NormalizationException".equals(className)) {
+            log.warn("Alert normalization failed: {}", ex.getMessage());
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(ErrorResponse.of(
+                            HttpStatus.BAD_REQUEST.value(),
+                            "NORMALIZATION_FAILED",
+                            ex.getMessage(),
+                            getRequestId()
+                    ));
+        }
+
+        if ("UnknownSourceException".equals(className)) {
+            log.warn("Unknown alert source: {}", ex.getMessage());
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(ErrorResponse.of(
+                            HttpStatus.BAD_REQUEST.value(),
+                            "UNKNOWN_ALERT_SOURCE",
+                            ex.getMessage(),
+                            getRequestId()
+                    ));
+        }
+
+        throw ex;
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationErrors(
             MethodArgumentNotValidException ex) {
 
-        List<ErrorResponse.ValidationError> errors = ex.getBindingResult()
+        final List<ErrorResponse.ValidationError> errors = ex.getBindingResult()
                 .getFieldErrors()
                 .stream()
                 .map(this::toValidationError)
@@ -85,7 +118,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleConstraintViolation(
             ConstraintViolationException ex) {
 
-        List<ErrorResponse.ValidationError> errors = ex.getConstraintViolations()
+        final List<ErrorResponse.ValidationError> errors = ex.getConstraintViolations()
                 .stream()
                 .map(violation -> new ErrorResponse.ValidationError(
                         violation.getPropertyPath().toString(),
@@ -166,14 +199,14 @@ public class GlobalExceptionHandler {
     }
 
     private String getRequestId() {
-        String requestId = MDC.get("requestId");
+        final String requestId = MDC.get("requestId");
         return requestId != null ? requestId : "unknown";
     }
 
     private ErrorResponse.ValidationError toValidationError(FieldError fieldError) {
-        String fieldName = fieldError.getField();
+        final String fieldName = fieldError.getField();
 
-        String rejectedValue = isSensitiveField(fieldName)
+        final String rejectedValue = isSensitiveField(fieldName)
                 ? "[REDACTED]"
                 : fieldError.getRejectedValue() != null
                 ? fieldError.getRejectedValue().toString()
@@ -188,7 +221,7 @@ public class GlobalExceptionHandler {
 
     private boolean isSensitiveField(String fieldName) {
         if (fieldName == null) return false;
-        String lowerField = fieldName.toLowerCase();
+        final String lowerField = fieldName.toLowerCase();
         return SENSITIVE_FIELD_NAMES.stream()
                 .anyMatch(lowerField::contains);
     }
