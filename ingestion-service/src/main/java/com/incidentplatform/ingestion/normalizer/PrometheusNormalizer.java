@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_normalizer;
+package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
@@ -101,6 +101,10 @@ public class PrometheusNormalizer extends BaseNormalizer {
         final Instant firedAt = parseInstant(getText(alert, "startsAt", null));
         final Map<String, String> metadata = extractMetadata(labels);
 
+        final String instance = getText(labels, "instance",
+                getText(labels, "job", "unknown"));
+        final String fingerprint = buildFingerprint(alertName, instance);
+
         log.debug("Prometheus firing alert[{}] normalized: alertName={}, severity={}",
                 index, alertName, severity);
 
@@ -113,6 +117,7 @@ public class PrometheusNormalizer extends BaseNormalizer {
                 title,
                 description,
                 firedAt,
+                fingerprint,
                 metadata
         );
     }
@@ -128,9 +133,9 @@ public class PrometheusNormalizer extends BaseNormalizer {
         }
 
         final String alertName = getTextOrThrow(labels, "alertname");
-
-        final String fingerprint = buildFingerprint(alertName);
-
+        final String instance = getText(labels, "instance",
+                getText(labels, "job", "unknown"));
+        final String fingerprint = buildFingerprint(alertName, instance);
         final Instant resolvedAt = parseInstant(getText(alert, "endsAt", null));
 
         log.debug("Prometheus resolved alert[{}] normalized: alertName={}, " +
