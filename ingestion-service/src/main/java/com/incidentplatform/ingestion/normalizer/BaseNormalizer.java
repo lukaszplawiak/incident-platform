@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_normalizer;
+package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
@@ -22,7 +22,6 @@ public abstract class BaseNormalizer implements AlertNormalizer {
 
     protected String getText(JsonNode node, String field, String defaultValue) {
         if (node == null) return defaultValue;
-        // final — value nie będzie reassignowany
         final JsonNode value = node.get(field);
         if (value == null || value.isNull() || value.asText().isBlank()) {
             return defaultValue;
@@ -46,8 +45,13 @@ public abstract class BaseNormalizer implements AlertNormalizer {
         }
     }
 
-    protected String buildFingerprint(String alertIdentifier) {
-        return String.format("%s:%s", getSourceName(), alertIdentifier);
+    protected String buildFingerprint(String... parts) {
+        final StringBuilder sb = new StringBuilder(getSourceName());
+        for (final String part : parts) {
+            sb.append(":");
+            sb.append(part != null ? part.toLowerCase().trim() : "unknown");
+        }
+        return sb.toString();
     }
 
     protected boolean isMissingOrNotObject(JsonNode node) {

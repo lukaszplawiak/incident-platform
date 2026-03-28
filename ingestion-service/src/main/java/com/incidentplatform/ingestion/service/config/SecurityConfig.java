@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion_service.config;
+package com.incidentplatform.ingestion.service.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import org.springframework.context.annotation.Bean;
