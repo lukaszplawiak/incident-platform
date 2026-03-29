@@ -1,4 +1,4 @@
-package com.incidentplatform.incident_service;
+package com.incidentplatform.incident;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
