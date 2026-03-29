@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion.service;
+package com.incidentplatform.ingestion;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -6,7 +6,7 @@ import org.springframework.context.annotation.ComponentScan;
 
 @SpringBootApplication
 @ComponentScan(basePackages = {
-		"com.incidentplatform.ingestion_service",
+		"com.incidentplatform.ingestion",
 		"com.incidentplatform.shared"
 })
 public class IngestionServiceApplication {
