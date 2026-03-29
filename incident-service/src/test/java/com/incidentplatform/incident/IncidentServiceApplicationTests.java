@@ -1,4 +1,4 @@
-package com.incidentplatform.incident_service;
+package com.incidentplatform.incident;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
