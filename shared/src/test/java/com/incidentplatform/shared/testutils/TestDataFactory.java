@@ -40,6 +40,7 @@ public final class TestDataFactory {
                 "High CPU usage on prod-server-1",
                 "CPU usage exceeded 95% for 5 minutes on instance prod-server-1:9100",
                 Instant.now().minusSeconds(60),
+                "prometheus:highcpuusage:prod-server-1:9100",
                 Map.of(
                         "job", "node-exporter",
                         "instance", "prod-server-1:9100",
@@ -58,6 +59,7 @@ public final class TestDataFactory {
                 "Multiple failed SSH login attempts detected",
                 "Brute force attack detected: 50 failed attempts from 192.168.1.100",
                 Instant.now().minusSeconds(30),
+                "wazuh:5551:003",
                 Map.of(
                         "rule_id", "5551",
                         "agent_name", "web-server-01",
@@ -76,6 +78,8 @@ public final class TestDataFactory {
                 "Test alert with severity: " + severity,
                 null,
                 Instant.now(),
+                "prometheus:test-alert-with-severity-" + severity.toLowerCase()
+                        + ":unknown",
                 Map.of()
         );
     }
@@ -90,6 +94,7 @@ public final class TestDataFactory {
                 "Alert for tenant: " + tenantId,
                 null,
                 Instant.now(),
+                "prometheus:alert-for-tenant-" + tenantId + ":unknown",
                 Map.of()
         );
     }
