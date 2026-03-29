@@ -1,12 +1,5 @@
 version: '3.9'
 
-# ============================================================
-# Incident Platform — lokalne środowisko deweloperskie
-#
-# Uruchomienie: make dev-up
-# Reset (czysta baza): make dev-reset
-# ============================================================
-
 services:
 
   # ----------------------------------------------------------
@@ -50,22 +43,23 @@ services:
       retries: 5
 
   # ----------------------------------------------------------
-  # Apache Kafka (KRaft mode — bez Zookeepera, Kafka 3.7+)
+  # Apache Kafka (Kafka 3.7+)
   # ----------------------------------------------------------
   kafka:
     image: apache/kafka:3.7.0
     container_name: incident-kafka
     restart: unless-stopped
     ports:
-      - "9092:9092"      # external (aplikacje Spring Boot)
-      - "9093:9093"      # internal (między kontenerami)
+      - "9092:9092"
+      - "9093:9093"
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: EXTERNAL://:9092,INTERNAL://:9094,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: EXTERNAL://localhost:9092,INTERNAL://kafka:9094
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: EXTERNAL:PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -76,15 +70,14 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1" ]
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 30s
 
   # ----------------------------------------------------------
-  # Kafka UI — przeglądarka topiców i wiadomości
-  # Dostępna na: http://localhost:8090
+  # Kafka UI
   # ----------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -94,14 +87,13 @@ services:
       - "8090:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9094
     depends_on:
       kafka:
         condition: service_healthy
 
   # ----------------------------------------------------------
-  # pgAdmin — przeglądarka bazy danych
-  # Dostępna na: http://localhost:5050
+  # pgAdmin: http://localhost:5050
   # Login: admin@incident.local / admin
   # ----------------------------------------------------------
   pgadmin:
