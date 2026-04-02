@@ -34,34 +34,25 @@ public class IncidentKafkaConsumer {
     )
     public void consumeAlert(ConsumerRecord<String, String> record,
                              Acknowledgment acknowledgment) {
-        log.debug("Received alert from Kafka: topic={}, partition={}, offset={}",
+        log.debug("Received alert: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        try {
-            final UnifiedAlertDto alert = objectMapper.readValue(
-                    record.value(), UnifiedAlertDto.class);
+        final UnifiedAlertDto alert = deserialize(record.value(),
+                UnifiedAlertDto.class);
 
-            final String tenantId = TenantContext.get();
+        final String tenantId = TenantContext.get();
 
-            log.info("Processing firing alert: alertId={}, fingerprint={}, " +
-                            "severity={}, source={}, tenant={}",
-                    alert.alertId(), alert.fingerprint(),
-                    alert.severity(), alert.source(), tenantId);
+        log.info("Processing firing alert: alertId={}, fingerprint={}, " +
+                        "severity={}, source={}, tenant={}",
+                alert.alertId(), alert.fingerprint(),
+                alert.severity(), alert.source(), tenantId);
 
-            commandService.createFromAlert(alert, tenantId);
+        commandService.createFromAlert(alert, tenantId);
 
-            acknowledgment.acknowledge();
+        acknowledgment.acknowledge();
 
-        } catch (Exception e) {
-            log.error("Failed to process alert from Kafka: topic={}, partition={}, " +
-                            "offset={}, key={}. Error: {}",
-                    record.topic(), record.partition(), record.offset(),
-                    record.key(), e.getMessage(), e);
-
-            // ACK mimo błędu — nie blokuj partycji
-            // TODO Enterprise #2: wysyłaj na DLQ zamiast ignorować
-            acknowledgment.acknowledge();
-        }
+        log.info("Alert processed successfully: alertId={}, tenant={}",
+                alert.alertId(), tenantId);
     }
 
     @KafkaListener(
@@ -71,29 +62,32 @@ public class IncidentKafkaConsumer {
     )
     public void consumeResolvedAlert(ConsumerRecord<String, String> record,
                                      Acknowledgment acknowledgment) {
-        log.debug("Received resolved alert from Kafka: topic={}, partition={}, " +
-                "offset={}", record.topic(), record.partition(), record.offset());
+        log.debug("Received resolved alert: topic={}, partition={}, offset={}",
+                record.topic(), record.partition(), record.offset());
 
+        final ResolvedAlertNotification notification = deserialize(
+                record.value(), ResolvedAlertNotification.class);
+
+        final String tenantId = TenantContext.get();
+
+        log.info("Processing resolved alert: fingerprint={}, source={}, tenant={}",
+                notification.alertFingerprint(), notification.source(), tenantId);
+
+        commandService.autoResolve(notification, tenantId);
+
+        acknowledgment.acknowledge();
+
+        log.info("Resolved alert processed: fingerprint={}, tenant={}",
+                notification.alertFingerprint(), tenantId);
+    }
+
+    private <T> T deserialize(String json, Class<T> type) {
         try {
-            final ResolvedAlertNotification notification = objectMapper.readValue(
-                    record.value(), ResolvedAlertNotification.class);
-
-            final String tenantId = TenantContext.get();
-
-            log.info("Processing resolved alert: fingerprint={}, source={}, tenant={}",
-                    notification.alertFingerprint(), notification.source(), tenantId);
-
-            commandService.autoResolve(notification, tenantId);
-
-            acknowledgment.acknowledge();
-
+            return objectMapper.readValue(json, type);
         } catch (Exception e) {
-            log.error("Failed to process resolved alert from Kafka: topic={}, " +
-                            "partition={}, offset={}. Error: {}",
-                    record.topic(), record.partition(), record.offset(),
-                    e.getMessage(), e);
-
-            acknowledgment.acknowledge();
+            throw new IllegalArgumentException(
+                    String.format("Failed to deserialize Kafka message to %s: %s",
+                            type.getSimpleName(), e.getMessage()), e);
         }
     }
 }
