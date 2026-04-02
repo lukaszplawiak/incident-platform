@@ -134,12 +134,17 @@ public class Incident {
             case ACKNOWLEDGED -> this.acknowledgedAt = Instant.now();
             case RESOLVED -> this.resolvedAt = Instant.now();
             case CLOSED -> this.closedAt = Instant.now();
-            default -> { /* pozostałe stany nie wymagają timestampa */ }
+            default -> {}
         }
     }
 
     public void assignTo(UUID userId) {
         this.assignedTo = userId;
+        this.updatedAt = Instant.now();
+    }
+
+    public void updateSeverity(String newSeverity) {
+        this.severity = newSeverity;
         this.updatedAt = Instant.now();
     }
 
