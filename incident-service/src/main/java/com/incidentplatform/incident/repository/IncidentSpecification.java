@@ -3,7 +3,6 @@ package com.incidentplatform.incident.repository;
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.domain.IncidentStatus;
 import com.incidentplatform.incident.dto.IncidentFilter;
-import com.incidentplatform.shared.events.SourceType;
 import jakarta.persistence.criteria.Predicate;
 import org.springframework.data.jpa.domain.Specification;
 
@@ -46,7 +45,7 @@ public final class IncidentSpecification {
                         filter.source().toLowerCase()));
             }
 
-            if (query.getResultType() != Long.class) {
+            if (query != null && query.getResultType() != Long.class) {
                 query.orderBy(criteriaBuilder.desc(root.get("createdAt")));
             }
 
