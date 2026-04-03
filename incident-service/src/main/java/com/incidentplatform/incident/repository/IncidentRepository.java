@@ -5,6 +5,7 @@ import com.incidentplatform.incident.domain.IncidentStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -13,17 +14,14 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface IncidentRepository extends JpaRepository<Incident, UUID> {
+public interface IncidentRepository
+        extends JpaRepository<Incident, UUID>,
+        JpaSpecificationExecutor<Incident> {
 
     Optional<Incident> findByIdAndTenantId(UUID id, String tenantId);
 
     Page<Incident> findByTenantIdOrderByCreatedAtDesc(String tenantId,
                                                       Pageable pageable);
-
-    Page<Incident> findByTenantIdAndStatusOrderByCreatedAtDesc(
-            String tenantId,
-            IncidentStatus status,
-            Pageable pageable);
 
     @Query("""
             SELECT COUNT(i) > 0
