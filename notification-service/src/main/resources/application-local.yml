@@ -1,0 +1,10 @@
+spring:
+  jpa:
+    show-sql: true
+
+jwt:
+  secret: local-development-secret-key-minimum-32-characters-long-not-for-production
+
+logging:
+  level:
+    com.incidentplatform: TRACE
