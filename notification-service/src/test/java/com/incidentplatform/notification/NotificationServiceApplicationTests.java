@@ -1,4 +1,4 @@
-package com.incidentplatform.notification_service;
+package com.incidentplatform.notification;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
