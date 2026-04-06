@@ -32,7 +32,7 @@ jobs:
       - name: Run unit tests
         run: |
           ./mvnw test \
-            -pl shared,ingestion-service,incident-service \
+            -pl shared,ingestion-service,incident-service,notification-service \
             --no-transfer-progress
 
       - name: Upload test results
@@ -44,5 +44,6 @@ jobs:
             shared/target/surefire-reports/
             ingestion-service/target/surefire-reports/
             incident-service/target/surefire-reports/
+            notification-service/target/surefire-reports/
           retention-days: 7
           if-no-files-found: warn
