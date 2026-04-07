@@ -8,3 +8,10 @@ jwt:
 logging:
   level:
     com.incidentplatform: TRACE
+
+notification:
+  channels:
+    slack:
+      enabled: true
+      webhook-url: SLACK_WEBHOOK_PLACEHOLDER
+      channel: "#incidents"
