@@ -5,15 +5,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestClient;
 
-/**
- * Kanał Slack — symulacja przez logi.
- *
- * Na produkcji:
- * - Slack Incoming Webhooks API
- * - Slack SDK (com.slack.api:slack-api-client)
- * - Formatowanie wiadomości jako Slack Block Kit JSON
- */
+import java.util.Map;
+
 @Component
 public class SlackNotificationChannel implements NotificationChannel {
 
@@ -23,8 +18,17 @@ public class SlackNotificationChannel implements NotificationChannel {
     @Value("${notification.channels.slack.enabled:true}")
     private boolean enabled;
 
+    @Value("${notification.channels.slack.webhook-url}")
+    private String webhookUrl;
+
     @Value("${notification.channels.slack.channel:#incidents}")
     private String defaultChannel;
+
+    private final RestClient restClient;
+
+    public SlackNotificationChannel(RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder.build();
+    }
 
     @Override
     public String channelName() {
@@ -38,7 +42,6 @@ public class SlackNotificationChannel implements NotificationChannel {
 
     @Override
     public void send(NotificationRequest request) {
-        // Emoji zależne od severity — wizualny priorytet w Slacku
         final String severityEmoji = switch (request.severity().toUpperCase()) {
             case "CRITICAL" -> "🔴";
             case "HIGH"     -> "🟠";
@@ -47,21 +50,35 @@ public class SlackNotificationChannel implements NotificationChannel {
             default         -> "⚪";
         };
 
-        // Na produkcji: restTemplate.postForEntity(webhookUrl, buildSlackPayload(...))
-        log.info("""
-                [SLACK SIMULATION] Sending Slack message:
-                  Channel:  {}
-                  Emoji:    {}
-                  To:       {}
-                  Message:  {}
-                  Incident: {} | Tenant: {}
-                """,
-                defaultChannel,
+        final String text = String.format(
+                "%s *%s*\n>%s\n>Incident ID: `%s` | Tenant: `%s`",
                 severityEmoji,
-                request.recipient(),
+                request.subject(),
                 request.message(),
                 request.incidentId(),
                 request.tenantId()
         );
+
+        final Map<String, String> payload = Map.of("text", text);
+
+        try {
+            restClient.post()
+                    .uri(webhookUrl)
+                    .header("Content-Type", "application/json")
+                    .body(payload)
+                    .retrieve()
+                    .toBodilessEntity();
+
+            log.info("Slack notification sent: recipient={}, incidentId={}",
+                    request.recipient(), request.incidentId());
+
+        } catch (Exception e) {
+            throw new NotificationException(
+                    "SLACK",
+                    request.recipient(),
+                    "Slack webhook call failed: " + e.getMessage(),
+                    e
+            );
+        }
     }
 }
