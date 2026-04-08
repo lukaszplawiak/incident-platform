@@ -61,15 +61,8 @@ class NotificationChannelTest {
     }
 
     @Test
-    @DisplayName("SlackNotificationChannel - channelName should be SLACK")
-    void slackChannelNameShouldBeSlack() {
-        final SlackNotificationChannel channel = new SlackNotificationChannel(RestClient.builder());
-        assertThat(channel.channelName()).isEqualTo("SLACK");
-    }
-
-    @Test
-    @DisplayName("SlackNotificationChannel - send should not throw")
-    void slackSendShouldNotThrow() {
+    @DisplayName("SlackNotificationChannel - channelName and isEnabled should be correct")
+    void slackChannelShouldBeCorrectlyConfigured() {
         final SlackNotificationChannel channel =
                 new SlackNotificationChannel(RestClient.builder());
         ReflectionTestUtils.setField(channel, "enabled", true);
@@ -77,18 +70,6 @@ class NotificationChannelTest {
         assertThat(channel.channelName()).isEqualTo("SLACK");
         assertThat(channel.isEnabled()).isTrue();
     }
-
-    @Test
-    @DisplayName("SlackNotificationChannel - should handle all severity levels")
-    void slackShouldHandleAllSeverities() {
-        final SlackNotificationChannel channel =
-                new SlackNotificationChannel(RestClient.builder());
-        ReflectionTestUtils.setField(channel, "enabled", true);
-        ReflectionTestUtils.setField(channel, "defaultChannel", "#incidents");
-        assertThat(channel.isEnabled()).isTrue();
-        assertThat(channel.channelName()).isEqualTo("SLACK");
-    }
-
 
     @Test
     @DisplayName("SmsNotificationChannel - channelName should be SMS")
