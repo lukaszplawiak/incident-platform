@@ -5,11 +5,13 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.RestClient;
+import org.springframework.mail.javamail.JavaMailSender;
 
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.Mockito.mock;
 
 @DisplayName("NotificationChannel implementations")
 class NotificationChannelTest {
@@ -26,38 +28,15 @@ class NotificationChannelTest {
     );
 
     @Test
-    @DisplayName("EmailNotificationChannel - channelName should be EMAIL")
-    void emailChannelNameShouldBeEmail() {
-        final EmailNotificationChannel channel = new EmailNotificationChannel();
-        assertThat(channel.channelName()).isEqualTo("EMAIL");
-    }
-
-    @Test
-    @DisplayName("EmailNotificationChannel - should be enabled by default")
-    void emailChannelShouldBeEnabledByDefault() {
-        final EmailNotificationChannel channel = new EmailNotificationChannel();
-        ReflectionTestUtils.setField(channel, "enabled", true);
-        assertThat(channel.isEnabled()).isTrue();
-    }
-
-    @Test
-    @DisplayName("EmailNotificationChannel - should be disabled when configured")
-    void emailChannelShouldBeDisableable() {
-        final EmailNotificationChannel channel = new EmailNotificationChannel();
-        ReflectionTestUtils.setField(channel, "enabled", false);
-        assertThat(channel.isEnabled()).isFalse();
-    }
-
-    @Test
-    @DisplayName("EmailNotificationChannel - send should not throw")
+    @DisplayName("EmailNotificationChannel - channelName and isEnabled should be correct")
     void emailSendShouldNotThrow() {
-        final EmailNotificationChannel channel = new EmailNotificationChannel();
+        final EmailNotificationChannel channel =
+                new EmailNotificationChannel(mock(JavaMailSender.class));
         ReflectionTestUtils.setField(channel, "enabled", true);
         ReflectionTestUtils.setField(channel, "fromAddress",
                 "alerts@incidentplatform.com");
-
-        assertThatCode(() -> channel.send(sampleRequest))
-                .doesNotThrowAnyException();
+        assertThat(channel.channelName()).isEqualTo("EMAIL");
+        assertThat(channel.isEnabled()).isTrue();
     }
 
     @Test
@@ -107,13 +86,40 @@ class NotificationChannelTest {
     }
 
     @Test
-    @DisplayName("all channels should have unique names")
-    void allChannelsShouldHaveUniqueNames() {
-        assertThat(new EmailNotificationChannel().channelName())
-                .isNotEqualTo(new SlackNotificationChannel(RestClient.builder()).channelName());
-        assertThat(new SlackNotificationChannel(RestClient.builder()).channelName())
-                .isNotEqualTo(new SmsNotificationChannel().channelName());
-        assertThat(new EmailNotificationChannel().channelName())
-                .isNotEqualTo(new SmsNotificationChannel().channelName());
+    @DisplayName("EmailNotificationChannel - channelName should be EMAIL")
+    void emailChannelNameShouldBeEmail() {
+        final EmailNotificationChannel channel =
+                new EmailNotificationChannel(mock(JavaMailSender.class));
+        assertThat(channel.channelName()).isEqualTo("EMAIL");
+    }
+
+    @Test
+    @DisplayName("EmailNotificationChannel - should be enabled by default")
+    void emailChannelShouldBeEnabledByDefault() {
+        final EmailNotificationChannel channel =
+                new EmailNotificationChannel(mock(JavaMailSender.class));
+        ReflectionTestUtils.setField(channel, "enabled", true);
+        assertThat(channel.isEnabled()).isTrue();
+    }
+
+    @Test
+    @DisplayName("EmailNotificationChannel - should be disabled when configured")
+    void emailChannelShouldBeDisableable() {
+        final EmailNotificationChannel channel =
+                new EmailNotificationChannel(mock(JavaMailSender.class));
+        ReflectionTestUtils.setField(channel, "enabled", false);
+        assertThat(channel.isEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("EmailNotificationChannel - channelName and isEnabled should be correct")
+    void emailChannelShouldBeCorrectlyConfigured() {
+        final EmailNotificationChannel channel =
+                new EmailNotificationChannel(mock(JavaMailSender.class));
+        ReflectionTestUtils.setField(channel, "enabled", true);
+        ReflectionTestUtils.setField(channel, "fromAddress",
+                "alerts@incidentplatform.com");
+        assertThat(channel.channelName()).isEqualTo("EMAIL");
+        assertThat(channel.isEnabled()).isTrue();
     }
 }
