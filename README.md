@@ -1,6 +1,6 @@
 # Incident Platform
 
-A production-grade, multi-tenant incident management platform built as a portfolio project to demonstrate backend engineering skills. Inspired by tools like PagerDuty and OpsGenie, the system ingests alerts from monitoring sources, creates and manages incidents, escalates unacknowledged incidents, and notifies on-call engineers through multiple channels.
+Incident Platform is a backend system that automates the detection, management, and resolution of production incidents. When a monitoring system detects a problem — high CPU, a security breach, a failed service — the platform ingests the alert, normalizes it from multiple sources (Prometheus, Wazuh), and deduplicates it to prevent noise. It then creates an actionable incident, tracks its full lifecycle from detection to resolution, and automatically notifies on-call engineers via Slack, email, and SMS. If no one responds in time, the incident escalates automatically. The system is built for multiple tenants — each organization's data is fully isolated — and every state change is recorded in an audit log for accountability and postmortem analysis. The goal: reduce the time between "something broke" and "someone is fixing it".
 
 ---
 
