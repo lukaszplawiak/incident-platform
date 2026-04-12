@@ -1,4 +1,4 @@
-package com.incidentplatform.escalation_service;
+package com.incidentplatform.escalation;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
