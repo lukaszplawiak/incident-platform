@@ -1,4 +1,4 @@
-package com.incidentplatform.postmortem_service;
+package com.incidentplatform.postmortem;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
