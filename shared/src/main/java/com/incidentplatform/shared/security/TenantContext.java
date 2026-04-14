@@ -40,6 +40,15 @@ public final class TenantContext {
         return tenantId;
     }
 
+    public static String getRequired() {
+        final String tenantId = TENANT_ID.get();
+        if (tenantId == null || tenantId.isBlank()) {
+            throw new IllegalStateException(
+                    "TenantContext is empty — JWT filter should have set it");
+        }
+        return tenantId;
+    }
+
     public static String getOrNull() {
         return TENANT_ID.get();
     }
