@@ -16,4 +16,6 @@ public interface PostmortemRepository extends JpaRepository<Postmortem, UUID> {
     List<Postmortem> findByTenantIdOrderByCreatedAtDesc(String tenantId);
 
     boolean existsByIncidentId(UUID incidentId);
+
+    List<Postmortem> findByStatus(String status);
 }
