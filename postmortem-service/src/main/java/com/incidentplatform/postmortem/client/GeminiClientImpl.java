@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -34,6 +36,8 @@ public class GeminiClientImpl implements GeminiClient {
         this.objectMapper = objectMapper;
     }
 
+    @Retry(name = "gemini", fallbackMethod = "generateFallback")
+    @CircuitBreaker(name = "gemini", fallbackMethod = "generateFallback")
     @Override
     public String generate(String prompt) {
         log.debug("Sending request to Gemini API, model={}, " +
@@ -62,6 +66,13 @@ public class GeminiClientImpl implements GeminiClient {
             throw new GeminiException(
                     "Gemini API request failed: " + e.getMessage(), e);
         }
+    }
+
+    public String generateFallback(String prompt, Exception ex) {
+        log.error("Gemini API unavailable after retries or circuit breaker " +
+                "is OPEN: {}", ex.getMessage());
+        throw new GeminiException(
+                "Gemini API unavailable: " + ex.getMessage(), ex);
     }
 
     private String buildRequestBody(String prompt) {
