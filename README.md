@@ -37,7 +37,8 @@ Prometheus / Wazuh / Generic
            │ incidents.lifecycle (IncidentResolvedEvent)
            ▼
   ┌──────────────────┐
-  │postmortem-service│  Gemini API integration (planned)
+  │postmortem-service│  REST API (port 8085)
+  │                  │  Gemini API integration
   └──────────────────┘
 ```
 
@@ -73,11 +74,24 @@ Consumes incident lifecycle events and delivers notifications through multiple c
 - **Audit log**: Every notification attempt recorded in `notification_log` (SENT / FAILED / SKIPPED)
 - **Fault isolation**: Failure of one channel does not block others
 
-### escalation-service (port 8084) — in progress
-Monitors open incidents and escalates those not acknowledged within a configurable time window.
+### escalation-service (port 8084)
+Monitors open incidents and automatically escalates those not acknowledged within a configurable time window.
 
-### postmortem-service (port 8085) — planned
-Automatically generates postmortem drafts using the Gemini API after incidents are resolved.
+- **Timer-based escalation**: `@Scheduled` checks every N seconds for overdue incidents
+- **EscalationTask**: Each opened incident gets a scheduled task in PostgreSQL with a configurable threshold (default: 15 minutes, 2 minutes locally for testing)
+- **Idempotency**: Re-delivery of `IncidentOpenedEvent` from Kafka does not create duplicate tasks
+- **ACK cancellation**: `IncidentAcknowledgedEvent` cancels the pending escalation task before the timer fires
+- **Event publishing**: Publishes `IncidentEscalatedEvent` back to `incidents.lifecycle` — picked up by notification-service and incident-service
+
+### postmortem-service (port 8085)
+Automatically generates postmortem drafts using the Gemini AI API after incidents are resolved.
+
+- **Triggered by**: `IncidentResolvedEvent` from `incidents.lifecycle`
+- **Gemini integration**: HTTP call via `RestClient` — no SDK, full vendor neutrality through `GeminiClient` interface
+- **Lifecycle**: `GENERATING → DRAFT → REVIEWED` (or `FAILED` on API error)
+- **Prompt engineering**: Structured prompt with incident title, severity, duration, and timeline — generates sections: Summary, Timeline, Root Cause, Impact, Resolution, Action Items, Lessons Learned
+- **REST API**: Engineers can retrieve and edit generated drafts via `GET/PATCH /api/v1/postmortems/incident/{id}`
+- **Fault tolerance**: Gemini API errors are caught and recorded — never block the Kafka consumer
 
 ---
 
@@ -94,6 +108,7 @@ Automatically generates postmortem drafts using the Gemini API after incidents a
 | Real-time | WebSocket (STOMP) |
 | Email | Spring Mail + Mailtrap SMTP |
 | Slack | Incoming Webhooks + RestClient |
+| AI | Gemini API via HTTP (RestClient) |
 | API Docs | SpringDoc OpenAPI 3 |
 | Build | Maven (multi-module) |
 | Observability | Spring Actuator, SLF4J + MDC (tenantId, requestId, userId) |
@@ -117,6 +132,12 @@ The notification consumer deserializes Kafka messages to `JsonNode` and extracts
 - `ingestion-service` uses a **custom** `DeadLetterPublisher` because it processes batches (one bad alert should not block the rest)
 - `incident-service` uses **Spring Kafka DLT** because it processes single messages and Spring handles retries correctly
 
+**Why `@Scheduled` for escalation instead of Kafka Streams?**
+Kafka Streams would require windowing, state stores, and a significantly more complex setup. `@Scheduled` with a PostgreSQL-backed task table is transparent, easily testable with Mockito, and sufficient for this use case. On production the same pattern can be replaced with Quartz or a dedicated job scheduler without changing the business logic.
+
+**Why no Gemini SDK for postmortem-service?**
+Using the raw HTTP API via `RestClient` keeps the integration vendor-neutral — the `GeminiClient` interface means switching to a different AI provider requires changing only one class. It also avoids an additional Maven dependency and makes the HTTP contract explicit and debuggable.
+
 ---
 
 ## Running Locally
@@ -134,6 +155,14 @@ docker-compose -f docker/docker-compose.yml up -d
 ./mvnw spring-boot:run -pl ingestion-service -Dspring-boot.run.profiles=local
 ./mvnw spring-boot:run -pl incident-service -Dspring-boot.run.profiles=local
 ./mvnw spring-boot:run -pl notification-service -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -pl escalation-service -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -pl postmortem-service -Dspring-boot.run.profiles=local
+```
+
+**Note**: postmortem-service requires a Gemini API key in `postmortem-service/src/main/resources/application-local.yml`:
+```yaml
+gemini:
+  api-key: your-api-key-here
 ```
 
 **Infrastructure ports**:
@@ -147,6 +176,8 @@ docker-compose -f docker/docker-compose.yml up -d
 | ingestion-service | 8081 | 8091 |
 | incident-service | 8082 | 8092 |
 | notification-service | 8083 | 8093 |
+| escalation-service | 8084 | 8094 |
+| postmortem-service | 8085 | 8095 |
 
 ---
 
@@ -179,6 +210,17 @@ After sending the alert:
 - An incident is created in PostgreSQL with status `OPEN`
 - `IncidentOpenedEvent` is published to `incidents.lifecycle`
 - notification-service sends an email (Mailtrap) and a Slack message
+- escalation-service schedules an escalation task (fires after 2 minutes locally)
+- After 2 minutes without ACK: `IncidentEscalatedEvent` is published, notification-service sends EMAIL + SLACK + SMS
+
+To test the postmortem flow, resolve the incident via the incident-service API:
+```bash
+curl -X POST http://localhost:8082/api/v1/incidents/{incidentId}/resolve \
+  -H "Authorization: Bearer $TOKEN"
+```
+- `IncidentResolvedEvent` is published to `incidents.lifecycle`
+- postmortem-service generates a draft via Gemini API
+- Draft is available at `GET http://localhost:8085/api/v1/postmortems/incident/{incidentId}`
 
 ---
 
@@ -186,7 +228,7 @@ After sending the alert:
 
 ```bash
 # All unit tests
-./mvnw test -pl shared,ingestion-service,incident-service,notification-service
+./mvnw test -pl shared,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service
 
 # Single module
 ./mvnw test -pl notification-service
@@ -197,6 +239,9 @@ After sending the alert:
 - `NotificationRouterTest` — routing logic for all 5 event types
 - `NotificationServiceTest` — orchestration, fault isolation, audit log
 - `JwtUtilsTest` — token generation, validation, expiry, edge cases
+- `EscalationServiceTest` — scheduling, cancellation, idempotency
+- `EscalationSchedulerTest` — timer logic, fault isolation across multiple tasks
+- `PostmortemServiceTest` — generation, Gemini failure handling, CRUD operations
 
 ---
 
@@ -207,9 +252,9 @@ incident-platform/
 ├── shared/                  # Common: events, DTOs, security (JWT, TenantContext)
 ├── ingestion-service/       # Alert normalization and deduplication
 ├── incident-service/        # Incident lifecycle management
-├── escalation-service/      # Automatic escalation (in progress)
 ├── notification-service/    # Multi-channel notifications
-├── postmortem-service/      # AI-generated postmortems (planned)
+├── escalation-service/      # Automatic escalation via @Scheduled
+├── postmortem-service/      # AI-generated postmortems via Gemini API
 └── docker/
     └── docker-compose.yml   # PostgreSQL, Redis, Kafka, pgAdmin, Kafka UI
 ```
