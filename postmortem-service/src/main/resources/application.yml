@@ -79,3 +79,30 @@ logging:
     org.apache.kafka: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} [%X{tenantId:-no-tenant}] [%X{requestId:-no-req}] %-5level %logger{36} - %msg%n"
+
+resilience4j:
+  retry:
+    instances:
+      gemini:
+        max-attempts: 3
+        wait-duration: 1s
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - com.incidentplatform.postmortem.client.GeminiException
+          - org.springframework.web.client.RestClientException
+        ignore-exceptions:
+          - java.lang.IllegalArgumentException
+  circuit-breaker:
+    instances:
+      gemini:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 60s
+        permitted-number-of-calls-in-half-open-state: 1
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - com.incidentplatform.postmortem.client.GeminiException
+          - org.springframework.web.client.RestClientException
