@@ -20,6 +20,17 @@ spring:
       properties:
         enable.idempotence: true
         interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor
+    consumer:
+      group-id: ingestion-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaConsumerInterceptor
+    listener:
+      ack-mode: MANUAL_IMMEDIATE
+      concurrency: 3
 
   security:
     user:
@@ -42,6 +53,7 @@ kafka:
     alerts-raw: alerts.raw
     alerts-resolved: alerts.resolved
     alerts-dead-letter: alerts.dead-letter
+    incidents-lifecycle: incidents.lifecycle
 
 ingestion:
   prometheus:
