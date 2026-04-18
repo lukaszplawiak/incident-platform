@@ -44,7 +44,7 @@ spring:
       fail-on-unknown-properties: false
 
 jwt:
-  secret: ${JWT_SECRET:development-secret-key-minimum-32-characters-long}
+  secret: ${JWT_SECRET}
   expiration-ms: ${JWT_EXPIRATION_MS:86400000}
 
 kafka:
