@@ -1,9 +1,11 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
+import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -12,18 +14,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-/**
- * Router powiadomień — tłumaczy event na listę żądań wysyłki.
- *
- * Odpowiada na pytania:
- * 1. Dla jakiego eventu wysyłamy powiadomienie?
- * 2. Przez jakie kanały?
- * 3. Do kogo?
- * 4. Z jaką treścią?
- *
- * W prawdziwym systemie "do kogo" pochodzi z bazy:
- * on-call schedule, user preferences, escalation policy.
- */
 @Component
 public class NotificationRouter {
 
@@ -32,21 +22,33 @@ public class NotificationRouter {
 
     private static final Map<String, Set<String>> EVENT_TO_CHANNELS =
             Map.of(
-                    "IncidentOpenedEvent",        Set.of("EMAIL", "SLACK"),
-                    "IncidentEscalatedEvent",     Set.of("EMAIL", "SLACK", "SMS"),
-                    "IncidentAcknowledgedEvent",  Set.of("SLACK"),
-                    "IncidentResolvedEvent",      Set.of("EMAIL", "SLACK"),
-                    "IncidentClosedEvent",        Set.of("EMAIL")
+                    "IncidentOpenedEvent",       Set.of("EMAIL", "SLACK"),
+                    "IncidentEscalatedEvent",    Set.of("EMAIL", "SLACK", "SMS"),
+                    "IncidentAcknowledgedEvent", Set.of("SLACK"),
+                    "IncidentResolvedEvent",     Set.of("EMAIL", "SLACK"),
+                    "IncidentClosedEvent",       Set.of("EMAIL")
             );
 
     private final Map<String, NotificationChannel> channelsByName;
+    private final OncallClient oncallClient;
 
-    public NotificationRouter(List<NotificationChannel> channels) {
+    @Value("${notification.fallback.email:oncall@example.com}")
+    private String fallbackEmail;
+
+    @Value("${notification.fallback.slack-channel:#incidents}")
+    private String fallbackSlackChannel;
+
+    @Value("${notification.fallback.phone:}")
+    private String fallbackPhone;
+
+    public NotificationRouter(List<NotificationChannel> channels,
+                              OncallClient oncallClient) {
         this.channelsByName = channels.stream()
                 .collect(Collectors.toMap(
                         NotificationChannel::channelName,
                         ch -> ch
                 ));
+        this.oncallClient = oncallClient;
         log.info("NotificationRouter initialized with channels: {}",
                 channelsByName.keySet());
     }
@@ -65,19 +67,31 @@ public class NotificationRouter {
             return List.of();
         }
 
+        final OncallClient.OncallInfo oncall = oncallClient
+                .getCurrentOncall(tenantId, "PRIMARY")
+                .orElse(null);
+
+        if (oncall != null) {
+            log.debug("Routing to oncall: tenantId={}, userId={}, userName={}",
+                    tenantId, oncall.userId(), oncall.userName());
+        } else {
+            log.warn("No oncall found for tenantId={} — using fallback addresses",
+                    tenantId);
+        }
+
         return targetChannels.stream()
                 .map(channelName -> {
                     final NotificationChannel channel =
                             channelsByName.get(channelName);
 
                     if (channel == null || !channel.isEnabled()) {
-                        log.debug("Channel {} not available, skipping", channelName);
+                        log.debug("Channel {} not available, skipping",
+                                channelName);
                         return null;
                     }
 
-                    // Symulujemy odbiorcę — w production pobieramy z bazy
                     final String recipient = resolveRecipient(
-                            channelName, tenantId, severity);
+                            channelName, tenantId, oncall);
 
                     final NotificationRequest request = new NotificationRequest(
                             incidentId,
@@ -98,12 +112,24 @@ public class NotificationRouter {
 
     private String resolveRecipient(String channelName,
                                     String tenantId,
-                                    String severity) {
+                                    OncallClient.OncallInfo oncall) {
+        if (oncall != null) {
+            return switch (channelName) {
+                case "EMAIL" -> oncall.email() != null
+                        ? oncall.email() : fallbackEmail;
+                case "SLACK" -> oncall.hasDm()
+                        ? oncall.slackUserId() : fallbackSlackChannel;
+                case "SMS"   -> oncall.hasSms()
+                        ? oncall.phone() : fallbackPhone;
+                default -> "unknown";
+            };
+        }
+
         return switch (channelName) {
-            case "EMAIL" -> "oncall@" + tenantId + ".example.com";
-            case "SLACK" -> "@oncall-" + tenantId;
-            case "SMS"   -> "+48100200300";
-            default      -> "unknown";
+            case "EMAIL" -> fallbackEmail;
+            case "SLACK" -> fallbackSlackChannel;
+            case "SMS"   -> fallbackPhone;
+            default -> "unknown";
         };
     }
 
