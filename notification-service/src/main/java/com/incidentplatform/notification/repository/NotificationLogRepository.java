@@ -13,4 +13,8 @@ public interface NotificationLogRepository
 
     List<NotificationLog> findByIncidentIdAndTenantIdOrderBySentAtDesc(
             UUID incidentId, String tenantId);
+
+    boolean existsByIncidentIdAndEventTypeAndChannel(
+            UUID incidentId, String eventType, String channel);
+
 }
