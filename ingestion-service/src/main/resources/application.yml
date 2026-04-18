@@ -1,6 +1,10 @@
 spring:
   application:
     name: ingestion-service
+  servlet:
+    multipart:
+      max-request-size: ${MAX_REQUEST_SIZE:1MB}
+      max-file-size: ${MAX_FILE_SIZE:1MB}
 
   data:
     redis:
@@ -69,6 +73,9 @@ server:
     include-stacktrace: never
     include-message: never
     include-binding-errors: never
+  tomcat:
+    max-http-request-header-size: 8KB
+    max-swallow-size: ${MAX_SWALLOW_SIZE:1MB}
 
 management:
   endpoints:
