@@ -130,6 +130,7 @@ public final class TestDataFactory {
                 TEST_INCIDENT_ID,
                 TEST_TENANT_ID,
                 TEST_ALERT_ID,
+                "prometheus:highcpuusage:prod-server-1:9100",
                 "High CPU usage on prod-server-1",
                 "CRITICAL",
                 SourceType.OPS,
@@ -151,6 +152,7 @@ public final class TestDataFactory {
                 TEST_INCIDENT_ID,
                 TEST_TENANT_ID,
                 TEST_USER_ID,
+                "prometheus:highcpuusage:prod-server-1:9100",
                 45L,
                 "Restarted the overloaded service and scaled up the instance",
                 Instant.now()

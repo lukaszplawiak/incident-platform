@@ -21,6 +21,7 @@ class IncidentEventTest {
         // when
         final IncidentOpenedEvent event = new IncidentOpenedEvent(
                 INCIDENT_ID, TENANT_ID, UUID.randomUUID(),
+                "prometheus:highcpu:prod-1",
                 "High CPU", "CRITICAL", SourceType.OPS, Instant.now()
         );
 
@@ -50,6 +51,7 @@ class IncidentEventTest {
         // when
         final IncidentResolvedEvent event = new IncidentResolvedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
+                "prometheus:highcpu:prod-1",
                 45L, "Restarted the service", Instant.now()
         );
 
@@ -95,11 +97,14 @@ class IncidentEventTest {
         // given
         final IncidentEvent opened = new IncidentOpenedEvent(
                 INCIDENT_ID, TENANT_ID, UUID.randomUUID(),
+                "prometheus:test:prod-1",
                 "title", "HIGH", SourceType.OPS, Instant.now());
         final IncidentEvent acknowledged = new IncidentAcknowledgedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID, Instant.now());
         final IncidentEvent resolved = new IncidentResolvedEvent(
-                INCIDENT_ID, TENANT_ID, USER_ID, 30L, null, Instant.now());
+                INCIDENT_ID, TENANT_ID, USER_ID,
+                "prometheus:test:prod-1",
+                30L, null, Instant.now());
         final IncidentEvent escalated = new IncidentEscalatedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID, 1, "HIGH", "title", Instant.now());
         final IncidentEvent closed = new IncidentClosedEvent(

@@ -41,6 +41,7 @@ public class IncidentEventPublisher {
                 incident.getId(),
                 incident.getTenantId(),
                 incident.getAlertId(),
+                incident.getAlertFingerprint(),
                 incident.getTitle(),
                 incident.getSeverity(),
                 incident.getSourceType(),
@@ -68,6 +69,7 @@ public class IncidentEventPublisher {
                 incident.getId(),
                 incident.getTenantId(),
                 resolvedBy,
+                incident.getAlertFingerprint(),
                 durationMinutes,
                 null,
                 Instant.now()
