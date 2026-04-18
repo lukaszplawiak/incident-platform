@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -47,6 +48,7 @@ public class DeduplicationService {
         log.info("DeduplicationService initialized with TTL: {} minutes", ttlMinutes);
     }
 
+    @CircuitBreaker(name = "redis-dedup", fallbackMethod = "isDuplicateFallback")
     public boolean isDuplicate(UnifiedAlertDto alert) {
         final String key = KEY_PREFIX + alert.tenantId() + ":" + alert.fingerprint();
 
@@ -77,5 +79,13 @@ public class DeduplicationService {
                     alert.fingerprint(), alert.source(), alert.tenantId(), e);
             return false;
         }
+    }
+
+    public boolean isDuplicateFallback(UnifiedAlertDto alert, Exception ex) {
+        redisErrorCounter.increment();
+        log.error("Redis circuit breaker OPEN — dedup disabled. " +
+                        "Allowing alert through. fingerprint={}, tenant={}",
+                alert.fingerprint(), alert.tenantId());
+        return false;
     }
 }

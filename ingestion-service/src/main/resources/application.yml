@@ -90,3 +90,19 @@ logging:
     org.springframework.kafka: INFO
   pattern:
     console: "%d{HH:mm:ss.SSS} [%X{tenantId:-no-tenant}] [%X{requestId:-no-req}] [%X{userId:-no-user}] %-5level %logger{36} - %msg%n"
+
+resilience4j:
+  circuit-breaker:
+    instances:
+      redis-dedup:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.data.redis.RedisConnectionFailureException
+          - io.lettuce.core.RedisConnectionException
+          - java.net.ConnectException
