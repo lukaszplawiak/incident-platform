@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
+import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -8,9 +9,13 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 @DisplayName("NotificationRouter")
 class NotificationRouterTest {
@@ -30,8 +35,13 @@ class NotificationRouterTest {
         slackChannel = new FakeChannel("SLACK");
         smsChannel   = new FakeChannel("SMS");
 
+        final OncallClient oncallClient = mock(OncallClient.class);
+        when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                .thenReturn(Optional.empty());
+
         router = new NotificationRouter(
-                List.of(emailChannel, slackChannel, smsChannel));
+                List.of(emailChannel, slackChannel, smsChannel),
+                oncallClient);
     }
 
     @Nested
@@ -216,9 +226,15 @@ class NotificationRouterTest {
         void shouldSkipDisabledChannels() {
             // given — SMS off
             final FakeChannel disabledSms = new FakeChannel("SMS", false);
+
+            final OncallClient oncallClient = mock(OncallClient.class);
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenReturn(Optional.empty());
+
             final NotificationRouter routerWithDisabledSms =
                     new NotificationRouter(
-                            List.of(emailChannel, slackChannel, disabledSms));
+                            List.of(emailChannel, slackChannel, disabledSms),
+                            oncallClient);
 
             // when
             final var result = routerWithDisabledSms.route(
