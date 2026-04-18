@@ -2,6 +2,7 @@ package com.incidentplatform.notification.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.security.ServiceTokenProvider;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,16 +13,6 @@ import org.springframework.web.client.RestClientException;
 
 import java.util.Optional;
 
-/**
- * HTTP implementacja OncallClient.
- *
- * Odpytuje oncall-service przez REST API.
- * Circuit breaker chroni przed kaskadowymi błędami gdy
- * oncall-service jest niedostępny.
- *
- * Fallback: gdy oncall-service niedostępny zwraca Optional.empty()
- * — NotificationRouter wtedy używa domyślnego adresu z konfiguracji.
- */
 @Component
 public class OncallClientImpl implements OncallClient {
 
@@ -30,14 +21,17 @@ public class OncallClientImpl implements OncallClient {
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    private final ServiceTokenProvider serviceTokenProvider;
 
     @Value("${oncall-service.base-url:http://localhost:8086}")
     private String oncallServiceBaseUrl;
 
     public OncallClientImpl(RestClient.Builder restClientBuilder,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper,
+                            ServiceTokenProvider serviceTokenProvider) {
         this.restClient = restClientBuilder.build();
         this.objectMapper = objectMapper;
+        this.serviceTokenProvider = serviceTokenProvider;
     }
 
     @CircuitBreaker(name = "oncall", fallbackMethod = "getCurrentOncallFallback")
@@ -47,11 +41,11 @@ public class OncallClientImpl implements OncallClient {
                 tenantId, role);
 
         try {
-            // Endpoint wymaga JWT — używamy wewnętrznego service-to-service token
-            // Na razie używamy tego samego JWT co przyszedł z Kafki (TenantContext)
             final String responseBody = restClient.get()
                     .uri(oncallServiceBaseUrl +
                             "/api/v1/oncall/current?role=" + role)
+                    .header("Authorization",
+                            "Bearer " + serviceTokenProvider.getToken())
                     .header("X-Tenant-Id", tenantId)
                     .retrieve()
                     .body(String.class);

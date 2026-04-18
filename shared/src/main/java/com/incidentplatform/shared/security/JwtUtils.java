@@ -25,6 +25,8 @@ public class JwtUtils {
     public static final String CLAIM_TENANT_ID = "tenantId";
     public static final String CLAIM_ROLES = "roles";
     public static final String CLAIM_EMAIL = "email";
+    public static final String CLAIM_SERVICE_NAME = "serviceName";
+    public static final String ROLE_SERVICE = "ROLE_SERVICE";
 
     private final SecretKey secretKey;
 
@@ -65,6 +67,24 @@ public class JwtUtils {
         log.info("JWT token generated for userId: {}, tenantId: {}, expiration: {}",
                 userId, tenantId, expiration);
 
+        return token;
+    }
+
+    public String generateServiceToken(String serviceName) {
+        final Date now = new Date();
+        final Date expiration = new Date(now.getTime() + expirationMs);
+
+        final String token = Jwts.builder()
+                .subject(serviceName)
+                .claim(CLAIM_SERVICE_NAME, serviceName)
+                .claim(CLAIM_ROLES, List.of(ROLE_SERVICE))
+                .claim(CLAIM_TENANT_ID, "system")
+                .issuedAt(now)
+                .expiration(expiration)
+                .signWith(secretKey)
+                .compact();
+
+        log.info("Service JWT token generated for service: {}", serviceName);
         return token;
     }
 
