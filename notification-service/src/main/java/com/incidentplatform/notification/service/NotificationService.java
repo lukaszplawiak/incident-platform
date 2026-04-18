@@ -47,6 +47,14 @@ public class NotificationService {
             final var channel = channelRequest.channel();
             final var request = channelRequest.request();
 
+            if (logRepository.existsByIncidentIdAndEventTypeAndChannel(
+                    incidentId, eventType, channel.channelName())) {
+                log.info("Notification already sent (idempotency check): " +
+                                "channel={}, incidentId={}, eventType={}",
+                        channel.channelName(), incidentId, eventType);
+                continue;
+            }
+
             try {
                 channel.send(request);
 
