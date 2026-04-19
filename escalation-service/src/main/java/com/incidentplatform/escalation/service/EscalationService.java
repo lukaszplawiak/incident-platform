@@ -4,7 +4,6 @@ import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,9 +18,6 @@ public class EscalationService {
 
     private final EscalationTaskRepository taskRepository;
 
-    @Value("${escalation.threshold-minutes:15}")
-    private int thresholdMinutes;
-
     public EscalationService(EscalationTaskRepository taskRepository) {
         this.taskRepository = taskRepository;
     }
@@ -33,42 +29,72 @@ public class EscalationService {
                                    String severity,
                                    String title) {
 
-        if (taskRepository.existsByIncidentId(incidentId)) {
-            log.debug("Escalation task already exists for incidentId={}, " +
-                    "skipping", incidentId);
+        if (taskRepository.existsByIncidentIdAndEscalationLevel(
+                incidentId, 1)) {
+            log.debug("Level 1 escalation task already exists for " +
+                    "incidentId={}, skipping", incidentId);
             return;
         }
 
-        final EscalationTask task = EscalationTask.create(
-                incidentId, tenantId, incidentOpenedAt,
-                thresholdMinutes, severity, title);
+        final EscalationTask task = EscalationTask.createLevel1(
+                incidentId, tenantId, incidentOpenedAt, severity, title);
 
         taskRepository.save(task);
 
-        log.info("Escalation scheduled: incidentId={}, tenant={}, " +
-                        "scheduledAt={}, thresholdMinutes={}",
-                incidentId, tenantId,
-                task.getScheduledEscalationAt(), thresholdMinutes);
+        log.info("Escalation level 1 scheduled: incidentId={}, tenant={}, " +
+                        "severity={}, scheduledAt={}, timeoutMinutes={}",
+                incidentId, tenantId, severity,
+                task.getScheduledEscalationAt(),
+                EscalationTask.resolveTimeout(severity));
+    }
+
+    @Transactional
+    public void scheduleLevel2Escalation(UUID incidentId,
+                                         String tenantId,
+                                         String severity,
+                                         String title) {
+
+        if (taskRepository.existsByIncidentIdAndEscalationLevel(
+                incidentId, 2)) {
+            log.debug("Level 2 escalation task already exists for " +
+                    "incidentId={}, skipping", incidentId);
+            return;
+        }
+
+        final EscalationTask task = EscalationTask.createLevel2(
+                incidentId, tenantId, Instant.now(), severity, title);
+
+        taskRepository.save(task);
+
+        log.info("Escalation level 2 scheduled: incidentId={}, tenant={}, " +
+                        "severity={}, scheduledAt={}",
+                incidentId, tenantId, severity,
+                task.getScheduledEscalationAt());
     }
 
     @Transactional
     public void cancelEscalation(UUID incidentId, String tenantId) {
-        taskRepository.findByIncidentId(incidentId).ifPresentOrElse(
-                task -> {
-                    if (task.isPending()) {
-                        task.cancel();
-                        taskRepository.save(task);
-                        log.info("Escalation cancelled (ACK received): " +
-                                        "incidentId={}, tenant={}",
-                                incidentId, tenantId);
-                    } else {
-                        log.debug("Escalation task not PENDING " +
-                                        "(status={}), skipping cancel: incidentId={}",
-                                task.getStatus(), incidentId);
-                    }
-                },
-                () -> log.debug("No escalation task found for incidentId={}, " +
-                        "nothing to cancel", incidentId)
-        );
+        final var tasks = taskRepository.findAllByIncidentId(incidentId);
+
+        if (tasks.isEmpty()) {
+            log.debug("No escalation tasks found for incidentId={}, " +
+                    "nothing to cancel", incidentId);
+            return;
+        }
+
+        int cancelled = 0;
+        for (final var task : tasks) {
+            if (task.isPending()) {
+                task.cancel();
+                taskRepository.save(task);
+                cancelled++;
+            }
+        }
+
+        if (cancelled > 0) {
+            log.info("Escalation cancelled (ACK received): incidentId={}, " +
+                            "tenant={}, cancelledTasks={}",
+                    incidentId, tenantId, cancelled);
+        }
     }
 }
