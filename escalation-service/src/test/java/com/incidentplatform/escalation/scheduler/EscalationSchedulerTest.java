@@ -5,6 +5,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
+import com.incidentplatform.escalation.service.EscalationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -19,12 +20,14 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("EscalationScheduler")
@@ -35,6 +38,9 @@ class EscalationSchedulerTest {
 
     @Mock
     private KafkaTemplate<String, String> kafkaTemplate;
+
+    @Mock
+    private EscalationService escalationService;
 
     private EscalationScheduler scheduler;
 
@@ -48,7 +54,7 @@ class EscalationSchedulerTest {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         scheduler = new EscalationScheduler(
-                taskRepository, kafkaTemplate, objectMapper);
+                taskRepository, kafkaTemplate, objectMapper, escalationService);
         ReflectionTestUtils.setField(scheduler,
                 "incidentsLifecycleTopic", TOPIC);
     }
@@ -58,10 +64,10 @@ class EscalationSchedulerTest {
     class CheckAndEscalate {
 
         @Test
-        @DisplayName("should escalate overdue PENDING tasks")
-        void shouldEscalateOverdueTasks() {
+        @DisplayName("should escalate level 1 task and schedule level 2")
+        void shouldEscalateLevel1AndScheduleLevel2() {
             // given
-            final EscalationTask task = buildOverdueTask();
+            final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
@@ -74,16 +80,19 @@ class EscalationSchedulerTest {
             // then
             then(kafkaTemplate).should()
                     .send(eq(TOPIC), eq(TENANT_ID), anyString());
+            assertThat(task.getStatus()).isEqualTo("ESCALATED");
 
-            // then
-            then(taskRepository).should().save(task);
+            // then — level 2 scheduled
+            then(escalationService).should().scheduleLevel2Escalation(
+                    task.getIncidentId(), TENANT_ID,
+                    task.getSeverity(), task.getTitle());
         }
 
         @Test
-        @DisplayName("should mark task as ESCALATED after sending event")
-        void shouldMarkTaskAsEscalated() {
+        @DisplayName("should escalate level 2 task without scheduling level 3")
+        void shouldEscalateLevel2WithoutSchedulingLevel3() {
             // given
-            final EscalationTask task = buildOverdueTask();
+            final EscalationTask task = buildOverdueTask(2);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
@@ -94,8 +103,13 @@ class EscalationSchedulerTest {
             scheduler.checkAndEscalate();
 
             // then
-            org.assertj.core.api.Assertions.assertThat(task.getStatus())
-                    .isEqualTo("ESCALATED");
+            then(kafkaTemplate).should()
+                    .send(eq(TOPIC), eq(TENANT_ID), anyString());
+            assertThat(task.getStatus()).isEqualTo("ESCALATED");
+
+            // then — no level 3 scheduled (max level reached)
+            then(escalationService).should(never())
+                    .scheduleLevel2Escalation(any(), any(), any(), any());
         }
 
         @Test
@@ -118,8 +132,8 @@ class EscalationSchedulerTest {
         @DisplayName("should continue escalating other tasks if one fails")
         void shouldContinueAfterOneFailure() {
             // given
-            final EscalationTask task1 = buildOverdueTask();
-            final EscalationTask task2 = buildOverdueTask();
+            final EscalationTask task1 = buildOverdueTask(1);
+            final EscalationTask task2 = buildOverdueTask(1);
 
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task1, task2));
@@ -133,20 +147,21 @@ class EscalationSchedulerTest {
             scheduler.checkAndEscalate();
 
             // then
-            then(kafkaTemplate).should(org.mockito.Mockito.times(2))
+            then(kafkaTemplate).should(times(2))
                     .send(anyString(), anyString(), anyString());
         }
     }
 
-    private EscalationTask buildOverdueTask() {
-        final Instant openedAt = Instant.now().minusSeconds(20 * 60L);
-        return EscalationTask.create(
-                UUID.randomUUID(),
-                TENANT_ID,
-                openedAt,
-                15,
-                "CRITICAL",
-                "High CPU Usage"
-        );
+    private EscalationTask buildOverdueTask(int level) {
+        final Instant openedAt = Instant.now().minusSeconds(60 * 60L);
+        if (level == 1) {
+            return EscalationTask.createLevel1(
+                    UUID.randomUUID(), TENANT_ID, openedAt,
+                    "CRITICAL", "High CPU Usage");
+        } else {
+            return EscalationTask.createLevel2(
+                    UUID.randomUUID(), TENANT_ID, openedAt,
+                    "CRITICAL", "High CPU Usage");
+        }
     }
 }
