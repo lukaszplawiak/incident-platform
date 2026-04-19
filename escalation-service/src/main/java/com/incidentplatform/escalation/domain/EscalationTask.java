@@ -23,13 +23,17 @@ import java.util.UUID;
 )
 public class EscalationTask {
 
+    public static final int TIMEOUT_CRITICAL = 5;
+    public static final int TIMEOUT_HIGH     = 15;
+    public static final int TIMEOUT_MEDIUM   = 30;
+    public static final int TIMEOUT_LOW      = 60;
+
     @Id
     @Column(name = "id", updatable = false, nullable = false)
     private UUID id;
 
     @NotNull
-    @Column(name = "incident_id", nullable = false, updatable = false,
-            unique = true)
+    @Column(name = "incident_id", nullable = false, updatable = false)
     private UUID incidentId;
 
     @NotBlank
@@ -57,6 +61,10 @@ public class EscalationTask {
     private String title;
 
     @NotNull
+    @Column(name = "escalation_level", nullable = false)
+    private int escalationLevel;
+
+    @NotNull
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -66,25 +74,55 @@ public class EscalationTask {
 
     protected EscalationTask() {}
 
-    public static EscalationTask create(UUID incidentId,
-                                        String tenantId,
-                                        Instant incidentOpenedAt,
-                                        int thresholdMinutes,
-                                        String severity,
-                                        String title) {
+    public static EscalationTask createLevel1(UUID incidentId,
+                                              String tenantId,
+                                              Instant incidentOpenedAt,
+                                              String severity,
+                                              String title) {
+        final int timeoutMinutes = resolveTimeout(severity);
+        return create(incidentId, tenantId, incidentOpenedAt,
+                severity, title, 1, timeoutMinutes);
+    }
+
+    public static EscalationTask createLevel2(UUID incidentId,
+                                              String tenantId,
+                                              Instant level1EscalatedAt,
+                                              String severity,
+                                              String title) {
+        final int timeoutMinutes = resolveTimeout(severity);
+        return create(incidentId, tenantId, level1EscalatedAt,
+                severity, title, 2, timeoutMinutes);
+    }
+
+    private static EscalationTask create(UUID incidentId,
+                                         String tenantId,
+                                         Instant startAt,
+                                         String severity,
+                                         String title,
+                                         int escalationLevel,
+                                         int timeoutMinutes) {
         final EscalationTask task = new EscalationTask();
         task.id = UUID.randomUUID();
         task.incidentId = incidentId;
         task.tenantId = tenantId;
-        task.incidentOpenedAt = incidentOpenedAt;
-        task.scheduledEscalationAt = incidentOpenedAt
-                .plusSeconds(thresholdMinutes * 60L);
+        task.incidentOpenedAt = startAt;
+        task.scheduledEscalationAt = startAt.plusSeconds(timeoutMinutes * 60L);
         task.status = "PENDING";
         task.severity = severity;
         task.title = title;
+        task.escalationLevel = escalationLevel;
         task.createdAt = Instant.now();
         task.updatedAt = Instant.now();
         return task;
+    }
+
+    public static int resolveTimeout(String severity) {
+        return switch (severity.toUpperCase()) {
+            case "CRITICAL" -> TIMEOUT_CRITICAL;
+            case "HIGH"     -> TIMEOUT_HIGH;
+            case "MEDIUM"   -> TIMEOUT_MEDIUM;
+            default         -> TIMEOUT_LOW;
+        };
     }
 
     public void markEscalated() {
@@ -97,22 +135,21 @@ public class EscalationTask {
         this.updatedAt = Instant.now();
     }
 
-    public boolean isPending() {
-        return "PENDING".equals(this.status);
-    }
-
-    public boolean isDueForEscalation() {
+    public boolean isPending()           { return "PENDING".equals(this.status); }
+    public boolean isMaxLevel()          { return this.escalationLevel >= 2; }
+    public boolean isDueForEscalation()  {
         return isPending() && Instant.now().isAfter(scheduledEscalationAt);
     }
 
-    public UUID getId() { return id; }
-    public UUID getIncidentId() { return incidentId; }
-    public String getTenantId() { return tenantId; }
-    public Instant getIncidentOpenedAt() { return incidentOpenedAt; }
+    public UUID getId()                    { return id; }
+    public UUID getIncidentId()            { return incidentId; }
+    public String getTenantId()            { return tenantId; }
+    public Instant getIncidentOpenedAt()   { return incidentOpenedAt; }
     public Instant getScheduledEscalationAt() { return scheduledEscalationAt; }
-    public String getStatus() { return status; }
-    public String getSeverity() { return severity; }
-    public String getTitle() { return title; }
-    public Instant getCreatedAt() { return createdAt; }
-    public Instant getUpdatedAt() { return updatedAt; }
+    public String getStatus()              { return status; }
+    public String getSeverity()            { return severity; }
+    public String getTitle()               { return title; }
+    public int getEscalationLevel()        { return escalationLevel; }
+    public Instant getCreatedAt()          { return createdAt; }
+    public Instant getUpdatedAt()          { return updatedAt; }
 }
