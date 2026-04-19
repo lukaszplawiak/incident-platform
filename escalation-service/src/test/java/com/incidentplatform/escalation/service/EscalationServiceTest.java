@@ -10,10 +10,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
-import java.util.Optional;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,8 +36,6 @@ class EscalationServiceTest {
     @BeforeEach
     void setUp() {
         escalationService = new EscalationService(taskRepository);
-        ReflectionTestUtils.setField(escalationService,
-                "thresholdMinutes", 15);
     }
 
     @Nested
@@ -46,11 +43,11 @@ class EscalationServiceTest {
     class ScheduleEscalation {
 
         @Test
-        @DisplayName("should create escalation task for new incident")
-        void shouldCreateTaskForNewIncident() {
+        @DisplayName("should create level 1 escalation task for new incident")
+        void shouldCreateLevel1TaskForNewIncident() {
             // given
-            given(taskRepository.existsByIncidentId(INCIDENT_ID))
-                    .willReturn(false);
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(
+                    INCIDENT_ID, 1)).willReturn(false);
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             // when
@@ -68,16 +65,38 @@ class EscalationServiceTest {
             assertThat(saved.getTenantId()).isEqualTo(TENANT_ID);
             assertThat(saved.getStatus()).isEqualTo("PENDING");
             assertThat(saved.getSeverity()).isEqualTo("CRITICAL");
-            assertThat(saved.getTitle()).isEqualTo("High CPU Usage");
+            assertThat(saved.getEscalationLevel()).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("should schedule escalation 15 minutes after opening")
-        void shouldScheduleEscalationAfterThreshold() {
+        @DisplayName("should schedule CRITICAL escalation after 5 minutes")
+        void shouldScheduleCriticalEscalationAfter5Minutes() {
             // given
             final Instant openedAt = Instant.now();
-            given(taskRepository.existsByIncidentId(INCIDENT_ID))
-                    .willReturn(false);
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(
+                    INCIDENT_ID, 1)).willReturn(false);
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            escalationService.scheduleEscalation(
+                    INCIDENT_ID, TENANT_ID, openedAt, "CRITICAL", "Test");
+
+            // then
+            final ArgumentCaptor<EscalationTask> captor =
+                    ArgumentCaptor.forClass(EscalationTask.class);
+            then(taskRepository).should().save(captor.capture());
+
+            assertThat(captor.getValue().getScheduledEscalationAt())
+                    .isEqualTo(openedAt.plusSeconds(5 * 60L));
+        }
+
+        @Test
+        @DisplayName("should schedule HIGH escalation after 15 minutes")
+        void shouldScheduleHighEscalationAfter15Minutes() {
+            // given
+            final Instant openedAt = Instant.now();
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(
+                    INCIDENT_ID, 1)).willReturn(false);
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             // when
@@ -89,18 +108,38 @@ class EscalationServiceTest {
                     ArgumentCaptor.forClass(EscalationTask.class);
             then(taskRepository).should().save(captor.capture());
 
-            final Instant expectedEscalationAt =
-                    openedAt.plusSeconds(15 * 60L);
             assertThat(captor.getValue().getScheduledEscalationAt())
-                    .isEqualTo(expectedEscalationAt);
+                    .isEqualTo(openedAt.plusSeconds(15 * 60L));
         }
 
         @Test
-        @DisplayName("should skip if escalation task already exists (idempotency)")
-        void shouldSkipIfTaskAlreadyExists() {
+        @DisplayName("should schedule MEDIUM escalation after 30 minutes")
+        void shouldScheduleMediumEscalationAfter30Minutes() {
             // given
-            given(taskRepository.existsByIncidentId(INCIDENT_ID))
-                    .willReturn(true);
+            final Instant openedAt = Instant.now();
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(
+                    INCIDENT_ID, 1)).willReturn(false);
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            escalationService.scheduleEscalation(
+                    INCIDENT_ID, TENANT_ID, openedAt, "MEDIUM", "Test");
+
+            // then
+            final ArgumentCaptor<EscalationTask> captor =
+                    ArgumentCaptor.forClass(EscalationTask.class);
+            then(taskRepository).should().save(captor.capture());
+
+            assertThat(captor.getValue().getScheduledEscalationAt())
+                    .isEqualTo(openedAt.plusSeconds(30 * 60L));
+        }
+
+        @Test
+        @DisplayName("should skip if level 1 task already exists (idempotency)")
+        void shouldSkipIfLevel1TaskAlreadyExists() {
+            // given
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(
+                    INCIDENT_ID, 1)).willReturn(true);
 
             // when
             escalationService.scheduleEscalation(
@@ -113,35 +152,79 @@ class EscalationServiceTest {
     }
 
     @Nested
+    @DisplayName("scheduleLevel2Escalation")
+    class ScheduleLevel2Escalation {
+
+        @Test
+        @DisplayName("should create level 2 escalation task")
+        void shouldCreateLevel2Task() {
+            // given
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(
+                    INCIDENT_ID, 2)).willReturn(false);
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            escalationService.scheduleLevel2Escalation(
+                    INCIDENT_ID, TENANT_ID, "CRITICAL", "High CPU");
+
+            // then
+            final ArgumentCaptor<EscalationTask> captor =
+                    ArgumentCaptor.forClass(EscalationTask.class);
+            then(taskRepository).should().save(captor.capture());
+
+            assertThat(captor.getValue().getEscalationLevel()).isEqualTo(2);
+            assertThat(captor.getValue().getStatus()).isEqualTo("PENDING");
+        }
+
+        @Test
+        @DisplayName("should skip if level 2 task already exists (idempotency)")
+        void shouldSkipIfLevel2TaskAlreadyExists() {
+            // given
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(
+                    INCIDENT_ID, 2)).willReturn(true);
+
+            // when
+            escalationService.scheduleLevel2Escalation(
+                    INCIDENT_ID, TENANT_ID, "CRITICAL", "High CPU");
+
+            // then
+            then(taskRepository).should(never()).save(any());
+        }
+    }
+
+    @Nested
     @DisplayName("cancelEscalation")
     class CancelEscalation {
 
         @Test
-        @DisplayName("should cancel PENDING task when ACK received")
-        void shouldCancelPendingTask() {
+        @DisplayName("should cancel all PENDING tasks when ACK received")
+        void shouldCancelAllPendingTasks() {
             // given
-            final EscalationTask task = EscalationTask.create(
-                    INCIDENT_ID, TENANT_ID, Instant.now(), 15,
+            final EscalationTask task1 = EscalationTask.createLevel1(
+                    INCIDENT_ID, TENANT_ID, Instant.now(),
+                    "CRITICAL", "High CPU");
+            final EscalationTask task2 = EscalationTask.createLevel2(
+                    INCIDENT_ID, TENANT_ID, Instant.now(),
                     "CRITICAL", "High CPU");
 
-            given(taskRepository.findByIncidentId(INCIDENT_ID))
-                    .willReturn(Optional.of(task));
+            given(taskRepository.findAllByIncidentId(INCIDENT_ID))
+                    .willReturn(List.of(task1, task2));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID);
 
             // then
-            assertThat(task.getStatus()).isEqualTo("CANCELLED");
-            then(taskRepository).should().save(task);
+            assertThat(task1.getStatus()).isEqualTo("CANCELLED");
+            assertThat(task2.getStatus()).isEqualTo("CANCELLED");
         }
 
         @Test
-        @DisplayName("should do nothing if no task found")
-        void shouldDoNothingIfNoTaskFound() {
+        @DisplayName("should do nothing if no tasks found")
+        void shouldDoNothingIfNoTasksFound() {
             // given
-            given(taskRepository.findByIncidentId(INCIDENT_ID))
-                    .willReturn(Optional.empty());
+            given(taskRepository.findAllByIncidentId(INCIDENT_ID))
+                    .willReturn(List.of());
 
             // when
             escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID);
@@ -154,13 +237,13 @@ class EscalationServiceTest {
         @DisplayName("should not cancel already ESCALATED task")
         void shouldNotCancelEscalatedTask() {
             // given
-            final EscalationTask task = EscalationTask.create(
-                    INCIDENT_ID, TENANT_ID, Instant.now(), 15,
+            final EscalationTask task = EscalationTask.createLevel1(
+                    INCIDENT_ID, TENANT_ID, Instant.now(),
                     "CRITICAL", "High CPU");
             task.markEscalated();
 
-            given(taskRepository.findByIncidentId(INCIDENT_ID))
-                    .willReturn(Optional.of(task));
+            given(taskRepository.findAllByIncidentId(INCIDENT_ID))
+                    .willReturn(List.of(task));
 
             // when
             escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID);
