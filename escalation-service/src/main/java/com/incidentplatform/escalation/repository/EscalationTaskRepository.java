@@ -22,7 +22,11 @@ public interface EscalationTaskRepository
             """)
     List<EscalationTask> findDueForEscalation(@Param("now") Instant now);
 
-    Optional<EscalationTask> findByIncidentId(UUID incidentId);
+    List<EscalationTask> findAllByIncidentId(UUID incidentId);
 
-    boolean existsByIncidentId(UUID incidentId);
+    boolean existsByIncidentIdAndEscalationLevel(UUID incidentId,
+                                                 int escalationLevel);
+
+    Optional<EscalationTask> findByIncidentIdAndEscalationLevel(
+            UUID incidentId, int escalationLevel);
 }
