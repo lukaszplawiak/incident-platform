@@ -54,6 +54,7 @@ jwt:
 kafka:
   topics:
     incidents-lifecycle: incidents.lifecycle
+    audit-events: audit.events
 
 notification:
   channels:
