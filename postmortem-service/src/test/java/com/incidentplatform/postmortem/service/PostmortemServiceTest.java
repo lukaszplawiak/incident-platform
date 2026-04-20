@@ -6,6 +6,7 @@ import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -40,6 +41,9 @@ class PostmortemServiceTest {
     @Mock
     private GeminiClient geminiClient;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private PostmortemService postmortemService;
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
@@ -54,7 +58,7 @@ class PostmortemServiceTest {
     @BeforeEach
     void setUp() {
         postmortemService = new PostmortemService(
-                postmortemRepository, geminiClient);
+                postmortemRepository, geminiClient, auditEventPublisher);
     }
 
     @Nested

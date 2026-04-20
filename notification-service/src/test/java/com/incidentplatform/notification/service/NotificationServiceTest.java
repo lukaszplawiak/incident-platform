@@ -6,6 +6,7 @@ import com.incidentplatform.notification.domain.NotificationLog;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -42,6 +43,9 @@ class NotificationServiceTest {
     @Mock
     private NotificationChannel slackChannel;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private NotificationService notificationService;
 
     private static final String TENANT_ID = "test-tenant";
@@ -50,7 +54,7 @@ class NotificationServiceTest {
 
     @BeforeEach
     void setUp() {
-        notificationService = new NotificationService(router, logRepository);
+        notificationService = new NotificationService(router, logRepository, auditEventPublisher);
     }
 
     @Nested

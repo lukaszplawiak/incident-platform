@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -42,6 +43,9 @@ class EscalationSchedulerTest {
     @Mock
     private EscalationService escalationService;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private EscalationScheduler scheduler;
 
     private static final String TOPIC = "incidents.lifecycle";
@@ -54,7 +58,11 @@ class EscalationSchedulerTest {
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
         scheduler = new EscalationScheduler(
-                taskRepository, kafkaTemplate, objectMapper, escalationService);
+                taskRepository,
+                kafkaTemplate,
+                objectMapper,
+                escalationService,
+                auditEventPublisher);
         ReflectionTestUtils.setField(scheduler,
                 "incidentsLifecycleTopic", TOPIC);
     }
