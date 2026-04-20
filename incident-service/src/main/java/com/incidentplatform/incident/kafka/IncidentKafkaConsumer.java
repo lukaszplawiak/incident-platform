@@ -42,13 +42,30 @@ public class IncidentKafkaConsumer {
 
         final String tenantId = TenantContext.get();
 
-        log.info("Processing firing alert: alertId={}, fingerprint={}, " +
-                        "severity={}, source={}, tenant={}",
-                alert.alertId(), alert.fingerprint(),
-                alert.severity(), alert.source(), tenantId);
+        // Layer 4 — consumer-side severity prioritization.
+        // CRITICAL alerts logged at higher priority for faster identification.
+        //
+        // TODO: Split into separate topics per severity (alerts.raw.critical,
+        // alerts.raw.high etc.) when project moves to Kubernetes with multiple replicas.
+        // Priority benefit is minimal with single instance.
+        // With multiple replicas — separate consumer groups with different concurrency:
+        // alerts.raw.critical → concurrency=5
+        // alerts.raw.high     → concurrency=3
+        // alerts.raw.medium   → concurrency=2
+        // alerts.raw.low      → concurrency=1
+        final boolean isCritical = "CRITICAL".equalsIgnoreCase(alert.severity());
+        if (isCritical) {
+            log.warn("CRITICAL alert received — high priority processing: " +
+                            "alertId={}, fingerprint={}, tenant={}",
+                    alert.alertId(), alert.fingerprint(), tenantId);
+        } else {
+            log.info("Processing firing alert: alertId={}, fingerprint={}, " +
+                            "severity={}, source={}, tenant={}",
+                    alert.alertId(), alert.fingerprint(),
+                    alert.severity(), alert.source(), tenantId);
+        }
 
         commandService.createFromAlert(alert, tenantId);
-
         acknowledgment.acknowledge();
 
         log.info("Alert processed successfully: alertId={}, tenant={}",
