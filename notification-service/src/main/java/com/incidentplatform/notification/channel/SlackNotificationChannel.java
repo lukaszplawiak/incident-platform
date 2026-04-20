@@ -15,11 +15,14 @@ public class SlackNotificationChannel implements NotificationChannel {
     private static final Logger log =
             LoggerFactory.getLogger(SlackNotificationChannel.class);
 
+    private static final String SLACK_API_URL =
+            "https://slack.com/api/chat.postMessage";
+
     @Value("${notification.channels.slack.enabled:true}")
     private boolean enabled;
 
-    @Value("${notification.channels.slack.webhook-url}")
-    private String webhookUrl;
+    @Value("${notification.channels.slack.bot-token}")
+    private String botToken;
 
     @Value("${notification.channels.slack.channel:#incidents}")
     private String defaultChannel;
@@ -42,6 +45,57 @@ public class SlackNotificationChannel implements NotificationChannel {
 
     @Override
     public void send(NotificationRequest request) {
+        final String text = buildText(request);
+
+        sendToSlack(defaultChannel, text, request);
+
+        if (isSlackUserId(request.recipient())) {
+            sendToSlack(request.recipient(), text, request);
+            log.info("Slack DM sent to on-call: userId={}, incidentId={}",
+                    request.recipient(), request.incidentId());
+        } else {
+            log.debug("Recipient is not a Slack User ID — skipping DM: " +
+                    "recipient={}", request.recipient());
+        }
+    }
+
+    private void sendToSlack(String channel, String text,
+                             NotificationRequest request) {
+        final Map<String, String> payload = Map.of(
+                "channel", channel,
+                "text", text
+        );
+
+        try {
+            restClient.post()
+                    .uri(SLACK_API_URL)
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + botToken)
+                    .body(payload)
+                    .retrieve()
+                    .toBodilessEntity();
+
+            log.info("Slack message sent: channel={}, incidentId={}",
+                    channel, request.incidentId());
+
+        } catch (Exception e) {
+            throw new NotificationException(
+                    "SLACK",
+                    channel,
+                    "Slack API call failed for channel=" + channel +
+                            ": " + e.getMessage(),
+                    e
+            );
+        }
+    }
+
+    private boolean isSlackUserId(String recipient) {
+        return recipient != null
+                && !recipient.isBlank()
+                && recipient.startsWith("U");
+    }
+
+    private String buildText(NotificationRequest request) {
         final String severityEmoji = switch (request.severity().toUpperCase()) {
             case "CRITICAL" -> "🔴";
             case "HIGH"     -> "🟠";
@@ -50,7 +104,7 @@ public class SlackNotificationChannel implements NotificationChannel {
             default         -> "⚪";
         };
 
-        final String text = String.format(
+        return String.format(
                 "%s *%s*\n>%s\n>Incident ID: `%s` | Tenant: `%s`",
                 severityEmoji,
                 request.subject(),
@@ -58,27 +112,5 @@ public class SlackNotificationChannel implements NotificationChannel {
                 request.incidentId(),
                 request.tenantId()
         );
-
-        final Map<String, String> payload = Map.of("text", text);
-
-        try {
-            restClient.post()
-                    .uri(webhookUrl)
-                    .header("Content-Type", "application/json")
-                    .body(payload)
-                    .retrieve()
-                    .toBodilessEntity();
-
-            log.info("Slack notification sent: recipient={}, incidentId={}",
-                    request.recipient(), request.incidentId());
-
-        } catch (Exception e) {
-            throw new NotificationException(
-                    "SLACK",
-                    request.recipient(),
-                    "Slack webhook call failed: " + e.getMessage(),
-                    e
-            );
-        }
     }
 }

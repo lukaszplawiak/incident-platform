@@ -62,7 +62,7 @@ notification:
       from: alerts@incidentplatform.com
     slack:
       enabled: true
-      webhook-url: ${SLACK_WEBHOOK_URL:https://hooks.slack.com/mock}
+      bot-token: ${SLACK_BOT_TOKEN}
       channel: "#incidents"
     sms:
       enabled: true
