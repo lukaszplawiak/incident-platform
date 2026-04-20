@@ -1,6 +1,8 @@
 package com.incidentplatform.ingestion.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.incidentplatform.ingestion.ratelimit.RateLimitingService;
+import com.incidentplatform.ingestion.ratelimit.RateLimitResult;
 import com.incidentplatform.ingestion.service.AlertIngestionService;
 import com.incidentplatform.ingestion.service.IngestionSummary;
 import com.incidentplatform.shared.security.TenantContext;
@@ -39,12 +41,15 @@ public class AlertIngestionController {
     private static final Logger log =
             LoggerFactory.getLogger(AlertIngestionController.class);
 
+    private static final int MAX_PAYLOAD_BYTES = 1024 * 1024; // 1MB
+
     private final AlertIngestionService alertIngestionService;
+    private final RateLimitingService rateLimitingService;
 
-    private static final int MAX_PAYLOAD_BYTES = 1024 * 1024;
-
-    public AlertIngestionController(AlertIngestionService alertIngestionService) {
+    public AlertIngestionController(AlertIngestionService alertIngestionService,
+                                    RateLimitingService rateLimitingService) {
         this.alertIngestionService = alertIngestionService;
+        this.rateLimitingService = rateLimitingService;
     }
 
     @PostMapping(
@@ -68,7 +73,11 @@ public class AlertIngestionController {
             @ApiResponse(responseCode = "401",
                     description = "Missing or invalid JWT token"),
             @ApiResponse(responseCode = "403",
-                    description = "Insufficient permissions")
+                    description = "Insufficient permissions"),
+            @ApiResponse(responseCode = "413",
+                    description = "Payload too large (max 1MB)"),
+            @ApiResponse(responseCode = "429",
+                    description = "Too many requests — rate limit exceeded")
     })
     public ResponseEntity<IngestionSummary> ingestAlerts(
             @Parameter(
@@ -107,17 +116,36 @@ public class AlertIngestionController {
                             }
                     )
             )
-            @RequestBody JsonNode rawPayload) {
+            @RequestBody JsonNode rawPayload,
+
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
 
         final String tenantId = TenantContext.get();
+        final String clientIp = resolveClientIp(httpRequest);
 
-        log.info("Alert ingestion request: source={}, tenant={}", source, tenantId);
+        log.info("Alert ingestion request: source={}, tenant={}, ip={}",
+                source, tenantId, clientIp);
 
         final String payloadString = rawPayload.toString();
         if (payloadString.length() > MAX_PAYLOAD_BYTES) {
             log.warn("Alert payload too large: source={}, tenant={}, size={}",
                     source, tenantId, payloadString.length());
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
+        }
+
+        // Rate limiting — per tenant + per IP
+        final RateLimitResult rateLimitResult =
+                rateLimitingService.tryConsume(tenantId, clientIp);
+
+        if (!rateLimitResult.allowed()) {
+            log.warn("Request rejected by rate limiter: reason={}, " +
+                            "tenant={}, ip={}", rateLimitResult.reason(),
+                    tenantId, clientIp);
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .header("Retry-After",
+                            String.valueOf(rateLimitResult.retryAfterSeconds()))
+                    .header("X-RateLimit-Reason", rateLimitResult.reason())
+                    .build();
         }
 
         final IngestionSummary summary = alertIngestionService.ingest(
@@ -134,8 +162,7 @@ public class AlertIngestionController {
             "or hasRole('ROLE_RESPONDER')")
     @Operation(
             summary = "List available alert sources",
-            description = "Returns list of registered alert normalizers " +
-                    "(available source identifiers for webhook configuration)"
+            description = "Returns list of registered alert normalizers"
     )
     @ApiResponse(responseCode = "200",
             description = "List of available source identifiers")
@@ -143,5 +170,23 @@ public class AlertIngestionController {
         final List<String> sources = alertIngestionService.getAvailableSources();
         log.debug("Available alert sources requested: {}", sources);
         return ResponseEntity.ok(sources);
+    }
+
+    /**
+     * Resolves client IP — obsługuje proxy i load balancer.
+     * Sprawdza nagłówki X-Forwarded-For i X-Real-IP przed RemoteAddr.
+     */
+    private String resolveClientIp(
+            jakarta.servlet.http.HttpServletRequest request) {
+        final String xForwardedFor = request.getHeader("X-Forwarded-For");
+        if (xForwardedFor != null && !xForwardedFor.isBlank()) {
+            // X-Forwarded-For może zawierać wiele IP — bierzemy pierwsze
+            return xForwardedFor.split(",")[0].trim();
+        }
+        final String xRealIp = request.getHeader("X-Real-IP");
+        if (xRealIp != null && !xRealIp.isBlank()) {
+            return xRealIp.trim();
+        }
+        return request.getRemoteAddr();
     }
 }
