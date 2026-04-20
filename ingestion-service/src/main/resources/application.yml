@@ -117,3 +117,37 @@ resilience4j:
           - org.springframework.data.redis.RedisConnectionFailureException
           - io.lettuce.core.RedisConnectionException
           - java.net.ConnectException
+
+# ================================================================
+# Rate Limiting — multi-layer DDoS protection (Layer 3)
+#
+# Per tenant:   isolation between tenants
+# Per IP:       protection against attacks from a single source
+# Per severity: CRITICAL > HIGH > MEDIUM > LOW
+#
+# TODO (Layer 1): Cloudflare — when project goes to public domain
+# TODO (Layer 2): Nginx Ingress rate limiting — when Kubernetes
+# TODO (Layer 4): Separate Kafka topics per severity — when Kubernetes
+#   alerts.raw.critical, alerts.raw.high etc.
+#   Priority benefit is minimal with single instance.
+# TODO (Layer 5): Prometheus alert RateLimitExceeded — when monitoring
+# ================================================================
+rate-limiting:
+  enabled: ${RATE_LIMITING_ENABLED:true}
+  tenant:
+    capacity: ${RATE_LIMIT_TENANT_CAPACITY:100}
+    refill-tokens: ${RATE_LIMIT_TENANT_REFILL:10}
+    refill-period-seconds: ${RATE_LIMIT_TENANT_PERIOD:1}
+  ip:
+    capacity: ${RATE_LIMIT_IP_CAPACITY:50}
+    refill-tokens: ${RATE_LIMIT_IP_REFILL:5}
+    refill-period-seconds: ${RATE_LIMIT_IP_PERIOD:1}
+  severity:
+    critical:
+      capacity: ${RATE_LIMIT_CRITICAL_CAPACITY:1000}
+    high:
+      capacity: ${RATE_LIMIT_HIGH_CAPACITY:500}
+    medium:
+      capacity: ${RATE_LIMIT_MEDIUM_CAPACITY:100}
+    low:
+      capacity: ${RATE_LIMIT_LOW_CAPACITY:50}
