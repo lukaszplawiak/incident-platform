@@ -23,6 +23,9 @@ public class KafkaConfig {
     @Value("${kafka.topics.alerts-resolved}")
     private String alertsResolvedTopic;
 
+    @Value("${kafka.topics.audit-events}")
+    private String auditEventsTopic;
+
     @Bean
     public NewTopic incidentsLifecycleTopic() {
         return TopicBuilder
@@ -51,6 +54,15 @@ public class KafkaConfig {
                 .replicas(1)
                 .config("retention.ms",
                         String.valueOf(30L * 24 * 60 * 60 * 1000))
+                .build();
+    }
+
+    @Bean
+    public NewTopic auditEventsTopic() {
+        return TopicBuilder
+                .name(auditEventsTopic)
+                .partitions(3)
+                .replicas(1)
                 .build();
     }
 
