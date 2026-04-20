@@ -54,6 +54,7 @@ jwt:
 kafka:
   topics:
     incidents-lifecycle: incidents.lifecycle
+    audit-events: audit.events
 
 gemini:
   api-key: ${GEMINI_API_KEY:your-api-key-here}

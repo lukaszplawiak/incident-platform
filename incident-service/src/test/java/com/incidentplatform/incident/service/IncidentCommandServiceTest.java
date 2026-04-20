@@ -7,6 +7,7 @@ import com.incidentplatform.incident.dto.IncidentDto;
 import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
 import com.incidentplatform.incident.repository.IncidentRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
@@ -51,6 +52,9 @@ class IncidentCommandServiceTest {
     @Mock
     private IncidentWebSocketPublisher webSocketPublisher;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private IncidentCommandService commandService;
 
     private static final String TENANT_ID = "test-tenant";
@@ -62,7 +66,8 @@ class IncidentCommandServiceTest {
                 incidentRepository,
                 historyRepository,
                 eventPublisher,
-                webSocketPublisher
+                webSocketPublisher,
+                auditEventPublisher
         );
     }
 

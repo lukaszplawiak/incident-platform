@@ -59,6 +59,7 @@ jwt:
 kafka:
   topics:
     incidents-lifecycle: incidents.lifecycle
+    audit-events: audit.events
 
 escalation:
   threshold-minutes: ${ESCALATION_THRESHOLD_MINUTES:15}
