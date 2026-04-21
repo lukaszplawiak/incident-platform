@@ -31,7 +31,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/actuator/health",
-                                "/actuator/info").permitAll()
+                                "/actuator/info",
+                                "/actuator/prometheus").permitAll()
                         .requestMatchers("/api/v1/oncall/current")
                         .hasAnyRole("SERVICE", "ADMIN")
                         .anyRequest().authenticated()
