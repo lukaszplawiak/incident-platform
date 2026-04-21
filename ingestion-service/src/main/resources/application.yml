@@ -82,6 +82,9 @@ server:
     max-swallow-size: ${MAX_SWALLOW_SIZE:1MB}
 
 management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:
