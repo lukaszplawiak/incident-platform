@@ -1,7 +1,5 @@
 version: '3.9'
-
 services:
-
   # ----------------------------------------------------------
   # PostgreSQL 16
   # ----------------------------------------------------------
@@ -70,14 +68,14 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1" ]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 10
       start_period: 30s
 
   # ----------------------------------------------------------
-  # Kafka UI
+  # Kafka UI: http://localhost:8090
   # ----------------------------------------------------------
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -112,8 +110,73 @@ services:
       postgres:
         condition: service_healthy
 
+  # ----------------------------------------------------------
+  # Prometheus: http://localhost:9090
+  # Scrape interval: 15s
+  # Scrape targets: wszystkie serwisy przez /actuator/prometheus
+  # ----------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: incident-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------
+  # Grafana: http://localhost:3000
+  # Login: admin / admin
+  # Datasource: Prometheus (auto-configured)
+  # ----------------------------------------------------------
+  grafana:
+    image: grafana/grafana:latest
+    container_name: incident-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: admin
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      # Auto-configure Prometheus datasource
+      GF_DATASOURCES_DEFAULT_NAME: Prometheus
+      GF_DATASOURCES_DEFAULT_TYPE: prometheus
+      GF_DATASOURCES_DEFAULT_URL: http://prometheus:9090
+      GF_DATASOURCES_DEFAULT_IS_DEFAULT: 'true'
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
   redis_data:
   kafka_data:
   pgadmin_data:
+  prometheus_data:
+  grafana_data:
