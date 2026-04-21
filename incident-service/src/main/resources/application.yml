@@ -88,6 +88,9 @@ server:
     include-binding-errors: never
 
 management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:
