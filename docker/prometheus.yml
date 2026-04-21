@@ -1,0 +1,58 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # ----------------------------------------------------------------
+  # Incident Platform — Spring Boot serwisy
+  # Każdy serwis eksponuje metryki na porcie management (8091-8096)
+  # przez endpoint /actuator/prometheus
+  # ----------------------------------------------------------------
+
+  - job_name: 'ingestion-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8091']
+        labels:
+          service: 'ingestion-service'
+          application: 'incident-platform'
+
+  - job_name: 'incident-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8092']
+        labels:
+          service: 'incident-service'
+          application: 'incident-platform'
+
+  - job_name: 'notification-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8093']
+        labels:
+          service: 'notification-service'
+          application: 'incident-platform'
+
+  - job_name: 'escalation-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8094']
+        labels:
+          service: 'escalation-service'
+          application: 'incident-platform'
+
+  - job_name: 'postmortem-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8095']
+        labels:
+          service: 'postmortem-service'
+          application: 'incident-platform'
+
+  - job_name: 'oncall-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8096']
+        labels:
+          service: 'oncall-service'
+          application: 'incident-platform'

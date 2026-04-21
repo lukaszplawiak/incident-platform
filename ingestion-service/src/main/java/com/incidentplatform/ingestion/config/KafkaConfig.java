@@ -1,4 +1,4 @@
-package com.incidentplatform.ingestion.service.config;
+package com.incidentplatform.ingestion.config;
 
 import org.apache.kafka.clients.admin.NewTopic;
 import org.springframework.beans.factory.annotation.Value;
