@@ -15,7 +15,6 @@ scrape_configs:
       - targets: ['host.docker.internal:8091']
         labels:
           service: 'ingestion-service'
-          application: 'incident-platform'
 
   - job_name: 'incident-service'
     metrics_path: '/actuator/prometheus'
@@ -23,7 +22,6 @@ scrape_configs:
       - targets: ['host.docker.internal:8092']
         labels:
           service: 'incident-service'
-          application: 'incident-platform'
 
   - job_name: 'notification-service'
     metrics_path: '/actuator/prometheus'
@@ -31,7 +29,6 @@ scrape_configs:
       - targets: ['host.docker.internal:8093']
         labels:
           service: 'notification-service'
-          application: 'incident-platform'
 
   - job_name: 'escalation-service'
     metrics_path: '/actuator/prometheus'
@@ -39,7 +36,6 @@ scrape_configs:
       - targets: ['host.docker.internal:8094']
         labels:
           service: 'escalation-service'
-          application: 'incident-platform'
 
   - job_name: 'postmortem-service'
     metrics_path: '/actuator/prometheus'
@@ -47,7 +43,6 @@ scrape_configs:
       - targets: ['host.docker.internal:8095']
         labels:
           service: 'postmortem-service'
-          application: 'incident-platform'
 
   - job_name: 'oncall-service'
     metrics_path: '/actuator/prometheus'
@@ -55,4 +50,3 @@ scrape_configs:
       - targets: ['host.docker.internal:8096']
         labels:
           service: 'oncall-service'
-          application: 'incident-platform'
