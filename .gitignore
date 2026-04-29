@@ -9,16 +9,22 @@ target/
 .idea/
 *.iml
 *.iws
+*.ipr
 .classpath
 .project
 .settings/
+.factorypath
+.apt_generated
+.springBeans
+.sts4-cache
+.vscode/
 *.swp
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logi
 *.log
 logs/
 
@@ -26,7 +32,7 @@ logs/
 application-local.yml
 application-secrets.yml
 
-# Env files — nigdy nie commituj sekretów
+# Env variable
 .env
 .env.local
 *.env
@@ -34,12 +40,5 @@ application-secrets.yml
 # Docker
 docker/data/
 
-# Node (frontend)
-frontend/node_modules/
-frontend/dist/
-frontend/.next/
-
-# GCP credentials — NIGDY nie commituj
-*.json
-!*-schema.json
-!package*.json
+# HELP.md
+HELP.md
