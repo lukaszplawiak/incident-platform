@@ -28,6 +28,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String MDC_REQUEST_ID = "requestId";
     private static final String MDC_USER_ID = "userId";
+
     private final JwtUtils jwtUtils;
 
     public JwtAuthFilter(JwtUtils jwtUtils) {
@@ -47,7 +48,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         try {
             processAuthentication(request);
             filterChain.doFilter(request, response);
-
         } finally {
             TenantContext.clear();
             MDC.remove(MDC_REQUEST_ID);
@@ -127,7 +127,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         return path.startsWith("/actuator/health")
                 || path.startsWith("/actuator/info")
                 || path.startsWith("/v3/api-docs")
-                || path.startsWith("/swagger-ui")
-                || path.startsWith("/dev/");
+                || path.startsWith("/swagger-ui");
     }
 }
