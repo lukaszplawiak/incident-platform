@@ -20,6 +20,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
@@ -54,7 +55,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should do nothing when no FAILED postmortems exist")
         void shouldDoNothingWhenNoFailedPostmortems() {
             // given
-            given(postmortemRepository.findByStatus("FAILED"))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of());
 
             // when
@@ -70,7 +71,7 @@ class PostmortemRetrySchedulerTest {
         void shouldMarkDraftWhenGeminiSucceeds() {
             // given
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findByStatus("FAILED"))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
             given(geminiClient.generate(anyString()))
                     .willReturn("## Summary\nRetried postmortem content");
@@ -88,11 +89,11 @@ class PostmortemRetrySchedulerTest {
         }
 
         @Test
-        @DisplayName("should keep FAILED status when Gemini still fails")
+        @DisplayName("should keep PERMANENTLY_FAILED status when Gemini still fails")
         void shouldKeepFailedStatusWhenGeminiStillFails() {
             // given
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findByStatus("FAILED"))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("Still unavailable"));
@@ -103,9 +104,29 @@ class PostmortemRetrySchedulerTest {
             scheduler.retryFailedPostmortems();
 
             // then
-            assertThat(postmortem.getStatus()).isEqualTo("FAILED");
+            assertThat(postmortem.getStatus()).isEqualTo("PERMANENTLY_FAILED");
             assertThat(postmortem.getErrorMessage())
                     .contains("Still unavailable");
+        }
+
+        @Test
+        @DisplayName("should mark PERMANENTLY_FAILED after exhausting all retries")
+        void shouldMarkPermanentlyFailedAfterMaxRetries() {
+            // given
+            final Postmortem postmortem = buildFailedPostmortemWithRetries(2);
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+                    .willReturn(List.of(postmortem));
+            given(geminiClient.generate(anyString()))
+                    .willThrow(new GeminiException("API down"));
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // when
+            scheduler.retryFailedPostmortems();
+
+            // then
+            assertThat(postmortem.getStatus()).isEqualTo("PERMANENTLY_FAILED");
+            assertThat(postmortem.getErrorMessage()).contains("API down");
         }
 
         @Test
@@ -115,10 +136,11 @@ class PostmortemRetrySchedulerTest {
             final Postmortem postmortem1 = buildFailedPostmortem();
             final Postmortem postmortem2 = buildFailedPostmortem();
 
-            given(postmortemRepository.findByStatus("FAILED"))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem1, postmortem2));
             given(postmortemRepository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
+
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("Timeout"))
                     .willReturn("## Summary\nSuccessful retry");
@@ -136,7 +158,7 @@ class PostmortemRetrySchedulerTest {
         void shouldSendPromptWithIncidentDetails() {
             // given
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findByStatus("FAILED"))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
             given(geminiClient.generate(anyString())).willReturn("draft");
             given(postmortemRepository.save(any()))
@@ -157,6 +179,10 @@ class PostmortemRetrySchedulerTest {
     }
 
     private Postmortem buildFailedPostmortem() {
+        return buildFailedPostmortemWithRetries(0);
+    }
+
+    private Postmortem buildFailedPostmortemWithRetries(int retryCount) {
         final Instant openedAt = Instant.now().minusSeconds(30 * 60L);
         final Instant resolvedAt = Instant.now();
         final Postmortem postmortem = Postmortem.createGenerating(
@@ -169,6 +195,9 @@ class PostmortemRetrySchedulerTest {
                 30
         );
         postmortem.markFailed("Gemini API quota exceeded");
+        for (int i = 0; i < retryCount; i++) {
+            postmortem.incrementRetryCount();
+        }
         return postmortem;
     }
 }
