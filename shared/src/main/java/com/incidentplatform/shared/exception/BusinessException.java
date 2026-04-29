@@ -5,7 +5,6 @@ import org.springframework.http.HttpStatus;
 public class BusinessException extends RuntimeException {
 
     private final String errorCode;
-
     private final HttpStatus httpStatus;
 
     public BusinessException(String errorCode, String message) {
@@ -24,6 +23,13 @@ public class BusinessException extends RuntimeException {
         super(message, cause);
         this.errorCode = errorCode;
         this.httpStatus = HttpStatus.UNPROCESSABLE_ENTITY;
+    }
+
+    public BusinessException(String errorCode, String message, HttpStatus httpStatus,
+                             Throwable cause) {
+        super(message, cause);
+        this.errorCode = errorCode;
+        this.httpStatus = httpStatus;
     }
 
     public String getErrorCode() {
