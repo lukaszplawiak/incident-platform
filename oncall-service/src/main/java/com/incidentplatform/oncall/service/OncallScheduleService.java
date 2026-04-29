@@ -5,6 +5,7 @@ import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
+import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -12,7 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -31,12 +31,11 @@ public class OncallScheduleService {
     @Transactional
     public OncallScheduleDto create(String tenantId,
                                     CreateOncallScheduleRequest request) {
-        final boolean overlapping = repository.existsOverlapping(
+        final boolean overlapping = repository.existsOverlappingForCreate(
                 tenantId,
                 request.role(),
                 request.startsAt(),
-                request.endsAt(),
-                UUID.fromString("00000000-0000-0000-0000-000000000000")
+                request.endsAt()
         );
 
         if (overlapping) {
@@ -95,20 +94,19 @@ public class OncallScheduleService {
     public OncallScheduleDto getById(UUID id, String tenantId) {
         return repository.findByIdAndTenantId(id, tenantId)
                 .map(OncallScheduleDto::from)
-                .orElseThrow(() -> new NoSuchElementException(
-                        "OncallSchedule not found: id=" + id));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "OncallSchedule", id));
     }
 
     @Transactional
     public void delete(UUID id, String tenantId) {
         final OncallSchedule schedule = repository
                 .findByIdAndTenantId(id, tenantId)
-                .orElseThrow(() -> new NoSuchElementException(
-                        "OncallSchedule not found: id=" + id));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "OncallSchedule", id));
 
         repository.delete(schedule);
 
-        log.info("OncallSchedule deleted: id={}, tenantId={}",
-                id, tenantId);
+        log.info("OncallSchedule deleted: id={}, tenantId={}", id, tenantId);
     }
 }

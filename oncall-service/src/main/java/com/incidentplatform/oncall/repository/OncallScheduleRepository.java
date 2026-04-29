@@ -49,6 +49,19 @@ public interface OncallScheduleRepository
             AND s.role = :role
             AND s.startsAt < :endsAt
             AND s.endsAt > :startsAt
+            """)
+    boolean existsOverlappingForCreate(
+            @Param("tenantId") String tenantId,
+            @Param("role") String role,
+            @Param("startsAt") Instant startsAt,
+            @Param("endsAt") Instant endsAt);
+
+    @Query("""
+            SELECT COUNT(s) > 0 FROM OncallSchedule s
+            WHERE s.tenantId = :tenantId
+            AND s.role = :role
+            AND s.startsAt < :endsAt
+            AND s.endsAt > :startsAt
             AND s.id != :excludeId
             """)
     boolean existsOverlapping(

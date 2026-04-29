@@ -5,6 +5,7 @@ import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
+import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -16,7 +17,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -59,9 +59,9 @@ class OncallScheduleServiceTest {
         void shouldCreateScheduleWhenNoOverlap() {
             // given
             final CreateOncallScheduleRequest request = buildRequest("PRIMARY");
-            given(repository.existsOverlapping(
-                    eq(TENANT_ID), eq("PRIMARY"),
-                    any(), any(), any()))
+
+            given(repository.existsOverlappingForCreate(
+                    eq(TENANT_ID), eq("PRIMARY"), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
@@ -83,8 +83,8 @@ class OncallScheduleServiceTest {
         void shouldSaveScheduleWithCorrectFields() {
             // given
             final CreateOncallScheduleRequest request = buildRequest("SECONDARY");
-            given(repository.existsOverlapping(
-                    anyString(), anyString(), any(), any(), any()))
+            given(repository.existsOverlappingForCreate(
+                    anyString(), anyString(), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
@@ -108,8 +108,8 @@ class OncallScheduleServiceTest {
         void shouldThrowWhenOverlap() {
             // given
             final CreateOncallScheduleRequest request = buildRequest("PRIMARY");
-            given(repository.existsOverlapping(
-                    anyString(), anyString(), any(), any(), any()))
+            given(repository.existsOverlappingForCreate(
+                    anyString(), anyString(), any(), any()))
                     .willReturn(true);
 
             // when / then
@@ -224,7 +224,7 @@ class OncallScheduleServiceTest {
         }
 
         @Test
-        @DisplayName("should throw NoSuchElementException when not found")
+        @DisplayName("should throw ResourceNotFoundException when not found")
         void shouldThrowWhenNotFound() {
             // given
             given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
@@ -233,7 +233,8 @@ class OncallScheduleServiceTest {
             // when / then
             assertThatThrownBy(() ->
                     service.getById(SCHEDULE_ID, TENANT_ID))
-                    .isInstanceOf(NoSuchElementException.class);
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining(SCHEDULE_ID.toString());
         }
     }
 
@@ -257,7 +258,7 @@ class OncallScheduleServiceTest {
         }
 
         @Test
-        @DisplayName("should throw when schedule not found")
+        @DisplayName("should throw ResourceNotFoundException when schedule not found")
         void shouldThrowWhenNotFound() {
             // given
             given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
@@ -266,12 +267,12 @@ class OncallScheduleServiceTest {
             // when / then
             assertThatThrownBy(() ->
                     service.delete(SCHEDULE_ID, TENANT_ID))
-                    .isInstanceOf(NoSuchElementException.class);
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining(SCHEDULE_ID.toString());
 
             then(repository).should(never()).delete(any());
         }
     }
-
 
     private CreateOncallScheduleRequest buildRequest(String role) {
         return new CreateOncallScheduleRequest(
