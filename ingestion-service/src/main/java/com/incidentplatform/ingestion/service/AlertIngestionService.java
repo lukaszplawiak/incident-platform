@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.ingestion.normalizer.AlertNormalizer;
 import com.incidentplatform.ingestion.normalizer.NormalizationException;
 import com.incidentplatform.ingestion.normalizer.NormalizationResult;
+import com.incidentplatform.ingestion.normalizer.UnknownSourceException;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import org.slf4j.Logger;
@@ -128,22 +129,5 @@ public class AlertIngestionService {
                     List.copyOf(normalizersBySource.keySet()));
         }
         return normalizer;
-    }
-
-    public static class UnknownSourceException extends RuntimeException {
-
-        private final String source;
-        private final List<String> availableSources;
-
-        public UnknownSourceException(String source, List<String> availableSources) {
-            super(String.format(
-                    "Unknown alert source: '%s'. Available sources: %s",
-                    source, availableSources));
-            this.source = source;
-            this.availableSources = availableSources;
-        }
-
-        public String getSource() { return source; }
-        public List<String> getAvailableSources() { return availableSources; }
     }
 }

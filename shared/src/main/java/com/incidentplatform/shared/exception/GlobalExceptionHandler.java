@@ -62,39 +62,6 @@ public class GlobalExceptionHandler {
                 ));
     }
 
-    @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<ErrorResponse> handleIngestionExceptions(
-            RuntimeException ex) {
-
-        final String className = ex.getClass().getSimpleName();
-
-        if ("NormalizationException".equals(className)) {
-            log.warn("Alert normalization failed: {}", ex.getMessage());
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(ErrorResponse.of(
-                            HttpStatus.BAD_REQUEST.value(),
-                            "NORMALIZATION_FAILED",
-                            ex.getMessage(),
-                            getRequestId()
-                    ));
-        }
-
-        if ("UnknownSourceException".equals(className)) {
-            log.warn("Unknown alert source: {}", ex.getMessage());
-            return ResponseEntity
-                    .status(HttpStatus.BAD_REQUEST)
-                    .body(ErrorResponse.of(
-                            HttpStatus.BAD_REQUEST.value(),
-                            "UNKNOWN_ALERT_SOURCE",
-                            ex.getMessage(),
-                            getRequestId()
-                    ));
-        }
-
-        throw ex;
-    }
-
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationErrors(
             MethodArgumentNotValidException ex) {
