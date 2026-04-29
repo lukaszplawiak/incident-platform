@@ -4,6 +4,7 @@ import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
+import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -39,8 +40,10 @@ class PostmortemRetrySchedulerTest {
 
     @BeforeEach
     void setUp() {
+        final PostmortemPromptBuilder promptBuilder = new PostmortemPromptBuilder();
+
         scheduler = new PostmortemRetryScheduler(
-                postmortemRepository, geminiClient);
+                postmortemRepository, geminiClient, promptBuilder);
     }
 
     @Nested
@@ -116,7 +119,6 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem1, postmortem2));
             given(postmortemRepository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
-
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("Timeout"))
                     .willReturn("## Summary\nSuccessful retry");
@@ -126,8 +128,6 @@ class PostmortemRetrySchedulerTest {
 
             // then
             then(geminiClient).should(times(2)).generate(anyString());
-
-            // then
             assertThat(postmortem2.getStatus()).isEqualTo("DRAFT");
         }
 

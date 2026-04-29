@@ -4,9 +4,9 @@ import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
+import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.jpa.repository.Query;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,11 +21,14 @@ public class PostmortemRetryScheduler {
 
     private final PostmortemRepository postmortemRepository;
     private final GeminiClient geminiClient;
+    private final PostmortemPromptBuilder promptBuilder;
 
     public PostmortemRetryScheduler(PostmortemRepository postmortemRepository,
-                                    GeminiClient geminiClient) {
+                                    GeminiClient geminiClient,
+                                    PostmortemPromptBuilder promptBuilder) {
         this.postmortemRepository = postmortemRepository;
         this.geminiClient = geminiClient;
+        this.promptBuilder = promptBuilder;
     }
 
     @Scheduled(
@@ -49,9 +52,8 @@ public class PostmortemRetryScheduler {
             try {
                 retryOne(postmortem);
             } catch (Exception e) {
-                log.error("Retry failed for postmortem: incidentId={}, " +
-                                "error={}", postmortem.getIncidentId(),
-                        e.getMessage());
+                log.error("Retry failed for postmortem: incidentId={}, error={}",
+                        postmortem.getIncidentId(), e.getMessage());
             }
         }
     }
@@ -61,7 +63,7 @@ public class PostmortemRetryScheduler {
                 postmortem.getIncidentId(), postmortem.getTenantId());
 
         try {
-            final String prompt = buildPrompt(postmortem);
+            final String prompt = promptBuilder.build(postmortem);
             final String content = geminiClient.generate(prompt);
 
             postmortem.markDraft(content, prompt);
@@ -74,52 +76,8 @@ public class PostmortemRetryScheduler {
             postmortem.markFailed(e.getMessage());
             postmortemRepository.save(postmortem);
 
-            log.warn("Postmortem retry still failing: incidentId={}, " +
-                    "error={}", postmortem.getIncidentId(), e.getMessage());
+            log.warn("Postmortem retry still failing: incidentId={}, error={}",
+                    postmortem.getIncidentId(), e.getMessage());
         }
-    }
-
-    private String buildPrompt(Postmortem postmortem) {
-        return String.format("""
-                You are an experienced SRE (Site Reliability Engineer) writing a postmortem document.
-                
-                Write a professional postmortem for the following incident:
-                
-                Title: %s
-                Severity: %s
-                Duration: %d minutes
-                Started: %s
-                Resolved: %s
-                
-                The postmortem should include the following sections:
-                
-                ## Summary
-                A brief 2-3 sentence description of what happened and the impact.
-                
-                ## Timeline
-                A chronological list of key events during the incident.
-                
-                ## Root Cause
-                The technical root cause of the incident.
-                
-                ## Impact
-                Who was affected and how.
-                
-                ## Resolution
-                What was done to resolve the incident.
-                
-                ## Action Items
-                3-5 concrete action items to prevent recurrence, each with a suggested owner role.
-                
-                ## Lessons Learned
-                Key takeaways from this incident.
-                
-                Write in a professional, factual tone. Use markdown formatting.
-                """,
-                postmortem.getIncidentTitle(),
-                postmortem.getIncidentSeverity(),
-                postmortem.getDurationMinutes(),
-                postmortem.getIncidentOpenedAt().toString(),
-                postmortem.getIncidentResolvedAt().toString());
     }
 }
