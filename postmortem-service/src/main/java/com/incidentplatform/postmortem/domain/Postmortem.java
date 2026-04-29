@@ -17,7 +17,8 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_postmortems_tenant_id",    columnList = "tenant_id"),
                 @Index(name = "idx_postmortems_incident_id",  columnList = "incident_id"),
-                @Index(name = "idx_postmortems_created_at",   columnList = "created_at")
+                @Index(name = "idx_postmortems_created_at",   columnList = "created_at"),
+                @Index(name = "idx_postmortems_status_retry", columnList = "status, retry_count")
         }
 )
 public class Postmortem {
@@ -68,6 +69,10 @@ public class Postmortem {
     private String promptUsed;
 
     @NotNull
+    @Column(name = "retry_count", nullable = false)
+    private Integer retryCount = 0;
+
+    @NotNull
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -94,6 +99,7 @@ public class Postmortem {
         p.incidentResolvedAt = incidentResolvedAt;
         p.durationMinutes = durationMinutes;
         p.status = "GENERATING";
+        p.retryCount = 0;
         p.createdAt = Instant.now();
         p.updatedAt = Instant.now();
         return p;
@@ -112,6 +118,17 @@ public class Postmortem {
         this.updatedAt = Instant.now();
     }
 
+    public void markPermanentlyFailed(String errorMessage) {
+        this.errorMessage = errorMessage;
+        this.status = "PERMANENTLY_FAILED";
+        this.updatedAt = Instant.now();
+    }
+
+    public void incrementRetryCount() {
+        this.retryCount++;
+        this.updatedAt = Instant.now();
+    }
+
     public void updateContent(String content) {
         this.content = content;
         this.updatedAt = Instant.now();
@@ -122,21 +139,23 @@ public class Postmortem {
         this.updatedAt = Instant.now();
     }
 
-    public boolean isDraft()  { return "DRAFT".equals(this.status); }
-    public boolean isFailed() { return "FAILED".equals(this.status); }
+    public boolean isDraft()             { return "DRAFT".equals(this.status); }
+    public boolean isFailed()            { return "FAILED".equals(this.status); }
+    public boolean isPermanentlyFailed() { return "PERMANENTLY_FAILED".equals(this.status); }
 
-    public UUID getId()                  { return id; }
-    public UUID getIncidentId()          { return incidentId; }
-    public String getTenantId()          { return tenantId; }
-    public String getIncidentTitle()     { return incidentTitle; }
-    public String getIncidentSeverity()  { return incidentSeverity; }
-    public Instant getIncidentOpenedAt() { return incidentOpenedAt; }
+    public UUID getId()                    { return id; }
+    public UUID getIncidentId()            { return incidentId; }
+    public String getTenantId()            { return tenantId; }
+    public String getIncidentTitle()       { return incidentTitle; }
+    public String getIncidentSeverity()    { return incidentSeverity; }
+    public Instant getIncidentOpenedAt()   { return incidentOpenedAt; }
     public Instant getIncidentResolvedAt() { return incidentResolvedAt; }
-    public Integer getDurationMinutes()  { return durationMinutes; }
-    public String getStatus()            { return status; }
-    public String getContent()           { return content; }
-    public String getErrorMessage()      { return errorMessage; }
-    public String getPromptUsed()        { return promptUsed; }
-    public Instant getCreatedAt()        { return createdAt; }
-    public Instant getUpdatedAt()        { return updatedAt; }
+    public Integer getDurationMinutes()    { return durationMinutes; }
+    public String getStatus()              { return status; }
+    public String getContent()             { return content; }
+    public String getErrorMessage()        { return errorMessage; }
+    public String getPromptUsed()          { return promptUsed; }
+    public Integer getRetryCount()         { return retryCount; }
+    public Instant getCreatedAt()          { return createdAt; }
+    public Instant getUpdatedAt()          { return updatedAt; }
 }
