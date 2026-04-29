@@ -36,13 +36,12 @@ class PostmortemRetrySchedulerTest {
     @Mock
     private GeminiClient geminiClient;
 
-    @Mock
-    private PostmortemPromptBuilder promptBuilder;
-
     private PostmortemRetryScheduler scheduler;
 
     @BeforeEach
     void setUp() {
+        final PostmortemPromptBuilder promptBuilder = new PostmortemPromptBuilder();
+
         scheduler = new PostmortemRetryScheduler(
                 postmortemRepository, geminiClient, promptBuilder);
     }
@@ -120,7 +119,6 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem1, postmortem2));
             given(postmortemRepository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
-
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("Timeout"))
                     .willReturn("## Summary\nSuccessful retry");
@@ -130,8 +128,6 @@ class PostmortemRetrySchedulerTest {
 
             // then
             then(geminiClient).should(times(2)).generate(anyString());
-
-            // then
             assertThat(postmortem2.getStatus()).isEqualTo("DRAFT");
         }
 

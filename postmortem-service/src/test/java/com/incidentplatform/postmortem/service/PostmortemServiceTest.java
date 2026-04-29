@@ -7,6 +7,7 @@ import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -18,7 +19,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -44,9 +44,6 @@ class PostmortemServiceTest {
     @Mock
     private AuditEventPublisher auditEventPublisher;
 
-    @Mock
-    private  PostmortemPromptBuilder promptBuilder;
-
     private PostmortemService postmortemService;
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
@@ -60,8 +57,11 @@ class PostmortemServiceTest {
 
     @BeforeEach
     void setUp() {
+        final PostmortemPromptBuilder promptBuilder = new PostmortemPromptBuilder();
+
         postmortemService = new PostmortemService(
-                postmortemRepository, geminiClient, auditEventPublisher, promptBuilder);
+                postmortemRepository, geminiClient, auditEventPublisher,
+                promptBuilder);
     }
 
     @Nested
@@ -214,7 +214,7 @@ class PostmortemServiceTest {
         }
 
         @Test
-        @DisplayName("should throw NoSuchElementException when not found")
+        @DisplayName("should throw ResourceNotFoundException when not found")
         void shouldThrowWhenNotFound() {
             // given
             given(postmortemRepository
@@ -224,7 +224,8 @@ class PostmortemServiceTest {
             // when / then
             assertThatThrownBy(() ->
                     postmortemService.getByIncidentId(INCIDENT_ID, TENANT_ID))
-                    .isInstanceOf(NoSuchElementException.class);
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining(INCIDENT_ID.toString());
         }
     }
 
@@ -257,7 +258,7 @@ class PostmortemServiceTest {
         }
 
         @Test
-        @DisplayName("should throw NoSuchElementException when postmortem not found")
+        @DisplayName("should throw ResourceNotFoundException when postmortem not found")
         void shouldThrowWhenNotFound() {
             // given
             given(postmortemRepository
@@ -269,7 +270,8 @@ class PostmortemServiceTest {
                     postmortemService.updateContent(
                             INCIDENT_ID, TENANT_ID,
                             new UpdatePostmortemRequest("content")))
-                    .isInstanceOf(NoSuchElementException.class);
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining(INCIDENT_ID.toString());
         }
     }
 
