@@ -7,6 +7,7 @@ import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -15,7 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.NoSuchElementException;
 import java.util.UUID;
 
 @Service
@@ -29,13 +29,16 @@ public class PostmortemService {
     private final PostmortemRepository postmortemRepository;
     private final GeminiClient geminiClient;
     private final AuditEventPublisher auditEventPublisher;
+    private final PostmortemPromptBuilder promptBuilder;
 
     public PostmortemService(PostmortemRepository postmortemRepository,
                              GeminiClient geminiClient,
-                             AuditEventPublisher auditEventPublisher) {
+                             AuditEventPublisher auditEventPublisher,
+                             PostmortemPromptBuilder promptBuilder) {
         this.postmortemRepository = postmortemRepository;
         this.geminiClient = geminiClient;
         this.auditEventPublisher = auditEventPublisher;
+        this.promptBuilder = promptBuilder;
     }
 
     @Transactional
@@ -48,8 +51,8 @@ public class PostmortemService {
                                    int durationMinutes) {
 
         if (postmortemRepository.existsByIncidentId(incidentId)) {
-            log.debug("Postmortem already exists for incidentId={}, " +
-                    "skipping", incidentId);
+            log.debug("Postmortem already exists for incidentId={}, skipping",
+                    incidentId);
             return;
         }
 
@@ -63,7 +66,8 @@ public class PostmortemService {
                 incidentId, tenantId, incidentSeverity, durationMinutes);
 
         try {
-            final String prompt = buildPrompt(incidentTitle, incidentSeverity,
+            final String prompt = promptBuilder.build(
+                    incidentTitle, incidentSeverity,
                     durationMinutes, incidentOpenedAt, incidentResolvedAt);
 
             final String content = geminiClient.generate(prompt);
@@ -118,8 +122,8 @@ public class PostmortemService {
         return postmortemRepository
                 .findByIncidentIdAndTenantId(incidentId, tenantId)
                 .map(PostmortemDto::from)
-                .orElseThrow(() -> new NoSuchElementException(
-                        "Postmortem not found for incidentId=" + incidentId));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Postmortem", incidentId));
     }
 
     @Transactional
@@ -128,8 +132,8 @@ public class PostmortemService {
                                        UpdatePostmortemRequest request) {
         final Postmortem postmortem = postmortemRepository
                 .findByIncidentIdAndTenantId(incidentId, tenantId)
-                .orElseThrow(() -> new NoSuchElementException(
-                        "Postmortem not found for incidentId=" + incidentId));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Postmortem", incidentId));
 
         postmortem.updateContent(request.content());
         postmortemRepository.save(postmortem);
@@ -145,51 +149,5 @@ public class PostmortemService {
         );
 
         return PostmortemDto.from(postmortem);
-    }
-
-    private String buildPrompt(String title,
-                               String severity,
-                               int durationMinutes,
-                               Instant openedAt,
-                               Instant resolvedAt) {
-        return String.format("""
-                You are an experienced SRE (Site Reliability Engineer) writing a postmortem document.
-
-                Write a professional postmortem for the following incident:
-
-                Title: %s
-                Severity: %s
-                Duration: %d minutes
-                Started: %s
-                Resolved: %s
-
-                The postmortem should include the following sections:
-
-                ## Summary
-                A brief 2-3 sentence description of what happened and the impact.
-
-                ## Timeline
-                A chronological list of key events during the incident.
-
-                ## Root Cause
-                The technical root cause of the incident.
-
-                ## Impact
-                Who was affected and how.
-
-                ## Resolution
-                What was done to resolve the incident.
-
-                ## Action Items
-                3-5 concrete action items to prevent recurrence, each with a suggested owner role (e.g., Backend Team, SRE Team).
-
-                ## Lessons Learned
-                Key takeaways from this incident.
-
-                Write in a professional, factual tone. Use markdown formatting.
-                Keep each section concise and actionable.
-                """,
-                title, severity, durationMinutes,
-                openedAt.toString(), resolvedAt.toString());
     }
 }

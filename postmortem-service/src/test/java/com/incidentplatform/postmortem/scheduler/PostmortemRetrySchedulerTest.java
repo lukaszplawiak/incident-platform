@@ -4,6 +4,7 @@ import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
+import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -35,12 +36,15 @@ class PostmortemRetrySchedulerTest {
     @Mock
     private GeminiClient geminiClient;
 
+    @Mock
+    private PostmortemPromptBuilder promptBuilder;
+
     private PostmortemRetryScheduler scheduler;
 
     @BeforeEach
     void setUp() {
         scheduler = new PostmortemRetryScheduler(
-                postmortemRepository, geminiClient);
+                postmortemRepository, geminiClient, promptBuilder);
     }
 
     @Nested

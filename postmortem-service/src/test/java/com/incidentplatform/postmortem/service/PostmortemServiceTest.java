@@ -44,6 +44,9 @@ class PostmortemServiceTest {
     @Mock
     private AuditEventPublisher auditEventPublisher;
 
+    @Mock
+    private  PostmortemPromptBuilder promptBuilder;
+
     private PostmortemService postmortemService;
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
@@ -58,7 +61,7 @@ class PostmortemServiceTest {
     @BeforeEach
     void setUp() {
         postmortemService = new PostmortemService(
-                postmortemRepository, geminiClient, auditEventPublisher);
+                postmortemRepository, geminiClient, auditEventPublisher, promptBuilder);
     }
 
     @Nested
