@@ -1,6 +1,7 @@
 package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.SourceType;
 import org.springframework.stereotype.Component;
@@ -29,7 +30,8 @@ public class WazuhNormalizer extends BaseNormalizer {
         final String ruleId = getTextOrThrow(rule, "id");
         final String ruleDescription = getTextOrThrow(rule, "description");
         final int level = getRuleLevel(rule);
-        final String severity = mapSeverity(level);
+
+        final Severity severity = mapSeverity(level);
 
         final JsonNode agent = rawPayload.get("agent");
         final String agentName = getText(agent, "name", "unknown");
@@ -65,11 +67,11 @@ public class WazuhNormalizer extends BaseNormalizer {
         return SOURCE;
     }
 
-    private String mapSeverity(int level) {
-        if (level >= 12) return "CRITICAL";
-        if (level >= 8)  return "HIGH";
-        if (level >= 4)  return "MEDIUM";
-        return "LOW";
+    private Severity mapSeverity(int level) {
+        if (level >= 12) return Severity.CRITICAL;
+        if (level >= 8)  return Severity.HIGH;
+        if (level >= 4)  return Severity.MEDIUM;
+        return Severity.LOW;
     }
 
     private int getRuleLevel(JsonNode rule) {

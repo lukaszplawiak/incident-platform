@@ -8,8 +8,6 @@ import java.time.Instant;
 @Component
 public class PostmortemPromptBuilder {
 
-    // In the future, this can be injected from application.yml or a database
-    // to allow per-tenant prompt configuration.
     private static final String PROMPT_TEMPLATE = """
             You are an experienced SRE (Site Reliability Engineer) writing a postmortem document.
 

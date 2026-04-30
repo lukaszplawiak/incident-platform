@@ -7,6 +7,7 @@ import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -165,11 +166,11 @@ class EscalationSchedulerTest {
         if (level == 1) {
             return EscalationTask.createLevel1(
                     UUID.randomUUID(), TENANT_ID, openedAt,
-                    "CRITICAL", "High CPU Usage");
+                    Severity.CRITICAL, "High CPU Usage");
         } else {
             return EscalationTask.createLevel2(
                     UUID.randomUUID(), TENANT_ID, openedAt,
-                    "CRITICAL", "High CPU Usage");
+                    Severity.CRITICAL, "High CPU Usage");
         }
     }
 }

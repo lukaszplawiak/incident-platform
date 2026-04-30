@@ -1,5 +1,7 @@
 package com.incidentplatform.notification.dto;
 
+import com.incidentplatform.shared.domain.Severity;
+
 import java.util.UUID;
 
 public record NotificationRequest(
@@ -10,9 +12,7 @@ public record NotificationRequest(
         String recipient,
         String subject,
         String message,
-
-        String severity,
-
+        Severity severity,
         String incidentTitle
 
 ) {}

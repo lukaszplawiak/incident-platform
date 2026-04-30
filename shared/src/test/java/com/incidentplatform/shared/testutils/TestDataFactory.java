@@ -1,5 +1,6 @@
 package com.incidentplatform.shared.testutils;
 
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.AlertReceivedEvent;
 import com.incidentplatform.shared.events.IncidentAcknowledgedEvent;
@@ -36,7 +37,7 @@ public final class TestDataFactory {
                 TEST_TENANT_ID,
                 "prometheus",
                 SourceType.OPS,
-                "CRITICAL",
+                Severity.CRITICAL,
                 "High CPU usage on prod-server-1",
                 "CPU usage exceeded 95% for 5 minutes on instance prod-server-1:9100",
                 Instant.now().minusSeconds(60),
@@ -55,7 +56,7 @@ public final class TestDataFactory {
                 TEST_TENANT_ID,
                 "wazuh",
                 SourceType.SECURITY,
-                "HIGH",
+                Severity.HIGH,
                 "Multiple failed SSH login attempts detected",
                 "Brute force attack detected: 50 failed attempts from 192.168.1.100",
                 Instant.now().minusSeconds(30),
@@ -68,18 +69,18 @@ public final class TestDataFactory {
         );
     }
 
-    public static UnifiedAlertDto anAlertWithSeverity(String severity) {
+    public static UnifiedAlertDto anAlertWithSeverity(Severity severity) {
         return new UnifiedAlertDto(
                 UUID.randomUUID(),
                 TEST_TENANT_ID,
                 "prometheus",
                 SourceType.OPS,
                 severity,
-                "Test alert with severity: " + severity,
+                "Test alert with severity: " + severity.name(),
                 null,
                 Instant.now(),
-                "prometheus:test-alert-with-severity-" + severity.toLowerCase()
-                        + ":unknown",
+                "prometheus:test-alert-with-severity-"
+                        + severity.name().toLowerCase() + ":unknown",
                 Map.of()
         );
     }
@@ -90,7 +91,7 @@ public final class TestDataFactory {
                 tenantId,
                 "prometheus",
                 SourceType.OPS,
-                "HIGH",
+                Severity.HIGH,
                 "Alert for tenant: " + tenantId,
                 null,
                 Instant.now(),
@@ -104,7 +105,7 @@ public final class TestDataFactory {
                 TEST_TENANT_ID,
                 "prometheus",
                 SourceType.OPS,
-                "CRITICAL",
+                Severity.CRITICAL,
                 "High CPU usage on prod-server-1",
                 "CPU usage exceeded 95% for 5 minutes",
                 Instant.now().minusSeconds(60),
@@ -117,7 +118,7 @@ public final class TestDataFactory {
                 TEST_TENANT_ID,
                 "wazuh",
                 SourceType.SECURITY,
-                "HIGH",
+                Severity.HIGH,
                 "Brute force attack detected",
                 "50 failed SSH attempts from 192.168.1.100",
                 Instant.now().minusSeconds(30),
@@ -132,7 +133,7 @@ public final class TestDataFactory {
                 TEST_ALERT_ID,
                 "prometheus:highcpuusage:prod-server-1:9100",
                 "High CPU usage on prod-server-1",
-                "CRITICAL",
+                Severity.CRITICAL,
                 SourceType.OPS,
                 Instant.now()
         );
@@ -165,7 +166,7 @@ public final class TestDataFactory {
                 TEST_TENANT_ID,
                 TEST_USER_ID,
                 1,
-                "CRITICAL",
+                Severity.CRITICAL,
                 "High CPU usage on prod-server-1",
                 Instant.now()
         );

@@ -7,6 +7,7 @@ import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,7 +50,6 @@ class PostmortemServiceTest {
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final String TENANT_ID = "test-tenant";
     private static final String TITLE = "High CPU Usage on prod-server-1";
-    private static final String SEVERITY = "CRITICAL";
     private static final Instant OPENED_AT =
             Instant.now().minusSeconds(30 * 60L);
     private static final Instant RESOLVED_AT = Instant.now();
@@ -81,7 +81,7 @@ class PostmortemServiceTest {
 
             // when
             postmortemService.generatePostmortem(
-                    INCIDENT_ID, TENANT_ID, TITLE, SEVERITY,
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
 
             // then
@@ -110,7 +110,7 @@ class PostmortemServiceTest {
 
             // when
             postmortemService.generatePostmortem(
-                    INCIDENT_ID, TENANT_ID, TITLE, SEVERITY,
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
 
             // then
@@ -132,7 +132,7 @@ class PostmortemServiceTest {
 
             // when
             postmortemService.generatePostmortem(
-                    INCIDENT_ID, TENANT_ID, TITLE, SEVERITY,
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
 
             // then
@@ -152,7 +152,7 @@ class PostmortemServiceTest {
 
             // when
             postmortemService.generatePostmortem(
-                    INCIDENT_ID, TENANT_ID, TITLE, SEVERITY,
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
 
             // then
@@ -162,7 +162,7 @@ class PostmortemServiceTest {
 
             final String prompt = promptCaptor.getValue();
             assertThat(prompt).contains(TITLE);
-            assertThat(prompt).contains(SEVERITY);
+            assertThat(prompt).contains(Severity.CRITICAL.toString());
             assertThat(prompt).contains(String.valueOf(DURATION));
         }
     }
@@ -277,7 +277,7 @@ class PostmortemServiceTest {
 
     private Postmortem buildDraftPostmortem() {
         final Postmortem postmortem = Postmortem.createGenerating(
-                INCIDENT_ID, TENANT_ID, TITLE, SEVERITY,
+                INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.toString(),
                 OPENED_AT, RESOLVED_AT, DURATION);
         postmortem.markDraft("## Summary\nTest postmortem content", "test prompt");
         return postmortem;

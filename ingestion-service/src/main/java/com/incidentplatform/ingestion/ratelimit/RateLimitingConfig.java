@@ -1,5 +1,6 @@
 package com.incidentplatform.ingestion.ratelimit;
 
+import com.incidentplatform.shared.domain.Severity;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import org.springframework.beans.factory.annotation.Value;
@@ -10,7 +11,6 @@ import java.time.Duration;
 @Configuration
 public class RateLimitingConfig {
 
-    // Per tenant limits
     @Value("${rate-limiting.tenant.capacity:100}")
     private long tenantCapacity;
 
@@ -20,7 +20,6 @@ public class RateLimitingConfig {
     @Value("${rate-limiting.tenant.refill-period-seconds:1}")
     private long tenantRefillPeriodSeconds;
 
-    // Per IP limits
     @Value("${rate-limiting.ip.capacity:50}")
     private long ipCapacity;
 
@@ -30,7 +29,6 @@ public class RateLimitingConfig {
     @Value("${rate-limiting.ip.refill-period-seconds:1}")
     private long ipRefillPeriodSeconds;
 
-    // Per severity limits (capacity)
     @Value("${rate-limiting.severity.critical.capacity:1000}")
     private long criticalCapacity;
 
@@ -63,13 +61,13 @@ public class RateLimitingConfig {
                 .build();
     }
 
-    public long getSeverityCapacity(String severity) {
+    public long getSeverityCapacity(Severity severity) {
         if (severity == null) return mediumCapacity;
-        return switch (severity.toUpperCase()) {
-            case "CRITICAL" -> criticalCapacity;
-            case "HIGH"     -> highCapacity;
-            case "LOW"      -> lowCapacity;
-            default         -> mediumCapacity;
+        return switch (severity) {
+            case CRITICAL -> criticalCapacity;
+            case HIGH     -> highCapacity;
+            case MEDIUM   -> mediumCapacity;
+            case LOW      -> lowCapacity;
         };
     }
 

@@ -2,6 +2,7 @@ package com.incidentplatform.incident.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.service.IncidentCommandService;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.security.TenantContext;
@@ -53,8 +54,8 @@ public class IncidentKafkaConsumer {
         // alerts.raw.high     → concurrency=3
         // alerts.raw.medium   → concurrency=2
         // alerts.raw.low      → concurrency=1
-        final boolean isCritical = "CRITICAL".equalsIgnoreCase(alert.severity());
-        if (isCritical) {
+
+        if (Severity.CRITICAL.equals(alert.severity())) {
             log.warn("CRITICAL alert received — high priority processing: " +
                             "alertId={}, fingerprint={}, tenant={}",
                     alert.alertId(), alert.fingerprint(), tenantId);

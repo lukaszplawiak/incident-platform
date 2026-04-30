@@ -1,7 +1,10 @@
 package com.incidentplatform.escalation.domain;
 
+import com.incidentplatform.shared.domain.Severity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
@@ -52,9 +55,10 @@ public class EscalationTask {
     @Column(name = "status", nullable = false)
     private String status;
 
-    @NotBlank
+    @NotNull
+    @Enumerated(EnumType.STRING)
     @Column(name = "severity", nullable = false, updatable = false)
-    private String severity;
+    private Severity severity;
 
     @NotBlank
     @Column(name = "title", nullable = false, updatable = false)
@@ -77,7 +81,7 @@ public class EscalationTask {
     public static EscalationTask createLevel1(UUID incidentId,
                                               String tenantId,
                                               Instant incidentOpenedAt,
-                                              String severity,
+                                              Severity severity,
                                               String title) {
         final int timeoutMinutes = resolveTimeout(severity);
         return create(incidentId, tenantId, incidentOpenedAt,
@@ -87,7 +91,7 @@ public class EscalationTask {
     public static EscalationTask createLevel2(UUID incidentId,
                                               String tenantId,
                                               Instant level1EscalatedAt,
-                                              String severity,
+                                              Severity severity,
                                               String title) {
         final int timeoutMinutes = resolveTimeout(severity);
         return create(incidentId, tenantId, level1EscalatedAt,
@@ -97,7 +101,7 @@ public class EscalationTask {
     private static EscalationTask create(UUID incidentId,
                                          String tenantId,
                                          Instant startAt,
-                                         String severity,
+                                         Severity severity,
                                          String title,
                                          int escalationLevel,
                                          int timeoutMinutes) {
@@ -116,12 +120,12 @@ public class EscalationTask {
         return task;
     }
 
-    public static int resolveTimeout(String severity) {
-        return switch (severity.toUpperCase()) {
-            case "CRITICAL" -> TIMEOUT_CRITICAL;
-            case "HIGH"     -> TIMEOUT_HIGH;
-            case "MEDIUM"   -> TIMEOUT_MEDIUM;
-            default         -> TIMEOUT_LOW;
+    public static int resolveTimeout(Severity severity) {
+        return switch (severity) {
+            case CRITICAL -> TIMEOUT_CRITICAL;
+            case HIGH     -> TIMEOUT_HIGH;
+            case MEDIUM   -> TIMEOUT_MEDIUM;
+            case LOW      -> TIMEOUT_LOW;
         };
     }
 
@@ -135,21 +139,21 @@ public class EscalationTask {
         this.updatedAt = Instant.now();
     }
 
-    public boolean isPending()           { return "PENDING".equals(this.status); }
-    public boolean isMaxLevel()          { return this.escalationLevel >= 2; }
-    public boolean isDueForEscalation()  {
+    public boolean isPending()          { return "PENDING".equals(this.status); }
+    public boolean isMaxLevel()         { return this.escalationLevel >= 2; }
+    public boolean isDueForEscalation() {
         return isPending() && Instant.now().isAfter(scheduledEscalationAt);
     }
 
-    public UUID getId()                    { return id; }
-    public UUID getIncidentId()            { return incidentId; }
-    public String getTenantId()            { return tenantId; }
-    public Instant getIncidentOpenedAt()   { return incidentOpenedAt; }
+    public UUID getId()                       { return id; }
+    public UUID getIncidentId()               { return incidentId; }
+    public String getTenantId()               { return tenantId; }
+    public Instant getIncidentOpenedAt()      { return incidentOpenedAt; }
     public Instant getScheduledEscalationAt() { return scheduledEscalationAt; }
-    public String getStatus()              { return status; }
-    public String getSeverity()            { return severity; }
-    public String getTitle()               { return title; }
-    public int getEscalationLevel()        { return escalationLevel; }
-    public Instant getCreatedAt()          { return createdAt; }
-    public Instant getUpdatedAt()          { return updatedAt; }
+    public String getStatus()                 { return status; }
+    public Severity getSeverity()             { return severity; }
+    public String getTitle()                  { return title; }
+    public int getEscalationLevel()           { return escalationLevel; }
+    public Instant getCreatedAt()             { return createdAt; }
+    public Instant getUpdatedAt()             { return updatedAt; }
 }

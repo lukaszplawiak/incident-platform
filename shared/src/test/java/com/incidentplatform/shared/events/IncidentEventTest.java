@@ -1,5 +1,6 @@
 package com.incidentplatform.shared.events;
 
+import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -22,7 +23,7 @@ class IncidentEventTest {
         final IncidentOpenedEvent event = new IncidentOpenedEvent(
                 INCIDENT_ID, TENANT_ID, UUID.randomUUID(),
                 "prometheus:highcpu:prod-1",
-                "High CPU", "CRITICAL", SourceType.OPS, Instant.now()
+                "High CPU", Severity.CRITICAL, SourceType.OPS, Instant.now()
         );
 
         // then
@@ -67,7 +68,7 @@ class IncidentEventTest {
         // when
         final IncidentEscalatedEvent event = new IncidentEscalatedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
-                2, "CRITICAL", "High CPU", Instant.now()
+                2, Severity.CRITICAL, "High CPU", Instant.now()
         );
 
         // then
@@ -98,7 +99,7 @@ class IncidentEventTest {
         final IncidentEvent opened = new IncidentOpenedEvent(
                 INCIDENT_ID, TENANT_ID, UUID.randomUUID(),
                 "prometheus:test:prod-1",
-                "title", "HIGH", SourceType.OPS, Instant.now());
+                "title", Severity.HIGH, SourceType.OPS, Instant.now());
         final IncidentEvent acknowledged = new IncidentAcknowledgedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID, Instant.now());
         final IncidentEvent resolved = new IncidentResolvedEvent(
@@ -106,11 +107,12 @@ class IncidentEventTest {
                 "prometheus:test:prod-1",
                 30L, null, Instant.now());
         final IncidentEvent escalated = new IncidentEscalatedEvent(
-                INCIDENT_ID, TENANT_ID, USER_ID, 1, "HIGH", "title", Instant.now());
+                INCIDENT_ID, TENANT_ID, USER_ID,
+                1, Severity.HIGH, "title", Instant.now());
         final IncidentEvent closed = new IncidentClosedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID, UUID.randomUUID(), Instant.now());
 
-        // when
+        // when / then
         assertThat(describeEvent(opened)).isEqualTo("opened");
         assertThat(describeEvent(acknowledged)).isEqualTo("acknowledged");
         assertThat(describeEvent(resolved)).isEqualTo("resolved");
@@ -120,11 +122,11 @@ class IncidentEventTest {
 
     private String describeEvent(IncidentEvent event) {
         return switch (event) {
-            case IncidentOpenedEvent e      -> "opened";
+            case IncidentOpenedEvent e       -> "opened";
             case IncidentAcknowledgedEvent e -> "acknowledged";
-            case IncidentResolvedEvent e    -> "resolved";
-            case IncidentEscalatedEvent e   -> "escalated";
-            case IncidentClosedEvent e      -> "closed";
+            case IncidentResolvedEvent e     -> "resolved";
+            case IncidentEscalatedEvent e    -> "escalated";
+            case IncidentClosedEvent e       -> "closed";
         };
     }
 }

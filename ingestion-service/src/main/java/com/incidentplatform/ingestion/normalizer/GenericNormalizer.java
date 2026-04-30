@@ -1,6 +1,7 @@
 package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.SourceType;
 import org.springframework.stereotype.Component;
@@ -9,7 +10,6 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 @Component
@@ -17,17 +17,16 @@ public class GenericNormalizer extends BaseNormalizer {
 
     private static final String SOURCE = "generic";
 
-    private static final Set<String> VALID_SEVERITIES =
-            Set.of("CRITICAL", "HIGH", "MEDIUM", "LOW");
-
     @Override
     public NormalizationResult normalize(JsonNode rawPayload, String tenantId) {
         log.debug("Normalizing generic alert for tenant: {}", tenantId);
 
         final String title = getTextOrThrow(rawPayload, "title");
-        final String severity = validateSeverity(
-                getTextOrThrow(rawPayload, "severity").toUpperCase()
+
+        final Severity severity = parseSeverity(
+                getTextOrThrow(rawPayload, "severity")
         );
+
         final String source = getText(rawPayload, "source", SOURCE);
         final SourceType sourceType = parseSourceType(
                 getText(rawPayload, "sourceType", "OPS")
@@ -60,13 +59,15 @@ public class GenericNormalizer extends BaseNormalizer {
         return SOURCE;
     }
 
-    private String validateSeverity(String severity) {
-        if (!VALID_SEVERITIES.contains(severity)) {
+    private Severity parseSeverity(String rawSeverity) {
+        try {
+            return Severity.fromString(rawSeverity);
+        } catch (IllegalArgumentException e) {
             throw new NormalizationException(SOURCE,
-                    String.format("Invalid severity '%s'. Must be one of: %s",
-                            severity, VALID_SEVERITIES));
+                    String.format("Invalid severity '%s'. Allowed values: %s",
+                            rawSeverity,
+                            java.util.Arrays.toString(Severity.values())));
         }
-        return severity;
     }
 
     private SourceType parseSourceType(String sourceType) {

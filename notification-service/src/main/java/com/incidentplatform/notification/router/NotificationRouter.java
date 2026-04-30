@@ -3,6 +3,7 @@ package com.incidentplatform.notification.router;
 import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,7 +57,7 @@ public class NotificationRouter {
     public List<ChannelRequest> route(String eventType,
                                       UUID incidentId,
                                       String tenantId,
-                                      String severity,
+                                      Severity severity,
                                       String title) {
 
         final Set<String> targetChannels = EVENT_TO_CHANNELS
@@ -133,13 +134,12 @@ public class NotificationRouter {
         };
     }
 
-    private String buildSubject(String eventType, String title,
-                                String severity) {
+    private String buildSubject(String eventType, String title, Severity severity) {
         return switch (eventType) {
             case "IncidentOpenedEvent"    ->
-                    "[" + severity + "] New incident: " + title;
+                    "[" + severity.name() + "] New incident: " + title;
             case "IncidentEscalatedEvent" ->
-                    "[ESCALATED][" + severity + "] " + title;
+                    "[ESCALATED][" + severity.name() + "] " + title;
             case "IncidentResolvedEvent"  ->
                     "[RESOLVED] " + title;
             case "IncidentAcknowledgedEvent" ->
@@ -151,17 +151,17 @@ public class NotificationRouter {
     }
 
     private String buildMessage(String eventType, String title,
-                                String severity, UUID incidentId) {
+                                Severity severity, UUID incidentId) {
         return switch (eventType) {
             case "IncidentOpenedEvent" ->
                     String.format("New %s incident opened: '%s' (ID: %s). " +
                                     "Please acknowledge immediately.",
-                            severity, title, incidentId);
+                            severity.name(), title, incidentId);
             case "IncidentEscalatedEvent" ->
                     String.format("ESCALATION: Incident '%s' (ID: %s) has been " +
                                     "escalated due to no acknowledgment. " +
                                     "Severity: %s. Immediate action required.",
-                            title, incidentId, severity);
+                            title, incidentId, severity.name());
             case "IncidentResolvedEvent" ->
                     String.format("Incident '%s' (ID: %s) has been resolved.",
                             title, incidentId);

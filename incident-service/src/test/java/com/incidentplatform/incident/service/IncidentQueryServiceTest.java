@@ -8,6 +8,7 @@ import com.incidentplatform.incident.dto.IncidentFilter;
 import com.incidentplatform.incident.dto.IncidentHistoryDto;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
 import com.incidentplatform.incident.repository.IncidentRepository;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,8 +71,8 @@ class IncidentQueryServiceTest {
             final IncidentFilter emptyFilter = new IncidentFilter(
                     null, null, null, null);
             final List<Incident> incidents = List.of(
-                    buildIncident("CRITICAL"),
-                    buildIncident("HIGH")
+                    buildIncident(Severity.CRITICAL),
+                    buildIncident(Severity.HIGH)
             );
             final Page<Incident> page = new PageImpl<>(incidents);
 
@@ -96,7 +97,7 @@ class IncidentQueryServiceTest {
             // given
             final IncidentFilter filter = new IncidentFilter(
                     IncidentStatus.OPEN, null, null, null);
-            final List<Incident> incidents = List.of(buildIncident("CRITICAL"));
+            final List<Incident> incidents = List.of(buildIncident(Severity.CRITICAL));
             final Page<Incident> page = new PageImpl<>(incidents);
 
             given(incidentRepository.findAll(
@@ -119,10 +120,11 @@ class IncidentQueryServiceTest {
         @DisplayName("should use Specification when severity filter provided")
         void shouldUseSpecificationWhenSeverityFilter() {
             // given
+            // IncidentFilter przyjmuje Severity enum — brak konwersji String
             final IncidentFilter filter = new IncidentFilter(
-                    null, "CRITICAL", null, null);
+                    null, Severity.CRITICAL, null, null);
             final Page<Incident> page = new PageImpl<>(
-                    List.of(buildIncident("CRITICAL")));
+                    List.of(buildIncident(Severity.CRITICAL)));
 
             given(incidentRepository.findAll(
                     any(Specification.class), eq(DEFAULT_PAGEABLE)))
@@ -134,7 +136,8 @@ class IncidentQueryServiceTest {
 
             // then
             assertThat(result.getContent()).hasSize(1);
-            assertThat(result.getContent().get(0).severity()).isEqualTo("CRITICAL");
+            assertThat(result.getContent().get(0).severity())
+                    .isEqualTo(Severity.CRITICAL);
         }
 
         @Test
@@ -142,7 +145,7 @@ class IncidentQueryServiceTest {
         void shouldUseSpecificationWhenMultipleFilters() {
             // given
             final IncidentFilter filter = new IncidentFilter(
-                    IncidentStatus.OPEN, "CRITICAL", SourceType.SECURITY, "wazuh");
+                    IncidentStatus.OPEN, Severity.CRITICAL, SourceType.SECURITY, "wazuh");
             final Page<Incident> page = new PageImpl<>(List.of());
 
             given(incidentRepository.findAll(
@@ -182,7 +185,7 @@ class IncidentQueryServiceTest {
         @DisplayName("should map Incident to IncidentDto correctly")
         void shouldMapIncidentToDto() {
             // given
-            final Incident incident = buildIncident("CRITICAL");
+            final Incident incident = buildIncident(Severity.CRITICAL);
             final Page<Incident> page = new PageImpl<>(List.of(incident));
             final IncidentFilter emptyFilter = new IncidentFilter(
                     null, null, null, null);
@@ -199,7 +202,7 @@ class IncidentQueryServiceTest {
             assertThat(dto.id()).isEqualTo(incident.getId());
             assertThat(dto.tenantId()).isEqualTo(TENANT_ID);
             assertThat(dto.status()).isEqualTo(IncidentStatus.OPEN);
-            assertThat(dto.severity()).isEqualTo("CRITICAL");
+            assertThat(dto.severity()).isEqualTo(Severity.CRITICAL);
             assertThat(dto.source()).isEqualTo("prometheus");
         }
 
@@ -208,9 +211,9 @@ class IncidentQueryServiceTest {
         void shouldReturnPageableMetadata() {
             // given
             final List<Incident> incidents = List.of(
-                    buildIncident("HIGH"),
-                    buildIncident("MEDIUM"),
-                    buildIncident("LOW")
+                    buildIncident(Severity.HIGH),
+                    buildIncident(Severity.MEDIUM),
+                    buildIncident(Severity.LOW)
             );
             final Page<Incident> page = new PageImpl<>(
                     incidents, DEFAULT_PAGEABLE, 3L);
@@ -239,7 +242,7 @@ class IncidentQueryServiceTest {
         @DisplayName("should return IncidentDto when incident found")
         void shouldReturnDtoWhenFound() {
             // given
-            final Incident incident = buildIncident("CRITICAL");
+            final Incident incident = buildIncident(Severity.CRITICAL);
 
             given(incidentRepository.findByIdAndTenantId(
                     incident.getId(), TENANT_ID))
@@ -251,7 +254,7 @@ class IncidentQueryServiceTest {
 
             // then
             assertThat(result.id()).isEqualTo(incident.getId());
-            assertThat(result.severity()).isEqualTo("CRITICAL");
+            assertThat(result.severity()).isEqualTo(Severity.CRITICAL);
             assertThat(result.status()).isEqualTo(IncidentStatus.OPEN);
         }
 
@@ -289,7 +292,7 @@ class IncidentQueryServiceTest {
         @DisplayName("should return DTO with allowedTransitions based on current status")
         void shouldReturnDtoWithAllowedTransitions() {
             // given
-            final Incident incident = buildIncident("HIGH");
+            final Incident incident = buildIncident(Severity.HIGH);
 
             given(incidentRepository.findByIdAndTenantId(
                     incident.getId(), TENANT_ID))
@@ -399,7 +402,7 @@ class IncidentQueryServiceTest {
         }
     }
 
-    private Incident buildIncident(String severity) {
+    private Incident buildIncident(Severity severity) {
         return new Incident(
                 TENANT_ID,
                 "High CPU usage on prod-server-1",
@@ -421,16 +424,6 @@ class IncidentQueryServiceTest {
                 incidentId, TENANT_ID,
                 fromStatus, toStatus,
                 null, changeSource, null
-        );
-    }
-
-    private IncidentHistory buildHistoryAt(UUID incidentId,
-                                           IncidentStatus toStatus,
-                                           Instant changedAt) {
-        return IncidentHistory.forAutomaticChange(
-                incidentId, TENANT_ID,
-                null, toStatus,
-                "KAFKA_CONSUMER", "Test"
         );
     }
 }

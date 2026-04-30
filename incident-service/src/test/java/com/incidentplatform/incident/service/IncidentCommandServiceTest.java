@@ -8,6 +8,7 @@ import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
 import com.incidentplatform.incident.repository.IncidentRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
@@ -40,20 +41,11 @@ import static org.mockito.Mockito.times;
 @DisplayName("IncidentCommandService")
 class IncidentCommandServiceTest {
 
-    @Mock
-    private IncidentRepository incidentRepository;
-
-    @Mock
-    private IncidentHistoryRepository historyRepository;
-
-    @Mock
-    private IncidentEventPublisher eventPublisher;
-
-    @Mock
-    private IncidentWebSocketPublisher webSocketPublisher;
-
-    @Mock
-    private AuditEventPublisher auditEventPublisher;
+    @Mock private IncidentRepository incidentRepository;
+    @Mock private IncidentHistoryRepository historyRepository;
+    @Mock private IncidentEventPublisher eventPublisher;
+    @Mock private IncidentWebSocketPublisher webSocketPublisher;
+    @Mock private AuditEventPublisher auditEventPublisher;
 
     private IncidentCommandService commandService;
 
@@ -63,12 +55,8 @@ class IncidentCommandServiceTest {
     @BeforeEach
     void setUp() {
         commandService = new IncidentCommandService(
-                incidentRepository,
-                historyRepository,
-                eventPublisher,
-                webSocketPublisher,
-                auditEventPublisher
-        );
+                incidentRepository, historyRepository,
+                eventPublisher, webSocketPublisher, auditEventPublisher);
     }
 
     @Nested
@@ -79,7 +67,7 @@ class IncidentCommandServiceTest {
         @DisplayName("should create new incident when no duplicate exists")
         void shouldCreateNewIncidentWhenNoDuplicate() {
             // given
-            final UnifiedAlertDto alert = buildAlert("CRITICAL",
+            final UnifiedAlertDto alert = buildAlert(Severity.CRITICAL,
                     "prometheus:highcpuusage:server-1");
 
             given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
@@ -94,18 +82,16 @@ class IncidentCommandServiceTest {
 
             // then
             then(incidentRepository).should(times(1)).save(any(Incident.class));
-            then(historyRepository).should(times(1))
-                    .save(any(IncidentHistory.class));
+            then(historyRepository).should(times(1)).save(any(IncidentHistory.class));
             then(eventPublisher).should(times(1)).publishOpened(any(Incident.class));
-            then(webSocketPublisher).should(times(1))
-                    .publishCreated(any(IncidentDto.class));
+            then(webSocketPublisher).should(times(1)).publishCreated(any(IncidentDto.class));
         }
 
         @Test
-        @DisplayName("should create new incident with OPEN status")
-        void shouldCreateNewIncidentWithOpenStatus() {
+        @DisplayName("should create new incident with correct severity")
+        void shouldCreateNewIncidentWithCorrectSeverity() {
             // given
-            final UnifiedAlertDto alert = buildAlert("HIGH",
+            final UnifiedAlertDto alert = buildAlert(Severity.HIGH,
                     "prometheus:alert:server-1");
 
             given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
@@ -126,16 +112,16 @@ class IncidentCommandServiceTest {
             final Incident saved = captor.getValue();
             assertThat(saved.getStatus()).isEqualTo(IncidentStatus.OPEN);
             assertThat(saved.getTenantId()).isEqualTo(TENANT_ID);
-            assertThat(saved.getSeverity()).isEqualTo("HIGH");
+            assertThat(saved.getSeverity()).isEqualTo(Severity.HIGH);
         }
 
         @Test
         @DisplayName("should ignore duplicate alert with same or lower severity")
         void shouldIgnoreDuplicateWithSameSeverity() {
             // given
-            final UnifiedAlertDto alert = buildAlert("HIGH",
+            final UnifiedAlertDto alert = buildAlert(Severity.HIGH,
                     "prometheus:highcpuusage:server-1");
-            final Incident existingIncident = buildIncident("HIGH",
+            final Incident existingIncident = buildIncident(Severity.HIGH,
                     "prometheus:highcpuusage:server-1");
 
             given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
@@ -156,9 +142,9 @@ class IncidentCommandServiceTest {
         @DisplayName("should update severity when duplicate has lower severity")
         void shouldUpdateSeverityWhenDuplicateHasLowerSeverity() {
             // given
-            final UnifiedAlertDto alert = buildAlert("CRITICAL",
+            final UnifiedAlertDto alert = buildAlert(Severity.CRITICAL,
                     "prometheus:highcpuusage:server-1");
-            final Incident existingIncident = buildIncident("LOW",
+            final Incident existingIncident = buildIncident(Severity.LOW,
                     "prometheus:highcpuusage:server-1");
 
             given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
@@ -178,16 +164,17 @@ class IncidentCommandServiceTest {
             final ArgumentCaptor<Incident> incidentCaptor =
                     ArgumentCaptor.forClass(Incident.class);
             then(incidentRepository).should().save(incidentCaptor.capture());
-            assertThat(incidentCaptor.getValue().getSeverity()).isEqualTo("CRITICAL");
+            assertThat(incidentCaptor.getValue().getSeverity())
+                    .isEqualTo(Severity.CRITICAL);
         }
 
         @Test
         @DisplayName("should NOT update severity when duplicate has higher severity")
         void shouldNotUpdateSeverityWhenDuplicateHasHigherSeverity() {
             // given
-            final UnifiedAlertDto alert = buildAlert("LOW",
+            final UnifiedAlertDto alert = buildAlert(Severity.LOW,
                     "prometheus:highcpuusage:server-1");
-            final Incident existingIncident = buildIncident("CRITICAL",
+            final Incident existingIncident = buildIncident(Severity.CRITICAL,
                     "prometheus:highcpuusage:server-1");
 
             given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
@@ -214,7 +201,7 @@ class IncidentCommandServiceTest {
             // given
             final String fingerprint = "prometheus:highcpuusage:server-1";
             final Incident incident = buildIncidentWithStatus(
-                    fingerprint, IncidentStatus.ACKNOWLEDGED); // ← zmiana z buildIncident
+                    fingerprint, IncidentStatus.ACKNOWLEDGED);
             final ResolvedAlertNotification notification =
                     buildResolvedNotification(fingerprint);
 
@@ -290,7 +277,7 @@ class IncidentCommandServiceTest {
         @DisplayName("should update status via FSM")
         void shouldUpdateStatusViaFsm() {
             // given
-            final Incident incident = buildIncident("HIGH",
+            final Incident incident = buildIncident(Severity.HIGH,
                     "prometheus:alert:server-1");
             final UpdateStatusCommand command = new UpdateStatusCommand(
                     IncidentStatus.ACKNOWLEDGED, "I am on it");
@@ -319,7 +306,7 @@ class IncidentCommandServiceTest {
         @DisplayName("should assign incident to user when acknowledging")
         void shouldAssignWhenAcknowledging() {
             // given
-            final Incident incident = buildIncident("HIGH",
+            final Incident incident = buildIncident(Severity.HIGH,
                     "prometheus:alert:server-1");
             final UpdateStatusCommand command = new UpdateStatusCommand(
                     IncidentStatus.ACKNOWLEDGED, null);
@@ -332,8 +319,7 @@ class IncidentCommandServiceTest {
                     .willAnswer(inv -> inv.getArgument(0));
 
             // when
-            commandService.updateStatus(
-                    incident.getId(), command, USER_ID, TENANT_ID);
+            commandService.updateStatus(incident.getId(), command, USER_ID, TENANT_ID);
 
             // then
             assertThat(incident.getAssignedTo()).isEqualTo(USER_ID);
@@ -361,7 +347,7 @@ class IncidentCommandServiceTest {
         @DisplayName("should throw BusinessException for invalid FSM transition")
         void shouldThrowForInvalidTransition() {
             // given
-            final Incident incident = buildIncident("HIGH",
+            final Incident incident = buildIncident(Severity.HIGH,
                     "prometheus:alert:server-1");
             final UpdateStatusCommand command = new UpdateStatusCommand(
                     IncidentStatus.CLOSED, null);
@@ -381,7 +367,7 @@ class IncidentCommandServiceTest {
         @DisplayName("should save history entry on status change")
         void shouldSaveHistoryOnStatusChange() {
             // given
-            final Incident incident = buildIncident("CRITICAL",
+            final Incident incident = buildIncident(Severity.CRITICAL,
                     "prometheus:alert:server-1");
             final UpdateStatusCommand command = new UpdateStatusCommand(
                     IncidentStatus.ACKNOWLEDGED, "Investigating now");
@@ -394,8 +380,7 @@ class IncidentCommandServiceTest {
                     .willAnswer(inv -> inv.getArgument(0));
 
             // when
-            commandService.updateStatus(
-                    incident.getId(), command, USER_ID, TENANT_ID);
+            commandService.updateStatus(incident.getId(), command, USER_ID, TENANT_ID);
 
             // then
             final ArgumentCaptor<IncidentHistory> historyCaptor =
@@ -419,7 +404,7 @@ class IncidentCommandServiceTest {
         @DisplayName("should assign incident to user")
         void shouldAssignIncidentToUser() {
             // given
-            final Incident incident = buildIncident("HIGH",
+            final Incident incident = buildIncident(Severity.HIGH,
                     "prometheus:alert:server-1");
             final UUID assignToId = UUID.randomUUID();
 
@@ -434,8 +419,7 @@ class IncidentCommandServiceTest {
 
             // then
             assertThat(result.assignedTo()).isEqualTo(assignToId);
-            then(webSocketPublisher).should()
-                    .publishUpdate(any(IncidentDto.class));
+            then(webSocketPublisher).should().publishUpdate(any(IncidentDto.class));
         }
 
         @Test
@@ -453,7 +437,7 @@ class IncidentCommandServiceTest {
         }
     }
 
-    private UnifiedAlertDto buildAlert(String severity, String fingerprint) {
+    private UnifiedAlertDto buildAlert(Severity severity, String fingerprint) {
         return new UnifiedAlertDto(
                 UUID.randomUUID(), TENANT_ID, "prometheus",
                 SourceType.OPS, severity,
@@ -465,7 +449,7 @@ class IncidentCommandServiceTest {
         );
     }
 
-    private Incident buildIncident(String severity, String fingerprint) {
+    private Incident buildIncident(Severity severity, String fingerprint) {
         return new Incident(
                 TENANT_ID,
                 "High CPU usage on prod-server-1",
@@ -481,15 +465,14 @@ class IncidentCommandServiceTest {
 
     private Incident buildIncidentWithStatus(String fingerprint,
                                              IncidentStatus status) {
-        final Incident incident = buildIncident("HIGH", fingerprint);
+        final Incident incident = buildIncident(Severity.HIGH, fingerprint);
         if (status != IncidentStatus.OPEN) {
             incident.transitionTo(status);
         }
         return incident;
     }
 
-    private ResolvedAlertNotification buildResolvedNotification(
-            String fingerprint) {
+    private ResolvedAlertNotification buildResolvedNotification(String fingerprint) {
         return ResolvedAlertNotification.of(
                 TENANT_ID, "prometheus", fingerprint, Instant.now());
     }

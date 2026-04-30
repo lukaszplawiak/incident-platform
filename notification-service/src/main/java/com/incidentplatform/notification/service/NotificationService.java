@@ -5,6 +5,7 @@ import com.incidentplatform.notification.domain.NotificationLog;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -35,7 +36,7 @@ public class NotificationService {
     public void processEvent(String eventType,
                              UUID incidentId,
                              String tenantId,
-                             String severity,
+                             Severity severity,
                              String title) {
 
         log.info("Processing notification event: type={}, incidentId={}, " +

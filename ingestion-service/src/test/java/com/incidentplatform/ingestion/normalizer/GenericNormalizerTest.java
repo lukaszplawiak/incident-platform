@@ -2,6 +2,7 @@ package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -54,7 +55,7 @@ class GenericNormalizerTest {
         assertThat(alert.tenantId()).isEqualTo(TENANT_ID);
         assertThat(alert.source()).isEqualTo("my-app");
         assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
-        assertThat(alert.severity()).isEqualTo("HIGH");
+        assertThat(alert.severity()).isEqualTo(Severity.HIGH);
         assertThat(alert.title()).isEqualTo("Database connection pool exhausted");
         assertThat(alert.description()).isEqualTo("All 100 connections are in use");
         assertThat(alert.firedAt()).isNotNull();
@@ -68,32 +69,32 @@ class GenericNormalizerTest {
         @Test
         @DisplayName("should accept CRITICAL severity")
         void shouldAcceptCritical() throws Exception {
-            assertThat(normalizeSeverity("CRITICAL")).isEqualTo("CRITICAL");
+            assertThat(normalizeSeverity("CRITICAL")).isEqualTo(Severity.CRITICAL);
         }
 
         @Test
         @DisplayName("should accept HIGH severity")
         void shouldAcceptHigh() throws Exception {
-            assertThat(normalizeSeverity("HIGH")).isEqualTo("HIGH");
+            assertThat(normalizeSeverity("HIGH")).isEqualTo(Severity.HIGH);
         }
 
         @Test
         @DisplayName("should accept MEDIUM severity")
         void shouldAcceptMedium() throws Exception {
-            assertThat(normalizeSeverity("MEDIUM")).isEqualTo("MEDIUM");
+            assertThat(normalizeSeverity("MEDIUM")).isEqualTo(Severity.MEDIUM);
         }
 
         @Test
         @DisplayName("should accept LOW severity")
         void shouldAcceptLow() throws Exception {
-            assertThat(normalizeSeverity("LOW")).isEqualTo("LOW");
+            assertThat(normalizeSeverity("LOW")).isEqualTo(Severity.LOW);
         }
 
         @Test
-        @DisplayName("should accept lowercase severity and normalize to uppercase")
+        @DisplayName("should accept lowercase severity and parse to enum")
         void shouldAcceptLowercaseSeverity() throws Exception {
-            assertThat(normalizeSeverity("critical")).isEqualTo("CRITICAL");
-            assertThat(normalizeSeverity("high")).isEqualTo("HIGH");
+            assertThat(normalizeSeverity("critical")).isEqualTo(Severity.CRITICAL);
+            assertThat(normalizeSeverity("high")).isEqualTo(Severity.HIGH);
         }
 
         @Test
@@ -120,7 +121,7 @@ class GenericNormalizerTest {
                     .isInstanceOf(NormalizationException.class);
         }
 
-        private String normalizeSeverity(String severity) throws Exception {
+        private Severity normalizeSeverity(String severity) throws Exception {
             return normalizer.normalize(
                             buildPayload(severity, "title", "OPS"), TENANT_ID)
                     .firingAlerts().get(0).severity();
@@ -134,61 +135,37 @@ class GenericNormalizerTest {
         @Test
         @DisplayName("should parse OPS sourceType")
         void shouldParseOps() throws Exception {
-            // given
             final JsonNode payload = buildPayload("HIGH", "title", "OPS");
-
-            // when
-            final var alert = normalizer.normalize(payload, TENANT_ID)
-                    .firingAlerts().get(0);
-
-            // then
+            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
         }
 
         @Test
         @DisplayName("should parse SECURITY sourceType")
         void shouldParseSecurity() throws Exception {
-            // given
             final JsonNode payload = buildPayload("HIGH", "title", "SECURITY");
-
-            // when
-            final var alert = normalizer.normalize(payload, TENANT_ID)
-                    .firingAlerts().get(0);
-
-            // then
+            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.SECURITY);
         }
 
         @Test
         @DisplayName("should default to OPS for unknown sourceType")
         void shouldDefaultToOpsForUnknown() throws Exception {
-            // given
             final JsonNode payload = buildPayload("HIGH", "title", "UNKNOWN");
-
-            // when
-            final var alert = normalizer.normalize(payload, TENANT_ID)
-                    .firingAlerts().get(0);
-
-            // then
+            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
         }
 
         @Test
         @DisplayName("should default to OPS when sourceType missing")
         void shouldDefaultToOpsWhenMissing() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "severity": "HIGH",
                       "title": "Test alert"
                     }
                     """);
-
-            // when
-            final var alert = normalizer.normalize(payload, TENANT_ID)
-                    .firingAlerts().get(0);
-
-            // then
+            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
         }
     }
@@ -200,7 +177,6 @@ class GenericNormalizerTest {
         @Test
         @DisplayName("should truncate metadata value exceeding 500 characters")
         void shouldTruncateLongMetadataValue() throws Exception {
-            // given
             final String longValue = "x".repeat(600);
             final JsonNode payload = objectMapper.readTree(String.format("""
                     {
@@ -211,31 +187,22 @@ class GenericNormalizerTest {
                       }
                     }
                     """, longValue));
-
-            // when
             final var metadata = normalizer.normalize(payload, TENANT_ID)
                     .firingAlerts().get(0).metadata();
-
-            // then
             assertThat(metadata.get("longField")).hasSize(500);
         }
 
         @Test
-        @DisplayName("should accept metadata with null value gracefully")
+        @DisplayName("should handle missing metadata section")
         void shouldHandleNullMetadataSection() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "severity": "HIGH",
                       "title": "Test alert"
                     }
                     """);
-
-            // when
             final var metadata = normalizer.normalize(payload, TENANT_ID)
                     .firingAlerts().get(0).metadata();
-
-            // then
             assertThat(metadata).isNotNull().isEmpty();
         }
     }
@@ -247,15 +214,12 @@ class GenericNormalizerTest {
         @Test
         @DisplayName("should throw when title is missing")
         void shouldThrowWhenTitleMissing() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "severity": "HIGH",
                       "sourceType": "OPS"
                     }
                     """);
-
-            // then
             assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("title");
@@ -264,15 +228,12 @@ class GenericNormalizerTest {
         @Test
         @DisplayName("should throw when severity is missing")
         void shouldThrowWhenSeverityMissing() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "title": "Test alert",
                       "sourceType": "OPS"
                     }
                     """);
-
-            // then
             assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("severity");
@@ -282,36 +243,24 @@ class GenericNormalizerTest {
     @Test
     @DisplayName("should use generic as default source when missing")
     void shouldUseGenericAsDefaultSource() throws Exception {
-        // given
         final JsonNode payload = objectMapper.readTree("""
                 {
                   "severity": "HIGH",
                   "title": "Test alert"
                 }
                 """);
-
-        // when
-        final var alert = normalizer.normalize(payload, TENANT_ID)
-                .firingAlerts().get(0);
-
-        // then
+        final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
         assertThat(alert.source()).isEqualTo("generic");
     }
 
     @Test
     @DisplayName("fingerprint should be based on title")
     void fingerprintShouldBeBasedOnTitle() throws Exception {
-        // given
         final JsonNode payload = buildPayload("HIGH",
                 "Database connection pool exhausted", "OPS");
-
-        // when
         final String fingerprint = normalizer.normalize(payload, TENANT_ID)
                 .firingAlerts().get(0).fingerprint();
-
-        // then
-        assertThat(fingerprint)
-                .isEqualTo("generic:database connection pool exhausted");
+        assertThat(fingerprint).isEqualTo("generic:database connection pool exhausted");
     }
 
     @Test

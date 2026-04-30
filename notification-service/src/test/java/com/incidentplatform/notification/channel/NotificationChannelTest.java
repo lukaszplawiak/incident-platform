@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.channel;
 
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -23,7 +24,7 @@ class NotificationChannelTest {
             "oncall@test.com",
             "[CRITICAL] High CPU",
             "New critical incident detected",
-            "CRITICAL",
+            Severity.CRITICAL,
             "High CPU Usage"
     );
 
@@ -78,7 +79,7 @@ class NotificationChannelTest {
         final String longMessage = "x".repeat(300);
         final NotificationRequest request = new NotificationRequest(
                 UUID.randomUUID(), "tenant", "IncidentEscalatedEvent",
-                "+48999888777", "subject", longMessage, "CRITICAL", "title");
+                "+48999888777", "subject", longMessage, Severity.CRITICAL, "title");
 
         // SMS cut to 160 chars
         assertThatCode(() -> channel.send(request))

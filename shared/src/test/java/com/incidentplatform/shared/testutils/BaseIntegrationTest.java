@@ -21,7 +21,7 @@ public abstract class BaseIntegrationTest {
                     .withDatabaseName("incidentdb_test")
                     .withUsername("incident_test")
                     .withPassword("incident_test_secret")
-                    .withReuse(true); // Reuse kontenera między uruchomieniami testów
+                    .withReuse(true); // Reuse of container with tests
 
     @Container
     protected static final KafkaContainer KAFKA =

@@ -3,6 +3,7 @@ package com.incidentplatform.notification.router;
 import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -54,7 +55,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentOpenedEvent", INCIDENT_ID,
-                    TENANT_ID, "CRITICAL", "High CPU");
+                    TENANT_ID, Severity.CRITICAL, "High CPU");
 
             // then
             final var channelNames = result.stream()
@@ -72,7 +73,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentOpenedEvent", INCIDENT_ID,
-                    TENANT_ID, "CRITICAL", "High CPU Usage");
+                    TENANT_ID, Severity.CRITICAL, "High CPU Usage");
 
             // then
             result.forEach(cr -> {
@@ -88,7 +89,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentOpenedEvent", INCIDENT_ID,
-                    TENANT_ID, "HIGH", "Test Incident");
+                    TENANT_ID, Severity.HIGH, "Test Incident");
 
             // then
             result.forEach(cr -> {
@@ -110,7 +111,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentEscalatedEvent", INCIDENT_ID,
-                    TENANT_ID, "CRITICAL", "Database Down");
+                    TENANT_ID, Severity.CRITICAL, "Database Down");
 
             // then
             final var channelNames = result.stream()
@@ -127,7 +128,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentEscalatedEvent", INCIDENT_ID,
-                    TENANT_ID, "CRITICAL", "Database Down");
+                    TENANT_ID, Severity.CRITICAL, "Database Down");
 
             // then
             result.forEach(cr ->
@@ -146,7 +147,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentResolvedEvent", INCIDENT_ID,
-                    TENANT_ID, "HIGH", "API Outage");
+                    TENANT_ID, Severity.HIGH, "API Outage");
 
             // then
             final var channelNames = result.stream()
@@ -168,7 +169,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentAcknowledgedEvent", INCIDENT_ID,
-                    TENANT_ID, "MEDIUM", "Memory Leak");
+                    TENANT_ID, Severity.MEDIUM, "Memory Leak");
 
             // then
             final var channelNames = result.stream()
@@ -189,7 +190,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "IncidentClosedEvent", INCIDENT_ID,
-                    TENANT_ID, "LOW", "Disk Space");
+                    TENANT_ID, Severity.LOW, "Disk Space");
 
             // then
             final var channelNames = result.stream()
@@ -210,7 +211,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "UnknownEvent", INCIDENT_ID,
-                    TENANT_ID, "HIGH", "Test");
+                    TENANT_ID, Severity.HIGH, "Test");
 
             // then
             assertThat(result).isEmpty();
@@ -239,7 +240,7 @@ class NotificationRouterTest {
             // when
             final var result = routerWithDisabledSms.route(
                     "IncidentEscalatedEvent", INCIDENT_ID,
-                    TENANT_ID, "CRITICAL", "Critical Incident");
+                    TENANT_ID, Severity.CRITICAL, "Critical Incident");
 
             // then
             final var channelNames = result.stream()

@@ -2,6 +2,7 @@ package com.incidentplatform.shared.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -33,8 +34,8 @@ public record UnifiedAlertDto(
         SourceType sourceType,
 
         @JsonProperty("severity")
-        @NotBlank
-        String severity,
+        @NotNull
+        Severity severity,
 
         @JsonProperty("title")
         @NotBlank
@@ -60,7 +61,6 @@ public record UnifiedAlertDto(
     public UnifiedAlertDto {
         if (alertId == null) alertId = UUID.randomUUID();
         if (title != null) title = title.trim();
-        if (severity != null) severity = severity.toUpperCase();
         if (source != null) source = source.toLowerCase();
 
         if (metadata != null) {
@@ -73,6 +73,6 @@ public record UnifiedAlertDto(
     }
 
     public boolean isCritical() {
-        return "CRITICAL".equals(severity);
+        return Severity.CRITICAL.equals(severity);
     }
 }
