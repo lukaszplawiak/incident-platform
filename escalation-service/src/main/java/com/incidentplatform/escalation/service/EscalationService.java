@@ -2,6 +2,7 @@ package com.incidentplatform.escalation.service;
 
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
+import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -26,7 +27,7 @@ public class EscalationService {
     public void scheduleEscalation(UUID incidentId,
                                    String tenantId,
                                    Instant incidentOpenedAt,
-                                   String severity,
+                                   Severity severity,
                                    String title) {
 
         if (taskRepository.existsByIncidentIdAndEscalationLevel(
@@ -51,7 +52,7 @@ public class EscalationService {
     @Transactional
     public void scheduleLevel2Escalation(UUID incidentId,
                                          String tenantId,
-                                         String severity,
+                                         Severity severity,
                                          String title) {
 
         if (taskRepository.existsByIncidentIdAndEscalationLevel(

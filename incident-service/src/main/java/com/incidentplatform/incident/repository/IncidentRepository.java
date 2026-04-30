@@ -2,6 +2,7 @@ package com.incidentplatform.incident.repository;
 
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.domain.IncidentStatus;
+import com.incidentplatform.shared.domain.Severity;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -48,5 +49,5 @@ public interface IncidentRepository
 
     long countByTenantIdAndStatusAndSeverity(String tenantId,
                                              IncidentStatus status,
-                                             String severity);
+                                             Severity severity);
 }

@@ -7,6 +7,7 @@ import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.incident.domain.IncidentStatus;
 import com.incidentplatform.incident.service.IncidentCommandService;
 import com.incidentplatform.incident.service.IncidentQueryService;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
@@ -71,7 +72,7 @@ public class IncidentController {
             @RequestParam(required = false) IncidentStatus status,
 
             @Parameter(description = "Filter by severity: CRITICAL, HIGH, MEDIUM, LOW")
-            @RequestParam(required = false) String severity,
+            @RequestParam(required = false) Severity severity,
 
             @Parameter(description = "Filter by source type: OPS, SECURITY")
             @RequestParam(required = false) SourceType sourceType,

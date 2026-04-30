@@ -1,5 +1,7 @@
 package com.incidentplatform.shared.events;
 
+import com.incidentplatform.shared.domain.Severity;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -8,7 +10,7 @@ public record IncidentEscalatedEvent(
         String tenantId,
         UUID escalateTo,
         int escalationLevel,
-        String severity,
+        Severity severity,
         String title,
         Instant occurredAt
 ) implements IncidentEvent {

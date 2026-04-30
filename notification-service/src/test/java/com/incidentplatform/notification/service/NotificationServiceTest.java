@@ -7,6 +7,7 @@ import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -71,7 +72,7 @@ class NotificationServiceTest {
             given(emailChannel.channelName()).willReturn("EMAIL");
             given(slackChannel.channelName()).willReturn("SLACK");
             given(router.route(EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    "CRITICAL", "High CPU"))
+                    Severity.CRITICAL, "High CPU"))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(
                                     emailChannel, emailRequest),
@@ -82,7 +83,7 @@ class NotificationServiceTest {
 
             // when
             notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, "CRITICAL", "High CPU");
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "High CPU");
 
             // then — call both
             then(emailChannel).should(times(1)).send(emailRequest);
@@ -103,7 +104,7 @@ class NotificationServiceTest {
 
             // when
             notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, "HIGH", "Test");
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.HIGH, "Test");
 
             // then — log with SENT status
             final ArgumentCaptor<NotificationLog> logCaptor =
@@ -134,7 +135,7 @@ class NotificationServiceTest {
 
             // when
             notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, "CRITICAL", "Test");
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "Test");
 
             // then — two records in log
             then(logRepository).should(times(2)).save(any(NotificationLog.class));
@@ -164,7 +165,7 @@ class NotificationServiceTest {
 
             // when
             notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, "HIGH", "Test");
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.HIGH, "Test");
 
             // then
             final ArgumentCaptor<NotificationLog> logCaptor =
@@ -201,7 +202,7 @@ class NotificationServiceTest {
 
             // when
             notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, "CRITICAL", "Test");
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "Test");
 
             // then
             then(slackChannel).should(times(1)).send(slackRequest);
@@ -222,7 +223,7 @@ class NotificationServiceTest {
 
             // when
             notificationService.processEvent(
-                    "UnknownEvent", INCIDENT_ID, TENANT_ID, "LOW", "Test");
+                    "UnknownEvent", INCIDENT_ID, TENANT_ID, Severity.LOW, "Test");
 
             // then
             then(emailChannel).should(never()).send(any());
@@ -238,7 +239,7 @@ class NotificationServiceTest {
                 "oncall@test-tenant.example.com",
                 "[CRITICAL] High CPU Usage",
                 "New CRITICAL incident detected",
-                "CRITICAL",
+                Severity.CRITICAL,
                 "High CPU Usage"
         );
     }

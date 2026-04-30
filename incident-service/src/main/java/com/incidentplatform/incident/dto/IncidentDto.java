@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.domain.IncidentFsm;
 import com.incidentplatform.incident.domain.IncidentStatus;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 
 import java.time.Instant;
@@ -30,7 +31,7 @@ public record IncidentDto(
         String description,
 
         @JsonProperty("severity")
-        String severity,
+        Severity severity,
 
         @JsonProperty("sourceType")
         SourceType sourceType,
@@ -69,26 +70,26 @@ public record IncidentDto(
         Set<IncidentStatus> allowedTransitions
 
 ) {
-    public static IncidentDto from(Incident incident) {
-        return new IncidentDto(
-                incident.getId(),
-                incident.getTenantId(),
-                incident.getStatus(),
-                incident.getTitle(),
-                incident.getDescription(),
-                incident.getSeverity(),
-                incident.getSourceType(),
-                incident.getSource(),
-                incident.getAlertId(),
-                incident.getAssignedTo(),
-                incident.getAlertFiredAt(),
-                incident.getCreatedAt(),
-                incident.getAcknowledgedAt(),
-                incident.getResolvedAt(),
-                incident.getClosedAt(),
-                incident.getMttaMinutes(),
-                incident.getMttrMinutes(),
-                IncidentFsm.getAllowedTransitions(incident.getStatus())
-        );
-    }
+        public static IncidentDto from(Incident incident) {
+                return new IncidentDto(
+                        incident.getId(),
+                        incident.getTenantId(),
+                        incident.getStatus(),
+                        incident.getTitle(),
+                        incident.getDescription(),
+                        incident.getSeverity(),
+                        incident.getSourceType(),
+                        incident.getSource(),
+                        incident.getAlertId(),
+                        incident.getAssignedTo(),
+                        incident.getAlertFiredAt(),
+                        incident.getCreatedAt(),
+                        incident.getAcknowledgedAt(),
+                        incident.getResolvedAt(),
+                        incident.getClosedAt(),
+                        incident.getMttaMinutes(),
+                        incident.getMttrMinutes(),
+                        IncidentFsm.getAllowedTransitions(incident.getStatus())
+                );
+        }
 }

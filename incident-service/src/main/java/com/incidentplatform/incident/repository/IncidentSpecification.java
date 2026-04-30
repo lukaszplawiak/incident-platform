@@ -28,10 +28,9 @@ public final class IncidentSpecification {
                         root.get("status"), filter.status()));
             }
 
-            if (filter.severity() != null && !filter.severity().isBlank()) {
+            if (filter.severity() != null) {
                 predicates.add(criteriaBuilder.equal(
-                        root.get("severity"),
-                        filter.severity().toUpperCase()));
+                        root.get("severity"), filter.severity()));
             }
 
             if (filter.sourceType() != null) {

@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.channel;
 
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.shared.domain.Severity;
 import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,12 +67,11 @@ public class EmailNotificationChannel implements NotificationChannel {
     }
 
     private String buildHtmlBody(NotificationRequest request) {
-        final String severityColor = switch (request.severity().toUpperCase()) {
-            case "CRITICAL" -> "#FF0000";
-            case "HIGH"     -> "#FF6600";
-            case "MEDIUM"   -> "#FFAA00";
-            case "LOW"      -> "#00AA00";
-            default         -> "#888888";
+        final String severityColor = switch (request.severity()) {
+            case CRITICAL -> "#FF0000";
+            case HIGH     -> "#FF6600";
+            case MEDIUM   -> "#FFAA00";
+            case LOW      -> "#00AA00";
         };
 
         return String.format("""
@@ -93,7 +93,7 @@ public class EmailNotificationChannel implements NotificationChannel {
                 request.message(),
                 request.incidentId(),
                 severityColor,
-                request.severity(),
+                request.severity().name(),
                 request.tenantId()
         );
     }

@@ -1,5 +1,6 @@
 package com.incidentplatform.shared.events;
 
+import com.incidentplatform.shared.domain.Severity;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
@@ -17,7 +18,7 @@ public record AlertReceivedEvent(
 
         @NotNull SourceType sourceType,
 
-        @NotBlank String severity,
+        @NotNull Severity severity,
 
         @NotBlank String title,
 
@@ -47,7 +48,7 @@ public record AlertReceivedEvent(
             String tenantId,
             String source,
             SourceType sourceType,
-            String severity,
+            Severity severity,
             String title,
             String description,
             Instant firedAt,

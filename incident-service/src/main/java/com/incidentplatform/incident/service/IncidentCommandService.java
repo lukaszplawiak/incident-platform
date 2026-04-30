@@ -230,7 +230,7 @@ public class IncidentCommandService {
                 String.format("Incident created from %s alert: '%s'",
                         alert.source(), alert.title()),
                 Map.of("source", alert.source(),
-                        "severity", alert.severity(),
+                        "severity", alert.severity().name(),
                         "fingerprint", alert.fingerprint())
         );
 
@@ -251,8 +251,8 @@ public class IncidentCommandService {
 
         final Incident existing = existingOpt.get();
 
-        if (isSeverityHigher(alert.severity(), existing.getSeverity())) {
-            final String previousSeverity = existing.getSeverity();
+        if (alert.severity().isHigherThan(existing.getSeverity())) {
+            final String previousSeverity = existing.getSeverity().name();
             existing.updateSeverity(alert.severity());
             incidentRepository.save(existing);
 
@@ -261,7 +261,7 @@ public class IncidentCommandService {
                     existing.getStatus(), existing.getStatus(),
                     "KAFKA_CONSUMER",
                     String.format("Severity escalated: %s → %s",
-                            previousSeverity, alert.severity())
+                            previousSeverity, alert.severity().name())
             ));
 
             log.info("Severity updated: incidentId={}, {} → {}, tenant={}",
@@ -272,9 +272,9 @@ public class IncidentCommandService {
                     existing.getId(), tenantId,
                     "INCIDENT_SEVERITY_UPDATED", SERVICE_NAME,
                     String.format("Severity updated: %s → %s",
-                            previousSeverity, alert.severity()),
+                            previousSeverity, alert.severity().name()),
                     Map.of("previousSeverity", previousSeverity,
-                            "newSeverity", alert.severity())
+                            "newSeverity", alert.severity().name())
             );
         }
 
@@ -288,21 +288,6 @@ public class IncidentCommandService {
             case CLOSED       -> "INCIDENT_CLOSED";
             case ESCALATED    -> "INCIDENT_ESCALATED";
             default           -> "INCIDENT_STATUS_CHANGED";
-        };
-    }
-
-    private boolean isSeverityHigher(String newSeverity,
-                                     String existingSeverity) {
-        return severityWeight(newSeverity) > severityWeight(existingSeverity);
-    }
-
-    private int severityWeight(String severity) {
-        return switch (severity.toUpperCase()) {
-            case "CRITICAL" -> 4;
-            case "HIGH"     -> 3;
-            case "MEDIUM"   -> 2;
-            case "LOW"      -> 1;
-            default         -> 0;
         };
     }
 

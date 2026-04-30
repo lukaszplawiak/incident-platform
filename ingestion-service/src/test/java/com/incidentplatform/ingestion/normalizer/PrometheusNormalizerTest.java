@@ -2,6 +2,7 @@ package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -33,7 +34,6 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should normalize single firing alert")
         void shouldNormalizeSingleFiringAlert() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "version": "4",
@@ -55,10 +55,8 @@ class PrometheusNormalizerTest {
                     }
                     """);
 
-            // when
             final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
 
-            // then
             assertThat(result.firingAlerts()).hasSize(1);
             assertThat(result.resolvedAlerts()).isEmpty();
 
@@ -66,7 +64,7 @@ class PrometheusNormalizerTest {
             assertThat(alert.tenantId()).isEqualTo(TENANT_ID);
             assertThat(alert.source()).isEqualTo("prometheus");
             assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
-            assertThat(alert.severity()).isEqualTo("CRITICAL");
+            assertThat(alert.severity()).isEqualTo(Severity.CRITICAL);
             assertThat(alert.title()).isEqualTo("High CPU usage detected");
             assertThat(alert.description()).isEqualTo("CPU above 95%");
             assertThat(alert.firedAt()).isNotNull();
@@ -77,7 +75,6 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should use alertname as title when summary annotation missing")
         void shouldUseAlertnamAsTitleWhenSummaryMissing() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [{
@@ -90,18 +87,13 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-
-            // when
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
-            assertThat(result.firingAlerts().get(0).title()).isEqualTo("HighCpuUsage");
+            assertThat(normalizer.normalize(payload, TENANT_ID)
+                    .firingAlerts().get(0).title()).isEqualTo("HighCpuUsage");
         }
 
         @Test
         @DisplayName("should use job label as fallback when instance missing")
         void shouldUseJobAsFingerprintFallback() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [{
@@ -114,19 +106,14 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-
-            // when
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
-            assertThat(result.firingAlerts().get(0).fingerprint())
+            assertThat(normalizer.normalize(payload, TENANT_ID)
+                    .firingAlerts().get(0).fingerprint())
                     .isEqualTo("prometheus:highcpuusage:node-exporter");
         }
 
         @Test
         @DisplayName("should use current time when startsAt is missing")
         void shouldUseCurrentTimeWhenStartsAtMissing() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [{
@@ -139,18 +126,13 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-
-            // when
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
-            assertThat(result.firingAlerts().get(0).firedAt()).isNotNull();
+            assertThat(normalizer.normalize(payload, TENANT_ID)
+                    .firingAlerts().get(0).firedAt()).isNotNull();
         }
 
         @Test
         @DisplayName("should exclude alertname and severity from metadata")
         void shouldExcludeAlertnamAndSeverityFromMetadata() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [{
@@ -164,12 +146,8 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-
-            // when
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
-            final var metadata = result.firingAlerts().get(0).metadata();
+            final var metadata = normalizer.normalize(payload, TENANT_ID)
+                    .firingAlerts().get(0).metadata();
             assertThat(metadata).doesNotContainKey("alertname");
             assertThat(metadata).doesNotContainKey("severity");
             assertThat(metadata).containsKey("job");
@@ -184,7 +162,6 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should create ResolvedAlertNotification for resolved alert")
         void shouldCreateResolvedNotification() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [{
@@ -198,14 +175,9 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-
-            // when
             final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
             assertThat(result.firingAlerts()).isEmpty();
             assertThat(result.resolvedAlerts()).hasSize(1);
-
             final var resolved = result.resolvedAlerts().get(0);
             assertThat(resolved.tenantId()).isEqualTo(TENANT_ID);
             assertThat(resolved.source()).isEqualTo("prometheus");
@@ -217,11 +189,10 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should use same fingerprint for firing and resolved alert")
         void shouldUseSameFingerprintForFiringAndResolved() throws Exception {
-            // given
-            final JsonNode firingPayload = objectMapper.readTree("""
+            final String alertJson = """
                     {
                       "alerts": [{
-                        "status": "firing",
+                        "status": "%s",
                         "labels": {
                           "alertname": "HighCpuUsage",
                           "severity": "critical",
@@ -229,29 +200,11 @@ class PrometheusNormalizerTest {
                         }
                       }]
                     }
-                    """);
-
-            // given
-            final JsonNode resolvedPayload = objectMapper.readTree("""
-                    {
-                      "alerts": [{
-                        "status": "resolved",
-                        "labels": {
-                          "alertname": "HighCpuUsage",
-                          "severity": "critical",
-                          "instance": "server-1:9100"
-                        }
-                      }]
-                    }
-                    """);
-
-            // when
-            final NormalizationResult firing =
-                    normalizer.normalize(firingPayload, TENANT_ID);
-            final NormalizationResult resolved =
-                    normalizer.normalize(resolvedPayload, TENANT_ID);
-
-            // then
+                    """;
+            final NormalizationResult firing = normalizer.normalize(
+                    objectMapper.readTree(String.format(alertJson, "firing")), TENANT_ID);
+            final NormalizationResult resolved = normalizer.normalize(
+                    objectMapper.readTree(String.format(alertJson, "resolved")), TENANT_ID);
             assertThat(firing.firingAlerts().get(0).fingerprint())
                     .isEqualTo(resolved.resolvedAlerts().get(0).alertFingerprint());
         }
@@ -264,34 +217,34 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should map critical to CRITICAL")
         void shouldMapCritical() throws Exception {
-            assertThat(normalizeSeverity("critical")).isEqualTo("CRITICAL");
+            assertThat(normalizeSeverity("critical")).isEqualTo(Severity.CRITICAL);
         }
 
         @Test
         @DisplayName("should map high to HIGH")
         void shouldMapHigh() throws Exception {
-            assertThat(normalizeSeverity("high")).isEqualTo("HIGH");
+            assertThat(normalizeSeverity("high")).isEqualTo(Severity.HIGH);
         }
 
         @Test
         @DisplayName("should map warning to MEDIUM")
         void shouldMapWarning() throws Exception {
-            assertThat(normalizeSeverity("warning")).isEqualTo("MEDIUM");
+            assertThat(normalizeSeverity("warning")).isEqualTo(Severity.MEDIUM);
         }
 
         @Test
         @DisplayName("should map info to LOW")
         void shouldMapInfo() throws Exception {
-            assertThat(normalizeSeverity("info")).isEqualTo("LOW");
+            assertThat(normalizeSeverity("info")).isEqualTo(Severity.LOW);
         }
 
         @Test
         @DisplayName("should map unknown severity to LOW")
         void shouldMapUnknownToLow() throws Exception {
-            assertThat(normalizeSeverity("unknown-severity")).isEqualTo("LOW");
+            assertThat(normalizeSeverity("unknown-severity")).isEqualTo(Severity.LOW);
         }
 
-        private String normalizeSeverity(String rawSeverity) throws Exception {
+        private Severity normalizeSeverity(String rawSeverity) throws Exception {
             final JsonNode payload = objectMapper.readTree(String.format("""
                     {
                       "alerts": [{
@@ -316,7 +269,6 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should process multiple alerts in batch")
         void shouldProcessMultipleAlerts() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [
@@ -339,11 +291,7 @@ class PrometheusNormalizerTest {
                       ]
                     }
                     """);
-
-            // when
             final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
             assertThat(result.firingAlerts()).hasSize(2);
             assertThat(result.resolvedAlerts()).isEmpty();
         }
@@ -351,7 +299,6 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should process mixed firing and resolved alerts in batch")
         void shouldProcessMixedBatch() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [
@@ -374,11 +321,7 @@ class PrometheusNormalizerTest {
                       ]
                     }
                     """);
-
-            // when
             final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
             assertThat(result.firingAlerts()).hasSize(1);
             assertThat(result.resolvedAlerts()).hasSize(1);
             assertThat(result.totalProcessed()).isEqualTo(2);
@@ -388,45 +331,26 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should limit batch to maxBatchSize")
         void shouldLimitBatchSize() throws Exception {
-            // given
             ReflectionTestUtils.setField(normalizer, "maxBatchSize", 2);
-
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [
                         {
                           "status": "firing",
-                          "labels": {
-                            "alertname": "Alert1",
-                            "severity": "critical",
-                            "instance": "server-1"
-                          }
+                          "labels": { "alertname": "Alert1", "severity": "critical", "instance": "server-1" }
                         },
                         {
                           "status": "firing",
-                          "labels": {
-                            "alertname": "Alert2",
-                            "severity": "high",
-                            "instance": "server-2"
-                          }
+                          "labels": { "alertname": "Alert2", "severity": "high", "instance": "server-2" }
                         },
                         {
                           "status": "firing",
-                          "labels": {
-                            "alertname": "Alert3",
-                            "severity": "low",
-                            "instance": "server-3"
-                          }
+                          "labels": { "alertname": "Alert3", "severity": "low", "instance": "server-3" }
                         }
                       ]
                     }
                     """);
-
-            // when
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
-
-            // then
-            assertThat(result.firingAlerts()).hasSize(2);
+            assertThat(normalizer.normalize(payload, TENANT_ID).firingAlerts()).hasSize(2);
         }
     }
 
@@ -437,15 +361,9 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should throw NormalizationException when alerts array missing")
         void shouldThrowWhenAlertsArrayMissing() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
-                    {
-                      "version": "4",
-                      "status": "firing"
-                    }
+                    { "version": "4", "status": "firing" }
                     """);
-
-            // then
             assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("alerts");
@@ -454,14 +372,9 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should throw NormalizationException when alerts array is empty")
         void shouldThrowWhenAlertsArrayEmpty() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
-                    {
-                      "alerts": []
-                    }
+                    { "alerts": [] }
                     """);
-
-            // then
             assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
                     .isInstanceOf(NormalizationException.class);
         }
@@ -469,20 +382,14 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should throw when alertname label is missing")
         void shouldThrowWhenAlertnameMissing() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [{
                         "status": "firing",
-                        "labels": {
-                          "severity": "critical",
-                          "instance": "server-1"
-                        }
+                        "labels": { "severity": "critical", "instance": "server-1" }
                       }]
                     }
                     """);
-
-            // then
             assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("alertname");
@@ -496,7 +403,6 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should generate consistent fingerprint for same alert")
         void shouldGenerateConsistentFingerprint() throws Exception {
-            // given
             final String alertJson = """
                     {
                       "alerts": [{
@@ -509,80 +415,50 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """;
-
-            // when
             final NormalizationResult result1 = normalizer.normalize(
                     objectMapper.readTree(alertJson), TENANT_ID);
             final NormalizationResult result2 = normalizer.normalize(
                     objectMapper.readTree(alertJson), TENANT_ID);
-
-            // then
             assertThat(result1.firingAlerts().get(0).fingerprint())
                     .isEqualTo(result2.firingAlerts().get(0).fingerprint());
         }
 
         @Test
         @DisplayName("should generate different fingerprints for different instances")
-        void shouldGenerateDifferentFingerprintsForDifferentInstances()
-                throws Exception {
-            // given
+        void shouldGenerateDifferentFingerprintsForDifferentInstances() throws Exception {
             final JsonNode payload1 = objectMapper.readTree("""
                     {
-                      "alerts": [{
-                        "status": "firing",
-                        "labels": {
-                          "alertname": "HighCpuUsage",
-                          "severity": "critical",
-                          "instance": "server-1:9100"
-                        }
-                      }]
+                      "alerts": [{"status": "firing", "labels": {
+                        "alertname": "HighCpuUsage", "severity": "critical", "instance": "server-1:9100"
+                      }}]
                     }
                     """);
             final JsonNode payload2 = objectMapper.readTree("""
                     {
-                      "alerts": [{
-                        "status": "firing",
-                        "labels": {
-                          "alertname": "HighCpuUsage",
-                          "severity": "critical",
-                          "instance": "server-2:9100"
-                        }
-                      }]
+                      "alerts": [{"status": "firing", "labels": {
+                        "alertname": "HighCpuUsage", "severity": "critical", "instance": "server-2:9100"
+                      }}]
                     }
                     """);
-
-            // when
-            final String fingerprint1 = normalizer.normalize(payload1, TENANT_ID)
+            final String f1 = normalizer.normalize(payload1, TENANT_ID)
                     .firingAlerts().get(0).fingerprint();
-            final String fingerprint2 = normalizer.normalize(payload2, TENANT_ID)
+            final String f2 = normalizer.normalize(payload2, TENANT_ID)
                     .firingAlerts().get(0).fingerprint();
-
-            // then
-            assertThat(fingerprint1).isNotEqualTo(fingerprint2);
+            assertThat(f1).isNotEqualTo(f2);
         }
 
         @Test
         @DisplayName("fingerprint should be lowercase")
         void fingerprintShouldBeLowercase() throws Exception {
-            // given
             final JsonNode payload = objectMapper.readTree("""
                     {
-                      "alerts": [{
-                        "status": "firing",
-                        "labels": {
-                          "alertname": "HighCpuUsage",
-                          "severity": "critical",
-                          "instance": "Server-1:9100"
-                        }
-                      }]
+                      "alerts": [{"status": "firing", "labels": {
+                        "alertname": "HighCpuUsage", "severity": "critical", "instance": "Server-1:9100"
+                      }}]
                     }
                     """);
-
-            // when
             final String fingerprint = normalizer.normalize(payload, TENANT_ID)
                     .firingAlerts().get(0).fingerprint();
-
-            // then
             assertThat(fingerprint).isEqualTo(fingerprint.toLowerCase());
         }
     }

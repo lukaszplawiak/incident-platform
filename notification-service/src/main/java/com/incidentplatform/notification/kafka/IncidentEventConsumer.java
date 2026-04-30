@@ -3,6 +3,8 @@ package com.incidentplatform.notification.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.service.NotificationService;
+import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -48,7 +50,9 @@ public class IncidentEventConsumer {
                     ? TenantContext.get()
                     : event.path("tenantId").asText("unknown");
 
-            final String severity = event.path("severity").asText("UNKNOWN");
+            final Severity severity = parseSeverity(
+                    event.path("severity").asText(), incidentId);
+
             final String title = event.path("title").asText("Unknown incident");
 
             log.info("Processing incident event: type={}, incidentId={}, " +
@@ -60,33 +64,35 @@ public class IncidentEventConsumer {
 
             acknowledgment.acknowledge();
 
+        } catch (UnrecognizedSeverityException e) {
+            log.error("Skipping notification event — {}", e.getMessage());
+            acknowledgment.acknowledge();
+
         } catch (Exception e) {
             log.error("Failed to process incident event: topic={}, " +
                             "partition={}, offset={}, error={}",
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage(), e);
-
             acknowledgment.acknowledge();
+        }
+    }
+
+    private Severity parseSeverity(String rawSeverity, UUID incidentId) {
+        try {
+            return Severity.fromString(rawSeverity);
+        } catch (IllegalArgumentException e) {
+            throw new UnrecognizedSeverityException(rawSeverity, incidentId,
+                    "notification routing");
         }
     }
 
     private String resolveEventType(ConsumerRecord<String, String> record,
                                     JsonNode event) {
-        if (event.has("acknowledgedBy")) {
-            return "IncidentAcknowledgedEvent";
-        }
-        if (event.has("resolvedBy") && event.has("durationMinutes")) {
-            return "IncidentResolvedEvent";
-        }
-        if (event.has("closedBy") || event.has("postmortemId")) {
-            return "IncidentClosedEvent";
-        }
-        if (event.has("escalationLevel")) {
-            return "IncidentEscalatedEvent";
-        }
-        if (event.has("severity") && event.has("title")) {
-            return "IncidentOpenedEvent";
-        }
+        if (event.has("acknowledgedBy")) return "IncidentAcknowledgedEvent";
+        if (event.has("resolvedBy") && event.has("durationMinutes")) return "IncidentResolvedEvent";
+        if (event.has("closedBy") || event.has("postmortemId")) return "IncidentClosedEvent";
+        if (event.has("escalationLevel")) return "IncidentEscalatedEvent";
+        if (event.has("severity") && event.has("title")) return "IncidentOpenedEvent";
 
         log.warn("Cannot determine event type for record: key={}, " +
                 "falling back to UNKNOWN", record.key());

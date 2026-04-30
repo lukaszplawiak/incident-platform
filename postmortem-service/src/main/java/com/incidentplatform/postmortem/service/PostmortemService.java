@@ -7,6 +7,7 @@ import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,7 @@ public class PostmortemService {
     public void generatePostmortem(UUID incidentId,
                                    String tenantId,
                                    String incidentTitle,
-                                   String incidentSeverity,
+                                   Severity incidentSeverity,
                                    Instant incidentOpenedAt,
                                    Instant incidentResolvedAt,
                                    int durationMinutes) {
@@ -57,7 +58,7 @@ public class PostmortemService {
         }
 
         final Postmortem postmortem = Postmortem.createGenerating(
-                incidentId, tenantId, incidentTitle, incidentSeverity,
+                incidentId, tenantId, incidentTitle, incidentSeverity.name(),
                 incidentOpenedAt, incidentResolvedAt, durationMinutes);
         postmortemRepository.save(postmortem);
 
@@ -67,7 +68,7 @@ public class PostmortemService {
 
         try {
             final String prompt = promptBuilder.build(
-                    incidentTitle, incidentSeverity,
+                    incidentTitle, incidentSeverity.name(),
                     durationMinutes, incidentOpenedAt, incidentResolvedAt);
 
             final String content = geminiClient.generate(prompt);

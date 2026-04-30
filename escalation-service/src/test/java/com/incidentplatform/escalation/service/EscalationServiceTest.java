@@ -2,6 +2,7 @@ package com.incidentplatform.escalation.service;
 
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
+import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -53,7 +54,7 @@ class EscalationServiceTest {
             // when
             escalationService.scheduleEscalation(
                     INCIDENT_ID, TENANT_ID, Instant.now(),
-                    "CRITICAL", "High CPU Usage");
+                    Severity.CRITICAL, "High CPU Usage");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -64,7 +65,7 @@ class EscalationServiceTest {
             assertThat(saved.getIncidentId()).isEqualTo(INCIDENT_ID);
             assertThat(saved.getTenantId()).isEqualTo(TENANT_ID);
             assertThat(saved.getStatus()).isEqualTo("PENDING");
-            assertThat(saved.getSeverity()).isEqualTo("CRITICAL");
+            assertThat(saved.getSeverity()).isEqualTo(Severity.CRITICAL);
             assertThat(saved.getEscalationLevel()).isEqualTo(1);
         }
 
@@ -79,7 +80,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, openedAt, "CRITICAL", "Test");
+                    INCIDENT_ID, TENANT_ID, openedAt, Severity.CRITICAL, "Test");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -101,7 +102,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, openedAt, "HIGH", "Test");
+                    INCIDENT_ID, TENANT_ID, openedAt, Severity.HIGH, "Test");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -123,7 +124,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, openedAt, "MEDIUM", "Test");
+                    INCIDENT_ID, TENANT_ID, openedAt, Severity.MEDIUM, "Test");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -144,7 +145,7 @@ class EscalationServiceTest {
             // when
             escalationService.scheduleEscalation(
                     INCIDENT_ID, TENANT_ID, Instant.now(),
-                    "CRITICAL", "High CPU");
+                    Severity.CRITICAL, "High CPU");
 
             // then
             then(taskRepository).should(never()).save(any());
@@ -165,7 +166,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleLevel2Escalation(
-                    INCIDENT_ID, TENANT_ID, "CRITICAL", "High CPU");
+                    INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "High CPU");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -185,7 +186,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleLevel2Escalation(
-                    INCIDENT_ID, TENANT_ID, "CRITICAL", "High CPU");
+                    INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "High CPU");
 
             // then
             then(taskRepository).should(never()).save(any());
@@ -202,10 +203,10 @@ class EscalationServiceTest {
             // given
             final EscalationTask task1 = EscalationTask.createLevel1(
                     INCIDENT_ID, TENANT_ID, Instant.now(),
-                    "CRITICAL", "High CPU");
+                    Severity.CRITICAL, "High CPU");
             final EscalationTask task2 = EscalationTask.createLevel2(
                     INCIDENT_ID, TENANT_ID, Instant.now(),
-                    "CRITICAL", "High CPU");
+                    Severity.CRITICAL, "High CPU");
 
             given(taskRepository.findAllByIncidentId(INCIDENT_ID))
                     .willReturn(List.of(task1, task2));
@@ -239,7 +240,7 @@ class EscalationServiceTest {
             // given
             final EscalationTask task = EscalationTask.createLevel1(
                     INCIDENT_ID, TENANT_ID, Instant.now(),
-                    "CRITICAL", "High CPU");
+                    Severity.CRITICAL, "High CPU");
             task.markEscalated();
 
             given(taskRepository.findAllByIncidentId(INCIDENT_ID))

@@ -1,5 +1,6 @@
 package com.incidentplatform.incident.domain;
 
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -54,9 +55,10 @@ public class Incident {
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
-    @NotBlank
+    @NotNull
+    @Enumerated(EnumType.STRING)
     @Column(name = "severity", nullable = false)
-    private String severity;
+    private Severity severity;
 
     @NotNull
     @Enumerated(EnumType.STRING)
@@ -104,7 +106,7 @@ public class Incident {
     public Incident(String tenantId,
                     String title,
                     String description,
-                    String severity,
+                    Severity severity,
                     SourceType sourceType,
                     String source,
                     String alertFingerprint,
@@ -143,7 +145,7 @@ public class Incident {
         this.updatedAt = Instant.now();
     }
 
-    public void updateSeverity(String newSeverity) {
+    public void updateSeverity(Severity newSeverity) {
         this.severity = newSeverity;
         this.updatedAt = Instant.now();
     }
@@ -162,22 +164,22 @@ public class Incident {
         return !IncidentFsm.isTerminalState(this.status);
     }
 
-    public UUID getId() { return id; }
-    public String getTenantId() { return tenantId; }
-    public IncidentStatus getStatus() { return status; }
-    public String getTitle() { return title; }
-    public String getDescription() { return description; }
-    public String getSeverity() { return severity; }
-    public SourceType getSourceType() { return sourceType; }
-    public String getSource() { return source; }
-    public String getAlertFingerprint() { return alertFingerprint; }
-    public UUID getAlertId() { return alertId; }
-    public UUID getAssignedTo() { return assignedTo; }
-    public Instant getAcknowledgedAt() { return acknowledgedAt; }
-    public Instant getResolvedAt() { return resolvedAt; }
-    public Instant getClosedAt() { return closedAt; }
-    public Instant getAlertFiredAt() { return alertFiredAt; }
-    public Instant getCreatedAt() { return createdAt; }
-    public Instant getUpdatedAt() { return updatedAt; }
-    public Long getVersion() { return version; }
+    public UUID getId()                    { return id; }
+    public String getTenantId()            { return tenantId; }
+    public IncidentStatus getStatus()      { return status; }
+    public String getTitle()               { return title; }
+    public String getDescription()         { return description; }
+    public Severity getSeverity()          { return severity; }
+    public SourceType getSourceType()      { return sourceType; }
+    public String getSource()              { return source; }
+    public String getAlertFingerprint()    { return alertFingerprint; }
+    public UUID getAlertId()               { return alertId; }
+    public UUID getAssignedTo()            { return assignedTo; }
+    public Instant getAcknowledgedAt()     { return acknowledgedAt; }
+    public Instant getResolvedAt()         { return resolvedAt; }
+    public Instant getClosedAt()           { return closedAt; }
+    public Instant getAlertFiredAt()       { return alertFiredAt; }
+    public Instant getCreatedAt()          { return createdAt; }
+    public Instant getUpdatedAt()          { return updatedAt; }
+    public Long getVersion()               { return version; }
 }

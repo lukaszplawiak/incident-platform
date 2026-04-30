@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.channel;
 
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -96,12 +97,11 @@ public class SlackNotificationChannel implements NotificationChannel {
     }
 
     private String buildText(NotificationRequest request) {
-        final String severityEmoji = switch (request.severity().toUpperCase()) {
-            case "CRITICAL" -> "🔴";
-            case "HIGH"     -> "🟠";
-            case "MEDIUM"   -> "🟡";
-            case "LOW"      -> "🟢";
-            default         -> "⚪";
+        final String severityEmoji = switch (request.severity()) {
+            case CRITICAL -> "🔴";
+            case HIGH     -> "🟠";
+            case MEDIUM   -> "🟡";
+            case LOW      -> "🟢";
         };
 
         return String.format(

@@ -1,5 +1,7 @@
 package com.incidentplatform.shared.events;
 
+import com.incidentplatform.shared.domain.Severity;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -9,7 +11,7 @@ public record IncidentOpenedEvent(
         UUID alertId,
         String fingerprint,
         String title,
-        String severity,
+        Severity severity,
         SourceType sourceType,
         Instant occurredAt
 ) implements IncidentEvent {

@@ -3,6 +3,8 @@ package com.incidentplatform.postmortem.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.postmortem.service.PostmortemService;
+import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -51,6 +53,10 @@ public class IncidentEventConsumer {
 
             acknowledgment.acknowledge();
 
+        } catch (UnrecognizedSeverityException e) {
+            log.error("Skipping postmortem generation — {}", e.getMessage());
+            acknowledgment.acknowledge();
+
         } catch (Exception e) {
             log.error("Failed to process event: topic={}, partition={}, " +
                             "offset={}, error={}",
@@ -64,9 +70,11 @@ public class IncidentEventConsumer {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
         final String tenantId = resolveTenantId(event);
-        final String severity = event.path("severity").asText("UNKNOWN");
         final String title = event.path("title").asText("Unknown incident");
         final int durationMinutes = event.path("durationMinutes").asInt(0);
+
+        final Severity severity = parseSeverity(
+                event.path("severity").asText(), incidentId);
 
         final Instant openedAt = event.has("openedAt")
                 ? Instant.parse(event.get("openedAt").asText())
@@ -85,6 +93,15 @@ public class IncidentEventConsumer {
                 openedAt, resolvedAt, durationMinutes);
     }
 
+    private Severity parseSeverity(String rawSeverity, UUID incidentId) {
+        try {
+            return Severity.fromString(rawSeverity);
+        } catch (IllegalArgumentException e) {
+            throw new UnrecognizedSeverityException(rawSeverity, incidentId,
+                    "postmortem generation");
+        }
+    }
+
     private String resolveTenantId(JsonNode event) {
         final String fromContext = TenantContext.getOrNull();
         if (fromContext != null && !fromContext.isBlank()) {
@@ -94,21 +111,11 @@ public class IncidentEventConsumer {
     }
 
     private String resolveEventType(JsonNode event) {
-        if (event.has("resolvedBy") || event.has("durationMinutes")) {
-            return "IncidentResolvedEvent";
-        }
-        if (event.has("acknowledgedBy")) {
-            return "IncidentAcknowledgedEvent";
-        }
-        if (event.has("escalationLevel")) {
-            return "IncidentEscalatedEvent";
-        }
-        if (event.has("closedBy") || event.has("postmortemId")) {
-            return "IncidentClosedEvent";
-        }
-        if (event.has("severity") && event.has("title")) {
-            return "IncidentOpenedEvent";
-        }
+        if (event.has("resolvedBy") || event.has("durationMinutes")) return "IncidentResolvedEvent";
+        if (event.has("acknowledgedBy")) return "IncidentAcknowledgedEvent";
+        if (event.has("escalationLevel")) return "IncidentEscalatedEvent";
+        if (event.has("closedBy") || event.has("postmortemId")) return "IncidentClosedEvent";
+        if (event.has("severity") && event.has("title")) return "IncidentOpenedEvent";
         return "UNKNOWN";
     }
 }

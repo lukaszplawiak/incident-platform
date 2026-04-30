@@ -1,6 +1,7 @@
 package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
@@ -91,7 +92,9 @@ public class PrometheusNormalizer extends BaseNormalizer {
         final JsonNode annotations = alert.get("annotations");
         final String alertName = getTextOrThrow(labels, "alertname");
         final String rawSeverity = getText(labels, "severity", "warning");
-        final String severity = mapSeverity(rawSeverity);
+
+        final Severity severity = mapSeverity(rawSeverity);
+
         final String title = annotations != null
                 ? getText(annotations, "summary", alertName)
                 : alertName;
@@ -144,17 +147,17 @@ public class PrometheusNormalizer extends BaseNormalizer {
         return ResolvedAlertNotification.of(tenantId, SOURCE, fingerprint, resolvedAt);
     }
 
-    private String mapSeverity(String rawSeverity) {
-        if (rawSeverity == null) return "LOW";
+    private Severity mapSeverity(String rawSeverity) {
+        if (rawSeverity == null) return Severity.LOW;
         return switch (rawSeverity.toLowerCase()) {
-            case "critical" -> "CRITICAL";
-            case "high"     -> "HIGH";
-            case "warning"  -> "MEDIUM";
-            case "info"     -> "LOW";
+            case "critical" -> Severity.CRITICAL;
+            case "high"     -> Severity.HIGH;
+            case "warning"  -> Severity.MEDIUM;
+            case "info"     -> Severity.LOW;
             default -> {
                 log.warn("Unknown Prometheus severity: '{}', defaulting to LOW",
                         rawSeverity);
-                yield "LOW";
+                yield Severity.LOW;
             }
         };
     }

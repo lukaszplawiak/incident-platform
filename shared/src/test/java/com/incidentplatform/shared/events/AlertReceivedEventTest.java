@@ -1,7 +1,8 @@
 package com.incidentplatform.shared.events;
 
-import org.junit.jupiter.api.Test;
+import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.Map;
@@ -23,7 +24,7 @@ class AlertReceivedEventTest {
         // when
         final AlertReceivedEvent event = AlertReceivedEvent.from(
                 tenantId, source, SourceType.OPS,
-                "CRITICAL", "High CPU usage",
+                Severity.CRITICAL, "High CPU usage",
                 "CPU exceeded 95%", firedAt,
                 Map.of("instance", "server-1:9100")
         );
@@ -33,7 +34,7 @@ class AlertReceivedEventTest {
         assertThat(event.tenantId()).isEqualTo(tenantId);
         assertThat(event.source()).isEqualTo(source);
         assertThat(event.sourceType()).isEqualTo(SourceType.OPS);
-        assertThat(event.severity()).isEqualTo("CRITICAL");
+        assertThat(event.severity()).isEqualTo(Severity.CRITICAL);
         assertThat(event.title()).isEqualTo("High CPU usage");
         assertThat(event.description()).isEqualTo("CPU exceeded 95%");
         assertThat(event.firedAt()).isEqualTo(firedAt);
@@ -47,7 +48,7 @@ class AlertReceivedEventTest {
         // when
         final AlertReceivedEvent event = new AlertReceivedEvent(
                 null, "tenant", "prometheus", SourceType.OPS,
-                "HIGH", "title", null,
+                Severity.HIGH, "title", null,
                 Instant.now(), null, null
         );
 
@@ -61,7 +62,7 @@ class AlertReceivedEventTest {
         // when
         final AlertReceivedEvent event = new AlertReceivedEvent(
                 UUID.randomUUID(), "tenant", "prometheus", SourceType.OPS,
-                "HIGH", "title", null,
+                Severity.HIGH, "title", null,
                 Instant.now(), null, null
         );
 
@@ -75,7 +76,7 @@ class AlertReceivedEventTest {
         // when
         final AlertReceivedEvent event = new AlertReceivedEvent(
                 UUID.randomUUID(), "tenant", "prometheus", SourceType.OPS,
-                "HIGH", "  High CPU usage  ", null,
+                Severity.HIGH, "  High CPU usage  ", null,
                 Instant.now(), Instant.now(), null
         );
 
@@ -89,7 +90,7 @@ class AlertReceivedEventTest {
         // when
         final AlertReceivedEvent event = AlertReceivedEvent.from(
                 "tenant", "prometheus", SourceType.OPS,
-                "HIGH", "title", null, Instant.now(), null
+                Severity.HIGH, "title", null, Instant.now(), null
         );
 
         // then
@@ -102,7 +103,7 @@ class AlertReceivedEventTest {
         // given
         final AlertEvent event = AlertReceivedEvent.from(
                 "acme-corp", "prometheus", SourceType.OPS,
-                "HIGH", "title", null, Instant.now(), null
+                Severity.HIGH, "title", null, Instant.now(), null
         );
 
         // then
@@ -118,11 +119,11 @@ class AlertReceivedEventTest {
         // when
         final AlertReceivedEvent event1 = AlertReceivedEvent.from(
                 "tenant", "prometheus", SourceType.OPS,
-                "HIGH", "title", null, Instant.now(), null
+                Severity.HIGH, "title", null, Instant.now(), null
         );
         final AlertReceivedEvent event2 = AlertReceivedEvent.from(
                 "tenant", "prometheus", SourceType.OPS,
-                "HIGH", "title", null, Instant.now(), null
+                Severity.HIGH, "title", null, Instant.now(), null
         );
 
         // then

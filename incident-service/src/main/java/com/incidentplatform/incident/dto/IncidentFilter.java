@@ -1,13 +1,14 @@
 package com.incidentplatform.incident.dto;
 
 import com.incidentplatform.incident.domain.IncidentStatus;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 
 public record IncidentFilter(
 
         IncidentStatus status,
 
-        String severity,
+        Severity severity,
 
         SourceType sourceType,
 
