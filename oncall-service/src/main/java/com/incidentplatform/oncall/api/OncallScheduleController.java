@@ -6,10 +6,12 @@ import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.security.TenantContext;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -20,9 +22,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.UUID;
 
+@Validated
 @RestController
 @RequestMapping("/api/v1/oncall")
 public class OncallScheduleController {
@@ -38,6 +40,7 @@ public class OncallScheduleController {
 
     @GetMapping("/current")
     public ResponseEntity<?> getCurrentOncall(
+            @NotBlank(message = "Role must not be blank if provided")
             @RequestParam(required = false) String role) {
         final String tenantId = TenantContext.getRequired();
 
@@ -72,12 +75,7 @@ public class OncallScheduleController {
             @PathVariable UUID id) {
         final String tenantId = TenantContext.getRequired();
         log.debug("GET /api/v1/oncall/schedules/{}, tenant={}", id, tenantId);
-
-        try {
-            return ResponseEntity.ok(service.getById(id, tenantId));
-        } catch (NoSuchElementException e) {
-            return ResponseEntity.notFound().build();
-        }
+        return ResponseEntity.ok(service.getById(id, tenantId));
     }
 
     @PostMapping("/schedules")
@@ -87,24 +85,15 @@ public class OncallScheduleController {
         log.debug("POST /api/v1/oncall/schedules, tenant={}, role={}",
                 tenantId, request.role());
 
-        try {
-            final OncallScheduleDto created = service.create(tenantId, request);
-            return ResponseEntity.status(HttpStatus.CREATED).body(created);
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().build();
-        }
+        final OncallScheduleDto created = service.create(tenantId, request);
+        return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
     @DeleteMapping("/schedules/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
         final String tenantId = TenantContext.getRequired();
         log.debug("DELETE /api/v1/oncall/schedules/{}, tenant={}", id, tenantId);
-
-        try {
-            service.delete(id, tenantId);
-            return ResponseEntity.noContent().build();
-        } catch (NoSuchElementException e) {
-            return ResponseEntity.notFound().build();
-        }
+        service.delete(id, tenantId);
+        return ResponseEntity.noContent().build();
     }
 }
