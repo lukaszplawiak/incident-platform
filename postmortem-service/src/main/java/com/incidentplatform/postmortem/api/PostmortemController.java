@@ -16,7 +16,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import java.util.NoSuchElementException;
 import java.util.UUID;
 
 @RestController
@@ -45,13 +44,8 @@ public class PostmortemController {
         final String tenantId = TenantContext.getRequired();
         log.debug("GET /api/v1/postmortems/incident/{}, tenant={}",
                 incidentId, tenantId);
-
-        try {
-            return ResponseEntity.ok(
-                    postmortemService.getByIncidentId(incidentId, tenantId));
-        } catch (NoSuchElementException e) {
-            return ResponseEntity.notFound().build();
-        }
+        return ResponseEntity.ok(
+                postmortemService.getByIncidentId(incidentId, tenantId));
     }
 
     @PatchMapping("/incident/{incidentId}")
@@ -61,13 +55,7 @@ public class PostmortemController {
         final String tenantId = TenantContext.getRequired();
         log.debug("PATCH /api/v1/postmortems/incident/{}, tenant={}",
                 incidentId, tenantId);
-
-        try {
-            return ResponseEntity.ok(
-                    postmortemService.updateContent(
-                            incidentId, tenantId, request));
-        } catch (NoSuchElementException e) {
-            return ResponseEntity.notFound().build();
-        }
+        return ResponseEntity.ok(
+                postmortemService.updateContent(incidentId, tenantId, request));
     }
 }

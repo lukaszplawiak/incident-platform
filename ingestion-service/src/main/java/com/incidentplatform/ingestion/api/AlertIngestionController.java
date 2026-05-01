@@ -15,12 +15,14 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -31,6 +33,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.Map;
 
+@Validated
 @RestController
 @RequestMapping("/api/v1/alerts")
 @Tag(name = "Alert Ingestion",
@@ -86,6 +89,7 @@ public class AlertIngestionController {
                     schema = @Schema(allowableValues = {
                             "prometheus", "wazuh", "generic"})
             )
+            @NotBlank(message = "Source must not be blank")
             @PathVariable String source,
 
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
@@ -133,7 +137,6 @@ public class AlertIngestionController {
             return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
         }
 
-        // Rate limiting — per tenant + per IP
         final RateLimitResult rateLimitResult =
                 rateLimitingService.tryConsume(tenantId, clientIp);
 
@@ -172,15 +175,10 @@ public class AlertIngestionController {
         return ResponseEntity.ok(sources);
     }
 
-    /**
-     * Resolves client IP — obsługuje proxy i load balancer.
-     * Sprawdza nagłówki X-Forwarded-For i X-Real-IP przed RemoteAddr.
-     */
     private String resolveClientIp(
             jakarta.servlet.http.HttpServletRequest request) {
         final String xForwardedFor = request.getHeader("X-Forwarded-For");
         if (xForwardedFor != null && !xForwardedFor.isBlank()) {
-            // X-Forwarded-For może zawierać wiele IP — bierzemy pierwsze
             return xForwardedFor.split(",")[0].trim();
         }
         final String xRealIp = request.getHeader("X-Real-IP");
