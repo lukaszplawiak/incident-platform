@@ -16,14 +16,14 @@ COPY escalation-service/pom.xml escalation-service/
 COPY postmortem-service/pom.xml postmortem-service/
 COPY oncall-service/pom.xml oncall-service/
 
-RUN --mount=type=cache,target=/root/.m2,id=incident-service-m2 \
-    ./mvnw dependency:go-offline -pl shared,incident-service -am -q --no-transfer-progress
+RUN --mount=type=cache,target=/root/.m2,id=postmortem-service-m2 \
+    ./mvnw dependency:go-offline -pl shared,postmortem-service -am -q --no-transfer-progress
 
 COPY shared/src shared/src
 COPY postmortem-service/src postmortem-service/src
 
-RUN --mount=type=cache,target=/root/.m2,id=incident-service-m2 \
-    ./mvnw package -pl shared,incident-service -am \
+RUN --mount=type=cache,target=/root/.m2,id=postmortem-service-m2 \
+    ./mvnw package -pl shared,postmortem-service -am \
     -DskipTests --no-transfer-progress
 
 FROM eclipse-temurin:21-jre-alpine
