@@ -118,6 +118,17 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 1
         automatic-transition-from-open-to-half-open-enabled: true
 
+  retry:
+    instances:
+      slack:
+        max-attempts: ${SLACK_RETRY_MAX_ATTEMPTS:3}
+        wait-duration: ${SLACK_RETRY_WAIT_MS:500ms}
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+
 logging:
   level:
     root: INFO

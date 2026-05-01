@@ -2,6 +2,7 @@ package com.incidentplatform.notification.channel;
 
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,34 +61,38 @@ public class SlackNotificationChannel implements NotificationChannel {
         }
     }
 
-    private void sendToSlack(String channel, String text,
-                             NotificationRequest request) {
+    @Retry(name = "slack", fallbackMethod = "sendToSlackFallback")
+    void sendToSlack(String channel, String text, NotificationRequest request) {
         final Map<String, String> payload = Map.of(
                 "channel", channel,
                 "text", text
         );
 
-        try {
-            restClient.post()
-                    .uri(SLACK_API_URL)
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer " + botToken)
-                    .body(payload)
-                    .retrieve()
-                    .toBodilessEntity();
+        restClient.post()
+                .uri(SLACK_API_URL)
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + botToken)
+                .body(payload)
+                .retrieve()
+                .toBodilessEntity();
 
-            log.info("Slack message sent: channel={}, incidentId={}",
-                    channel, request.incidentId());
+        log.info("Slack message sent: channel={}, incidentId={}",
+                channel, request.incidentId());
+    }
 
-        } catch (Exception e) {
-            throw new NotificationException(
-                    "SLACK",
-                    channel,
-                    "Slack API call failed for channel=" + channel +
-                            ": " + e.getMessage(),
-                    e
-            );
-        }
+    void sendToSlackFallback(String channel, String text,
+                             NotificationRequest request, Exception cause) {
+        log.error("Slack notification failed after all retry attempts: " +
+                        "channel={}, incidentId={}, error={}",
+                channel, request.incidentId(), cause.getMessage());
+
+        throw new NotificationException(
+                "SLACK",
+                channel,
+                String.format("Slack API call failed after retries for " +
+                        "channel=%s: %s", channel, cause.getMessage()),
+                cause
+        );
     }
 
     private boolean isSlackUserId(String recipient) {
