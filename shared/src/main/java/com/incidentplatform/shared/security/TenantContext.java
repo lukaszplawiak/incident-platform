@@ -6,12 +6,12 @@ import org.slf4j.MDC;
 
 public final class TenantContext {
 
-    private static final Logger log = LoggerFactory.getLogger(TenantContext.class);
+    private static final Logger log =
+            LoggerFactory.getLogger(TenantContext.class);
 
     public static final String MDC_TENANT_KEY = "tenantId";
 
-    private static final InheritableThreadLocal<String> TENANT_ID =
-            new InheritableThreadLocal<>();
+    private static final ThreadLocal<String> TENANT_ID = new ThreadLocal<>();
 
     private TenantContext() {
         throw new UnsupportedOperationException(
@@ -30,7 +30,7 @@ public final class TenantContext {
     }
 
     public static String get() {
-        String tenantId = TENANT_ID.get();
+        final String tenantId = TENANT_ID.get();
         if (tenantId == null) {
             throw new IllegalStateException(
                     "TenantContext is not set for current thread. " +
@@ -58,7 +58,7 @@ public final class TenantContext {
     }
 
     public static void clear() {
-        String tenantId = TENANT_ID.get();
+        final String tenantId = TENANT_ID.get();
         TENANT_ID.remove();
         MDC.remove(MDC_TENANT_KEY);
         log.debug("TenantContext cleared for tenant: {}", tenantId);
