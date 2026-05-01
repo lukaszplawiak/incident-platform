@@ -13,6 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -64,6 +65,7 @@ class EscalationSchedulerTest {
                 objectMapper,
                 escalationService,
                 auditEventPublisher);
+
         ReflectionTestUtils.setField(scheduler,
                 "incidentsLifecycleTopic", TOPIC);
     }
@@ -91,7 +93,6 @@ class EscalationSchedulerTest {
                     .send(eq(TOPIC), eq(TENANT_ID), anyString());
             assertThat(task.getStatus()).isEqualTo("ESCALATED");
 
-            // then — level 2 scheduled
             then(escalationService).should().scheduleLevel2Escalation(
                     task.getIncidentId(), TENANT_ID,
                     task.getSeverity(), task.getTitle());
@@ -116,7 +117,6 @@ class EscalationSchedulerTest {
                     .send(eq(TOPIC), eq(TENANT_ID), anyString());
             assertThat(task.getStatus()).isEqualTo("ESCALATED");
 
-            // then — no level 3 scheduled (max level reached)
             then(escalationService).should(never())
                     .scheduleLevel2Escalation(any(), any(), any(), any());
         }
@@ -158,6 +158,53 @@ class EscalationSchedulerTest {
             // then
             then(kafkaTemplate).should(times(2))
                     .send(anyString(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("should send valid JSON payload to Kafka")
+        void shouldSendValidJsonPayload() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(task));
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(kafkaTemplate.send(anyString(), anyString(), anyString()))
+                    .willReturn(null);
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then
+            final ArgumentCaptor<String> payloadCaptor =
+                    ArgumentCaptor.forClass(String.class);
+            then(kafkaTemplate).should()
+                    .send(anyString(), anyString(), payloadCaptor.capture());
+
+            final String payload = payloadCaptor.getValue();
+            assertThat(payload).contains("incidentId");
+            assertThat(payload).contains("tenantId");
+            assertThat(payload).contains("severity");
+            assertThat(payload).contains("\"CRITICAL\"");
+            assertThat(payload).contains("escalationLevel");
+        }
+
+        @Test
+        @DisplayName("should send payload with tenantId as Kafka key")
+        void shouldUseTenantIdAsKafkaKey() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(task));
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(kafkaTemplate.send(anyString(), anyString(), anyString()))
+                    .willReturn(null);
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then
+            then(kafkaTemplate).should()
+                    .send(eq(TOPIC), eq(TENANT_ID), anyString());
         }
     }
 

@@ -1,5 +1,6 @@
 package com.incidentplatform.escalation.scheduler;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
@@ -68,13 +69,13 @@ public class EscalationScheduler {
             try {
                 escalate(task);
             } catch (Exception e) {
-                log.error("Failed to escalate task: incidentId={}, " +
-                        "error={}", task.getIncidentId(), e.getMessage(), e);
+                log.error("Failed to escalate task: incidentId={}, error={}",
+                        task.getIncidentId(), e.getMessage(), e);
             }
         }
     }
 
-    private void escalate(EscalationTask task) throws Exception {
+    private void escalate(EscalationTask task) {
         final IncidentEscalatedEvent event = new IncidentEscalatedEvent(
                 task.getIncidentId(),
                 task.getTenantId(),
@@ -85,7 +86,7 @@ public class EscalationScheduler {
                 Instant.now()
         );
 
-        final String payload = objectMapper.writeValueAsString(event);
+        final String payload = serializeEvent(event);
 
         kafkaTemplate.send(
                 incidentsLifecycleTopic,
@@ -103,28 +104,30 @@ public class EscalationScheduler {
 
         final String role = task.getEscalationLevel() == 1
                 ? "SECONDARY" : "MANAGER";
+
         auditEventPublisher.publishSystem(
                 task.getIncidentId(), task.getTenantId(),
                 "ESCALATION_FIRED", SERVICE_NAME,
                 String.format("Escalation level %d fired — %s notified. " +
                                 "No ACK within timeout for severity %s.",
-                        task.getEscalationLevel(), role, task.getSeverity()),
+                        task.getEscalationLevel(), role,
+                        task.getSeverity().name()),
                 Map.of("escalationLevel", task.getEscalationLevel(),
                         "role", role,
-                        "severity", task.getSeverity())
+                        "severity", task.getSeverity().name())
         );
 
         // Layer 4 — consumer-side severity prioritization.
         // CRITICAL alerts logged at higher priority for faster identification.
         //
-        // TODO: Split into separate topics per severity (alerts.raw.critical,
-        // alerts.raw.high etc.) when project moves to Kubernetes with multiple replicas.
+        // TODO: Split into separate topics per severity (incidents.lifecycle.critical,
+        // incidents.lifecycle.high etc.) when project moves to Kubernetes with multiple replicas.
         // Priority benefit is minimal with single instance.
         // With multiple replicas — separate consumer groups with different concurrency:
-        // alerts.raw.critical → concurrency=5
-        // alerts.raw.high     → concurrency=3
-        // alerts.raw.medium   → concurrency=2
-        // alerts.raw.low      → concurrency=1
+        // incidents.lifecycle.critical → concurrency=5
+        // incidents.lifecycle.high     → concurrency=3
+        // incidents.lifecycle.medium   → concurrency=2
+        // incidents.lifecycle.low      → concurrency=1
 
         if (!task.isMaxLevel()) {
             escalationService.scheduleLevel2Escalation(
@@ -133,6 +136,7 @@ public class EscalationScheduler {
                     task.getSeverity(),
                     task.getTitle()
             );
+
             log.info("Level 2 escalation scheduled: incidentId={}, " +
                             "tenant={}, severity={}",
                     task.getIncidentId(), task.getTenantId(),
@@ -149,9 +153,19 @@ public class EscalationScheduler {
                             EscalationTask.resolveTimeout(task.getSeverity()))
             );
         } else {
-            log.info("Max escalation level reached: incidentId={}, " +
-                            "tenant={}", task.getIncidentId(),
-                    task.getTenantId());
+            log.info("Max escalation level reached: incidentId={}, tenant={}",
+                    task.getIncidentId(), task.getTenantId());
+        }
+    }
+
+    private String serializeEvent(IncidentEscalatedEvent event) {
+        try {
+            return objectMapper.writeValueAsString(event);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(
+                    String.format("Failed to serialize IncidentEscalatedEvent " +
+                                    "for incidentId=%s: %s",
+                            event.incidentId(), e.getMessage()), e);
         }
     }
 }
