@@ -51,29 +51,13 @@ public class OncallClientImpl implements OncallClient {
                     .body(String.class);
 
             if (responseBody == null || responseBody.isBlank()) {
-                log.debug("No oncall found for tenantId={}, role={}",
-                        tenantId, role);
                 return Optional.empty();
             }
 
-            final JsonNode json = objectMapper.readTree(responseBody);
-            final OncallInfo info = new OncallInfo(
-                    json.path("userId").asText(null),
-                    json.path("userName").asText(null),
-                    json.path("email").asText(null),
-                    json.path("phone").asText(null),
-                    json.path("slackUserId").asText(null),
-                    json.path("role").asText(null)
-            );
-
-            log.debug("Current oncall found: tenantId={}, role={}, userId={}",
-                    tenantId, role, info.userId());
-
-            return Optional.of(info);
+            return Optional.of(parseOncallInfo(responseBody));
 
         } catch (RestClientException e) {
-            log.warn("Failed to fetch oncall from oncall-service: " +
-                            "tenantId={}, role={}, error={}",
+            log.warn("Failed to fetch oncall: tenantId={}, role={}, error={}",
                     tenantId, role, e.getMessage());
             return Optional.empty();
         } catch (Exception e) {
@@ -83,10 +67,65 @@ public class OncallClientImpl implements OncallClient {
         }
     }
 
+    @Override
+    public Optional<OncallInfo> findBySlackUserId(String slackUserId) {
+        log.debug("Looking up user by slackUserId: {}", slackUserId);
+
+        try {
+            final String responseBody = restClient.get()
+                    .uri(oncallServiceBaseUrl +
+                            "/api/v1/oncall/by-slack/" + slackUserId)
+                    .header("Authorization",
+                            "Bearer " + serviceTokenProvider.getToken())
+                    .retrieve()
+                    .body(String.class);
+
+            if (responseBody == null || responseBody.isBlank()) {
+                log.warn("No user found for slackUserId: {}", slackUserId);
+                return Optional.empty();
+            }
+
+            final JsonNode json = objectMapper.readTree(responseBody);
+            final OncallInfo info = new OncallInfo(
+                    json.path("userId").asText(null),
+                    json.path("userName").asText(null),
+                    null,
+                    null,
+                    json.path("slackUserId").asText(null),
+                    null
+            );
+
+            log.debug("User found for slackUserId={}: userId={}",
+                    slackUserId, info.userId());
+            return Optional.of(info);
+
+        } catch (RestClientException e) {
+            log.warn("Failed to lookup user by slackUserId={}: {}",
+                    slackUserId, e.getMessage());
+            return Optional.empty();
+        } catch (Exception e) {
+            log.error("Unexpected error looking up slackUserId={}: {}",
+                    slackUserId, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     public Optional<OncallInfo> getCurrentOncallFallback(
             String tenantId, String role, Exception ex) {
         log.warn("OncallClient circuit breaker OPEN: tenantId={}, role={}, " +
                 "using fallback. Error: {}", tenantId, role, ex.getMessage());
         return Optional.empty();
+    }
+
+    private OncallInfo parseOncallInfo(String responseBody) throws Exception {
+        final JsonNode json = objectMapper.readTree(responseBody);
+        return new OncallInfo(
+                json.path("userId").asText(null),
+                json.path("userName").asText(null),
+                json.path("email").asText(null),
+                json.path("phone").asText(null),
+                json.path("slackUserId").asText(null),
+                json.path("role").asText(null)
+        );
     }
 }

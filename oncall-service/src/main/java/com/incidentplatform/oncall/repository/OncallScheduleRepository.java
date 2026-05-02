@@ -44,6 +44,14 @@ public interface OncallScheduleRepository
     Optional<OncallSchedule> findByIdAndTenantId(UUID id, String tenantId);
 
     @Query("""
+            SELECT s FROM OncallSchedule s
+            WHERE s.slackUserId = :slackUserId
+            ORDER BY s.startsAt DESC
+            """)
+    List<OncallSchedule> findBySlackUserId(
+            @Param("slackUserId") String slackUserId);
+
+    @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
             AND s.role = :role

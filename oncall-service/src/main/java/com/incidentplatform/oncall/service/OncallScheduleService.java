@@ -4,6 +4,7 @@ import com.incidentplatform.oncall.domain.OncallSchedule;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
+import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
@@ -96,6 +97,20 @@ public class OncallScheduleService {
                 .map(OncallScheduleDto::from)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "OncallSchedule", id));
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<SlackUserLookupResponse> findBySlackUserId(
+            String slackUserId) {
+        return repository.findBySlackUserId(slackUserId)
+                .stream()
+                .findFirst()
+                .map(schedule -> new SlackUserLookupResponse(
+                        schedule.getUserId(),
+                        schedule.getUserName(),
+                        schedule.getTenantId(),
+                        schedule.getSlackUserId()
+                ));
     }
 
     @Transactional
