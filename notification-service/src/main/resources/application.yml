@@ -70,6 +70,7 @@ notification:
       enabled: true
       bot-token: ${SLACK_BOT_TOKEN}
       channel: "#incidents"
+      signing-secret: ${SLACK_SIGNING_SECRET}
     sms:
       enabled: true
       from-number: ${SMS_FROM:+1234567890}
@@ -80,6 +81,9 @@ notification:
 
 oncall-service:
   base-url: ${ONCALL_SERVICE_URL:http://localhost:8086}
+
+incident-service:
+  base-url: ${INCIDENT_SERVICE_URL:http://localhost:8082}
 
 server:
   port: ${SERVER_PORT:8083}

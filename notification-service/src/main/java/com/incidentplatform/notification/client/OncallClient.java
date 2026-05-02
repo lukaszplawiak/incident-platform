@@ -6,6 +6,8 @@ public interface OncallClient {
 
     Optional<OncallInfo> getCurrentOncall(String tenantId, String role);
 
+    Optional<OncallInfo> findBySlackUserId(String slackUserId);
+
     record OncallInfo(
             String userId,
             String userName,

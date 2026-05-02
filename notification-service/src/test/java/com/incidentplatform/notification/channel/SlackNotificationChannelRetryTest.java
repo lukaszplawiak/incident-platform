@@ -1,5 +1,6 @@
 package com.incidentplatform.notification.channel;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import io.github.resilience4j.retry.Retry;
@@ -8,12 +9,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
-import org.springframework.web.client.HttpServerErrorException;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -22,8 +21,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-
-@ExtendWith(MockitoExtension.class)
 @DisplayName("SlackNotificationChannel — retry behaviour")
 class SlackNotificationChannelRetryTest {
 
@@ -31,14 +28,15 @@ class SlackNotificationChannelRetryTest {
 
     @BeforeEach
     void setUp() {
-        channel = new SlackNotificationChannel(RestClient.builder());
+        channel = new SlackNotificationChannel(
+                RestClient.builder(), new ObjectMapper());
         ReflectionTestUtils.setField(channel, "enabled", true);
         ReflectionTestUtils.setField(channel, "botToken", "xoxb-test-token");
         ReflectionTestUtils.setField(channel, "defaultChannel", "#incidents");
     }
 
     @Nested
-    @DisplayName("sendToSlackFallback")
+    @DisplayName("sendWithAckButtonFallback")
     class FallbackMethod {
 
         @Test
@@ -46,13 +44,11 @@ class SlackNotificationChannelRetryTest {
         void shouldThrowNotificationExceptionOnFallback() {
             // given
             final NotificationRequest request = buildRequest();
-            final Exception cause = new ResourceAccessException(
-                    "Connection timed out");
+            final Exception cause = new ResourceAccessException("Connection timed out");
 
             // when / then
             assertThatThrownBy(() ->
-                    channel.sendToSlackFallback(
-                            "#incidents", "text", request, cause))
+                    channel.sendWithAckButtonFallback("#incidents", request, cause))
                     .isInstanceOf(NotificationException.class)
                     .hasMessageContaining("after retries")
                     .hasMessageContaining("#incidents")
@@ -68,8 +64,7 @@ class SlackNotificationChannelRetryTest {
 
             // when / then
             assertThatThrownBy(() ->
-                    channel.sendToSlackFallback(
-                            "U0123456789", "text", request, cause))
+                    channel.sendWithAckButtonFallback("U0123456789", request, cause))
                     .isInstanceOf(NotificationException.class)
                     .hasMessageContaining("U0123456789");
         }
@@ -84,8 +79,8 @@ class SlackNotificationChannelRetryTest {
 
             // when
             try {
-                channel.sendToSlackFallback(
-                        "#incidents", "text", request, originalCause);
+                channel.sendWithAckButtonFallback(
+                        "#incidents", request, originalCause);
             } catch (NotificationException e) {
                 // then
                 assertThat(e.getCause()).isSameAs(originalCause);
@@ -124,7 +119,7 @@ class SlackNotificationChannelRetryTest {
         }
 
         @Test
-        @DisplayName("should NOT retry on IllegalArgumentException (programming error)")
+        @DisplayName("should NOT retry on IllegalArgumentException")
         void shouldNotRetryOnIllegalArgumentException() {
             // given
             final AtomicInteger callCount = new AtomicInteger(0);
@@ -177,13 +172,12 @@ class SlackNotificationChannelRetryTest {
     }
 
     @Nested
-    @DisplayName("buildText")
-    class BuildText {
+    @DisplayName("Severity emoji")
+    class SeverityEmoji {
 
         @Test
-        @DisplayName("should use correct emoji for each severity")
-        void shouldUseCorrectEmoji() {
-
+        @DisplayName("should handle all severity values without throwing")
+        void shouldHandleAllSeverityValues() {
             for (final Severity severity : Severity.values()) {
                 final NotificationRequest request = new NotificationRequest(
                         UUID.randomUUID(), "test-tenant",

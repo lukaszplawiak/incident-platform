@@ -33,6 +33,7 @@ public class SecurityConfig {
                                 "/actuator/health",
                                 "/actuator/info",
                                 "/actuator/prometheus").permitAll()
+                        .requestMatchers("/api/v1/slack/actions").permitAll()
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthFilter,
