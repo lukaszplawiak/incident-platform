@@ -18,7 +18,6 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -81,7 +80,6 @@ public class IncidentController {
             @RequestParam(required = false) SourceType sourceType,
 
             @Parameter(description = "Filter by source name: prometheus, wazuh, generic")
-            @NotBlank(message = "Source filter must not be blank if provided")
             @RequestParam(required = false) String source,
 
             @PageableDefault(size = 20, sort = "createdAt")
