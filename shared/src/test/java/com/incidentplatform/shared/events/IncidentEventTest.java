@@ -48,7 +48,7 @@ class IncidentEventTest {
         final IncidentResolvedEvent event = new IncidentResolvedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
                 "prometheus:highcpu:prod-1",
-                45L, "Restarted the service", Severity.CRITICAL, Instant.now()
+                45L, "Restarted the service", "High CPU usage on prod-server-1", Severity.CRITICAL, Instant.now()
         );
 
         assertThat(event.durationMinutes()).isEqualTo(45L);
@@ -93,7 +93,7 @@ class IncidentEventTest {
         final IncidentEvent resolved = new IncidentResolvedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
                 "prometheus:test:prod-1",
-                30L, null, Severity.HIGH, Instant.now());
+                30L, null, "title", Severity.HIGH, Instant.now());
         final IncidentEvent escalated = new IncidentEscalatedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
                 1, Severity.HIGH, "title", Instant.now());

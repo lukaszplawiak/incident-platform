@@ -156,6 +156,7 @@ public final class TestDataFactory {
                 "prometheus:highcpuusage:prod-server-1:9100",
                 45L,
                 "Restarted the overloaded service and scaled up the instance",
+                "High CPU usage on prod-server-1",
                 Severity.CRITICAL,
                 Instant.now()
         );
