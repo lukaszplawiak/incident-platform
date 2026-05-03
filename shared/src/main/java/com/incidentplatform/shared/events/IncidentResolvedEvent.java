@@ -12,6 +12,7 @@ public record IncidentResolvedEvent(
         String fingerprint,
         long durationMinutes,
         String resolution,
+        String title,
         Severity severity,
         Instant occurredAt
 ) implements IncidentEvent {

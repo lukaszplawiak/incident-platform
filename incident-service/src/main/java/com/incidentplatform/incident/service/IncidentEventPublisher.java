@@ -72,6 +72,7 @@ public class IncidentEventPublisher {
                 incident.getAlertFingerprint(),
                 durationMinutes,
                 null,
+                incident.getTitle(),
                 incident.getSeverity(),
                 Instant.now()
         );
@@ -107,9 +108,7 @@ public class IncidentEventPublisher {
     private void publish(UUID incidentId, Object event, String eventType) {
         try {
             final String payload = objectMapper.writeValueAsString(event);
-            final String partitionKey = incidentId.toString();
-
-            kafkaTemplate.send(incidentsLifecycleTopic, partitionKey, payload)
+            kafkaTemplate.send(incidentsLifecycleTopic, incidentId.toString(), payload)
                     .whenComplete((result, ex) -> {
                         if (ex != null) {
                             log.error("Failed to publish {} to Kafka: " +
@@ -125,7 +124,6 @@ public class IncidentEventPublisher {
                                     incidentId);
                         }
                     });
-
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize {}: incidentId={}",
                     eventType, incidentId, e);
