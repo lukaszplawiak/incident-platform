@@ -29,3 +29,5 @@ data:
 
   # WebSocket
   WEBSOCKET_ALLOWED_ORIGINS: "http://localhost:4200,http://incident-platform-frontend"
+
+  SPRING_PROFILES_ACTIVE: "dev"

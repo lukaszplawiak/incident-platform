@@ -9,34 +9,37 @@ resources:
   # Dev-specific secrets
   - secrets.yml
 
-# Dev patches — minimal resources, 1 replica per service
+# Dev patches — 1 replica per service, increased memory for JVM
 patches:
-  # Reduce replicas to 1 for all deployments in dev
   - target:
       kind: Deployment
     patch: |-
       - op: replace
         path: /spec/replicas
         value: 1
-  # Reduce HPA maxReplicas in dev
   - target:
       kind: HorizontalPodAutoscaler
     patch: |-
       - op: replace
         path: /spec/maxReplicas
         value: 1
-  # Reduce memory limits in dev
+  # Spring Boot JVM needs minimum 512Mi — 256Mi causes OOMKilled
   - target:
       kind: Deployment
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
-        value: "256Mi"
+        value: "768Mi"
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/memory
-        value: "128Mi"
+        value: "512Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe/initialDelaySeconds
+        value: 90
+      - op: replace
+        path: /spec/template/spec/containers/0/livenessProbe/initialDelaySeconds
+        value: 120
 
-# Dev image tags — use local images from Minikube
 images:
   - name: incident-service
     newTag: dev

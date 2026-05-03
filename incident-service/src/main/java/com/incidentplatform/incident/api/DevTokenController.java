@@ -19,7 +19,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/dev/token")
-@Profile("local")
+@Profile({"local", "dev"})
 @Tag(name = "Dev Tools", description = "LOCAL PROFILE ONLY")
 public class DevTokenController {
 

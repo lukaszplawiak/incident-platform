@@ -31,6 +31,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/actuator/health",
+                                "/actuator/health/**",
                                 "/actuator/info",
                                 "/actuator/prometheus").permitAll()
                         .requestMatchers("/api/v1/oncall/current")

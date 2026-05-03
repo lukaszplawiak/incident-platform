@@ -32,10 +32,14 @@ spec:
               value: "broker,controller"
             - name: KAFKA_LISTENERS
               value: "PLAINTEXT://:9092,CONTROLLER://:9093"
+            - name: MY_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: KAFKA_ADVERTISED_LISTENERS
-              value: "PLAINTEXT://kafka:9092"
+              value: "PLAINTEXT://kafka-0.kafka.$(MY_POD_NAMESPACE).svc.cluster.local:9092"
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
-              value: "1@kafka:9093"
+              value: "1@kafka-0.kafka.$(MY_POD_NAMESPACE).svc.cluster.local:9093"
             - name: KAFKA_CONTROLLER_LISTENER_NAMES
               value: "CONTROLLER"
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
@@ -92,4 +96,7 @@ spec:
     - port: 9092
       targetPort: 9092
       name: kafka
-  clusterIP: None  # Headless service for StatefulSet
+    - port: 9093
+      targetPort: 9093
+      name: controller
+  clusterIP: None
