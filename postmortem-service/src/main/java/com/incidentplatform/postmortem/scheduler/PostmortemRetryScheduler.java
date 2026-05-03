@@ -5,6 +5,7 @@ import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -38,6 +39,11 @@ public class PostmortemRetryScheduler {
     @Scheduled(
             fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
             initialDelayString = "120000"
+    )
+    @SchedulerLock(
+            name = "postmortem-service:retryFailedPostmortems",
+            lockAtMostFor = "9m",
+            lockAtLeastFor = "30s"
     )
     @Transactional
     public void retryFailedPostmortems() {
