@@ -72,6 +72,7 @@ public class IncidentEventPublisher {
                 incident.getAlertFingerprint(),
                 durationMinutes,
                 null,
+                incident.getSeverity(),
                 Instant.now()
         );
         publish(incident.getId(), event, "IncidentResolvedEvent");
