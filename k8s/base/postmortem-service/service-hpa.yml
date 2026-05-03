@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postmortem-service
+  labels:
+    app: postmortem-service
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  selector:
+    app: postmortem-service
+  ports:
+    - name: http
+      port: 8085
+      targetPort: 8085
+    - name: management
+      port: 8095
+      targetPort: 8095
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: postmortem-service-hpa
+  labels:
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: postmortem-service
+  minReplicas: 1
+  maxReplicas: 2
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

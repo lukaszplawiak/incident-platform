@@ -1,0 +1,70 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: incident-platform-ingress
+  labels:
+    app.kubernetes.io/part-of: incident-platform
+  annotations:
+    # nginx.ingress.kubernetes.io/rewrite-target: /
+    # Rate limiting — prevents DDoS (backlog item)
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # WebSocket support for incident-service
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: incident-platform.local  # Add to /etc/hosts for local dev
+      http:
+        paths:
+          # ingestion-service — receives alerts from Prometheus/Wazuh
+          - path: /api/v1/alerts
+            pathType: Prefix
+            backend:
+              service:
+                name: ingestion-service
+                port:
+                  number: 8081
+
+          # incident-service — main service, WebSocket included
+          - path: /api/v1/incidents
+            pathType: Prefix
+            backend:
+              service:
+                name: incident-service
+                port:
+                  number: 8082
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: incident-service
+                port:
+                  number: 8082
+
+          # notification-service — Slack webhooks
+          - path: /api/v1/slack
+            pathType: Prefix
+            backend:
+              service:
+                name: notification-service
+                port:
+                  number: 8083
+
+          # oncall-service
+          - path: /api/v1/oncall
+            pathType: Prefix
+            backend:
+              service:
+                name: oncall-service
+                port:
+                  number: 8086
+
+          # postmortem-service
+          - path: /api/v1/postmortems
+            pathType: Prefix
+            backend:
+              service:
+                name: postmortem-service
+                port:
+                  number: 8085

@@ -1,0 +1,40 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: incident-platform-staging
+
+resources:
+  # Extend base configuration
+  - ../../base
+  # Staging-specific secrets
+  - secrets.yml
+
+patches:
+  - target:
+      kind: Deployment
+      name: incident-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target:
+      kind: Deployment
+      name: ingestion-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+
+images:
+  - name: incident-service
+    newTag: staging
+  - name: ingestion-service
+    newTag: staging
+  - name: notification-service
+    newTag: staging
+  - name: escalation-service
+    newTag: staging
+  - name: postmortem-service
+    newTag: staging
+  - name: oncall-service
+    newTag: staging
