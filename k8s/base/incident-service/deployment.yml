@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-service
+  labels:
+    app: incident-service
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: incident-service
+  # RollingUpdate — zero downtime deployment.
+  # maxUnavailable: 0 — during update, always keep requested replicas running.
+  # maxSurge: 1 — allow one extra pod during update.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: incident-service
+    spec:
+      # Wait for dependencies before starting — prevents startup failures
+      initContainers:
+        - name: wait-for-postgresql
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgresql 5432; do
+                echo "Waiting for PostgreSQL...";
+                sleep 2;
+              done
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z kafka 9092; do
+                echo "Waiting for Kafka...";
+                sleep 2;
+              done
+      containers:
+        - name: incident-service
+          image: incident-service:latest
+          # Never pull if image exists locally (for Minikube dev)
+          # Change to Always for staging/prod with registry
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+              name: http
+            - containerPort: 8092
+              name: management
+          envFrom:
+            # Load all non-sensitive config from ConfigMap
+            - configMapRef:
+                name: app-config
+          env:
+            # Load secrets individually from Secret
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: JWT_SECRET
+            - name: SERVER_PORT
+              value: "8082"
+            - name: MANAGEMENT_PORT
+              value: "8092"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          # readinessProbe — when pod is ready to receive traffic.
+          # Kubernetes sends traffic only after this probe succeeds.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8092
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          # livenessProbe — when to restart the pod.
+          # Kubernetes restarts pod if this probe fails.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8092
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3

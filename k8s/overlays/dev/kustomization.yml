@@ -1,0 +1,55 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: incident-platform-dev
+
+resources:
+  # Extend base configuration
+  - ../../base
+  # Dev-specific secrets
+  - secrets.yml
+
+# Dev patches — 1 replica per service, increased memory for JVM
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+  - target:
+      kind: HorizontalPodAutoscaler
+    patch: |-
+      - op: replace
+        path: /spec/maxReplicas
+        value: 1
+  # Spring Boot JVM needs minimum 512Mi — 256Mi causes OOMKilled
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "768Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "512Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/readinessProbe/initialDelaySeconds
+        value: 90
+      - op: replace
+        path: /spec/template/spec/containers/0/livenessProbe/initialDelaySeconds
+        value: 120
+
+images:
+  - name: incident-service
+    newTag: dev
+  - name: ingestion-service
+    newTag: dev
+  - name: notification-service
+    newTag: dev
+  - name: escalation-service
+    newTag: dev
+  - name: postmortem-service
+    newTag: dev
+  - name: oncall-service
+    newTag: dev

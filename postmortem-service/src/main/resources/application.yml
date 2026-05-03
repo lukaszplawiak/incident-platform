@@ -92,6 +92,8 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+      probes:
+        enabled: true
   server:
     port: ${MANAGEMENT_PORT:8095}
 

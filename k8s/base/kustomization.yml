@@ -1,0 +1,37 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: incident-platform
+
+resources:
+  # Namespace
+  - namespace/namespace.yml
+
+  # Infrastructure
+  - infrastructure/postgresql-secret.yml
+  - infrastructure/app-config.yml
+  - infrastructure/postgresql.yml
+  - infrastructure/kafka.yml
+  - infrastructure/redis.yml
+  - infrastructure/ingress.yml
+
+  # Application services
+  - ingestion-service/deployment.yml
+  - ingestion-service/service-hpa.yml
+  - incident-service/deployment.yml
+  - incident-service/service-hpa.yml
+  - notification-service/deployment.yml
+  - notification-service/service-hpa.yml
+  - escalation-service/deployment.yml
+  - escalation-service/service-hpa.yml
+  - postmortem-service/deployment.yml
+  - postmortem-service/service-hpa.yml
+  - oncall-service/deployment.yml
+  - oncall-service/service-hpa.yml
+
+# Common labels applied to all resources
+labels:
+  - pairs:
+      app.kubernetes.io/managed-by: kustomize
+      app.kubernetes.io/part-of: incident-platform
+    includeSelectors: false

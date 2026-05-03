@@ -103,6 +103,8 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+      probes:
+        enabled: true
   server:
     port: ${MANAGEMENT_PORT:8092}
 
@@ -116,6 +118,3 @@ logging:
     org.hibernate.SQL: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} [%X{tenantId:-no-tenant}] [%X{requestId:-no-req}] [%X{userId:-no-user}] %-5level %logger{36} - %msg%n"
-
-websocket:
-  allowed-origins: ${WEBSOCKET_ALLOWED_ORIGINS:http://localhost:4200}

@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-service
+  labels:
+    app: incident-service
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  selector:
+    app: incident-service
+  ports:
+    - name: http
+      port: 8082
+      targetPort: 8082
+    - name: management
+      port: 8092
+      targetPort: 8092
+---
+# HorizontalPodAutoscaler — automatically scales replicas based on CPU/memory.
+# When CPU > 70% → add replica (up to maxReplicas).
+# When CPU < 70% → remove replica (down to minReplicas).
+# ShedLock ensures schedulers don't duplicate when scaled up.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: incident-service-hpa
+  labels:
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: incident-service
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80

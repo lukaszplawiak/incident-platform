@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  labels:
+    app: notification-service
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-service
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      initContainers:
+        - name: wait-for-postgresql
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z postgresql 5432; do echo 'Waiting for PostgreSQL...'; sleep 2; done"]
+        - name: wait-for-kafka
+          image: busybox:1.36
+          command: ["sh", "-c", "until nc -z kafka 9092; do echo 'Waiting for Kafka...'; sleep 2; done"]
+      containers:
+        - name: notification-service
+          image: notification-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+              name: http
+            - containerPort: 8093
+              name: management
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: JWT_SECRET
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SLACK_BOT_TOKEN
+            - name: SLACK_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SLACK_SIGNING_SECRET
+            - name: SERVER_PORT
+              value: "8083"
+            - name: MANAGEMENT_PORT
+              value: "8093"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8093
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8093
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
