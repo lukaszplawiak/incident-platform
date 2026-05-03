@@ -7,6 +7,7 @@ import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -51,6 +52,11 @@ public class EscalationScheduler {
     @Scheduled(
             fixedDelayString = "${escalation.scheduler-interval-ms:60000}",
             initialDelayString = "30000"
+    )
+    @SchedulerLock(
+            name = "escalation-service:checkAndEscalate",
+            lockAtMostFor = "5m",
+            lockAtLeastFor = "10s"
     )
     @Transactional
     public void checkAndEscalate() {
@@ -116,18 +122,6 @@ public class EscalationScheduler {
                         "role", role,
                         "severity", task.getSeverity().name())
         );
-
-        // Layer 4 — consumer-side severity prioritization.
-        // CRITICAL alerts logged at higher priority for faster identification.
-        //
-        // TODO: Split into separate topics per severity (incidents.lifecycle.critical,
-        // incidents.lifecycle.high etc.) when project moves to Kubernetes with multiple replicas.
-        // Priority benefit is minimal with single instance.
-        // With multiple replicas — separate consumer groups with different concurrency:
-        // incidents.lifecycle.critical → concurrency=5
-        // incidents.lifecycle.high     → concurrency=3
-        // incidents.lifecycle.medium   → concurrency=2
-        // incidents.lifecycle.low      → concurrency=1
 
         if (!task.isMaxLevel()) {
             escalationService.scheduleLevel2Escalation(
