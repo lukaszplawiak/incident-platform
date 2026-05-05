@@ -4,15 +4,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 @Component
@@ -40,15 +43,17 @@ public class IncidentEventConsumer {
         log.debug("Received incident event: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
+        // Extract tenantId from this specific record's Kafka header.
+        // The incidents-lifecycle topic is multi-tenant — each record must be
+        final String tenantId = extractTenantId(record);
+        TenantContext.set(tenantId);
+
         try {
             final JsonNode event = objectMapper.readTree(record.value());
 
             final String eventType = resolveEventType(record, event);
             final UUID incidentId = UUID.fromString(
                     event.get("incidentId").asText());
-            final String tenantId = TenantContext.getOrNull() != null
-                    ? TenantContext.get()
-                    : event.path("tenantId").asText("unknown");
 
             final Severity severity = parseSeverity(
                     event.path("severity").asText(), incidentId);
@@ -74,6 +79,9 @@ public class IncidentEventConsumer {
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage(), e);
             acknowledgment.acknowledge();
+
+        } finally {
+            TenantContext.clear();
         }
     }
 
@@ -97,5 +105,23 @@ public class IncidentEventConsumer {
         log.warn("Cannot determine event type for record: key={}, " +
                 "falling back to UNKNOWN", record.key());
         return "UNKNOWN";
+    }
+
+    // Reads tenantId from the Kafka record header set by TenantKafkaProducerInterceptor.
+    // Each record on a multi-tenant topic carries its own tenantId header —
+    private String extractTenantId(ConsumerRecord<?, ?> record) {
+        final Header header = record.headers()
+                .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
+        if (header != null) {
+            final String tenantId = new String(header.value(), StandardCharsets.UTF_8);
+            if (!tenantId.isBlank()) {
+                return tenantId;
+            }
+        }
+        // Fallback: should not happen in production, but prevents NPE
+        log.warn("Missing tenantId Kafka header, falling back to payload: " +
+                        "topic={}, partition={}, offset={}",
+                record.topic(), record.partition(), record.offset());
+        return "unknown";
     }
 }

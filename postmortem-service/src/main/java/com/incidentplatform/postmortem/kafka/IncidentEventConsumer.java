@@ -4,15 +4,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.postmortem.service.PostmortemService;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -41,12 +44,17 @@ public class IncidentEventConsumer {
         log.debug("Received event: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
+        // Extract tenantId from this specific record's Kafka header.
+        // The incidents-lifecycle topic is multi-tenant — each record must be
+        final String tenantId = extractTenantId(record);
+        TenantContext.set(tenantId);
+
         try {
             final JsonNode event = objectMapper.readTree(record.value());
             final String eventType = resolveEventType(event);
 
             if ("IncidentResolvedEvent".equals(eventType)) {
-                handleResolved(event);
+                handleResolved(event, tenantId);
             } else {
                 log.debug("Ignoring event type: {}", eventType);
             }
@@ -63,13 +71,15 @@ public class IncidentEventConsumer {
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage(), e);
             acknowledgment.acknowledge();
+
+        } finally {
+            TenantContext.clear();
         }
     }
 
-    private void handleResolved(JsonNode event) {
+    private void handleResolved(JsonNode event, String tenantId) {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
-        final String tenantId = resolveTenantId(event);
         final String title = event.path("title").asText("Unknown incident");
         final int durationMinutes = event.path("durationMinutes").asInt(0);
 
@@ -102,14 +112,6 @@ public class IncidentEventConsumer {
         }
     }
 
-    private String resolveTenantId(JsonNode event) {
-        final String fromContext = TenantContext.getOrNull();
-        if (fromContext != null && !fromContext.isBlank()) {
-            return fromContext;
-        }
-        return event.path("tenantId").asText("unknown");
-    }
-
     private String resolveEventType(JsonNode event) {
         if (event.has("resolvedBy") || event.has("durationMinutes")) return "IncidentResolvedEvent";
         if (event.has("acknowledgedBy")) return "IncidentAcknowledgedEvent";
@@ -117,5 +119,22 @@ public class IncidentEventConsumer {
         if (event.has("closedBy") || event.has("postmortemId")) return "IncidentClosedEvent";
         if (event.has("severity") && event.has("title")) return "IncidentOpenedEvent";
         return "UNKNOWN";
+    }
+
+    // Reads tenantId from the Kafka record header set by TenantKafkaProducerInterceptor.
+    // Each record on a multi-tenant topic carries its own tenantId header —
+    private String extractTenantId(ConsumerRecord<?, ?> record) {
+        final Header header = record.headers()
+                .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
+        if (header != null) {
+            final String tenantId = new String(header.value(), StandardCharsets.UTF_8);
+            if (!tenantId.isBlank()) {
+                return tenantId;
+            }
+        }
+        log.warn("Missing tenantId Kafka header, falling back to unknown: " +
+                        "topic={}, partition={}, offset={}",
+                record.topic(), record.partition(), record.offset());
+        return "unknown";
     }
 }

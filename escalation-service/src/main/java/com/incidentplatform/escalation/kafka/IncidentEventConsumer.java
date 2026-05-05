@@ -4,15 +4,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -41,13 +44,18 @@ public class IncidentEventConsumer {
         log.debug("Received incident event: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
+        // Extract tenantId from this specific record's Kafka header.
+        // The incidents-lifecycle topic is multi-tenant — each record must be
+        final String tenantId = extractTenantId(record);
+        TenantContext.set(tenantId);
+
         try {
             final JsonNode event = objectMapper.readTree(record.value());
             final String eventType = resolveEventType(event);
 
             switch (eventType) {
-                case "IncidentOpenedEvent" -> handleOpened(event);
-                case "IncidentAcknowledgedEvent" -> handleAcknowledged(event);
+                case "IncidentOpenedEvent" -> handleOpened(record, event, tenantId);
+                case "IncidentAcknowledgedEvent" -> handleAcknowledged(event, tenantId);
                 default -> log.debug("Ignoring event type: {}", eventType);
             }
 
@@ -63,13 +71,17 @@ public class IncidentEventConsumer {
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage(), e);
             acknowledgment.acknowledge();
+
+        } finally {
+            TenantContext.clear();
         }
     }
 
-    private void handleOpened(JsonNode event) {
+    private void handleOpened(ConsumerRecord<?, ?> record,
+                              JsonNode event,
+                              String tenantId) {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
-        final String tenantId = resolveTenantId(event);
         final String title = event.path("title").asText("Unknown incident");
 
         final Severity severity = parseSeverity(
@@ -87,10 +99,9 @@ public class IncidentEventConsumer {
                 incidentId, tenantId, openedAt, severity, title);
     }
 
-    private void handleAcknowledged(JsonNode event) {
+    private void handleAcknowledged(JsonNode event, String tenantId) {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
-        final String tenantId = resolveTenantId(event);
 
         log.info("Cancelling escalation (ACK received): " +
                 "incidentId={}, tenant={}", incidentId, tenantId);
@@ -107,14 +118,6 @@ public class IncidentEventConsumer {
         }
     }
 
-    private String resolveTenantId(JsonNode event) {
-        final String fromContext = TenantContext.getOrNull();
-        if (fromContext != null && !fromContext.isBlank()) {
-            return fromContext;
-        }
-        return event.path("tenantId").asText("unknown");
-    }
-
     private String resolveEventType(JsonNode event) {
         if (event.has("acknowledgedBy")) return "IncidentAcknowledgedEvent";
         if (event.has("resolvedBy") && event.has("durationMinutes")) return "IncidentResolvedEvent";
@@ -122,5 +125,22 @@ public class IncidentEventConsumer {
         if (event.has("escalationLevel")) return "IncidentEscalatedEvent";
         if (event.has("severity") && event.has("title")) return "IncidentOpenedEvent";
         return "UNKNOWN";
+    }
+
+    // Reads tenantId from the Kafka record header set by TenantKafkaProducerInterceptor.
+    // Each record on a multi-tenant topic carries its own tenantId header —
+    private String extractTenantId(ConsumerRecord<?, ?> record) {
+        final Header header = record.headers()
+                .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
+        if (header != null) {
+            final String tenantId = new String(header.value(), StandardCharsets.UTF_8);
+            if (!tenantId.isBlank()) {
+                return tenantId;
+            }
+        }
+        log.warn("Missing tenantId Kafka header, falling back to unknown: " +
+                        "topic={}, partition={}, offset={}",
+                record.topic(), record.partition(), record.offset());
+        return "unknown";
     }
 }
