@@ -76,7 +76,7 @@ Core domain service. Manages the full lifecycle of incidents.
 
 - **State Machine (FSM)**: Custom lightweight FSM — `OPEN → ACKNOWLEDGED → ESCALATED → RESOLVED → CLOSED`
 - **CQRS**: Separate `IncidentCommandService` and `IncidentQueryService`
-- **Optimistic locking**: `@Version` on the `Incident` entity prevents concurrent update conflicts
+- **Optimistic locking**: `@Version` on the `Incident` entity prevents concurrent update conflicts — HTTP 409 Conflict returned on collision
 - **Idempotency**: Before creating a new incident, checks if an active incident with the same fingerprint already exists — defense-in-depth against Redis dedup failures
 - **WebSocket**: Real-time incident updates via STOMP over `/ws`
 - **Centralized audit log**: `AuditEventConsumer` collects events from all services via `audit.events` Kafka topic and persists them to `audit_events` table
@@ -101,7 +101,7 @@ Monitors open incidents and automatically escalates those not acknowledged withi
 
 - **Two-level escalation chain**: Level 1 notifies SECONDARY on-call, Level 2 notifies MANAGER — if no ACK at any level
 - **Severity-based timeouts**: CRITICAL=5min, HIGH=15min, MEDIUM=30min, LOW=60min — urgency matches incident severity
-- **Timer-based escalation**: `@Scheduled` checks every N seconds for overdue incidents
+- **Timer-based escalation**: `@Scheduled` + ShedLock checks every N seconds for overdue incidents — safe in multi-instance deployments
 - **EscalationTask**: Each opened incident gets a scheduled task in PostgreSQL — one per level
 - **Idempotency**: Re-delivery of `IncidentOpenedEvent` from Kafka does not create duplicate tasks
 - **ACK cancellation**: `IncidentAcknowledgedEvent` cancels ALL pending escalation tasks (level 1 and 2)
@@ -111,7 +111,7 @@ Monitors open incidents and automatically escalates those not acknowledged withi
 Automatically generates postmortem drafts using the Gemini AI API after incidents are resolved.
 
 - **Triggered by**: `IncidentResolvedEvent` from `incidents.lifecycle`
-- **Gemini integration**: HTTP call via `RestClient` — no SDK, full vendor neutrality through `GeminiClient` interface
+- **Gemini integration**: HTTP call via `RestClient` — no SDK, full vendor neutrality through `GeminiClient` interface. API key passed via `x-goog-api-key` header (not query param) per Google security best practices
 - **Resilience**: Resilience4j retry + circuit breaker on Gemini API calls; `PostmortemRetryScheduler` retries FAILED postmortems
 - **Lifecycle**: `GENERATING → DRAFT → REVIEWED` (or `FAILED` on API error)
 - **Prompt engineering**: Structured prompt with incident title, severity, duration, and timeline — generates sections: Summary, Timeline, Root Cause, Impact, Resolution, Action Items, Lessons Learned
@@ -208,6 +208,22 @@ Audit event types:
 - `ESCALATION_FIRED`, `ESCALATION_SCHEDULED`
 - `POSTMORTEM_GENERATED`, `POSTMORTEM_FAILED`, `POSTMORTEM_UPDATED`
 
+### Multi-Tenant Kafka — Per-Record Tenant Isolation
+
+All Kafka topics are multi-tenant — records from different tenants are interleaved on the same topic. Tenant isolation is enforced at two levels:
+
+- **Producer**: `TenantKafkaProducerInterceptor` automatically adds `X-Tenant-Id` header to every outgoing record, reading from the current thread's `TenantContext`
+- **Consumer**: Each `@KafkaListener` method reads `X-Tenant-Id` from its own `ConsumerRecord` header before processing, and clears `TenantContext` in a `finally` block — guaranteeing no tenant leaks between records in the same batch
+- **Validation**: `TenantKafkaConsumerInterceptor` validates that every incoming record carries a tenant header, logging a warning if missing — acts as an early detection layer before business logic runs
+
+This design ensures that even if Kafka delivers records from `tenant-a` and `tenant-b` in the same poll batch, each record is processed with the correct tenant context.
+
+### Concurrency Safety
+
+- **Optimistic locking**: `@Version` field on `Incident` entity — concurrent PATCH requests on the same incident return `HTTP 409 Conflict` instead of silently overwriting each other
+- **`GlobalExceptionHandler`**: Catches `ObjectOptimisticLockingFailureException` and returns a structured 409 response with `OPTIMISTIC_LOCK_CONFLICT` error code
+- **ShedLock**: `EscalationScheduler` and `PostmortemRetryScheduler` use ShedLock to prevent duplicate job execution across multiple service instances
+
 ### Edge Cases Handled
 
 **TTL expiry during active incident** — When `IncidentOpenedEvent` is consumed by `ingestion-service`, the Redis key TTL is extended to 7 days. When `IncidentResolvedEvent` arrives, the key is deleted immediately. If the resolved event is lost (Kafka failure), the 7-day TTL acts as a safety net.
@@ -231,9 +247,9 @@ spring:
         max.poll.records: 10          # limits records per poll cycle
 ```
 
-**Audit log best-effort** — `AuditEventPublisher` catches all exceptions internally. An audit log failure never propagates to the business logic — the main flow is never blocked by observability infrastructure.
+**Audit event resilience** — `AuditEventPublisher` uses `@Retryable` (3 attempts, exponential backoff) for transient Kafka failures. Serialization errors are not retried — bad data won't fix itself. The main business flow is never blocked by observability infrastructure.
 
-**Payload size limit** — `ingestion-service` rejects payloads over 1MB at both the HTTP layer (`spring.servlet.multipart`) and application layer (explicit size check before processing). Oversized payloads return `413 Payload Too Large` with no Kafka publishing.
+**Payload size limit** — `ingestion-service` rejects payloads over 1MB at the application layer (explicit size check before processing). Oversized payloads return `413 Payload Too Large` with no Kafka publishing.
 
 ### Security
 
@@ -241,8 +257,10 @@ spring:
 - **Service-to-service auth**: Internal HTTP calls between services use `ServiceTokenProvider` which generates and caches JWT tokens with `ROLE_SERVICE` — not exposed to end users
 - **Dev endpoints**: `DevTokenController` is gated with `@Profile("local")` — never available in production
 - **Management port isolation**: Prometheus metrics endpoint exposed on separate management port (8091–8096) — never co-located with the business API port
+- **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in server access logs or CDN caches
 - **Request size limits**: `ingestion-service` rejects payloads over 1MB — protection against DoS via oversized alerts
 - **Slack Bot Token**: Minimal OAuth scopes (`chat:write`, `im:write`) — principle of least privilege
+- **Sensitive field redaction**: `GlobalExceptionHandler` redacts fields named `password`, `secret`, `token`, `apiKey` from validation error responses
 
 ---
 
@@ -307,7 +325,117 @@ Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `c
 In-memory rate limiting (ConcurrentHashMap) is sufficient for a single instance. The tradeoff is documented: each instance maintains independent counters, so a load-balanced deployment would allow N×limit requests. Migration to bucket4j-redis requires changing one class — the `RateLimitingService` — when moving to Kubernetes.
 
 **Why a centralized audit log via Kafka instead of per-service history tables?**
-Per-service history tables (e.g. `incident_history`) scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident timeline. The `audit.events` Kafka topic acts as a single audit stream — any service can publish events and the consumer assembles them into a unified chronological view accessible via one API endpoint.
+Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident timeline. The `audit.events` Kafka topic acts as a single audit stream — any service can publish events and the consumer assembles them into a unified chronological view accessible via one API endpoint.
+
+**Why per-record TenantContext in Kafka listeners instead of the consumer interceptor?**
+`TenantKafkaConsumerInterceptor.onConsume()` receives an entire batch — setting TenantContext from the first record and breaking means subsequent records from different tenants are processed with the wrong context. Reading `X-Tenant-Id` per-record directly in each `@KafkaListener` guarantees correctness regardless of batch composition. The interceptor is kept as a validation layer that logs warnings for records missing the tenant header.
+
+
+---
+
+## Kubernetes
+
+The platform ships with a complete Kubernetes configuration using **Kustomize** with environment overlays. All 6 services are production-ready to deploy to any Kubernetes cluster.
+
+### Structure
+
+```
+k8s/
+├── base/                        # Environment-agnostic base configuration
+│   ├── infrastructure/          # PostgreSQL, Kafka (KRaft), Redis, Ingress, ConfigMap
+│   ├── {service}/
+│   │   ├── deployment.yml       # Deployment with health probes, init containers, resource limits
+│   │   └── service-hpa.yml      # ClusterIP Service + HorizontalPodAutoscaler
+│   └── kustomization.yml
+└── overlays/
+    ├── dev/                     # Minikube — 1 replica, relaxed probes, 768Mi memory limit
+    ├── staging/                 # Staging overrides
+    └── prod/                    # Production overrides
+```
+
+### Key Features
+
+**Rolling updates** — zero downtime deployments out of the box:
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0   # never reduce below requested replicas
+    maxSurge: 1         # allow one extra pod during update
+```
+
+**Init containers** — each service waits for its dependencies before starting, preventing crash loops on cold start:
+```yaml
+initContainers:
+  - name: wait-for-postgresql
+    command: ["sh", "-c", "until nc -z postgresql 5432; do sleep 2; done"]
+  - name: wait-for-kafka
+    command: ["sh", "-c", "until nc -z kafka 9092; do sleep 2; done"]
+```
+
+**Health probes** — Kubernetes routes traffic only to ready pods:
+```yaml
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: 8092          # management port, separate from API port
+  initialDelaySeconds: 30
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: 8092
+  initialDelaySeconds: 60
+```
+
+**Horizontal Pod Autoscaler** — CPU and memory-based autoscaling for all services:
+```yaml
+minReplicas: 1
+maxReplicas: 3
+metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        averageUtilization: 80
+```
+
+**ShedLock** — prevents duplicate scheduled job execution when a service scales to multiple replicas (escalation-service, postmortem-service).
+
+**Management port isolation** — Prometheus metrics and health endpoints run on a separate port (8091–8096), never mixed with the business API port.
+
+### Running on Minikube
+
+```bash
+# Start Minikube with enough resources for 6 JVM services
+minikube start --cpus=4 --memory=7500 --driver=docker
+
+# Build images directly into Minikube Docker daemon (no registry needed)
+eval $(minikube docker-env)
+docker build -t incident-service:dev -f incident-service/Dockerfile .
+# ... repeat for each service
+
+# Deploy dev overlay
+kubectl apply -k k8s/overlays/dev
+
+# Watch pods come up
+kubectl get pods -n incident-platform-dev -w
+
+# Access the API (tunnel or port-forward)
+minikube tunnel
+# or
+kubectl port-forward svc/incident-service 8082:8082 -n incident-platform-dev
+```
+
+The dev overlay applies patches on top of base:
+- 1 replica per service (overrides HPA)
+- 768Mi memory limit (JVM needs more than the 512Mi base default on Minikube)
+- Relaxed probe delays (readiness=90s, liveness=120s) to account for slower JVM startup
+
 
 ---
 
@@ -413,8 +541,10 @@ After sending the alert:
 
 To test the postmortem flow, resolve the incident:
 ```bash
-curl -X POST http://localhost:8082/api/v1/incidents/{incidentId}/resolve \
-  -H "Authorization: Bearer $TOKEN"
+curl -X PATCH http://localhost:8082/api/v1/incidents/{incidentId}/status \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"status": "RESOLVED"}'
 ```
 - `IncidentResolvedEvent` published to `incidents.lifecycle`
 - `ingestion-service` deletes the Redis dedup key — same alert can create a new incident
@@ -434,14 +564,21 @@ curl -X POST http://localhost:8082/api/v1/incidents/{incidentId}/resolve \
 ```
 
 **Test coverage highlights**:
-- `IncidentFsmTest` — 25 combinations of allowed/forbidden state transitions
+- `IncidentFsmTest` — 25 combinations of allowed/forbidden state transitions using `@ParameterizedTest` + `@CsvSource`
+- `IncidentCommandServiceTest` — deduplication logic, severity escalation on duplicate alerts, optimistic lock, FSM validation
+- `IncidentQueryServiceTest` — filter routing (Specification vs. simple query), tenant scoping, DTO mapping
+- `IncidentKafkaConsumerTest` — per-record tenant isolation, TenantContext cleanup in finally, no cross-tenant leaks
+- `NotificationServiceTest` — orchestration, fault isolation between channels, idempotency, audit event publishing
 - `NotificationRouterTest` — routing logic for all 5 event types, fallback when oncall-service unavailable
-- `NotificationServiceTest` — orchestration, fault isolation, idempotency, audit event publishing
-- `JwtUtilsTest` — token generation, validation, expiry, edge cases
+- `NotificationIncidentEventConsumerTest` — header-based tenant resolution, event routing, TenantContext lifecycle
 - `EscalationServiceTest` — level 1/2 scheduling, cancellation, idempotency, severity-based timeouts
 - `EscalationSchedulerTest` — timer logic, level 2 scheduling after level 1, fault isolation
+- `EscalationIncidentEventConsumerTest` — per-record tenant isolation, event routing, sequential records without leaks
 - `PostmortemServiceTest` — generation, Gemini failure handling, CRUD, audit event publishing
-- `PostmortemRetrySchedulerTest` — retry logic for FAILED postmortems
+- `PostmortemRetrySchedulerTest` — retry logic for FAILED postmortems, max retry limit
+- `PostmortemIncidentEventConsumerTest` — header tenant wins over payload tenant, ignored event types
+- `JwtUtilsTest` — token generation, validation, expiry, edge cases, secret length validation
+- `TenantContextTest` — ThreadLocal isolation between threads, TenantAwareTaskDecorator propagation
 - `OncallScheduleServiceTest` — schedule creation, overlap detection, current on-call resolution
 
 ---
@@ -451,11 +588,12 @@ curl -X POST http://localhost:8082/api/v1/incidents/{incidentId}/resolve \
 ```
 incident-platform/
 ├── shared/                  # Common: events, DTOs, security (JWT, TenantContext, ServiceTokenProvider, AuditEventPublisher)
+│                            # Kafka interceptors: TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor
 ├── ingestion-service/       # Alert normalization, deduplication, rate limiting, lifecycle consumer
 ├── incident-service/        # Incident lifecycle, FSM, audit log consumer + API
 ├── notification-service/    # Multi-channel notifications, Slack Bot Token, on-call routing
-├── escalation-service/      # 2-level escalation chain, severity-based timeouts
-├── postmortem-service/      # AI-generated postmortems via Gemini API
+├── escalation-service/      # 2-level escalation chain, severity-based timeouts, ShedLock
+├── postmortem-service/      # AI-generated postmortems via Gemini API, retry scheduler
 ├── oncall-service/          # On-call schedule management
 └── docker/
     ├── docker-compose.yml   # PostgreSQL, Redis (AOF), Kafka, pgAdmin, Kafka UI, Prometheus, Grafana
@@ -469,3 +607,5 @@ incident-platform/
 ## Author
 
 Built by Łukasz Pławiak as a portfolio project demonstrating production-oriented Java/Spring Boot backend development.
+
+Frontend companion: [incident-platform-frontend](https://github.com/your-username/incident-platform-frontend) — Angular 21 SPA with real-time WebSocket dashboard.
