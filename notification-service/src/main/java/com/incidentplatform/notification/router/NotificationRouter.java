@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -107,7 +108,7 @@ public class NotificationRouter {
 
                     return new ChannelRequest(channel, request);
                 })
-                .filter(cr -> cr != null)
+                .filter(Objects::nonNull)
                 .toList();
     }
 
