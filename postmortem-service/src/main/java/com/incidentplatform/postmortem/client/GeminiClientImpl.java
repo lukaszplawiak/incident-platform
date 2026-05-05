@@ -44,12 +44,13 @@ public class GeminiClientImpl implements GeminiClient {
                 "promptLength={}", model, prompt.length());
 
         final String requestBody = buildRequestBody(prompt);
-        final String uri = "/v1beta/models/" + model +
-                ":generateContent?key=" + apiKey;
+
+        final String uri = "/v1beta/models/{model}:generateContent";
 
         try {
             final String responseBody = restClient.post()
-                    .uri(uri)
+                    .uri(uri, model)
+                    .header("x-goog-api-key", apiKey)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(requestBody)
                     .retrieve()
