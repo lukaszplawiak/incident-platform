@@ -2,6 +2,7 @@ package com.incidentplatform.shared.exception;
 
 import com.incidentplatform.shared.dto.ErrorResponse;
 import jakarta.validation.ConstraintViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -145,6 +146,24 @@ public class GlobalExceptionHandler {
                         HttpStatus.FORBIDDEN.value(),
                         "FORBIDDEN",
                         "You do not have permission to perform this action.",
+                        getRequestId()
+                ));
+    }
+
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ErrorResponse> handleOptimisticLocking(
+            OptimisticLockingFailureException ex) {
+
+        log.warn("Optimistic lock conflict: {}",
+                ex.getMessage());
+
+        return ResponseEntity
+                .status(HttpStatus.CONFLICT)
+                .body(ErrorResponse.of(
+                        HttpStatus.CONFLICT.value(),
+                        "OPTIMISTIC_LOCK_CONFLICT",
+                        "The resource was modified by another request. " +
+                                "Please fetch the latest version and retry.",
                         getRequestId()
                 ));
     }
