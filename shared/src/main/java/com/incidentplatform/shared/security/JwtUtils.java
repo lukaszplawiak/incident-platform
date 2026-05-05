@@ -64,7 +64,7 @@ public class JwtUtils {
                 .signWith(secretKey)
                 .compact();
 
-        log.info("JWT token generated for userId: {}, tenantId: {}, expiration: {}",
+        log.debug("JWT token generated for userId: {}, tenantId: {}, expiration: {}",
                 userId, tenantId, expiration);
 
         return token;
@@ -84,7 +84,7 @@ public class JwtUtils {
                 .signWith(secretKey)
                 .compact();
 
-        log.info("Service JWT token generated for service: {}", serviceName);
+        log.debug("Service JWT token generated for service: {}", serviceName);
         return token;
     }
 
@@ -133,7 +133,6 @@ public class JwtUtils {
     public List<String> extractRoles(Claims claims) {
         Object rolesObj = claims.get(CLAIM_ROLES);
         if (rolesObj instanceof List<?> rolesList) {
-            // Pattern matching instanceof — Java 16+ feature
             return rolesList.stream()
                     .filter(r -> r instanceof String)
                     .map(r -> (String) r)
