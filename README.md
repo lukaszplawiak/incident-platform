@@ -183,7 +183,8 @@ The ingestion pipeline implements defense-in-depth against alert flooding:
 | 3 | bucket4j per-tenant + per-IP (application) | ✅ Implemented |
 | 4 | Kafka consumer-side severity prioritization | ✅ Implemented (CRITICAL logged at WARN) |
 | 4 (full) | Separate Kafka topics per severity | TODO — when Kubernetes with multiple replicas |
-| 5 | Prometheus alert on RateLimitExceeded | TODO — when monitoring |
+| 5 | Micrometer metrics: `rate_limit.tenant.rejected`, `rate_limit.ip.rejected` | ✅ Implemented |
+| 5 (full) | Prometheus alerting rules on RateLimitExceeded | TODO — alerting rules not yet configured |
 
 ### Escalation Chain
 
