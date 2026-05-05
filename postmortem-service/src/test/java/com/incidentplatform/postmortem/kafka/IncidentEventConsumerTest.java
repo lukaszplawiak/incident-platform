@@ -25,6 +25,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
@@ -125,7 +126,7 @@ class IncidentEventConsumerTest {
                     ArgumentCaptor.forClass(String.class);
             then(postmortemService).should().generatePostmortem(
                     eq(INCIDENT_ID), tenantCaptor.capture(),
-                    any(), any(), any(), any(), any());
+                    any(), any(), any(), any(), anyInt());
             assertThat(tenantCaptor.getValue()).isEqualTo(TENANT_ID);
         }
 
@@ -141,7 +142,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(postmortemService).should().generatePostmortem(
-                    eq(INCIDENT_ID), any(), any(), any(), any(), any(), any());
+                    eq(INCIDENT_ID), any(), any(), any(), any(), any(), anyInt());
         }
 
         @Test
@@ -157,7 +158,7 @@ class IncidentEventConsumerTest {
             // then
             then(postmortemService).should().generatePostmortem(
                     any(), any(), any(), eq(Severity.CRITICAL),
-                    any(), any(), any());
+                    any(), any(), anyInt());
         }
 
         @Test
@@ -211,7 +212,7 @@ class IncidentEventConsumerTest {
             // then
             then(postmortemService).should(never())
                     .generatePostmortem(any(), any(), any(),
-                            any(), any(), any(), any());
+                            any(), any(), any(), anyInt());
             then(acknowledgment).should().acknowledge();
         }
 
@@ -228,7 +229,7 @@ class IncidentEventConsumerTest {
             // then
             then(postmortemService).should(never())
                     .generatePostmortem(any(), any(), any(),
-                            any(), any(), any(), any());
+                            any(), any(), any(), anyInt());
         }
     }
 
@@ -260,7 +261,7 @@ class IncidentEventConsumerTest {
             org.mockito.BDDMockito.willThrow(new RuntimeException("Gemini error"))
                     .given(postmortemService)
                     .generatePostmortem(any(), any(), any(),
-                            any(), any(), any(), any());
+                            any(), any(), any(), anyInt());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -296,7 +297,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(postmortemService).should().generatePostmortem(
-                    any(), tenantCaptor.capture(), any(), any(), any(), any(), any());
+                    any(), tenantCaptor.capture(), any(), any(), any(), any(), anyInt());
             assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
         }
     }
