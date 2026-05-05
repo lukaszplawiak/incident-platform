@@ -6,6 +6,8 @@ import com.incidentplatform.shared.dto.AuditEventMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
@@ -53,6 +55,11 @@ public class AuditEventPublisher {
                 sourceService, userId, detail, metadata));
     }
 
+    @Retryable(
+            retryFor = Exception.class,
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 500, multiplier = 2)
+    )
     private void publish(AuditEventMessage message) {
         try {
             final String payload = objectMapper.writeValueAsString(message);
