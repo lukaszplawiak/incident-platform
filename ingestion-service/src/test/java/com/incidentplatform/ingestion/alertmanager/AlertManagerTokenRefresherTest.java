@@ -22,7 +22,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("AlertmanagerTokenRefresher")
+@DisplayName("AlertManagerTokenRefresher")
 class AlertManagerTokenRefresherTest {
 
     @Mock
@@ -42,8 +42,8 @@ class AlertManagerTokenRefresherTest {
                 .willReturn(FAKE_TOKEN);
     }
 
-    private AlertmanagerTokenRefresher createRefresher(boolean enabled) {
-        return new AlertmanagerTokenRefresher(
+    private AlertManagerTokenRefresher createRefresher(boolean enabled) {
+        return new AlertManagerTokenRefresher(
                 jwtUtils,
                 tokenFile.toString(),
                 EXPIRATION_MS,
@@ -51,16 +51,14 @@ class AlertManagerTokenRefresherTest {
         );
     }
 
-    private AlertmanagerTokenRefresher createRefresherWithPath(String path) {
-        return new AlertmanagerTokenRefresher(
+    private AlertManagerTokenRefresher createRefresherWithPath(String path) {
+        return new AlertManagerTokenRefresher(
                 jwtUtils,
                 path,
                 EXPIRATION_MS,
                 true
         );
     }
-
-    // ─── generateTokenOnStartup ───────────────────────────────────────────────
 
     @Nested
     @DisplayName("generateTokenOnStartup")
@@ -70,7 +68,7 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("writes token to file on application startup")
         void writesTokenToFileOnStartup() throws IOException {
             // given
-            final AlertmanagerTokenRefresher refresher = createRefresher(true);
+            final AlertManagerTokenRefresher refresher = createRefresher(true);
 
             // when
             refresher.generateTokenOnStartup();
@@ -85,7 +83,7 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("does nothing when disabled")
         void doesNothingWhenDisabled() {
             // given
-            final AlertmanagerTokenRefresher refresher = createRefresher(false);
+            final AlertManagerTokenRefresher refresher = createRefresher(false);
 
             // when
             refresher.generateTokenOnStartup();
@@ -99,7 +97,7 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("does nothing when token file path is blank")
         void doesNothingWhenPathIsBlank() {
             // given
-            final AlertmanagerTokenRefresher refresher =
+            final AlertManagerTokenRefresher refresher =
                     createRefresherWithPath("");
 
             // when
@@ -110,8 +108,6 @@ class AlertManagerTokenRefresherTest {
         }
     }
 
-    // ─── refreshToken ─────────────────────────────────────────────────────────
-
     @Nested
     @DisplayName("refreshToken")
     class RefreshToken {
@@ -120,7 +116,7 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("writes new token to file overwriting previous value")
         void overwritesPreviousToken() throws IOException {
             // given
-            final AlertmanagerTokenRefresher refresher = createRefresher(true);
+            final AlertManagerTokenRefresher refresher = createRefresher(true);
             Files.writeString(tokenFile, "old-token");
 
             given(jwtUtils.generateServiceToken("alertmanager"))
@@ -139,7 +135,7 @@ class AlertManagerTokenRefresherTest {
         void createsParentDirectories() throws IOException {
             // given
             final Path nestedPath = tempDir.resolve("secrets/nested/ingestor-token");
-            final AlertmanagerTokenRefresher refresher =
+            final AlertManagerTokenRefresher refresher =
                     createRefresherWithPath(nestedPath.toString());
 
             // when
@@ -155,11 +151,11 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("does not throw when JwtUtils fails — existing token stays valid")
         void doesNotThrowWhenJwtUtilsFails() {
             // given
-            final AlertmanagerTokenRefresher refresher = createRefresher(true);
+            final AlertManagerTokenRefresher refresher = createRefresher(true);
             given(jwtUtils.generateServiceToken("alertmanager"))
                     .willThrow(new RuntimeException("JWT secret not configured"));
 
-            // when / then — must not propagate exception
+            // when / then
             org.assertj.core.api.Assertions.assertThatCode(refresher::refreshToken)
                     .doesNotThrowAnyException();
         }
@@ -168,12 +164,12 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("token file contains no trailing newline")
         void tokenFileHasNoTrailingNewline() throws IOException {
             // given
-            final AlertmanagerTokenRefresher refresher = createRefresher(true);
+            final AlertManagerTokenRefresher refresher = createRefresher(true);
 
             // when
             refresher.refreshToken();
 
-            // then — Alertmanager reads raw file, trailing newline would corrupt token
+            // then
             final byte[] bytes = Files.readAllBytes(tokenFile);
             assertThat(bytes[bytes.length - 1])
                     .as("Token file must not end with newline")
@@ -184,14 +180,14 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("refreshes token on each scheduled call")
         void refreshesOnEachScheduledCall() {
             // given
-            final AlertmanagerTokenRefresher refresher = createRefresher(true);
+            final AlertManagerTokenRefresher refresher = createRefresher(true);
 
             // when
             refresher.refreshToken();
             refresher.refreshToken();
             refresher.refreshToken();
 
-            // then — generateServiceToken called once per refresh
+            // then
             then(jwtUtils).should(times(3)).generateServiceToken("alertmanager");
         }
     }

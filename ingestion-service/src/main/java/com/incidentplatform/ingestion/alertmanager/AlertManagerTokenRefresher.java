@@ -42,11 +42,6 @@ public class AlertManagerTokenRefresher {
         this.enabled = enabled;
     }
 
-    /**
-     * Generates initial token on application startup.
-     * Alertmanager reads the file on first webhook call — the token must
-     * exist before Alertmanager makes its first request.
-     */
     @EventListener(ApplicationReadyEvent.class)
     public void generateTokenOnStartup() {
         if (!isConfigured()) return;
@@ -55,15 +50,6 @@ public class AlertManagerTokenRefresher {
         refreshToken();
     }
 
-    /**
-     * Refreshes token at 80% of its lifetime.
-     * Default expiration is 24h (86_400_000ms) → refresh every ~19h.
-     *
-     * Alertmanager re-reads credentials_file before each webhook call,
-     * so the new token takes effect immediately without any restart.
-     *
-     * fixedDelayString reads from property so it can be overridden in tests.
-     */
     @Scheduled(fixedDelayString = "${alertmanager.token-refresh-delay-ms:#{${jwt.expiration-ms:86400000} * 8 / 10}}")
     public void refreshToken() {
         if (!isConfigured()) return;
@@ -79,8 +65,6 @@ public class AlertManagerTokenRefresher {
                     (long) (expirationMs * 0.8));
 
         } catch (Exception e) {
-            // Log as ERROR but do not crash — existing token is still valid
-            // until it actually expires. Next scheduled refresh will retry.
             log.error("Failed to refresh Alertmanager ingestor token: file={}, error={}",
                     tokenFilePath, e.getMessage(), e);
         }
@@ -89,27 +73,22 @@ public class AlertManagerTokenRefresher {
     private void writeTokenToFile(String token) throws IOException {
         final Path path = Path.of(tokenFilePath);
 
-        // Create parent directories if they don't exist
         final Path parent = path.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
         }
 
-        // Write token without trailing newline — Alertmanager reads raw file content
         Files.writeString(path, token,
                 StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE,
                 StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING);
 
-        // Restrict file permissions to owner read-only (600)
-        // Prevents other processes from reading the token
         try {
             final Set<PosixFilePermission> permissions =
                     PosixFilePermissions.fromString("rw-------");
             Files.setPosixFilePermissions(path, permissions);
         } catch (UnsupportedOperationException e) {
-            // Windows does not support POSIX permissions — skip silently
             log.debug("POSIX file permissions not supported on this OS, skipping chmod");
         }
     }
