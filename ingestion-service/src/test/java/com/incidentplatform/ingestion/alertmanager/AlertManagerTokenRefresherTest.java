@@ -38,8 +38,6 @@ class AlertManagerTokenRefresherTest {
     @BeforeEach
     void setUp() {
         tokenFile = tempDir.resolve("ingestor-token");
-        given(jwtUtils.generateServiceToken("alertmanager"))
-                .willReturn(FAKE_TOKEN);
     }
 
     private AlertManagerTokenRefresher createRefresher(boolean enabled) {
@@ -69,6 +67,7 @@ class AlertManagerTokenRefresherTest {
         void writesTokenToFileOnStartup() throws IOException {
             // given
             final AlertManagerTokenRefresher refresher = createRefresher(true);
+            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
 
             // when
             refresher.generateTokenOnStartup();
@@ -137,6 +136,7 @@ class AlertManagerTokenRefresherTest {
             final Path nestedPath = tempDir.resolve("secrets/nested/ingestor-token");
             final AlertManagerTokenRefresher refresher =
                     createRefresherWithPath(nestedPath.toString());
+            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
 
             // when
             refresher.refreshToken();
@@ -165,6 +165,7 @@ class AlertManagerTokenRefresherTest {
         void tokenFileHasNoTrailingNewline() throws IOException {
             // given
             final AlertManagerTokenRefresher refresher = createRefresher(true);
+            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
 
             // when
             refresher.refreshToken();
@@ -181,6 +182,7 @@ class AlertManagerTokenRefresherTest {
         void refreshesOnEachScheduledCall() {
             // given
             final AlertManagerTokenRefresher refresher = createRefresher(true);
+            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
 
             // when
             refresher.refreshToken();
