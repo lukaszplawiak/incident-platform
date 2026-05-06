@@ -60,7 +60,7 @@ public class AlertIngestionController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN') or hasRole('ROLE_SERVICE')")
     @Operation(
             summary = "Ingest alerts from external source",
             description = "Accepts alert payload from monitoring system, " +

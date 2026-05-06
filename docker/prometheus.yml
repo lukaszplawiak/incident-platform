@@ -2,11 +2,22 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# Load alerting rules from separate file
+rule_files:
+  - "prometheus.rules.yml"
+
+# Send alerts to Alertmanager
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['alertmanager:9093']
+      timeout: 10s
+
 scrape_configs:
   # ----------------------------------------------------------------
-  # Incident Platform — Spring Boot serwisy
-  # Każdy serwis eksponuje metryki na porcie management (8091-8096)
-  # przez endpoint /actuator/prometheus
+  # Incident Platform — Spring Boot services
+  # Every service serve metrics on ports (8091-8096)
+  # by endpoint /actuator/prometheus
   # ----------------------------------------------------------------
 
   - job_name: 'ingestion-service'

@@ -1,0 +1,187 @@
+# Prometheus alerting rules for Incident Platform
+#
+# All alerts MUST include a tenantId label — ingestion-service uses this
+# to set TenantContext when creating incidents.
+#
+# Alert severity must match IncidentSeverity enum:
+# CRITICAL, HIGH, MEDIUM, LOW (case-insensitive in normalizer)
+#
+# Example Prometheus recording rule to add tenantId to your metrics:
+#   - record: node_cpu_usage_with_tenant
+#     expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
+#     labels:
+#       tenantId: "acme-corp"
+
+groups:
+
+  # ────────────────────────────────────────────────────────────────
+  # Infrastructure alerts
+  # ────────────────────────────────────────────────────────────────
+  - name: infrastructure
+    rules:
+
+      - alert: HighCpuUsage
+        # Fire when CPU usage > 90% for 5 minutes
+        expr: |
+          100 - (avg by(instance, tenantId) (
+            rate(node_cpu_seconds_total{mode="idle"}[5m])
+          ) * 100) > 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: >
+            CPU usage on {{ $labels.instance }} has been above 90%
+            for more than 5 minutes. Current value: {{ $value | printf "%.1f" }}%.
+
+      - alert: HighMemoryUsage
+        # Fire when available memory < 10% for 5 minutes
+        expr: |
+          (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 < 10
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "Low memory on {{ $labels.instance }}"
+          description: >
+            Available memory on {{ $labels.instance }} is below 10%.
+            Available: {{ $value | printf "%.1f" }}%.
+
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{fstype!~"tmpfs|fuse.lxcfs"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|fuse.lxcfs"}) * 100 < 15
+        for: 10m
+        labels:
+          severity: high
+        annotations:
+          summary: "Disk space low on {{ $labels.instance }}"
+          description: >
+            Disk usage on {{ $labels.instance }} ({{ $labels.mountpoint }})
+            is above 85%. Available: {{ $value | printf "%.1f" }}%.
+
+  # ────────────────────────────────────────────────────────────────
+  # Application alerts — ingestion-service
+  # ────────────────────────────────────────────────────────────────
+  - name: ingestion
+    rules:
+
+      - alert: TenantRateLimitExceeded
+        # Fire when a tenant is being rate-limited at > 10 req/s for 2 minutes
+        expr: |
+          rate(rate_limit_tenant_rejected_total[5m]) > 10
+        for: 2m
+        labels:
+          severity: high
+        annotations:
+          summary: "Tenant {{ $labels.tenantId }} is being rate limited"
+          description: >
+            Tenant {{ $labels.tenantId }} has had more than 10 requests/sec
+            rejected by the rate limiter in the last 5 minutes.
+            Possible alert flood or abuse. Rejected count: {{ $value | printf "%.0f" }}/s.
+
+      - alert: IpRateLimitExceeded
+        # Fire when an IP is being aggressively rate-limited > 20 req/s
+        expr: |
+          rate(rate_limit_ip_rejected_total[5m]) > 20
+        for: 1m
+        labels:
+          severity: critical
+          tenantId: system
+        annotations:
+          summary: "IP {{ $labels.clientIp }} is aggressively rate limited"
+          description: >
+            IP {{ $labels.clientIp }} has had more than 20 requests/sec rejected.
+            Possible DDoS attempt. Rejected count: {{ $value | printf "%.0f" }}/s.
+
+      - alert: AlertIngestionErrorRateHigh
+        # Fire when > 5% of ingestion requests fail
+        expr: |
+          rate(http_server_requests_seconds_count{
+            uri=~"/api/v1/alerts/.*",
+            status=~"5.."
+          }[5m])
+          /
+          rate(http_server_requests_seconds_count{
+            uri=~"/api/v1/alerts/.*"
+          }[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: high
+        annotations:
+          summary: "High error rate on alert ingestion endpoint"
+          description: >
+            More than 5% of alert ingestion requests are failing.
+            Current error rate: {{ $value | printf "%.1f" }}%.
+
+  # ────────────────────────────────────────────────────────────────
+  # Application alerts — incident-service
+  # ────────────────────────────────────────────────────────────────
+  - name: incident-service
+    rules:
+
+      - alert: IncidentServiceDown
+        # Fire when incident-service health check fails
+        expr: |
+          up{service="incident-service"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          tenantId: system
+        annotations:
+          summary: "incident-service is down"
+          description: >
+            The incident-service has been unreachable for more than 1 minute.
+            No new incidents can be created or updated.
+
+      - alert: HighHttpErrorRate
+        # Fire when > 1% of requests to any service return 5xx
+        expr: |
+          rate(http_server_requests_seconds_count{status=~"5.."}[5m])
+          /
+          rate(http_server_requests_seconds_count[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "High HTTP error rate on {{ $labels.service }}"
+          description: >
+            Service {{ $labels.service }} has more than 1% of requests
+            returning 5xx errors. Current rate: {{ $value | printf "%.2f" }}.
+
+  # ────────────────────────────────────────────────────────────────
+  # JVM alerts — all services
+  # ────────────────────────────────────────────────────────────────
+  - name: jvm
+    rules:
+
+      - alert: JvmMemoryHigh
+        # Fire when JVM heap usage > 85%
+        expr: |
+          jvm_memory_used_bytes{area="heap"}
+          /
+          jvm_memory_max_bytes{area="heap"} > 0.85
+        for: 5m
+        labels:
+          severity: high
+        annotations:
+          summary: "JVM heap memory high on {{ $labels.service }}"
+          description: >
+            JVM heap usage on {{ $labels.service }} is above 85%.
+            Current: {{ $value | printf "%.1f" }}%. Risk of OOMKilled.
+
+      - alert: JvmGcPauseHigh
+        # Fire when GC pause time > 200ms on average
+        expr: |
+          rate(jvm_gc_pause_seconds_sum[5m])
+          /
+          rate(jvm_gc_pause_seconds_count[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: medium
+        annotations:
+          summary: "High GC pause time on {{ $labels.service }}"
+          description: >
+            Average GC pause on {{ $labels.service }} is above 200ms.
+            Current: {{ $value | printf "%.0f" }}ms. May indicate memory pressure.
