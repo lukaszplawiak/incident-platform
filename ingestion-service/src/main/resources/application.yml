@@ -168,3 +168,16 @@ rate-limiting:
       capacity: ${RATE_LIMIT_MEDIUM_CAPACITY:100}
     low:
       capacity: ${RATE_LIMIT_LOW_CAPACITY:50}
+
+alertmanager:
+  # Path to the file where the Alertmanager ingestor token is written.
+  # Must match the credentials_file path mounted into the Alertmanager container.
+  # Leave blank to disable automatic token refresh (e.g. in CI/test environments).
+  token-file-path: ${ALERTMANAGER_TOKEN_FILE_PATH:}
+
+  # Enable/disable automatic token refresh.
+  token-refresh-enabled: ${ALERTMANAGER_TOKEN_REFRESH_ENABLED:true}
+
+  # Token refresh delay in ms — defaults to 80% of jwt.expiration-ms (24h * 0.8 = ~19h).
+  # Override explicitly if needed, e.g. after changing jwt.expiration-ms.
+  # token-refresh-delay-ms: 69120000

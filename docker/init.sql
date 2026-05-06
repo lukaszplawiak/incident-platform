@@ -1,7 +1,7 @@
 -- ============================================================
--- init.sql — uruchamiany automatycznie przy pierwszym docker-compose up
--- Tworzy bazę i użytkownika aplikacji z odpowiednimi uprawnieniami
--- UWAGA: Flyway zarządza schematem tabel — tutaj tylko setup bazy
+-- init.sql — executed automatically on the first `docker-compose up`
+-- Creates the database and application user with appropriate privileges
+-- NOTE: Flyway manages the table schema — this file only handles database setup
 -- ============================================================
 
 -- Włącz rozszerzenie pgvector (potrzebne dla Security Bonus)
@@ -10,16 +10,16 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- full text search helper
 
 -- ============================================================
--- Uwagi do uprawnień (ważne dla Row-Level Security w E#1):
--- incident_app to użytkownik aplikacji — NIE jest superuserem
--- dzięki temu RLS będzie działać poprawnie gdy go dodamy
+-- Notes on permissions (important for Row-Level Security in E#1):
+-- incident_app is the application user — it is NOT a superuser
+-- this ensures RLS will work correctly once we add it
 -- ============================================================
 
--- Upewnij się że użytkownik incident_app ma odpowiednie uprawnienia
--- (tworzy go docker-compose przez POSTGRES_USER)
+-- Ensure that the incident_app user has the appropriate privileges
+-- (it is created by docker-compose via POSTGRES_USER)
 GRANT ALL PRIVILEGES ON DATABASE incidentdb TO incident_app;
 
--- Schema publiczna
+-- Schema publicly
 GRANT ALL ON SCHEMA public TO incident_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT ALL ON TABLES TO incident_app;
@@ -27,8 +27,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
     GRANT ALL ON SEQUENCES TO incident_app;
 
 -- ============================================================
--- Flyway tracking table (Spring Boot tworzy automatycznie,
--- ale upewniamy się że schemat istnieje)
+-- Flyway tracking table (Spring Boot creates it automatically,
+-- but we ensure that the schema exists)
 -- ============================================================
--- Spring Boot z Flyway automatycznie wykryje i zastosuje
--- migracje z resources/db/migration/ w każdym serwisie
+-- Spring Boot with Flyway will automatically detect and apply
+-- migrations from resources/db/migration/ in each service
