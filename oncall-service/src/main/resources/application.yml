@@ -3,75 +3,21 @@ spring:
     name: oncall-service
 
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
-    username: ${DB_USER:incident_app}
-    password: ${DB_PASSWORD:incident_secret}
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:5}
-      connection-timeout: 30000
       pool-name: oncall-service-pool
 
-  jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
-
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    baseline-version: 0
-    validate-on-migrate: true
     table: flyway_schema_history_oncall
 
-  jackson:
-    serialization:
-      write-dates-as-timestamps: false
-    deserialization:
-      fail-on-unknown-properties: false
-    default-property-inclusion: non_null
-
-jwt:
-  secret: ${JWT_SECRET}
-  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
-  service-expiration-ms: ${JWT_SERVICE_EXPIRATION_MS:2592000000}
+  security:
+    user:
+      name: ${SECURITY_USER:disabled}
+      password: ${SECURITY_PASSWORD:disabled}
 
 server:
   port: ${SERVER_PORT:8086}
-  server-header: ""
-  error:
-    include-stacktrace: never
-    include-message: never
-    include-binding-errors: never
 
 management:
-  metrics:
-    tags:
-      application: ${spring.application.name}
-    distribution:
-      percentiles-histogram:
-        http.server.requests: true
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
-  endpoint:
-    health:
-      show-details: when-authorized
-      probes:
-        enabled: true
   server:
     port: ${MANAGEMENT_PORT:8096}
-
-logging:
-  level:
-    root: INFO
-    com.incidentplatform: DEBUG
-    org.springframework.security: WARN
-    org.springframework.kafka: INFO
-    org.apache.kafka: WARN
-  pattern:
-    console: "%d{HH:mm:ss.SSS} [%X{tenantId:-no-tenant}] [%X{requestId:-no-req}] [%X{userId:-no-user}] %-5level %logger{36} - %msg%n"
