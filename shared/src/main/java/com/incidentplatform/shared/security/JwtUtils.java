@@ -31,10 +31,12 @@ public class JwtUtils {
     private final SecretKey secretKey;
 
     private final long expirationMs;
+    private final long serviceExpirationMs;
 
     public JwtUtils(
             @Value("${jwt.secret}") String secret,
-            @Value("${jwt.expiration-ms:86400000}") long expirationMs) {
+            @Value("${jwt.expiration-ms:86400000}") long expirationMs,
+            @Value("${jwt.service-expiration-ms:2592000000}") long serviceExpirationMs) {
 
         if (secret == null || secret.length() < 32) {
             throw new IllegalArgumentException(
@@ -45,8 +47,10 @@ public class JwtUtils {
 
         this.secretKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
         this.expirationMs = expirationMs;
+        this.serviceExpirationMs = serviceExpirationMs;
 
-        log.info("JwtUtils initialized, token expiration: {} ms", expirationMs);
+        log.info("JwtUtils initialized, user token expiration: {} ms, " +
+                "service token expiration: {} ms", expirationMs, serviceExpirationMs);
     }
 
     public String generateToken(UUID userId, String tenantId,
@@ -64,7 +68,7 @@ public class JwtUtils {
                 .signWith(secretKey)
                 .compact();
 
-        log.debug("JWT token generated for userId: {}, tenantId: {}, expiration: {}",
+        log.info("JWT token generated for userId: {}, tenantId: {}, expiration: {}",
                 userId, tenantId, expiration);
 
         return token;
@@ -72,7 +76,7 @@ public class JwtUtils {
 
     public String generateServiceToken(String serviceName) {
         final Date now = new Date();
-        final Date expiration = new Date(now.getTime() + expirationMs);
+        final Date expiration = new Date(now.getTime() + serviceExpirationMs);
 
         final String token = Jwts.builder()
                 .subject(serviceName)
@@ -84,7 +88,7 @@ public class JwtUtils {
                 .signWith(secretKey)
                 .compact();
 
-        log.debug("Service JWT token generated for service: {}", serviceName);
+        log.info("Service JWT token generated for service: {}", serviceName);
         return token;
     }
 

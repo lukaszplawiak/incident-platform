@@ -68,6 +68,7 @@ spring:
 jwt:
   secret: ${JWT_SECRET}
   expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  service-expiration-ms: ${JWT_SERVICE_EXPIRATION_MS:2592000000}
 
 kafka:
   topics:

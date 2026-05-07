@@ -26,7 +26,7 @@ public class AlertManagerTokenRefresher {
 
     private final JwtUtils jwtUtils;
     private final String tokenFilePath;
-    private final long expirationMs;
+    private final long serviceExpirationMs;
     private final boolean enabled;
 
     private static final String SERVICE_NAME = "alertmanager";
@@ -34,11 +34,11 @@ public class AlertManagerTokenRefresher {
     public AlertManagerTokenRefresher(
             JwtUtils jwtUtils,
             @Value("${alertmanager.token-file-path:}") String tokenFilePath,
-            @Value("${jwt.expiration-ms:86400000}") long expirationMs,
+            @Value("${jwt.service-expiration-ms:2592000000}") long serviceExpirationMs,
             @Value("${alertmanager.token-refresh-enabled:true}") boolean enabled) {
         this.jwtUtils = jwtUtils;
         this.tokenFilePath = tokenFilePath;
-        this.expirationMs = expirationMs;
+        this.serviceExpirationMs = serviceExpirationMs;
         this.enabled = enabled;
     }
 
@@ -50,7 +50,7 @@ public class AlertManagerTokenRefresher {
         refreshToken();
     }
 
-    @Scheduled(fixedDelayString = "${alertmanager.token-refresh-delay-ms:#{${jwt.expiration-ms:86400000} * 8 / 10}}")
+    @Scheduled(fixedDelayString = "${alertmanager.token-refresh-delay-ms:#{${jwt.service-expiration-ms:2592000000} * 8 / 10}}")
     public void refreshToken() {
         if (!isConfigured()) return;
 
@@ -61,8 +61,8 @@ public class AlertManagerTokenRefresher {
             log.info("Alertmanager ingestor token refreshed: file={}, " +
                             "expiresInMs={}, nextRefreshInMs={}",
                     tokenFilePath,
-                    expirationMs,
-                    (long) (expirationMs * 0.8));
+                    serviceExpirationMs,
+                    (long) (serviceExpirationMs * 0.8));
 
         } catch (Exception e) {
             log.error("Failed to refresh Alertmanager ingestor token: file={}, error={}",
