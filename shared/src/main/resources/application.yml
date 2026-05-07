@@ -1,0 +1,269 @@
+# =============================================================================
+# SHARED DEFAULT CONFIGURATION — incident-platform
+# =============================================================================
+#
+# This file provides default values shared across all microservices in this
+# monorepo. It is located in the `shared` module which every service depends on,
+# so Spring Boot automatically discovers it on the classpath.
+#
+# Each service's own application.yml overrides only what is service-specific
+# (port, database table name, Kafka group-id, feature flags etc.).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# PRODUCTION APPROACH — Spring Cloud Config Server
+# ─────────────────────────────────────────────────────────────────────────────
+# In a production microservices system, shared configuration is managed by a
+# dedicated Config Server (Spring Cloud Config) backed by a separate git
+# repository. This approach provides:
+#
+#   1. CENTRALIZED MANAGEMENT — one place to change a value across all services.
+#      Updating a Kafka timeout or logging pattern no longer requires touching
+#      6 files, raising 6 PRs and deploying 6 services.
+#
+#   2. HOT RELOAD — services can refresh configuration at runtime via
+#      @RefreshScope + POST /actuator/refresh without restarting. Critical for
+#      changing log levels in production without downtime.
+#
+#   3. ENVIRONMENT SEGREGATION — separate config files per environment:
+#      application.yml (shared defaults)
+#      application-prod.yml (production overrides)
+#      ingestion-service-prod.yml (service + environment specific)
+#      Config Server serves the correct combination based on spring.profiles.active.
+#
+#   4. AUDIT TRAIL — every config change is a git commit with author, timestamp
+#      and message. Full history of "who changed what and when" for compliance.
+#
+#   5. SECRET MANAGEMENT — Config Server integrates with HashiCorp Vault or
+#      AWS Secrets Manager. Sensitive values (JWT_SECRET, DB_PASSWORD) are
+#      never stored in git — they are fetched from Vault at runtime and
+#      injected into the config response.
+#
+#   6. ACCESS CONTROL — the config repository can have stricter access rules
+#      than the application code repository. A developer can read the code
+#      without having access to production secrets.
+#
+# Architecture with Config Server:
+#
+#   git repo: incident-platform-config
+#   ├── application.yml              ← what this file contains (shared defaults)
+#   ├── ingestion-service.yml        ← ingestion-specific overrides
+#   ├── incident-service.yml
+#   └── ...
+#
+#   Config Server (port 8888)
+#   └── serves config to all services on startup via HTTP
+#
+#   Each service bootstrap.yml:
+#     spring:
+#       config:
+#         import: "configserver:http://config-server:8888"
+#       application:
+#         name: ingestion-service
+#     → Config Server returns: application.yml + ingestion-service.yml merged
+#
+# WHY NOT Config Server here:
+#   This is a portfolio project running as a monorepo. Adding a Config Server
+#   introduces a chicken-and-egg problem (it must start before all other
+#   services), an additional container to manage, and complexity that exceeds
+#   the benefit at this scale. The shared classpath approach below achieves
+#   the same DRY goal with zero additional infrastructure.
+#   The tradeoff is documented and understood — migrating to Config Server
+#   requires adding one module, one dependency per service and a config repo.
+# =============================================================================
+
+# ─────────────────────────────────────────────────────────────────────────────
+# JWT — shared by all services (auth + service-to-service tokens)
+# ─────────────────────────────────────────────────────────────────────────────
+jwt:
+  secret: ${JWT_SECRET}
+  # User tokens (ROLE_RESPONDER, ROLE_ADMIN): 24h
+  # Short lifetime limits exposure if a user token is compromised.
+  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  # Service-to-service tokens (ROLE_SERVICE): 30 days
+  # Machine credentials stored in secured files (chmod 600), not browsers.
+  # Short expiration provides minimal security benefit at the cost of
+  # operational complexity (frequent rotation).
+  service-expiration-ms: ${JWT_SERVICE_EXPIRATION_MS:2592000000}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Jackson — consistent JSON serialization across all services
+# ─────────────────────────────────────────────────────────────────────────────
+spring:
+  jackson:
+    serialization:
+      # Serialize Instant/LocalDate as ISO-8601 strings, not epoch milliseconds.
+      # Consumers (Angular frontend, external systems) expect human-readable dates.
+      write-dates-as-timestamps: false
+    deserialization:
+      # Do not fail when a JSON payload contains fields unknown to the DTO.
+      # This is critical for forward compatibility between services — a producer
+      # can add new fields without breaking older consumers.
+      fail-on-unknown-properties: false
+    # Omit null fields from JSON responses — reduces payload size and avoids
+    # exposing internal field names for fields with no data.
+    default-property-inclusion: non_null
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Kafka Consumer — shared defaults for all consumer services
+  # Services override: group-id (must be unique per service)
+  # ─────────────────────────────────────────────────────────────────────────
+  kafka:
+    consumer:
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # Read from the beginning of topic when no committed offset exists.
+      # Ensures no events are missed on first deployment or after consumer group reset.
+      auto-offset-reset: earliest
+      # Manual acknowledgment — we commit offsets only after successful processing.
+      # Prevents message loss: if the service crashes before ack, Kafka redelivers.
+      enable-auto-commit: false
+      properties:
+        # Reads X-Tenant-Id header from each Kafka record and validates its presence.
+        # TenantContext is set per-record in each @KafkaListener — not here.
+        interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaConsumerInterceptor
+        # Maximum time between poll() calls before Kafka considers the consumer dead
+        # and triggers a rebalance. Must be > max processing time per batch.
+        max.poll.interval.ms: 30000
+        # Kafka broker considers the consumer dead if no heartbeat received within this window.
+        session.timeout.ms: 15000
+        # Heartbeat interval — must be < session.timeout.ms / 3 to guarantee
+        # at least 3 heartbeats before the session times out.
+        heartbeat.interval.ms: 5000
+        # Limit records per poll cycle — controls max memory usage per batch
+        # and keeps max.poll.interval.ms predictable.
+        max.poll.records: 10
+    listener:
+      # Commit offset only on explicit acknowledgment.acknowledge() call.
+      # Paired with enable-auto-commit: false above.
+      ack-mode: MANUAL_IMMEDIATE
+      # 3 concurrent listener threads per service instance.
+      # Matches Kafka topic partition count (3) for optimal throughput.
+      # When scaling to multiple replicas in Kubernetes, each replica gets
+      # a subset of partitions — total parallelism = replicas × concurrency.
+      concurrency: 3
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Kafka Producer — shared defaults for services that publish events
+    # (ingestion-service, incident-service, escalation-service)
+    # ─────────────────────────────────────────────────────────────────────────
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # Wait for all in-sync replicas to acknowledge before returning success.
+      # Prevents data loss if the leader broker fails immediately after write.
+      acks: all
+      retries: 3
+      properties:
+        # Exactly-once producer semantics — Kafka deduplicates retried messages
+        # using producer ID + sequence number. Prevents duplicate events on retry.
+        enable.idempotence: true
+        # Automatically injects X-Tenant-Id header from TenantContext into every
+        # outgoing Kafka record. Consumers use this header to set their TenantContext.
+        interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # JPA — shared defaults for services with PostgreSQL
+    # Services override: hikari.pool-name (must be unique per service)
+    # ─────────────────────────────────────────────────────────────────────────
+    datasource:
+      url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
+      username: ${DB_USER:incident_app}
+      password: ${DB_PASSWORD:incident_secret}
+      hikari:
+        # Connection timeout — fail fast rather than queuing requests when DB is down.
+        connection-timeout: 30000
+
+    jpa:
+      hibernate:
+        # Validate schema against entities on startup — fail fast if migrations
+        # are missing. Never use create/update in production.
+        ddl-auto: validate
+      show-sql: false
+      properties:
+        hibernate:
+          dialect: org.hibernate.dialect.PostgreSQLDialect
+
+    flyway:
+      enabled: true
+      locations: classpath:db/migration
+      # Allow Flyway to run on a non-empty schema (existing tables from manual setup).
+      baseline-on-migrate: true
+      baseline-version: 0
+      # Fail startup if applied migrations differ from files on disk.
+      # Catches accidental migration file edits after deployment.
+      validate-on-migrate: true
+      # Each service has its own flyway history table to avoid conflicts
+      # when sharing a single PostgreSQL instance.
+      # Services override: table: flyway_schema_history_{service}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Server — hardening defaults applied to all services
+# ─────────────────────────────────────────────────────────────────────────────
+server:
+  # Do not expose server implementation details in HTTP response headers.
+  # Prevents attackers from identifying the server version for targeted exploits.
+  server-header: ""
+  error:
+    # Never include stack traces, exception messages or binding errors in
+    # HTTP error responses — these expose internal implementation details.
+    # Clients receive only the structured ErrorResponse DTO from GlobalExceptionHandler.
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Management / Actuator — consistent observability across all services
+# ─────────────────────────────────────────────────────────────────────────────
+management:
+  metrics:
+    tags:
+      # Attach service name to every metric — essential for filtering
+      # in Grafana when all services send metrics to the same Prometheus instance.
+      application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        # Enable histogram buckets for HTTP request duration.
+        # Required for accurate p50/p95/p99 latency percentiles in Grafana.
+        http.server.requests: true
+  endpoints:
+    web:
+      exposure:
+        # Expose only necessary endpoints — health for Kubernetes probes,
+        # info for service metadata, prometheus for metrics scraping.
+        include: health,info,prometheus
+  endpoint:
+    health:
+      # Show full health details only to authenticated users (ROLE_ADMIN).
+      # Unauthenticated requests see UP/DOWN only — no internal details.
+      show-details: when-authorized
+      probes:
+        # Enable /actuator/health/readiness and /actuator/health/liveness
+        # for Kubernetes liveness and readiness probes.
+        enabled: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging — consistent format across all services for log aggregation
+# ─────────────────────────────────────────────────────────────────────────────
+logging:
+  level:
+    root: INFO
+    # Debug level for application code — visible in development, can be
+    # changed to INFO in production via environment variable without redeployment:
+    # LOGGING_LEVEL_COM_INCIDENTPLATFORM=INFO
+    com.incidentplatform: DEBUG
+    # Suppress verbose Spring Security logs — authentication events are
+    # already logged by JwtAuthFilter at appropriate levels.
+    org.springframework.security: WARN
+    # Suppress Kafka internal logs — consumer rebalancing, metadata updates etc.
+    # Spring Kafka logs the relevant application-level events (consumer started etc.)
+    org.apache.kafka: WARN
+    org.springframework.kafka: INFO
+  pattern:
+    # Structured log format with MDC context for distributed tracing.
+    # Every log line includes tenantId, requestId and userId — making it
+    # possible to filter all logs for a specific request or tenant across
+    # all services in a log aggregation system (ELK, Loki, CloudWatch).
+    #
+    # Example output:
+    # 13:45:01.234 [acme-corp] [req-abc123] [user-1] INFO  IncidentCommandService - Incident created
+    console: "%d{HH:mm:ss.SSS} [%X{tenantId:-no-tenant}] [%X{requestId:-no-req}] [%X{userId:-no-user}] %-5level %logger{36} - %msg%n"

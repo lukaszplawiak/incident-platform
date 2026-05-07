@@ -3,21 +3,13 @@ spring:
     name: incident-service
 
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
-    username: ${DB_USER:incident_app}
-    password: ${DB_PASSWORD:incident_secret}
     hikari:
       maximum-pool-size: ${DB_POOL_SIZE:10}
-      connection-timeout: 30000
       pool-name: incident-service-pool
 
   jpa:
-    hibernate:
-      ddl-auto: validate
-    show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
         jdbc:
           batch_size: 25
@@ -25,55 +17,17 @@ spring:
         order_updates: true
 
   flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
-    baseline-version: 0
-    validate-on-migrate: true
     table: flyway_schema_history_incident
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
       group-id: incident-service
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      auto-offset-reset: earliest
-      enable-auto-commit: false
-      properties:
-        interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaConsumerInterceptor
-        max.poll.interval.ms: 30000
-        session.timeout.ms: 15000
-        heartbeat.interval.ms: 5000
-        max.poll.records: 10
-    producer:
-      key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
-      acks: all
-      retries: 3
-      properties:
-        enable.idempotence: true
-        interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor
-    listener:
-      ack-mode: MANUAL_IMMEDIATE
-      concurrency: 3
-
-  jackson:
-    serialization:
-      write-dates-as-timestamps: false
-    deserialization:
-      fail-on-unknown-properties: false
-    default-property-inclusion: non_null
 
   security:
     user:
       name: ${SECURITY_USER:disabled}
       password: ${SECURITY_PASSWORD:disabled}
-
-jwt:
-  secret: ${JWT_SECRET}
-  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
-  service-expiration-ms: ${JWT_SERVICE_EXPIRATION_MS:2592000000}
 
 kafka:
   topics:
@@ -84,38 +38,11 @@ kafka:
 
 server:
   port: ${SERVER_PORT:8082}
-  server-header: ""
-  error:
-    include-stacktrace: never
-    include-message: never
-    include-binding-errors: never
 
 management:
-  metrics:
-    tags:
-      application: ${spring.application.name}
-    distribution:
-      percentiles-histogram:
-        http.server.requests: true
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
-  endpoint:
-    health:
-      show-details: when-authorized
-      probes:
-        enabled: true
   server:
     port: ${MANAGEMENT_PORT:8092}
 
 logging:
   level:
-    root: INFO
-    com.incidentplatform: DEBUG
-    org.springframework.security: WARN
-    org.apache.kafka: WARN
-    org.springframework.kafka: INFO
     org.hibernate.SQL: WARN
-  pattern:
-    console: "%d{HH:mm:ss.SSS} [%X{tenantId:-no-tenant}] [%X{requestId:-no-req}] [%X{userId:-no-user}] %-5level %logger{36} - %msg%n"
