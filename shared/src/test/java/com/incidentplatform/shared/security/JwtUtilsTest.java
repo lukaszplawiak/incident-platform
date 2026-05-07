@@ -18,12 +18,13 @@ class JwtUtilsTest {
     private static final String TEST_SECRET =
             "test-secret-key-minimum-32-characters-long-for-hs256";
     private static final long EXPIRATION_MS = 3600_000L;
+    private static final long SERVICE_EXPIRATION_MS = 2592000_000L; // 30 days
 
     private JwtUtils jwtUtils;
 
     @BeforeEach
     void setUp() {
-        jwtUtils = new JwtUtils(TEST_SECRET, EXPIRATION_MS);
+        jwtUtils = new JwtUtils(TEST_SECRET, EXPIRATION_MS, SERVICE_EXPIRATION_MS);
     }
 
     @Test
@@ -89,7 +90,7 @@ class JwtUtilsTest {
         // given
         final JwtUtils otherJwtUtils = new JwtUtils(
                 "other-secret-key-minimum-32-characters-long-different",
-                EXPIRATION_MS);
+                EXPIRATION_MS, SERVICE_EXPIRATION_MS);
         final String tokenWithWrongSignature = otherJwtUtils.generateToken(
                 UUID.randomUUID(), "acme", "user@acme.com", List.of());
 
@@ -105,7 +106,7 @@ class JwtUtilsTest {
     @DisplayName("should return empty for expired token")
     void shouldReturnEmptyForExpiredToken() {
         // given
-        final JwtUtils expiredJwtUtils = new JwtUtils(TEST_SECRET, 0L);
+        final JwtUtils expiredJwtUtils = new JwtUtils(TEST_SECRET, 0L, SERVICE_EXPIRATION_MS);
         final String expiredToken = expiredJwtUtils.generateToken(
                 UUID.randomUUID(), "acme", "user@acme.com", List.of());
 
@@ -220,7 +221,7 @@ class JwtUtilsTest {
     @DisplayName("should throw when secret is shorter than 32 characters")
     void shouldThrowWhenSecretTooShort() {
         // then
-        assertThatThrownBy(() -> new JwtUtils("short-secret", EXPIRATION_MS))
+        assertThatThrownBy(() -> new JwtUtils("short-secret", EXPIRATION_MS, SERVICE_EXPIRATION_MS))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("32 characters");
     }
@@ -229,7 +230,7 @@ class JwtUtilsTest {
     @DisplayName("should throw when secret is null")
     void shouldThrowWhenSecretIsNull() {
         // then
-        assertThatThrownBy(() -> new JwtUtils(null, EXPIRATION_MS))
+        assertThatThrownBy(() -> new JwtUtils(null, EXPIRATION_MS, SERVICE_EXPIRATION_MS))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -240,7 +241,7 @@ class JwtUtilsTest {
         final String secret32 = "12345678901234567890123456789012";
 
         // when/then
-        final JwtUtils utils = new JwtUtils(secret32, EXPIRATION_MS);
+        final JwtUtils utils = new JwtUtils(secret32, EXPIRATION_MS, SERVICE_EXPIRATION_MS);
         assertThat(utils).isNotNull();
     }
 
