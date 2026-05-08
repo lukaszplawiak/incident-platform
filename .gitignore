@@ -44,4 +44,5 @@ docker/data/
 HELP.md
 # Alertmanager token file — generated automatically by AlertmanagerTokenRefresher.
 # Contains a short-lived JWT token. Never commit to git.
-docker/secrets/
+docker/secrets/**/docker/secrets/
+ingestor-token
