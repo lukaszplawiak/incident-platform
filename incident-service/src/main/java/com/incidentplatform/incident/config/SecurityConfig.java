@@ -2,6 +2,7 @@ package com.incidentplatform.incident.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
+import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -41,6 +42,7 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html").permitAll()
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/ws/**").permitAll()
                         .requestMatchers("/dev/**").permitAll()
                         .requestMatchers("/api/v1/incidents/**").authenticated()

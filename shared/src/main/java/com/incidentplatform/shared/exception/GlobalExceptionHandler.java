@@ -15,6 +15,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.List;
 import java.util.Set;
@@ -169,7 +170,16 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ErrorResponse> handleUnexpectedException(Exception ex) {
+    public ResponseEntity<ErrorResponse> handleUnexpectedException(Exception ex) throws NoResourceFoundException {
+
+        // NoResourceFoundException is thrown by Spring's resource handler when
+        // a URL doesn't match any endpoint. Re-throwing it allows Spring Boot's
+        // default error handling to respond with 404 instead of 500.
+        // This is especially important for the management port (8091) where
+        // actuator endpoints are served by a separate context.
+        if (ex instanceof NoResourceFoundException nrfe) {
+            throw nrfe;
+        }
 
         log.error("Unexpected error occurred, requestId: {}", getRequestId(), ex);
 

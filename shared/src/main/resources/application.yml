@@ -225,12 +225,6 @@ management:
         # Enable histogram buckets for HTTP request duration.
         # Required for accurate p50/p95/p99 latency percentiles in Grafana.
         http.server.requests: true
-  endpoints:
-    web:
-      exposure:
-        # Expose only necessary endpoints — health for Kubernetes probes,
-        # info for service metadata, prometheus for metrics scraping.
-        include: health,info,prometheus
   endpoint:
     health:
       # Show full health details only to authenticated users (ROLE_ADMIN).

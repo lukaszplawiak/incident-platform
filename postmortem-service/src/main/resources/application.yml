@@ -43,6 +43,10 @@ server:
 management:
   server:
     port: ${MANAGEMENT_PORT:8095}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
 
 resilience4j:
   retry:
