@@ -150,7 +150,7 @@ Manages on-call schedules and answers "who is on-call right now?" for each tenan
 | Build | Maven (multi-module) |
 | Observability | Micrometer + Prometheus + Grafana, SLF4J + MDC (tenantId, requestId, userId) |
 | CI | GitHub Actions |
-| Containers | Docker Compose |
+| Containers | Docker Compose + Kubernetes (Kustomize) |
 
 ---
 
@@ -174,21 +174,15 @@ No single layer failure results in duplicate incidents. Each layer independently
 
 ### Multi-Layer DDoS Protection
 
-The ingestion pipeline implements defense-in-depth against alert flooding:
-
 | Layer | Mechanism | Status |
 |---|---|---|
 | 1 | Cloudflare | TODO — when public domain |
 | 2 | Nginx Ingress rate limiting per IP | TODO — when Kubernetes |
 | 3 | bucket4j per-tenant + per-IP (application) | ✅ Implemented |
-| 4 | Kafka consumer-side severity prioritization | ✅ Implemented (CRITICAL logged at WARN) |
-| 4 (full) | Separate Kafka topics per severity | TODO — when Kubernetes with multiple replicas |
+| 4 | Kafka consumer-side severity prioritization | ✅ Implemented |
 | 5 | Micrometer metrics: `rate_limit.tenant.rejected`, `rate_limit.ip.rejected` | ✅ Implemented |
-| 5 (full) | Prometheus alerting rules on RateLimitExceeded | TODO — alerting rules not yet configured |
 
 ### Escalation Chain
-
-When an incident is not acknowledged, escalation follows a structured chain with timeouts calibrated to severity:
 
 ```
 T+0:    Incident OPEN → PRIMARY on-call: Slack DM + Email
@@ -197,146 +191,60 @@ T+10m*: Still no ACK → Level 2: MANAGER: Email + SMS
         (* for CRITICAL — HIGH=15m, MEDIUM=30m, LOW=60m)
 ```
 
-Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK at any point cancels all pending tasks.
-
 ### Centralized Audit Log
 
-Every state change across all services is recorded in a single chronological timeline per incident. The audit log is event-driven — each service publishes `AuditEventMessage` to the `audit.events` Kafka topic, consumed and persisted by `incident-service`.
+Every state change across all services is recorded in a single chronological timeline per incident via the `audit.events` Kafka topic. Audit event types include: `INCIDENT_CREATED`, `INCIDENT_ACKNOWLEDGED`, `INCIDENT_ESCALATED`, `INCIDENT_RESOLVED`, `NOTIFICATION_SENT`, `ESCALATION_FIRED`, `POSTMORTEM_GENERATED` and more.
 
-Audit event types:
-- `INCIDENT_CREATED`, `INCIDENT_ACKNOWLEDGED`, `INCIDENT_ESCALATED`, `INCIDENT_RESOLVED`, `INCIDENT_CLOSED`, `INCIDENT_ASSIGNED`, `INCIDENT_SEVERITY_UPDATED`
-- `NOTIFICATION_SENT`, `NOTIFICATION_FAILED`
-- `ESCALATION_FIRED`, `ESCALATION_SCHEDULED`
-- `POSTMORTEM_GENERATED`, `POSTMORTEM_FAILED`, `POSTMORTEM_UPDATED`
+### Multi-Tenant Kafka
 
-### Multi-Tenant Kafka — Per-Record Tenant Isolation
-
-All Kafka topics are multi-tenant — records from different tenants are interleaved on the same topic. Tenant isolation is enforced at two levels:
-
-- **Producer**: `TenantKafkaProducerInterceptor` automatically adds `X-Tenant-Id` header to every outgoing record, reading from the current thread's `TenantContext`
-- **Consumer**: Each `@KafkaListener` method reads `X-Tenant-Id` from its own `ConsumerRecord` header before processing, and clears `TenantContext` in a `finally` block — guaranteeing no tenant leaks between records in the same batch
-- **Validation**: `TenantKafkaConsumerInterceptor` validates that every incoming record carries a tenant header, logging a warning if missing — acts as an early detection layer before business logic runs
-
-This design ensures that even if Kafka delivers records from `tenant-a` and `tenant-b` in the same poll batch, each record is processed with the correct tenant context.
-
-### Concurrency Safety
-
-- **Optimistic locking**: `@Version` field on `Incident` entity — concurrent PATCH requests on the same incident return `HTTP 409 Conflict` instead of silently overwriting each other
-- **`GlobalExceptionHandler`**: Catches `ObjectOptimisticLockingFailureException` and returns a structured 409 response with `OPTIMISTIC_LOCK_CONFLICT` error code
-- **ShedLock**: `EscalationScheduler` and `PostmortemRetryScheduler` use ShedLock to prevent duplicate job execution across multiple service instances
-
-### Edge Cases Handled
-
-**TTL expiry during active incident** — When `IncidentOpenedEvent` is consumed by `ingestion-service`, the Redis key TTL is extended to 7 days. When `IncidentResolvedEvent` arrives, the key is deleted immediately. If the resolved event is lost (Kafka failure), the 7-day TTL acts as a safety net.
-
-**Resolved before fired** — If Prometheus sends a `resolved` event before the `firing` event arrives (network reorder), `incident-service` safely ignores the resolved event. The subsequent fired alert creates a new incident normally.
-
-**Redis circuit breaker** — When Redis is unavailable, `DeduplicationService` opens a Resilience4j circuit breaker and lets alerts through. The `incident-service` fingerprint check (layer 5) prevents duplicate incidents.
-
-**Notification deduplication** — `notification-service` checks `notification_log` before sending. Kafka at-least-once delivery never results in duplicate emails or Slack messages.
-
-**Kafka consumer rebalancing** — All consumer services configure explicit timeouts to prevent rebalancing storms under load:
-
-```yaml
-spring:
-  kafka:
-    consumer:
-      properties:
-        max.poll.interval.ms: 30000   # max processing time per batch
-        session.timeout.ms: 15000     # broker considers consumer dead after this
-        heartbeat.interval.ms: 5000   # must be < session.timeout / 3
-        max.poll.records: 10          # limits records per poll cycle
-```
-
-**Audit event resilience** — `AuditEventPublisher` uses `@Retryable` (3 attempts, exponential backoff) for transient Kafka failures. Serialization errors are not retried — bad data won't fix itself. The main business flow is never blocked by observability infrastructure.
-
-**Payload size limit** — `ingestion-service` rejects payloads over 1MB at the application layer (explicit size check before processing). Oversized payloads return `413 Payload Too Large` with no Kafka publishing.
+All topics are multi-tenant. `TenantKafkaProducerInterceptor` adds `X-Tenant-Id` to every outgoing record. Each `@KafkaListener` reads it per-record and clears `TenantContext` in a `finally` block — guaranteeing no tenant leaks between records in the same batch.
 
 ### Security
 
-- **JWT secret**: No default value — application refuses to start without `JWT_SECRET` environment variable set explicitly
-- **Service-to-service auth**: Internal HTTP calls between services use `ServiceTokenProvider` which generates and caches JWT tokens with `ROLE_SERVICE` — not exposed to end users
-- **Dev endpoints**: `DevTokenController` is gated with `@Profile("local")` — never available in production
-- **Management port isolation**: Prometheus metrics endpoint exposed on separate management port (8091–8096) — never co-located with the business API port
-- **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in server access logs or CDN caches
-- **Request size limits**: `ingestion-service` rejects payloads over 1MB — protection against DoS via oversized alerts
-- **Slack Bot Token**: Minimal OAuth scopes (`chat:write`, `im:write`) — principle of least privilege
-- **Sensitive field redaction**: `GlobalExceptionHandler` redacts fields named `password`, `secret`, `token`, `apiKey` from validation error responses
+- **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set
+- **Dev endpoints**: `DevTokenController` gated with `@Profile("local")` — never available in production
+- **Management port isolation**: Prometheus metrics on separate port (8091–8096), never mixed with business API
+- **Sensitive field redaction**: `GlobalExceptionHandler` redacts `password`, `secret`, `token`, `apiKey` from error responses
 
 ---
 
 ## Observability
 
-The platform is fully instrumented for production monitoring.
-
-### Metrics (Micrometer + Prometheus + Grafana)
-
-All services expose metrics via `/actuator/prometheus` on the management port. Prometheus scrapes every 15 seconds. Grafana provides dashboards for:
-
-- HTTP request rate and error rate per service
-- JVM heap and non-heap memory
-- Rate limit rejections per tenant and per IP
-- Kafka consumer lag
-
-**Infrastructure**: Prometheus and Grafana are included in `docker-compose.yml` — monitoring starts with a single `docker-compose up`.
-
-### Distributed Tracing Context
-
-Every log line includes MDC context for correlation across services:
+All services expose metrics via `/actuator/prometheus` on the management port. Every log line includes MDC context:
 
 ```
 13:45:01.234 [acme-corp] [req-abc123] [user-1] INFO  IncidentCommandService - Incident created
 ```
 
-Format: `[tenantId] [requestId] [userId]` — allows filtering all logs for a specific incident or tenant across all services.
+Format: `[tenantId] [requestId] [userId]` — allows filtering all logs for a specific incident across all services.
 
 ---
 
 ## Design Decisions
 
 **Why a custom FSM instead of Spring State Machine?**
-Spring State Machine adds significant complexity and weight for a portfolio project. A simple `Map<IncidentStatus, Set<IncidentStatus>>` of allowed transitions is transparent, easily testable, and sufficient for this use case.
+A simple `Map<IncidentStatus, Set<IncidentStatus>>` is transparent, easily testable, and sufficient for this use case.
 
 **Why CQRS without separate databases?**
-Full CQRS with read replicas is overkill here. The lightweight split between `CommandService` and `QueryService` within the same PostgreSQL instance demonstrates understanding of the pattern without unnecessary infrastructure.
-
-**Why Consumer-Driven Contracts for notification-service?**
-The notification consumer deserializes Kafka messages to `JsonNode` and extracts only the fields it needs. This decouples the consumer from the exact producer schema — a change to `IncidentOpenedEvent` that adds new fields won't break notification-service.
-
-**Why separate DLQ strategies for ingestion vs. incident?**
-- `ingestion-service` uses a **custom** `DeadLetterPublisher` because it processes batches (one bad alert should not block the rest)
-- `incident-service` uses **Spring Kafka DLT** because it processes single messages and Spring handles retries correctly
+The `CommandService`/`QueryService` split within the same PostgreSQL instance demonstrates the pattern without unnecessary infrastructure.
 
 **Why `@Scheduled` for escalation instead of Kafka Streams?**
-Kafka Streams would require windowing, state stores, and a significantly more complex setup. `@Scheduled` with a PostgreSQL-backed task table is transparent, easily testable with Mockito, and sufficient for this use case. On production the same pattern can be replaced with Quartz or a dedicated job scheduler without changing the business logic.
+`@Scheduled` with a PostgreSQL-backed task table is transparent, testable with Mockito, and sufficient. ShedLock prevents duplicate execution across instances.
 
-**Why no Gemini SDK for postmortem-service?**
-Using the raw HTTP API via `RestClient` keeps the integration vendor-neutral — the `GeminiClient` interface means switching to a different AI provider requires changing only one class. It also avoids an additional Maven dependency and makes the HTTP contract explicit and debuggable.
-
-**Why a separate oncall-service instead of extending notification-service?**
-On-call schedule management is a distinct bounded context. A separate service allows independent scaling, independent deployment, and future extension (e.g. PagerDuty integration, calendar sync) without touching the notification pipeline. The `OncallClient` interface in `notification-service` keeps the coupling minimal — if `oncall-service` is unavailable, notification-service falls back to configured defaults.
+**Why no Gemini SDK?**
+`RestClient` via the `GeminiClient` interface keeps the integration vendor-neutral — switching AI providers requires changing one class.
 
 **Why HS512 for JWT instead of RS256 or Keycloak?**
-HS512 with a shared secret is sufficient for a controlled environment where all services are owned by the same team. The tradeoff is documented and understood: a single compromised secret affects all services. The `ServiceTokenProvider` is already abstracted behind an interface — migrating to RS256 or Keycloak requires changing one class per service.
+Sufficient for a controlled environment where all services are owned by the same team. `ServiceTokenProvider` is abstracted behind an interface — migrating to RS256 requires changing one class per service.
 
-**Why Slack Bot Token instead of Incoming Webhook?**
-Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` supports both direct messages (to the on-call engineer's Slack User ID) and channel posts — with a single API. Bot Token also enables future ACK-via-Slack (Interactive Components) without architectural changes.
-
-**Why bucket4j in-memory instead of Redis-backed rate limiting?**
-In-memory rate limiting (ConcurrentHashMap) is sufficient for a single instance. The tradeoff is documented: each instance maintains independent counters, so a load-balanced deployment would allow N×limit requests. Migration to bucket4j-redis requires changing one class — the `RateLimitingService` — when moving to Kubernetes.
-
-**Why a centralized audit log via Kafka instead of per-service history tables?**
-Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident timeline. The `audit.events` Kafka topic acts as a single audit stream — any service can publish events and the consumer assembles them into a unified chronological view accessible via one API endpoint.
-
-**Why per-record TenantContext in Kafka listeners instead of the consumer interceptor?**
-`TenantKafkaConsumerInterceptor.onConsume()` receives an entire batch — setting TenantContext from the first record and breaking means subsequent records from different tenants are processed with the wrong context. Reading `X-Tenant-Id` per-record directly in each `@KafkaListener` guarantees correctness regardless of batch composition. The interceptor is kept as a validation layer that logs warnings for records missing the tenant header.
-
+**Why per-record TenantContext in Kafka listeners?**
+`TenantKafkaConsumerInterceptor.onConsume()` receives an entire batch — reading `X-Tenant-Id` per-record in each `@KafkaListener` guarantees correctness regardless of batch composition.
 
 ---
 
 ## Kubernetes
 
-The platform ships with a complete Kubernetes configuration using **Kustomize** with environment overlays. All 6 services are production-ready to deploy to any Kubernetes cluster.
+The platform ships with a complete Kubernetes configuration using **Kustomize** with environment overlays.
 
 ### Structure
 
@@ -350,136 +258,129 @@ k8s/
 │   └── kustomization.yml
 └── overlays/
     ├── dev/                     # Minikube — 1 replica, relaxed probes, 768Mi memory limit
-    ├── staging/                 # Staging overrides
-    └── prod/                    # Production overrides
+    ├── staging/
+    └── prod/
 ```
-
-### Key Features
-
-**Rolling updates** — zero downtime deployments out of the box:
-```yaml
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxUnavailable: 0   # never reduce below requested replicas
-    maxSurge: 1         # allow one extra pod during update
-```
-
-**Init containers** — each service waits for its dependencies before starting, preventing crash loops on cold start:
-```yaml
-initContainers:
-  - name: wait-for-postgresql
-    command: ["sh", "-c", "until nc -z postgresql 5432; do sleep 2; done"]
-  - name: wait-for-kafka
-    command: ["sh", "-c", "until nc -z kafka 9092; do sleep 2; done"]
-```
-
-**Health probes** — Kubernetes routes traffic only to ready pods:
-```yaml
-readinessProbe:
-  httpGet:
-    path: /actuator/health/readiness
-    port: 8092          # management port, separate from API port
-  initialDelaySeconds: 30
-livenessProbe:
-  httpGet:
-    path: /actuator/health/liveness
-    port: 8092
-  initialDelaySeconds: 60
-```
-
-**Horizontal Pod Autoscaler** — CPU and memory-based autoscaling for all services:
-```yaml
-minReplicas: 1
-maxReplicas: 3
-metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        averageUtilization: 70
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        averageUtilization: 80
-```
-
-**ShedLock** — prevents duplicate scheduled job execution when a service scales to multiple replicas (escalation-service, postmortem-service).
-
-**Management port isolation** — Prometheus metrics and health endpoints run on a separate port (8091–8096), never mixed with the business API port.
-
-### Running on Minikube
-
-```bash
-# Start Minikube with enough resources for 6 JVM services
-minikube start --cpus=4 --memory=7500 --driver=docker
-
-# Build images directly into Minikube Docker daemon (no registry needed)
-eval $(minikube docker-env)
-docker build -t incident-service:dev -f incident-service/Dockerfile .
-# ... repeat for each service
-
-# Deploy dev overlay
-kubectl apply -k k8s/overlays/dev
-
-# Watch pods come up
-kubectl get pods -n incident-platform-dev -w
-
-# Access the API (tunnel or port-forward)
-minikube tunnel
-# or
-kubectl port-forward svc/incident-service 8082:8082 -n incident-platform-dev
-```
-
-The dev overlay applies patches on top of base:
-- 1 replica per service (overrides HPA)
-- 768Mi memory limit (JVM needs more than the 512Mi base default on Minikube)
-- Relaxed probe delays (readiness=90s, liveness=120s) to account for slower JVM startup
-
 
 ---
 
-## Running Locally
+## Running Locally (Manual)
 
-**Prerequisites**: Java 21, Docker Desktop, Maven
+### Prerequisites
+
+- Java 21
+- Docker Desktop (at least 4GB RAM allocated)
+- `jq`
+
+### Step 1 — Start infrastructure
 
 ```bash
-# 1. Start infrastructure (PostgreSQL, Redis, Kafka, Prometheus, Grafana)
-docker-compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up -d postgres redis kafka kafka-ui pgadmin
+```
 
-# 2. Build all modules
+Wait until all containers are healthy:
+
+```bash
+docker compose -f docker/docker-compose.yml ps
+```
+
+### Step 2 — Create application-local.yml for each service
+
+Each service requires `src/main/resources/application-local.yml` (excluded from git). Create one file per service.
+
+> **Important**: Use only standard ASCII hyphens (`-`) in comments — em dashes (`—`) in YAML comments prevent Spring Boot from loading the file.
+
+**All 6 services** need at minimum:
+
+```yaml
+jwt:
+  secret: local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only
+
+logging:
+  level:
+    com.incidentplatform: DEBUG
+```
+
+**incident-service** additionally needs WebSocket origins:
+
+```yaml
+jwt:
+  secret: local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only
+
+websocket:
+  allowed-origins:
+    - http://localhost:4200
+    - http://localhost:3000
+
+logging:
+  level:
+    com.incidentplatform: DEBUG
+```
+
+**postmortem-service** additionally needs a Gemini API key:
+
+```yaml
+jwt:
+  secret: local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only
+
+gemini:
+  api-key: your-gemini-api-key-here
+
+logging:
+  level:
+    com.incidentplatform: DEBUG
+```
+
+### Step 3 — Build all modules
+
+```bash
 ./mvnw clean install -DskipTests
+```
 
-# 3. Start services (separate terminals)
+### Step 4 — Start all 6 services (separate terminals)
+
+```bash
+# Terminal 1 — start first, it generates the Alertmanager token
 ./mvnw spring-boot:run -pl ingestion-service -Dspring-boot.run.profiles=local
+
+# Terminal 2
 ./mvnw spring-boot:run -pl incident-service -Dspring-boot.run.profiles=local
+
+# Terminal 3
 ./mvnw spring-boot:run -pl notification-service -Dspring-boot.run.profiles=local
+
+# Terminal 4
 ./mvnw spring-boot:run -pl escalation-service -Dspring-boot.run.profiles=local
+
+# Terminal 5
 ./mvnw spring-boot:run -pl postmortem-service -Dspring-boot.run.profiles=local
+
+# Terminal 6
 ./mvnw spring-boot:run -pl oncall-service -Dspring-boot.run.profiles=local
 ```
 
-**Required in `application-local.yml` per service**:
-```yaml
-# All services require:
-jwt:
-  secret: local-development-secret-key-minimum-32-characters-long-not-for-production
+### Step 5 — Verify all services are up
 
-# postmortem-service additionally requires:
-gemini:
-  api-key: your-api-key-here
+```bash
+for port in 8091 8092 8093 8094 8095 8096; do
+  echo -n "Port $port: "
+  curl -s http://localhost:$port/actuator/health | jq -r .status
+done
 ```
 
-**Infrastructure URLs**:
-- Kafka UI: http://localhost:8090
-- pgAdmin: http://localhost:5050
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3000 (admin/admin)
+Expected:
+```
+Port 8091: UP
+Port 8092: UP
+Port 8093: UP
+Port 8094: UP
+Port 8095: UP
+Port 8096: UP
+```
 
-**Service ports**:
+### Service Ports
 
-| Service | API | Management (Prometheus) |
+| Service | API Port | Management Port |
 |---|---|---|
 | ingestion-service | 8081 | 8091 |
 | incident-service | 8082 | 8092 |
@@ -488,69 +389,321 @@ gemini:
 | postmortem-service | 8085 | 8095 |
 | oncall-service | 8086 | 8096 |
 
+### Infrastructure URLs
+
+| Tool | URL | Credentials |
+|---|---|---|
+| Kafka UI | http://localhost:8090 | - |
+| pgAdmin | http://localhost:5050 | admin@admin.com / admin |
+| Prometheus | http://localhost:9090 | - |
+| Grafana | http://localhost:3000 | admin / admin |
+
+---
+
+## Running on Kubernetes (Minikube)
+
+### Prerequisites
+
+- Docker Desktop (at least 6GB RAM allocated)
+- [Minikube](https://minikube.sigs.k8s.io/docs/start/)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
+- `jq`
+
+### Step 1 — Start Minikube
+
+```bash
+minikube start --cpus=4 --driver=docker
+```
+
+Verify the cluster is ready:
+
+```bash
+kubectl get nodes
+# Expected: minikube   Ready   control-plane
+```
+
+### Step 2 — Configure Docker to use Minikube's daemon
+
+```bash
+eval $(minikube docker-env)
+```
+
+> Run this in every terminal session where you build images. It only affects the current shell.
+
+### Step 3 — Build all Docker images
+
+```bash
+for service in ingestion-service incident-service notification-service escalation-service postmortem-service oncall-service; do
+  echo "Building $service..."
+  docker build -t $service:dev -f $service/Dockerfile .
+done
+```
+
+First run takes 20-40 minutes (Maven downloads dependencies). Verify all images were built:
+
+```bash
+docker images | grep ":dev"
+# Expected: 6 images listed
+```
+
+### Step 4 — Configure secrets
+
+Review and update `k8s/overlays/dev/secrets.yml`:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+type: Opaque
+stringData:
+  JWT_SECRET: "local-development-secret-key-minimum-64-characters-long-not-for-production-k8s"
+  GEMINI_API_KEY: "your-gemini-api-key-here"
+  SLACK_BOT_TOKEN: "your-slack-bot-token-here"
+  SLACK_SIGNING_SECRET: "your-slack-signing-secret-here"
+```
+
+### Step 5 — Deploy to Minikube
+
+```bash
+kubectl apply -k k8s/overlays/dev
+```
+
+### Step 6 — Wait for all pods to be ready
+
+```bash
+kubectl get pods -n incident-platform-dev -w
+```
+
+Wait until all pods show `1/1 Running`. Init containers wait for PostgreSQL and Kafka — this takes 2-5 minutes. Press `Ctrl+C` when done.
+
+Expected final state:
+```
+escalation-service-xxx     1/1   Running   ...
+incident-service-xxx       1/1   Running   ...
+ingestion-service-xxx      1/1   Running   ...
+kafka-0                    1/1   Running   ...
+notification-service-xxx   1/1   Running   ...
+oncall-service-xxx         1/1   Running   ...
+postgresql-0               1/1   Running   ...
+postmortem-service-xxx     1/1   Running   ...
+redis-xxx                  1/1   Running   ...
+```
+
+### Step 7 — Configure local DNS
+
+```bash
+echo "127.0.0.1 incident-platform.local" | sudo tee -a /etc/hosts
+```
+
+### Step 8 — Start Minikube tunnel (separate terminal, keep it running)
+
+```bash
+minikube tunnel
+```
+
+### Step 9 — Verify the cluster is reachable
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" http://incident-platform.local/api/v1/incidents
+# Expected: 403 (reachable — authentication required)
+```
+
 ---
 
 ## End-to-End Test
 
+These steps work for both local and Kubernetes deployments.
+
+### Step 1 — Generate a dev token
+
+**Local:**
 ```bash
-# Get a dev token (local profile only)
-TOKEN=$(curl -s "http://localhost:8081/dev/token?userId=user-1&tenantId=acme-corp" | jq -r '.token')
+TOKEN=$(curl -s "http://localhost:8082/dev/token?userId=11111111-1111-1111-1111-111111111111&tenantId=test-tenant&email=admin@test.com&roles=ROLE_ADMIN" | jq -r .token)
+echo "Token: ${TOKEN:0:50}..."
+```
 
-# (Optional) Register an on-call schedule so notifications go to the right person
-curl -X POST http://localhost:8086/api/v1/oncall/schedules \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "userId": "user-1",
-    "userName": "Jan Kowalski",
-    "email": "jan@acme-corp.com",
-    "slackUserId": "U0123456789",
-    "role": "PRIMARY",
-    "startsAt": "2024-01-01T00:00:00Z",
-    "endsAt": "2024-12-31T23:59:59Z"
-  }'
+**Kubernetes** (`/dev/token` is not exposed via ingress by design — use port-forward):
+```bash
+kubectl port-forward svc/ingestion-service 8081:8081 -n incident-platform-dev &
+sleep 2
+TOKEN=$(curl -s "http://localhost:8081/dev/token?userId=11111111-1111-1111-1111-111111111111&tenantId=test-tenant&email=admin@test.com&roles=ROLE_ADMIN" | jq -r .token)
+echo "Token: ${TOKEN:0:50}..."
+```
 
-# Send a firing alert
-curl -X POST http://localhost:8081/api/v1/alerts/prometheus \
-  -H "Content-Type: application/json" \
+### Step 2 — Send a firing alert (simulating Prometheus/Alertmanager)
+
+**Local:**
+```bash
+curl -s -X POST http://localhost:8081/api/v1/alerts/prometheus \
   -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: test-tenant" \
+  -H "Content-Type: application/json" \
   -d '{
     "alerts": [{
       "status": "firing",
       "labels": {
-        "alertname": "HighCpuUsage",
+        "alertname": "HighCPU",
         "severity": "critical",
-        "instance": "prod-server-1:9100"
+        "instance": "server-01"
       },
       "annotations": {
-        "summary": "High CPU Usage on prod-server-1"
+        "summary": "CPU usage above 90%",
+        "description": "Server server-01 CPU is at 95%"
       }
     }]
-  }'
+  }' | jq .
 ```
 
-After sending the alert:
-- An incident is created in PostgreSQL with status `OPEN`
-- `IncidentOpenedEvent` is published to `incidents.lifecycle`
-- `ingestion-service` extends the Redis dedup TTL to 7 days
-- `notification-service` queries `oncall-service` for the current PRIMARY on-call
-- notification-service sends Slack DM to the on-call engineer + posts to `#incidents`
-- escalation-service schedules level 1 escalation task (fires after 5 minutes for CRITICAL locally)
-- After timeout without ACK: level 1 fires → SECONDARY notified via Slack DM + SMS
-- After another timeout: level 2 fires → MANAGER notified via Email + SMS
-- All events recorded in audit log — query via `GET /api/v1/incidents/{id}/audit`
-
-To test the postmortem flow, resolve the incident:
+**Kubernetes:**
 ```bash
-curl -X PATCH http://localhost:8082/api/v1/incidents/{incidentId}/status \
-  -H "Content-Type: application/json" \
+curl -s -X POST http://incident-platform.local/api/v1/alerts/prometheus \
   -H "Authorization: Bearer $TOKEN" \
-  -d '{"status": "RESOLVED"}'
+  -H "X-Tenant-Id: test-tenant" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alerts": [{
+      "status": "firing",
+      "labels": {
+        "alertname": "HighCPU",
+        "severity": "critical",
+        "instance": "server-01"
+      },
+      "annotations": {
+        "summary": "CPU usage above 90%",
+        "description": "Server server-01 CPU is at 95%"
+      }
+    }]
+  }' | jq .
 ```
-- `IncidentResolvedEvent` published to `incidents.lifecycle`
-- `ingestion-service` deletes the Redis dedup key — same alert can create a new incident
-- postmortem-service generates a draft via Gemini API
-- Draft available at `GET http://localhost:8085/api/v1/postmortems/incident/{incidentId}`
+
+Expected response:
+```json
+{
+  "received": 1,
+  "processed": 1,
+  "duplicates": 0,
+  "fullySuccessful": true
+}
+```
+
+### Step 3 — Verify incident was created
+
+**Local:**
+```bash
+curl -s http://localhost:8082/api/v1/incidents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: test-tenant" | jq '.content[]'
+```
+
+**Kubernetes** (use port-forward for a token signed with the k8s JWT_SECRET):
+```bash
+kubectl port-forward svc/incident-service 8082:8082 -n incident-platform-dev &
+sleep 2
+TOKEN_K8S=$(curl -s "http://localhost:8082/dev/token?userId=11111111-1111-1111-1111-111111111111&tenantId=test-tenant&email=admin@test.com&roles=ROLE_ADMIN" | jq -r .token)
+
+curl -s http://incident-platform.local/api/v1/incidents \
+  -H "Authorization: Bearer $TOKEN_K8S" \
+  -H "X-Tenant-Id: test-tenant" | jq '.content[]'
+```
+
+Expected response:
+```json
+{
+  "id": "<incident-id>",
+  "tenantId": "test-tenant",
+  "status": "OPEN",
+  "title": "CPU usage above 90%",
+  "severity": "CRITICAL",
+  "allowedTransitions": ["ACKNOWLEDGED", "ESCALATED"]
+}
+```
+
+### Step 4 — Acknowledge the incident
+
+```bash
+INCIDENT_ID="<id from previous response>"
+
+# Local
+curl -s -X PATCH http://localhost:8082/api/v1/incidents/$INCIDENT_ID/status \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: test-tenant" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "ACKNOWLEDGED"}' | jq .
+```
+
+Expected response includes:
+```json
+{
+  "status": "ACKNOWLEDGED",
+  "acknowledgedAt": "...",
+  "mttaMinutes": 0,
+  "allowedTransitions": ["RESOLVED"]
+}
+```
+
+### Step 5 — Resolve the incident
+
+```bash
+# Local
+curl -s -X PATCH http://localhost:8082/api/v1/incidents/$INCIDENT_ID/status \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: test-tenant" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "RESOLVED"}' | jq .
+```
+
+Expected response includes:
+```json
+{
+  "status": "RESOLVED",
+  "resolvedAt": "...",
+  "mttaMinutes": 0,
+  "mttrMinutes": 1,
+  "allowedTransitions": ["CLOSED"]
+}
+```
+
+After resolving, `postmortem-service` automatically generates a draft via Gemini API. Retrieve it with:
+
+```bash
+# Local
+curl -s http://localhost:8085/api/v1/postmortems/incident/$INCIDENT_ID \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: test-tenant" | jq .
+```
+
+### Step 6 — Check the audit log
+
+```bash
+# Local
+curl -s http://localhost:8082/api/v1/incidents/$INCIDENT_ID/audit \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: test-tenant" | jq '.[]'
+```
+
+Shows the full chronological timeline of every event across all services for this incident.
+
+### Step 7 — (Optional) Register an on-call schedule
+
+For notifications and escalations to reach the right person:
+
+```bash
+# Local
+curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Tenant-Id: test-tenant" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "userId": "11111111-1111-1111-1111-111111111111",
+    "userName": "Jan Kowalski",
+    "email": "jan@example.com",
+    "slackUserId": "U0123456789",
+    "role": "PRIMARY",
+    "startsAt": "2026-01-01T00:00:00Z",
+    "endsAt": "2026-12-31T23:59:59Z"
+  }' | jq .
+```
 
 ---
 
@@ -566,19 +719,15 @@ curl -X PATCH http://localhost:8082/api/v1/incidents/{incidentId}/status \
 
 **Test coverage highlights**:
 - `IncidentFsmTest` — 25 combinations of allowed/forbidden state transitions using `@ParameterizedTest` + `@CsvSource`
-- `IncidentCommandServiceTest` — deduplication logic, severity escalation on duplicate alerts, optimistic lock, FSM validation
-- `IncidentQueryServiceTest` — filter routing (Specification vs. simple query), tenant scoping, DTO mapping
+- `IncidentCommandServiceTest` — deduplication logic, severity escalation, optimistic lock, FSM validation
 - `IncidentKafkaConsumerTest` — per-record tenant isolation, TenantContext cleanup in finally, no cross-tenant leaks
-- `NotificationServiceTest` — orchestration, fault isolation between channels, idempotency, audit event publishing
+- `NotificationServiceTest` — orchestration, fault isolation between channels, idempotency
 - `NotificationRouterTest` — routing logic for all 5 event types, fallback when oncall-service unavailable
-- `NotificationIncidentEventConsumerTest` — header-based tenant resolution, event routing, TenantContext lifecycle
 - `EscalationServiceTest` — level 1/2 scheduling, cancellation, idempotency, severity-based timeouts
 - `EscalationSchedulerTest` — timer logic, level 2 scheduling after level 1, fault isolation
-- `EscalationIncidentEventConsumerTest` — per-record tenant isolation, event routing, sequential records without leaks
 - `PostmortemServiceTest` — generation, Gemini failure handling, CRUD, audit event publishing
 - `PostmortemRetrySchedulerTest` — retry logic for FAILED postmortems, max retry limit
-- `PostmortemIncidentEventConsumerTest` — header tenant wins over payload tenant, ignored event types
-- `JwtUtilsTest` — token generation, validation, expiry, edge cases, secret length validation
+- `JwtUtilsTest` — token generation, validation, expiry, secret length validation
 - `TenantContextTest` — ThreadLocal isolation between threads, TenantAwareTaskDecorator propagation
 - `OncallScheduleServiceTest` — schedule creation, overlap detection, current on-call resolution
 
@@ -588,19 +737,25 @@ curl -X PATCH http://localhost:8082/api/v1/incidents/{incidentId}/status \
 
 ```
 incident-platform/
-├── shared/                  # Common: events, DTOs, security (JWT, TenantContext, ServiceTokenProvider, AuditEventPublisher)
+├── shared/                  # Common: events, DTOs, security (JWT, TenantContext, AuditEventPublisher)
 │                            # Kafka interceptors: TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor
-├── ingestion-service/       # Alert normalization, deduplication, rate limiting, lifecycle consumer
+├── ingestion-service/       # Alert normalization, deduplication, rate limiting
 ├── incident-service/        # Incident lifecycle, FSM, audit log consumer + API
 ├── notification-service/    # Multi-channel notifications, Slack Bot Token, on-call routing
 ├── escalation-service/      # 2-level escalation chain, severity-based timeouts, ShedLock
-├── postmortem-service/      # AI-generated postmortems via Gemini API, retry scheduler
+├── postmortem-service/      # AI-generated postmortems via Gemini API
 ├── oncall-service/          # On-call schedule management
-└── docker/
-    ├── docker-compose.yml   # PostgreSQL, Redis (AOF), Kafka, pgAdmin, Kafka UI, Prometheus, Grafana
-    ├── prometheus.yml       # Prometheus scrape configuration
-    └── grafana/
-        └── provisioning/    # Grafana auto-provisioning (datasources)
+├── docker/
+│   ├── docker-compose.yml   # PostgreSQL, Redis (AOF), Kafka, pgAdmin, Kafka UI, Prometheus, Grafana
+│   ├── prometheus.yml       # Prometheus scrape config
+│   └── grafana/
+│       └── provisioning/    # Grafana auto-provisioning
+└── k8s/
+    ├── base/                # Environment-agnostic Kubernetes manifests
+    └── overlays/
+        ├── dev/             # Minikube: 1 replica, 768Mi memory, relaxed probe delays
+        ├── staging/
+        └── prod/
 ```
 
 ---
@@ -609,4 +764,4 @@ incident-platform/
 
 Built by Łukasz Pławiak as a portfolio project demonstrating production-oriented Java/Spring Boot backend development.
 
-Frontend companion: [incident-platform-frontend](https://github.com/your-username/incident-platform-frontend) — Angular 21 SPA with real-time WebSocket dashboard.
+Frontend companion: [incident-platform-frontend](https://github.com/lukaszplawiak/incident-platform-frontend) — Angular 21 SPA with real-time WebSocket dashboard.
