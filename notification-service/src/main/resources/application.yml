@@ -67,10 +67,7 @@ server:
 management:
   server:
     port: ${MANAGEMENT_PORT:8093}
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus
+  endpoint:
     health:
       probes:
         enabled: false

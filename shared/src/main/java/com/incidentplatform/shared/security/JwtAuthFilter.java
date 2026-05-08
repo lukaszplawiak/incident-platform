@@ -124,7 +124,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         final String path = request.getRequestURI();
         return path.startsWith("/actuator/health")
                 || path.startsWith("/actuator/info")
-                || path.startsWith("/actuator/prometheus")
                 || path.startsWith("/v3/api-docs")
                 || path.startsWith("/swagger-ui");
     }
