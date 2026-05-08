@@ -41,6 +41,7 @@ public class SecurityConfig {
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html").permitAll()
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/postmortems/**").authenticated()
                         .anyRequest().authenticated()
                 )

@@ -42,6 +42,10 @@ server:
 management:
   server:
     port: ${MANAGEMENT_PORT:8092}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
 
 logging:
   level:

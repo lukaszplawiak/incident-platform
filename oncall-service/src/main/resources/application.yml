@@ -21,3 +21,7 @@ server:
 management:
   server:
     port: ${MANAGEMENT_PORT:8096}
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

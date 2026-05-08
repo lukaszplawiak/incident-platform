@@ -30,6 +30,7 @@ public class SecurityConfig {
                                 "/actuator/health/**",
                                 "/actuator/info",
                                 "/actuator/prometheus").permitAll()
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/oncall/current")
                         .hasAnyRole("SERVICE", "ADMIN")
                         .anyRequest().authenticated()
