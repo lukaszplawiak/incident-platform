@@ -120,7 +120,6 @@ class IncidentQueryServiceTest {
         @DisplayName("should use Specification when severity filter provided")
         void shouldUseSpecificationWhenSeverityFilter() {
             // given
-            // IncidentFilter przyjmuje Severity enum — brak konwersji String
             final IncidentFilter filter = new IncidentFilter(
                     null, Severity.CRITICAL, null, null);
             final Page<Incident> page = new PageImpl<>(
