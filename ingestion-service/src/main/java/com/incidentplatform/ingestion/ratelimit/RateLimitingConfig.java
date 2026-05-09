@@ -3,50 +3,36 @@ package com.incidentplatform.ingestion.ratelimit;
 import com.incidentplatform.shared.domain.Severity;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
 import java.time.Duration;
 
+/**
+ * Factory for bucket4j {@link Bucket} instances used by the rate limiter.
+ *
+ * <p>Configuration is injected via {@link RateLimitingProperties} —
+ * a single {@code @ConfigurationProperties} record that owns all
+ * {@code rate-limiting.*} properties. No {@code @Value} annotations
+ * are needed here.
+ */
 @Configuration
+@EnableConfigurationProperties(RateLimitingProperties.class)
 public class RateLimitingConfig {
 
-    @Value("${rate-limiting.tenant.capacity:100}")
-    private long tenantCapacity;
+    private final RateLimitingProperties props;
 
-    @Value("${rate-limiting.tenant.refill-tokens:10}")
-    private long tenantRefillTokens;
-
-    @Value("${rate-limiting.tenant.refill-period-seconds:1}")
-    private long tenantRefillPeriodSeconds;
-
-    @Value("${rate-limiting.ip.capacity:50}")
-    private long ipCapacity;
-
-    @Value("${rate-limiting.ip.refill-tokens:5}")
-    private long ipRefillTokens;
-
-    @Value("${rate-limiting.ip.refill-period-seconds:1}")
-    private long ipRefillPeriodSeconds;
-
-    @Value("${rate-limiting.severity.critical.capacity:1000}")
-    private long criticalCapacity;
-
-    @Value("${rate-limiting.severity.high.capacity:500}")
-    private long highCapacity;
-
-    @Value("${rate-limiting.severity.medium.capacity:100}")
-    private long mediumCapacity;
-
-    @Value("${rate-limiting.severity.low.capacity:50}")
-    private long lowCapacity;
+    public RateLimitingConfig(RateLimitingProperties props) {
+        this.props = props;
+    }
 
     public Bucket createTenantBucket() {
         return Bucket.builder()
                 .addLimit(Bandwidth.builder()
-                        .capacity(tenantCapacity)
-                        .refillGreedy(tenantRefillTokens,
-                                Duration.ofSeconds(tenantRefillPeriodSeconds))
+                        .capacity(props.tenant().capacity())
+                        .refillGreedy(
+                                props.tenant().refillTokens(),
+                                Duration.ofSeconds(props.tenant().refillPeriodSeconds()))
                         .build())
                 .build();
     }
@@ -54,27 +40,27 @@ public class RateLimitingConfig {
     public Bucket createIpBucket() {
         return Bucket.builder()
                 .addLimit(Bandwidth.builder()
-                        .capacity(ipCapacity)
-                        .refillGreedy(ipRefillTokens,
-                                Duration.ofSeconds(ipRefillPeriodSeconds))
+                        .capacity(props.ip().capacity())
+                        .refillGreedy(
+                                props.ip().refillTokens(),
+                                Duration.ofSeconds(props.ip().refillPeriodSeconds()))
                         .build())
                 .build();
     }
 
     public long getSeverityCapacity(Severity severity) {
-        if (severity == null) return mediumCapacity;
+        if (severity == null) return props.severity().medium().capacity();
         return switch (severity) {
-            case CRITICAL -> criticalCapacity;
-            case HIGH     -> highCapacity;
-            case MEDIUM   -> mediumCapacity;
-            case LOW      -> lowCapacity;
+            case CRITICAL -> props.severity().critical().capacity();
+            case HIGH     -> props.severity().high().capacity();
+            case MEDIUM   -> props.severity().medium().capacity();
+            case LOW      -> props.severity().low().capacity();
         };
     }
 
-    public long getTenantCapacity()            { return tenantCapacity; }
-    public long getTenantRefillTokens()        { return tenantRefillTokens; }
-    public long getTenantRefillPeriodSeconds() { return tenantRefillPeriodSeconds; }
-    public long getIpCapacity()                { return ipCapacity; }
-    public long getIpRefillTokens()            { return ipRefillTokens; }
-    public long getIpRefillPeriodSeconds()     { return ipRefillPeriodSeconds; }
+    // Expose properties for callers that need raw values
+    // (e.g. metrics reporting, diagnostics endpoints)
+    public RateLimitingProperties properties() {
+        return props;
+    }
 }
