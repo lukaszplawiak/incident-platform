@@ -5,11 +5,18 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.ConcurrentHashMap;
 
+/**
+ * Per-tenant and per-IP rate limiter backed by bucket4j token buckets.
+ *
+ * <p>The {@code enabled} flag is read from {@link RateLimitingProperties}
+ * injected through {@link RateLimitingConfig} — no {@code @Value} annotation
+ * needed. This keeps all rate-limiting configuration in one place and makes
+ * it trivial to disable in tests by setting {@code rate-limiting.enabled=false}.
+ */
 @Service
 public class RateLimitingService {
 
@@ -17,9 +24,7 @@ public class RateLimitingService {
             LoggerFactory.getLogger(RateLimitingService.class);
 
     private final RateLimitingConfig config;
-
-    @Value("${rate-limiting.enabled:true}")
-    private boolean enabled;
+    private final boolean enabled;
 
     private final ConcurrentHashMap<String, Bucket> tenantBuckets =
             new ConcurrentHashMap<>();
@@ -32,6 +37,7 @@ public class RateLimitingService {
     public RateLimitingService(RateLimitingConfig config,
                                MeterRegistry meterRegistry) {
         this.config = config;
+        this.enabled = config.properties().enabled();
 
         this.tenantRateLimitedCounter = Counter.builder("rate_limit.tenant.rejected")
                 .description("Number of requests rejected by tenant rate limiter")
@@ -52,8 +58,8 @@ public class RateLimitingService {
 
         if (!tenantBucket.tryConsume(1)) {
             tenantRateLimitedCounter.increment();
-            log.warn("Rate limit exceeded for tenant: tenantId={}, " +
-                    "clientIp={}", tenantId, clientIp);
+            log.warn("Rate limit exceeded for tenant: tenantId={}, clientIp={}",
+                    tenantId, clientIp);
             return RateLimitResult.tenantLimited(tenantId);
         }
 
@@ -62,8 +68,8 @@ public class RateLimitingService {
 
         if (!ipBucket.tryConsume(1)) {
             ipRateLimitedCounter.increment();
-            log.warn("Rate limit exceeded for IP: clientIp={}, " +
-                    "tenantId={}", clientIp, tenantId);
+            log.warn("Rate limit exceeded for IP: clientIp={}, tenantId={}",
+                    clientIp, tenantId);
             return RateLimitResult.ipLimited(clientIp);
         }
 
