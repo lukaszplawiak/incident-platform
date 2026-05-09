@@ -5,10 +5,45 @@ metadata:
   labels:
     app.kubernetes.io/part-of: incident-platform
   annotations:
-    # nginx.ingress.kubernetes.io/rewrite-target: /
-    # Rate limiting — prevents DDoS (backlog item)
-    nginx.ingress.kubernetes.io/limit-rps: "100"
-    # WebSocket support for incident-service
+    # ─── Rate limiting — Layer 2 DDoS protection (Nginx Ingress) ───────────────
+    #
+    # These annotations implement per-client-IP rate limiting at the Nginx
+    # Ingress layer, complementing the per-tenant + per-IP rate limiting
+    # already implemented in application code (bucket4j, Layer 3).
+    #
+    # limit-rps: max requests per second per source IP.
+    #   20 req/s allows burst traffic from legitimate clients (dashboards,
+    #   monitoring tools) while blocking aggressive scanners and DDoS sources.
+    #
+    # limit-rpm: max requests per minute per source IP (= 20 * 60 = 1200).
+    #   Prevents clients that slow down to exactly the rps limit from
+    #   exceeding the intended throughput over longer windows.
+    #
+    # limit-connections: max concurrent open connections per source IP.
+    #   10 concurrent connections is generous for a browser or Alertmanager
+    #   but stops connection exhaustion attacks.
+    #
+    # limit-burst-multiplier: allows short bursts up to N * limit-rps.
+    #   Multiplier of 5 allows up to 100 req/s burst for legitimate spikes
+    #   (e.g. Prometheus firing multiple alerts simultaneously) without
+    #   triggering rate limiting on normal operations.
+    #
+    # When a client exceeds the limit, Nginx returns HTTP 429 Too Many Requests.
+    # The application-layer rate limiter (bucket4j) handles per-tenant limits
+    # on top of this — two independent defense layers.
+    #
+    # These limits apply to ALL paths in this Ingress. The ingestion endpoint
+    # (/api/v1/alerts) has the strictest throughput requirements — Alertmanager
+    # batches alerts and sends them infrequently, so 20 req/s is more than
+    # sufficient for normal operations.
+    # ───────────────────────────────────────────────────────────────────────────
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/limit-rpm: "1200"
+    nginx.ingress.kubernetes.io/limit-connections: "10"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "5"
+
+    # WebSocket support for incident-service — long-lived connections require
+    # extended timeouts so the proxy does not close them prematurely.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
