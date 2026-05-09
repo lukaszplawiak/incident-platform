@@ -32,6 +32,11 @@ public class AlertKafkaProducer {
         this.alertsResolvedTopic = alertsResolvedTopic;
     }
 
+    // Fire-and-forget: Kafka errors are logged but not propagated to the caller.
+    // Blocking on broker availability would cause HTTP 5xx during Kafka outages —
+    // Alertmanager would retry aggressively, creating alert floods.
+    // Trade-off: occasional alert loss vs. endpoint availability under pressure.
+    // A DLQ would eliminate message loss in a production deployment.
     public void publishFiring(UnifiedAlertDto alert) {
         try {
             final String payload = objectMapper.writeValueAsString(alert);
@@ -63,6 +68,7 @@ public class AlertKafkaProducer {
         }
     }
 
+    // Same fire-and-forget design as publishFiring — see above for rationale.
     public void publishResolved(ResolvedAlertNotification notification) {
         try {
             final String payload = objectMapper.writeValueAsString(notification);
