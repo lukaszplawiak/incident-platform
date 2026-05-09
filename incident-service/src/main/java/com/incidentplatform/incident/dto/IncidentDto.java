@@ -70,6 +70,13 @@ public record IncidentDto(
         Set<IncidentStatus> allowedTransitions
 
 ) {
+        // alertFingerprint is intentionally excluded from this response.
+        //
+        // It is an internal implementation detail of the ingestion-service deduplication
+        // mechanism — no API client can act on it, and no endpoint accepts it as input.
+        // Exposing internal identifiers through a public API surface is poor design
+        // regardless of security considerations: clients should only receive data
+        // they can actually use.
         public static IncidentDto from(Incident incident) {
                 return new IncidentDto(
                         incident.getId(),
