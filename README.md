@@ -11,6 +11,8 @@
 
 A production-oriented microservices backend that automates the full lifecycle of production incidents — from alert ingestion through escalation to AI-generated postmortems. Built to demonstrate real-world engineering: event-driven architecture, multi-tenancy, observability, and Kubernetes-ready deployment.
 
+(BONUS) Frontend companion: [incident-platform-frontend](https://github.com/lukaszplawiak/incident-platform-frontend) — Angular 21 SPA with real-time WebSocket dashboard.
+
 [Overview](#overview) | [Architecture](#architecture) | [Design Decisions](#design-decisions) | [Tech Stack](#tech-stack) | [Resilience & Security](#resilience--security) | [Observability](#observability) | [CI/CD](#cicd) | [Running Locally](#running-locally) | [Running on Kubernetes](#running-on-kubernetes) | [End-to-End Test](#end-to-end-test) | [Running Tests](#running-tests) | [Project Structure](#project-structure)
 
 ---
