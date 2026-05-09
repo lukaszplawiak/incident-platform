@@ -88,6 +88,39 @@ services:
       kafka:
         condition: service_healthy
 
+
+  # ----------------------------------------------------------
+  # Kafka Exporter: exposes Kafka consumer group lag metrics
+  # for Prometheus scraping.
+  #
+  # Metrics available at http://localhost:9308/metrics:
+  #   kafka_consumer_group_lag      -- messages behind per partition
+  #   kafka_consumer_group_lag_sum  -- total lag per consumer group
+  #   kafka_consumer_group_members  -- number of active consumers
+  #   kafka_topic_partition_offset  -- latest offset per partition
+  #
+  # Used by KafkaConsumerLagHigh and KafkaConsumerLagCritical alert rules.
+  # ----------------------------------------------------------
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: incident-kafka-exporter
+    restart: unless-stopped
+    ports:
+      - "9308:9308"
+    command:
+      - --kafka.server=kafka:9094
+      - --web.listen-address=:9308
+      - --log.level=warn
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:9308/metrics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ----------------------------------------------------------
   # pgAdmin: http://localhost:5050
   # Login: admin@incident.local / admin

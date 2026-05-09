@@ -185,3 +185,72 @@ groups:
           description: >
             Average GC pause on {{ $labels.service }} is above 200ms.
             Current: {{ $value | printf "%.0f" }}ms. May indicate memory pressure.
+
+
+  # ────────────────────────────────────────────────────────────────
+  # Kafka alerts -- consumer group lag
+  #
+  # Metrics sourced from kafka-exporter (danielqsj/kafka-exporter).
+  # Requires kafka-exporter container running and scraped by Prometheus
+  # -- see docker-compose.yml and prometheus.yml for configuration.
+  #
+  # Consumer lag = difference between the latest offset on the broker
+  # and the last committed offset by the consumer group.
+  # High lag means consumers are falling behind producers -- events
+  # are queuing in Kafka without being processed.
+  # ────────────────────────────────────────────────────────────────
+  - name: kafka
+    rules:
+
+      - alert: KafkaConsumerLagHigh
+        # Fire when any consumer group has total lag > 1000 messages
+        # for 5 minutes -- sustained lag, not a transient spike.
+        #
+        # Threshold rationale:
+        #   Normal operation : lag < 50   (consumers keep up with producers)
+        #   Acceptable burst : lag < 500  (brief spike during high load)
+        #   Alert threshold  : lag > 1000 for 5m = consumers cannot keep up
+        #
+        # Monitored consumer groups:
+        #   incident-service     -- alerts.raw, alerts.resolved
+        #   notification-service -- incidents.lifecycle
+        #   escalation-service   -- incidents.lifecycle
+        #   postmortem-service   -- incidents.lifecycle
+        #   ingestion-service    -- incidents.lifecycle (dedup)
+        expr: |
+          sum by (consumergroup, topic) (
+            kafka_consumer_group_lag
+          ) > 1000
+        for: 5m
+        labels:
+          severity: high
+          tenantId: system
+        annotations:
+          summary: "High Kafka consumer lag: {{ $labels.consumergroup }} on {{ $labels.topic }}"
+          description: >
+            Consumer group {{ $labels.consumergroup }} has accumulated
+            more than 1000 unprocessed messages on topic {{ $labels.topic }}.
+            The consuming service is falling behind.
+            Current lag: {{ $value | printf "%.0f" }} messages.
+            Check service logs for processing errors or resource exhaustion.
+
+      - alert: KafkaConsumerLagCritical
+        # Fire when lag exceeds 10000 messages for 2 minutes.
+        # At this level incident creation, notifications and escalations
+        # may be significantly delayed.
+        expr: |
+          sum by (consumergroup, topic) (
+            kafka_consumer_group_lag
+          ) > 10000
+        for: 2m
+        labels:
+          severity: critical
+          tenantId: system
+        annotations:
+          summary: "Critical Kafka consumer lag: {{ $labels.consumergroup }} on {{ $labels.topic }}"
+          description: >
+            Consumer group {{ $labels.consumergroup }} has over 10000 unprocessed
+            messages on topic {{ $labels.topic }}.
+            Incident processing, notifications and escalations are severely delayed.
+            Current lag: {{ $value | printf "%.0f" }} messages.
+            Immediate investigation required.
