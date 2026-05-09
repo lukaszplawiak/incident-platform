@@ -61,3 +61,20 @@ scrape_configs:
       - targets: ['host.docker.internal:8096']
         labels:
           service: 'oncall-service'
+
+  # ----------------------------------------------------------------
+  # Kafka Exporter -- consumer group lag and topic metrics
+  #
+  # Exposes metrics from kafka-exporter container (port 9308):
+  #   kafka_consumer_group_lag      -- lag per partition
+  #   kafka_consumer_group_lag_sum  -- total lag per consumer group
+  #   kafka_consumer_group_members  -- active consumers
+  #
+  # Used by KafkaConsumerLagHigh and KafkaConsumerLagCritical alert rules.
+  # ----------------------------------------------------------------
+  - job_name: 'kafka-exporter'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+        labels:
+          service: 'kafka'
