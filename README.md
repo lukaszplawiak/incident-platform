@@ -212,7 +212,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 | Layer | Mechanism | Status |
 |---|---|---|
 | 1 | Cloudflare | TODO — when public domain |
-| 2 | Nginx Ingress rate limiting | TODO — when multi-replica Kubernetes |
+| 2 | Nginx Ingress per-IP rate limiting (20 req/s, 10 connections) | ✅ Implemented |
 | 3 | bucket4j per-tenant + per-IP (application layer) | ✅ Implemented |
 | 4 | Kafka consumer severity prioritization | ✅ Implemented |
 | 5 | Micrometer: `rate_limit.tenant.rejected`, `rate_limit.ip.rejected` | ✅ Implemented |
@@ -249,9 +249,9 @@ All services expose metrics via `/actuator/prometheus` on the management port (8
 - HTTP request rate and error rate per service
 - JVM heap, non-heap memory, GC activity
 - Rate limit rejections per tenant and per IP
-- Kafka consumer lag per consumer group
+- Kafka consumer lag per consumer group (via `kafka-exporter` — `KafkaConsumerLagHigh` and `KafkaConsumerLagCritical` alert rules)
 
-Prometheus and Grafana are included in `docker-compose.yml` — monitoring starts alongside the application with a single command.
+Prometheus, Alertmanager, Grafana and `kafka-exporter` are included in `docker-compose.yml`. See [Running Locally](#running-locally) for startup order — the monitoring stack requires a pre-generated Alertmanager token.
 
 ### Distributed Tracing Context
 
@@ -320,6 +320,7 @@ The CI badge at the top of this README reflects the current status of the `main`
 - Java 21
 - Docker Desktop (minimum 4GB RAM allocated)
 - `jq` — command-line JSON formatter (`brew install jq` on macOS)
+- Python 3 — required for `scripts/generate-alertmanager-token.sh` (standard library only, no pip install needed)
 
 ### Step 1 — Start infrastructure
 
@@ -398,7 +399,7 @@ logging:
 ### Step 4 — Start all 6 services (separate terminals)
 
 ```bash
-# Terminal 1 — start first, generates the Alertmanager ingestor token
+# Terminal 1
 ./mvnw spring-boot:run -pl ingestion-service -Dspring-boot.run.profiles=local
 
 # Terminal 2
@@ -417,7 +418,35 @@ logging:
 ./mvnw spring-boot:run -pl oncall-service -Dspring-boot.run.profiles=local
 ```
 
-### Step 5 — Verify all services are up
+### Step 5 — (Optional) Start monitoring stack
+
+The monitoring stack (Prometheus, Alertmanager, Grafana, kafka-exporter) requires
+a pre-generated JWT token. Generate it once before starting:
+
+```bash
+export JWT_SECRET="local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only"
+./scripts/generate-alertmanager-token.sh
+```
+
+Then start the monitoring stack:
+
+```bash
+docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafana kafka-exporter
+```
+
+| Tool | URL | Credentials |
+|---|---|---|
+| Prometheus | http://localhost:9090 | — |
+| Alertmanager | http://localhost:9093 | — |
+| Grafana | http://localhost:3000 | admin / admin |
+
+> The monitoring stack is optional for local development — all 6 services run and process
+> alerts without it. Start it when you want to observe metrics dashboards or test real
+> Alertmanager → ingestion-service alert routing.
+>
+> Token expires after 30 days. Regenerate with the same script before expiry.
+
+### Step 6 — Verify all services are up
 
 ```bash
 for port in 8091 8092 8093 8094 8095 8096; do
@@ -441,13 +470,19 @@ Port 8096: UP
 | Tool | URL | Credentials |
 |---|---|---|
 | Kafka UI | http://localhost:8090 | — |
-| pgAdmin | http://localhost:5050 | admin@admin.com / admin |
+| pgAdmin | http://localhost:5050 | admin@incident.com / admin |
 | Prometheus | http://localhost:9090 | — |
 | Grafana | http://localhost:3000 | admin / admin |
 
 ---
 
 ## Running on Kubernetes
+
+> **Monitoring stack note**: Prometheus, Alertmanager, Grafana and kafka-exporter
+> are part of the `docker-compose.yml` setup only — they are not deployed in Kubernetes.
+> In a production Kubernetes environment, monitoring is typically handled by a separate
+> stack (e.g. `kube-prometheus-stack` via Helm). The `scripts/generate-alertmanager-token.sh`
+> script is only needed for the local docker-compose setup.
 
 ### Prerequisites
 
@@ -590,15 +625,15 @@ These steps work for both local and Kubernetes deployments. Replace the base URL
 
 **Local:**
 ```bash
-TOKEN=$(curl -s "http://localhost:8082/dev/token?userId=11111111-1111-1111-1111-111111111111&tenantId=test-tenant&email=admin@test.com&roles=ROLE_ADMIN" | jq -r .token)
+TOKEN=$(curl -s "http://localhost:8082/dev/token?tenantId=test-tenant" | jq -r .token)
 echo "Token: ${TOKEN:0:50}..."
 ```
 
-**Kubernetes** — `/dev/token` is intentionally not exposed via Ingress. Use port-forward:
+**Kubernetes** — `/dev/token` is intentionally not exposed via Ingress. Use port-forward to incident-service:
 ```bash
-kubectl port-forward svc/ingestion-service 8081:8081 -n incident-platform-dev &
+kubectl port-forward svc/incident-service 8082:8082 -n incident-platform-dev &
 sleep 2
-TOKEN=$(curl -s "http://localhost:8081/dev/token?userId=11111111-1111-1111-1111-111111111111&tenantId=test-tenant&email=admin@test.com&roles=ROLE_ADMIN" | jq -r .token)
+TOKEN=$(curl -s "http://localhost:8082/dev/token?tenantId=test-tenant" | jq -r .token)
 echo "Token: ${TOKEN:0:50}..."
 ```
 
@@ -671,7 +706,7 @@ curl -s http://localhost:8082/api/v1/incidents \
 ```bash
 kubectl port-forward svc/incident-service 8082:8082 -n incident-platform-dev &
 sleep 2
-TOKEN_K8S=$(curl -s "http://localhost:8082/dev/token?userId=11111111-1111-1111-1111-111111111111&tenantId=test-tenant&email=admin@test.com&roles=ROLE_ADMIN" | jq -r .token)
+TOKEN_K8S=$(curl -s "http://localhost:8082/dev/token?tenantId=test-tenant" | jq -r .token)
 
 curl -s http://incident-platform.local/api/v1/incidents \
   -H "Authorization: Bearer $TOKEN_K8S" \
@@ -857,9 +892,14 @@ incident-platform/
 │       ├── api/                   # OncallScheduleController
 │       └── service/               # OncallScheduleService (overlap detection, current on-call)
 │
+├── scripts/
+│   └── generate-alertmanager-token.sh  # Generates JWT token for Alertmanager — run once before starting the stack
+│
 ├── docker/
-│   ├── docker-compose.yml         # PostgreSQL, Redis (AOF), Kafka (KRaft), pgAdmin, Kafka UI, Prometheus, Grafana
-│   ├── prometheus.yml             # Scrape config for all 6 management ports
+│   ├── docker-compose.yml         # PostgreSQL, Redis (AOF), Kafka (KRaft), Kafka Exporter, pgAdmin, Kafka UI, Prometheus, Alertmanager, Grafana
+│   ├── prometheus.yml             # Scrape config for all 6 management ports + kafka-exporter
+│   ├── prometheus.rules.yml       # Alert rules: infrastructure, ingestion, incident-service, Kafka lag, JVM
+│   ├── alertmanager.yml           # Alert routing to ingestion-service webhook, credentials_file auth
 │   └── grafana/
 │       └── provisioning/          # Grafana datasource auto-provisioning
 │
