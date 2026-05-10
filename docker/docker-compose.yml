@@ -145,15 +145,16 @@ services:
   # Alertmanager: http://localhost:9093
   #
   # Routes Prometheus alerts to ingestion-service webhook.
-  # Authenticates via Bearer token (ROLE_SERVICE JWT).
+  # Authenticates via Bearer token (ROLE_SERVICE JWT) read from file.
   #
   # REQUIRED - generate token before starting the stack:
-  #   1. Start ingestion-service locally (make run-ingestion)
-  #   2. Run:
-  #      export ALERTMANAGER_INGESTOR_TOKEN=$(curl -s \
-  #        "http://localhost:8081/dev/token?userId=alertmanager&tenantId=system" \
-  #        | jq -r '.token')
-  #   3. docker compose up -d
+  #   export JWT_SECRET="your-64-char-secret"
+  #   ./scripts/generate-alertmanager-token.sh
+  #
+  # Token is written to docker/secrets/alertmanager-token.txt and mounted
+  # into the container at /etc/alertmanager/secrets/token.
+  # Alertmanager reads the file on every outgoing request — token rotation
+  # is handled automatically by AlertManagerTokenRefresher in ingestion-service.
   # ----------------------------------------------------------
   alertmanager:
     image: prom/alertmanager:latest
@@ -163,13 +164,12 @@ services:
       - "9093:9093"
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./secrets:/etc/alertmanager/secrets:ro
       - alertmanager_data:/alertmanager
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'
       - '--web.listen-address=:9093'
-    environment:
-      ALERTMANAGER_INGESTOR_TOKEN: ${ALERTMANAGER_INGESTOR_TOKEN}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -199,9 +199,6 @@ services:
       - '--web.console.libraries=/etc/prometheus/console_libraries'
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--web.enable-lifecycle'
-    depends_on:
-      alertmanager:
-        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
