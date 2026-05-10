@@ -16,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
@@ -58,54 +59,45 @@ class AlertManagerTokenRefresherTest {
         );
     }
 
+    // ─── Initial token provisioning ───────────────────────────────────────────
+    // The initial token is created by scripts/generate-alertmanager-token.sh
+    // before the stack starts — NOT by this class on startup.
+    // These tests verify that no token is written during application startup.
+
     @Nested
-    @DisplayName("generateTokenOnStartup")
-    class GenerateTokenOnStartup {
+    @DisplayName("startup behaviour")
+    class StartupBehaviour {
 
         @Test
-        @DisplayName("writes token to file on application startup")
-        void writesTokenToFileOnStartup() throws IOException {
+        @DisplayName("does not write token file on application startup")
+        void doesNotWriteTokenFileOnStartup() {
             // given
             final AlertManagerTokenRefresher refresher = createRefresher(true);
-            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
 
-            // when
-            refresher.generateTokenOnStartup();
+            // when — simulate application context startup, no explicit call
+            // refresher has no @EventListener — nothing fires on startup
 
-            // then
-            assertThat(tokenFile).exists();
-            assertThat(Files.readString(tokenFile, StandardCharsets.UTF_8))
-                    .isEqualTo(FAKE_TOKEN);
-        }
-
-        @Test
-        @DisplayName("does nothing when disabled")
-        void doesNothingWhenDisabled() {
-            // given
-            final AlertManagerTokenRefresher refresher = createRefresher(false);
-
-            // when
-            refresher.generateTokenOnStartup();
-
-            // then
+            // then — no file written, no JwtUtils call
             then(jwtUtils).should(never()).generateServiceToken("alertmanager");
             assertThat(tokenFile).doesNotExist();
         }
 
         @Test
-        @DisplayName("does nothing when token file path is blank")
-        void doesNothingWhenPathIsBlank() {
-            // given
-            final AlertManagerTokenRefresher refresher =
-                    createRefresherWithPath("");
-
-            // when
-            refresher.generateTokenOnStartup();
-
-            // then
-            then(jwtUtils).should(never()).generateServiceToken("alertmanager");
+        @DisplayName("initial token must be pre-provisioned by the generate script")
+        void initialTokenMustBeProvisionedExternally() {
+            // This test documents the expected operational contract:
+            // docker/secrets/alertmanager-token.txt must exist before the stack starts.
+            // AlertManagerTokenRefresher only rotates an existing token — it does not
+            // create it. If the file is missing, Alertmanager will fail to authenticate.
+            assertThat(tokenFile)
+                    .as("Token file must be created by scripts/generate-alertmanager-token.sh " +
+                            "before starting the stack — AlertManagerTokenRefresher does not " +
+                            "create the initial token")
+                    .doesNotExist();
         }
     }
+
+    // ─── Scheduled token rotation ─────────────────────────────────────────────
 
     @Nested
     @DisplayName("refreshToken")
@@ -156,7 +148,7 @@ class AlertManagerTokenRefresherTest {
                     .willThrow(new RuntimeException("JWT secret not configured"));
 
             // when / then
-            org.assertj.core.api.Assertions.assertThatCode(refresher::refreshToken)
+            assertThatCode(refresher::refreshToken)
                     .doesNotThrowAnyException();
         }
 
@@ -191,6 +183,34 @@ class AlertManagerTokenRefresherTest {
 
             // then
             then(jwtUtils).should(times(3)).generateServiceToken("alertmanager");
+        }
+
+        @Test
+        @DisplayName("does nothing when disabled")
+        void doesNothingWhenDisabled() {
+            // given
+            final AlertManagerTokenRefresher refresher = createRefresher(false);
+
+            // when
+            refresher.refreshToken();
+
+            // then
+            then(jwtUtils).should(never()).generateServiceToken("alertmanager");
+            assertThat(tokenFile).doesNotExist();
+        }
+
+        @Test
+        @DisplayName("does nothing when token file path is blank")
+        void doesNothingWhenPathIsBlank() {
+            // given
+            final AlertManagerTokenRefresher refresher =
+                    createRefresherWithPath("");
+
+            // when
+            refresher.refreshToken();
+
+            // then
+            then(jwtUtils).should(never()).generateServiceToken("alertmanager");
         }
     }
 }

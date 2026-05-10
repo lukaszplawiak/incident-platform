@@ -4,8 +4,6 @@ import com.incidentplatform.shared.security.JwtUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +16,20 @@ import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Set;
 
+/**
+ * Rotates the Alertmanager ingestor JWT before it expires.
+ *
+ * <p>The initial token is generated once by {@code scripts/generate-alertmanager-token.sh}
+ * before the stack starts — this class is responsible only for keeping it fresh.
+ * Alertmanager reads the token file on every outgoing request (credentials_file in
+ * alertmanager.yml) so rotation is seamless: no Alertmanager restart required.
+ *
+ * <p>Rotation schedule: every 80% of the token lifetime (default: every 24 days
+ * for a 30-day token). This ensures the file is always updated well before expiry.
+ *
+ * <p>If {@code alertmanager.token-file-path} is not configured or
+ * {@code alertmanager.token-refresh-enabled} is false, this component is a no-op.
+ */
 @Component
 public class AlertManagerTokenRefresher {
 
@@ -42,15 +54,12 @@ public class AlertManagerTokenRefresher {
         this.enabled = enabled;
     }
 
-    @EventListener(ApplicationReadyEvent.class)
-    public void generateTokenOnStartup() {
-        if (!isConfigured()) return;
-        log.info("Generating initial Alertmanager ingestor token on startup: file={}",
-                tokenFilePath);
-        refreshToken();
-    }
-
-    @Scheduled(fixedDelayString = "${alertmanager.token-refresh-delay-ms:#{${jwt.service-expiration-ms:2592000000} * 8 / 10}}")
+    // Rotates the token file at 80% of the token lifetime.
+    // The initial token is created by scripts/generate-alertmanager-token.sh —
+    // this method only refreshes it to prevent expiry during long-running deployments.
+    @Scheduled(fixedDelayString =
+            "${alertmanager.token-refresh-delay-ms:" +
+                    "#{${jwt.service-expiration-ms:2592000000} * 8 / 10}}")
     public void refreshToken() {
         if (!isConfigured()) return;
 
@@ -58,14 +67,14 @@ public class AlertManagerTokenRefresher {
             final String token = jwtUtils.generateServiceToken(SERVICE_NAME);
             writeTokenToFile(token);
 
-            log.info("Alertmanager ingestor token refreshed: file={}, " +
-                            "expiresInMs={}, nextRefreshInMs={}",
+            log.info("Alertmanager ingestor token rotated: file={}, " +
+                            "expiresInMs={}, nextRotationInMs={}",
                     tokenFilePath,
                     serviceExpirationMs,
                     (long) (serviceExpirationMs * 0.8));
 
         } catch (Exception e) {
-            log.error("Failed to refresh Alertmanager ingestor token: file={}, error={}",
+            log.error("Failed to rotate Alertmanager ingestor token: file={}, error={}",
                     tokenFilePath, e.getMessage(), e);
         }
     }
@@ -100,7 +109,7 @@ public class AlertManagerTokenRefresher {
         }
         if (tokenFilePath == null || tokenFilePath.isBlank()) {
             log.debug("alertmanager.token-file-path not configured — " +
-                    "Alertmanager token refresh disabled");
+                    "Alertmanager token rotation disabled");
             return false;
         }
         return true;
