@@ -531,20 +531,51 @@ docker images | grep ":dev"
 
 ### Step 4 — Configure secrets
 
-Review and update `k8s/overlays/dev/secrets.yml`:
+`k8s/overlays/dev/secrets.yml` contains base64-encoded values. The file ships with
+placeholders — replace them with your own values before deploying.
+
+**Required for basic operation** (incidents, escalation, audit log):
+
+```bash
+# JWT_SECRET — must be at least 64 characters
+echo -n "local-development-secret-key-minimum-64-characters-long-not-for-production-k8s" | base64
+```
+
+**Required for AI postmortems** (postmortem-service):
+
+```bash
+# Get a free key at https://aistudio.google.com/
+echo -n "your-gemini-api-key" | base64
+```
+
+**Required for Slack notifications** (notification-service):
+
+```bash
+# Create a Slack app at https://api.slack.com/apps
+# Bot Token Scopes needed: chat:write, im:write
+echo -n "xoxb-your-slack-bot-token" | base64
+echo -n "your-slack-signing-secret" | base64
+```
+
+Replace the `data` values in `k8s/overlays/dev/secrets.yml` with your encoded output:
 
 ```yaml
 apiVersion: v1
 kind: Secret
 metadata:
   name: app-secrets
+  namespace: incident-platform-dev
 type: Opaque
-stringData:
-  JWT_SECRET: "local-development-secret-key-minimum-64-characters-long-not-for-production-k8s"
-  GEMINI_API_KEY: "your-gemini-api-key-here"
-  SLACK_BOT_TOKEN: "your-slack-bot-token-here"
-  SLACK_SIGNING_SECRET: "your-slack-signing-secret-here"
+data:
+  JWT_SECRET: <base64-encoded-value>
+  GEMINI_API_KEY: <base64-encoded-value>        # optional — postmortems disabled if missing
+  SLACK_BOT_TOKEN: <base64-encoded-value>       # optional — Slack notifications disabled if missing
+  SLACK_SIGNING_SECRET: <base64-encoded-value>  # optional — Slack notifications disabled if missing
 ```
+
+> **Minimum setup**: only `JWT_SECRET` is required to run the full incident lifecycle
+> (ingestion → incident → escalation → audit log). Slack and Gemini are optional — the
+> platform works without them, notifications fall back to logs.
 
 ### Step 5 — Deploy
 
