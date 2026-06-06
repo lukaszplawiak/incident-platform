@@ -28,6 +28,7 @@ on:
     paths:
       - '**/pom.xml'
       - '**/src/**'
+      - '.snyk'
       - '.github/workflows/snyk.yml'
   schedule:
     # Every Monday 09:00 Warsaw time (07:00 UTC) -- 1h after OWASP scan
@@ -42,6 +43,8 @@ jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Snyk dependency scan
   # Scans pom.xml dependencies against Snyk vulnerability database.
+  # Uses --maven-aggregate-project (not --all-projects) to scan once
+  # through the root pom.xml so .snyk suppressions are applied consistently.
   # ──────────────────────────────────────────────────────────
   snyk-dependencies:
     name: Snyk — Dependency Scan
@@ -70,19 +73,12 @@ jobs:
       - name: Run Snyk dependency scan
         run: |
           snyk test \
-            --all-projects \
-            --severity-threshold=high \
-            --maven-aggregate-project
-
-      - name: Generate SARIF for GitHub Security tab
-        if: always()
-        continue-on-error: true
-        run: |
-          snyk test \
-            --all-projects \
-            --severity-threshold=high \
             --maven-aggregate-project \
+            --severity-threshold=high \
             --sarif-file-output=snyk-deps.sarif
+        # --maven-aggregate-project: resolves multi-module project via root pom.xml
+        # --all-projects is intentionally NOT used — it scans each module separately
+        # causing .snyk suppressions to be applied inconsistently across scans
 
       - name: Upload dependency SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
