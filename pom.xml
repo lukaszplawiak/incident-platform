@@ -47,6 +47,12 @@
         <wiremock.version>3.9.1</wiremock.version>
         <google-cloud.version>26.47.0</google-cloud.version>
         <itext.version>8.0.4</itext.version>
+        <owasp.version>10.0.3</owasp.version>
+        <!-- NVD API key for OWASP Dependency-Check — speeds up NVD database
+             download from ~15 min to ~2 min. Empty by default — override via:
+               ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
+             Free key: https://nvd.nist.gov/developers/request-an-api-key -->
+        <nvd.api.key></nvd.api.key>
     </properties>
 
     <dependencyManagement>
@@ -145,7 +151,6 @@
                 <version>${micrometer.version}</version>
             </dependency>
 
-
             <dependency>
                 <groupId>net.javacrumbs.shedlock</groupId>
                 <artifactId>shedlock-spring</artifactId>
@@ -234,11 +239,43 @@
                     </configuration>
                 </plugin>
 
-
                 <plugin>
                     <groupId>org.jacoco</groupId>
                     <artifactId>jacoco-maven-plugin</artifactId>
                     <version>0.8.12</version>
+                </plugin>
+
+                <!-- ═══════════════════════════════════════════════════════════
+                     OWASP Dependency-Check
+                     Scans all dependencies against the NVD CVE database.
+
+                     Run manually:
+                       ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
+                       open target/dependency-check-report.html
+
+                     Not bound to verify — avoids slowing down regular builds.
+                     Runs automatically via:
+                       .github/workflows/owasp-dependency-check.yml
+                       (every Monday and on pom.xml changes)
+
+                     NVD API key (free):
+                       https://nvd.nist.gov/developers/request-an-api-key
+                     ═══════════════════════════════════════════════════════════ -->
+                <plugin>
+                    <groupId>org.owasp</groupId>
+                    <artifactId>dependency-check-maven</artifactId>
+                    <version>${owasp.version}</version>
+                    <configuration>
+                        <!-- Fail build when CVSS score >= 7.0 (High or Critical) -->
+                        <failBuildOnCVSS>7</failBuildOnCVSS>
+                        <!-- Generate HTML report in target/ -->
+                        <format>HTML</format>
+                        <outputDirectory>${project.build.directory}</outputDirectory>
+                        <name>OWASP Dependency-Check Report</name>
+                        <!-- Suppress false positives -->
+                        <suppressionFile>${maven.multiModuleProjectDirectory}/owasp-suppressions.xml</suppressionFile>
+                        <nvdApiKey>${nvd.api.key}</nvdApiKey>
+                    </configuration>
                 </plugin>
 
             </plugins>
