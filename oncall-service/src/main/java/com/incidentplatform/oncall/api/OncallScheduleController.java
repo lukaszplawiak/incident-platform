@@ -6,7 +6,6 @@ import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.security.TenantContext;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -40,11 +39,10 @@ public class OncallScheduleController {
 
     @GetMapping("/current")
     public ResponseEntity<?> getCurrentOncall(
-            @NotBlank(message = "Role must not be blank if provided")
             @RequestParam(required = false) String role) {
         final String tenantId = TenantContext.getRequired();
 
-        if (role != null) {
+        if (role != null && !role.isBlank()) {
             log.debug("GET /api/v1/oncall/current?role={}, tenant={}",
                     role, tenantId);
             return service.getCurrentOncall(tenantId, role)
