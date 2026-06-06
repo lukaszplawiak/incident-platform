@@ -21,6 +21,8 @@ public interface IncidentRepository
 
     Optional<Incident> findByIdAndTenantId(UUID id, String tenantId);
 
+    boolean existsByIdAndTenantId(UUID id, String tenantId);
+
     Page<Incident> findByTenantIdOrderByCreatedAtDesc(String tenantId,
                                                       Pageable pageable);
 
