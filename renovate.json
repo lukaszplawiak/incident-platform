@@ -1,0 +1,83 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+
+  "timezone": "Europe/Warsaw",
+
+  "schedule": ["every weekend"],
+
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "rebaseWhen": "behind-base-branch",
+
+  "minimumReleaseAge": "3 days",
+
+  "labels": ["dependencies"],
+
+  "packageRules": [
+    {
+      "description": "Spring Boot — group all Spring updates into one PR",
+      "matchPackagePatterns": ["^org.springframework"],
+      "groupName": "Spring Framework",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Spring Boot parent — extra caution, wait 7 days",
+      "matchPackageNames": ["org.springframework.boot:spring-boot-starter-parent"],
+      "groupName": "Spring Boot",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Kafka — group Kafka client and streams together",
+      "matchPackagePatterns": ["^org.apache.kafka"],
+      "groupName": "Apache Kafka"
+    },
+    {
+      "description": "Testcontainers — group all testcontainers modules",
+      "matchPackagePatterns": ["^org.testcontainers"],
+      "groupName": "Testcontainers"
+    },
+    {
+      "description": "AWS / GCP SDKs — major versions require manual review",
+      "matchPackagePatterns": [
+        "^com.google.cloud",
+        "^software.amazon"
+      ],
+      "minimumReleaseAge": "14 days",
+      "labels": ["dependencies", "needs-review"]
+    },
+    {
+      "description": "GitHub Actions — pin to SHA and auto-update",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "Docker base images — group all Dockerfile updates",
+      "matchManagers": ["dockerfile"],
+      "groupName": "Docker base images",
+      "minimumReleaseAge": "7 days"
+    },
+    {
+      "description": "Patch and minor updates — auto-merge when CI passes",
+      "matchUpdateTypes": ["patch", "minor"],
+      "matchPackagePatterns": ["*"],
+      "automerge": false
+    },
+    {
+      "description": "Major updates — always require manual review",
+      "matchUpdateTypes": ["major"],
+      "labels": ["dependencies", "major-update"],
+      "automerge": false
+    }
+  ],
+
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "dependencies"]
+  },
+
+  "osvVulnerabilityAlerts": true
+}
