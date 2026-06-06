@@ -17,7 +17,7 @@ public class ServiceTokenProvider {
 
     private final JwtUtils jwtUtils;
     private final String serviceName;
-    private final long expirationMs;
+    private final long serviceExpirationMs;
 
     private volatile String cachedToken;
     private volatile Instant tokenExpiresAt;
@@ -25,10 +25,10 @@ public class ServiceTokenProvider {
     public ServiceTokenProvider(
             JwtUtils jwtUtils,
             @Value("${spring.application.name:unknown-service}") String serviceName,
-            @Value("${jwt.expiration-ms:86400000}") long expirationMs) {
+            @Value("${jwt.service-expiration-ms:2592000000}") long serviceExpirationMs) {
         this.jwtUtils = jwtUtils;
         this.serviceName = serviceName;
-        this.expirationMs = expirationMs;
+        this.serviceExpirationMs = serviceExpirationMs;
     }
 
     public String getToken() {
@@ -53,7 +53,7 @@ public class ServiceTokenProvider {
 
         cachedToken = jwtUtils.generateServiceToken(serviceName);
         tokenExpiresAt = Instant.now()
-                .plusMillis(expirationMs);
+                .plusMillis(serviceExpirationMs);
 
         log.debug("Service token refreshed for service={}, expiresAt={}",
                 serviceName, tokenExpiresAt);
