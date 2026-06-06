@@ -5,11 +5,9 @@
 # code for security issues (SQL injection, XXE, path traversal,
 # insecure deserialization, and others).
 #
-# Two scans in one workflow:
-#   1. snyk test — dependency CVE scan
-#   2. snyk code — static application security testing (SAST)
-#
-# Results uploaded to GitHub Security tab via SARIF.
+# Uses Snyk CLI directly (not snyk/actions/maven) to avoid
+# JAVA_HOME issues with the Docker-based action in multi-module
+# Maven projects.
 #
 # Runs on:
 #   - Push to main
@@ -43,6 +41,7 @@ permissions:
 jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Snyk dependency scan
+  # Scans pom.xml dependencies against Snyk vulnerability database.
   # ──────────────────────────────────────────────────────────
   snyk-dependencies:
     name: Snyk — Dependency Scan
@@ -62,25 +61,27 @@ jobs:
       - name: Build project
         run: ./mvnw clean compile -DskipTests --no-transfer-progress
 
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Authenticate Snyk
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+
       - name: Run Snyk dependency scan
-        uses: snyk/actions/maven@master
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: >
-            --severity-threshold=high
-            --all-projects
+        run: |
+          snyk test \
+            --all-projects \
+            --severity-threshold=high \
+            --maven-aggregate-project
 
       - name: Generate SARIF for GitHub Security tab
-        uses: snyk/actions/maven@master
         if: always()
         continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          args: >
-            --severity-threshold=high
-            --all-projects
+        run: |
+          snyk test \
+            --all-projects \
+            --severity-threshold=high \
+            --maven-aggregate-project \
             --sarif-file-output=snyk-deps.sarif
 
       - name: Upload dependency SARIF to GitHub Security tab
@@ -92,6 +93,8 @@ jobs:
 
   # ──────────────────────────────────────────────────────────
   # Job 2: Snyk code scan (SAST)
+  # Analyses Java source code for security vulnerabilities.
+  # Findings go to GitHub Security tab, do not block the build.
   # ──────────────────────────────────────────────────────────
   snyk-code:
     name: Snyk — Code Scan (SAST)
@@ -101,26 +104,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4.2.2
 
-      - name: Set up Java 21
-        uses: actions/setup-java@v4.7.1
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: 'maven'
+      - name: Install Snyk CLI
+        run: npm install -g snyk
+
+      - name: Authenticate Snyk
+        run: snyk auth ${{ secrets.SNYK_TOKEN }}
 
       - name: Run Snyk code scan
-        uses: snyk/actions/maven@master
         continue-on-error: true
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        with:
-          command: code test
-          args: >
-            --severity-threshold=high
+        run: |
+          snyk code test \
+            --severity-threshold=high \
             --sarif-file-output=snyk-code.sarif
         # continue-on-error: true — SAST findings are reported as alerts
-        # in the Security tab, not as build failures. Security issues in
-        # application code require manual review before blocking the build.
+        # in the Security tab without blocking the build.
+        # Security issues in application code require manual review.
 
       - name: Upload code SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v4
