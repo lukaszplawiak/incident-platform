@@ -24,22 +24,23 @@ public class SlackNotificationChannel implements NotificationChannel {
     public static final String SLACK_API_UPDATE =
             "https://slack.com/api/chat.update";
 
-    @Value("${notification.channels.slack.enabled:true}")
-    private boolean enabled;
-
-    @Value("${notification.channels.slack.bot-token}")
-    private String botToken;
-
-    @Value("${notification.channels.slack.channel:#incidents}")
-    private String defaultChannel;
-
+    private final boolean enabled;
+    private final String botToken;
+    private final String defaultChannel;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
 
-    public SlackNotificationChannel(RestClient.Builder restClientBuilder,
-                                    ObjectMapper objectMapper) {
+    public SlackNotificationChannel(
+            RestClient.Builder restClientBuilder,
+            ObjectMapper objectMapper,
+            @Value("${notification.channels.slack.enabled:true}") boolean enabled,
+            @Value("${notification.channels.slack.bot-token}") String botToken,
+            @Value("${notification.channels.slack.channel:#incidents}") String defaultChannel) {
         this.restClient = restClientBuilder.build();
         this.objectMapper = objectMapper;
+        this.enabled = enabled;
+        this.botToken = botToken;
+        this.defaultChannel = defaultChannel;
     }
 
     @Override
@@ -186,7 +187,6 @@ public class SlackNotificationChannel implements NotificationChannel {
                         )
                 ),
                 Map.of("type", "divider"),
-                // Zamiast przycisku — informacja o ACK
                 Map.of(
                         "type", "context",
                         "elements", List.of(

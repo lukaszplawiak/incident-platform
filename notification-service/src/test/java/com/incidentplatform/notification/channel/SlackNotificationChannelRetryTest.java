@@ -9,7 +9,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -29,10 +28,12 @@ class SlackNotificationChannelRetryTest {
     @BeforeEach
     void setUp() {
         channel = new SlackNotificationChannel(
-                RestClient.builder(), new ObjectMapper());
-        ReflectionTestUtils.setField(channel, "enabled", true);
-        ReflectionTestUtils.setField(channel, "botToken", "xoxb-test-token");
-        ReflectionTestUtils.setField(channel, "defaultChannel", "#incidents");
+                RestClient.builder(),
+                new ObjectMapper(),
+                true,
+                "xoxb-test-token",
+                "#incidents"
+        );
     }
 
     @Nested
