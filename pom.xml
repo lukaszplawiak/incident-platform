@@ -45,7 +45,7 @@
         <mapstruct.version>1.6.3</mapstruct.version>
         <resilience4j.version>2.2.0</resilience4j.version>
         <jjwt.version>0.12.6</jjwt.version>
-        <wiremock.version>3.9.1</wiremock.version>
+        <wiremock.version>3.13.2</wiremock.version>
         <google-cloud.version>26.47.0</google-cloud.version>
         <itext.version>8.0.5</itext.version>
         <!-- OWASP plugin version, NVD_API_KEY speeds download from ~15min to ~2min -->
