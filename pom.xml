@@ -38,7 +38,7 @@
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
-        <kafka.version>3.9.0</kafka.version>
+        <kafka.version>3.9.1</kafka.version>
         <testcontainers.version>1.20.1</testcontainers.version>
         <springdoc.version>2.8.16</springdoc.version>
         <mapstruct.version>1.6.2</mapstruct.version>
@@ -49,6 +49,8 @@
         <itext.version>8.0.5</itext.version>
         <owasp.version>10.0.4</owasp.version>
         <commons-compress.version>1.28.0</commons-compress.version>
+        <commons-lang3.version>3.18.0</commons-lang3.version>
+        <postgresql.version>42.7.11</postgresql.version>
         <!-- NVD API key for OWASP Dependency-Check — speeds up NVD database
              download from ~15 min to ~2 min. Empty by default — override via:
                ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
