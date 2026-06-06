@@ -176,8 +176,7 @@ On-call schedule management is a distinct bounded context. A separate service al
 | Observability | Micrometer + Prometheus + Grafana | HTTP metrics, JVM, Kafka lag, rate limit rejections |
 | Logging | SLF4J + MDC | Structured logs with tenantId, requestId, userId |
 | Containers | Docker Compose + Kubernetes (Kustomize) | Local infra + production-ready k8s overlays |
-| CI | GitHub Actions | Build, test, coverage, Docker image validation |
-
+| CI / Security | GitHub Actions · Renovate · OWASP Dependency-Check · Snyk | Build, test, coverage, automated dependency updates, CVE scanning |
 ---
 
 ## Resilience & Security
@@ -306,6 +305,61 @@ Build Docker image (matrix: 6 services in parallel) → GitHub Actions cache (la
 - Builds all 6 service images in a matrix strategy (`fail-fast: false` — one failure doesn't cancel others)
 - Uses `docker/build-push-action` with GitHub Actions cache for fast layer reuse
 - Images are validated but not pushed — no registry configured yet (next step: GitHub Container Registry)
+
+### Job 3 — Security Scanning
+
+Two dedicated workflows run independently from the main CI pipeline — security scans are slow
+(NVD database download takes 2–15 minutes) and should not block every feature build.
+
+**OWASP Dependency-Check** (`.github/workflows/owasp-dependency-check.yml`):
+
+```
+Checkout → Java 21 setup → Run dependency-check:aggregate → Upload HTML report as artifact
+```
+
+- Compares all Maven dependencies against the NVD CVE database
+- Fails the build when any dependency has a CVSS score >= 7.0 (High or Critical)
+- HTML report uploaded as artifact (retained 30 days) — downloadable from the Actions run
+- Runs every Monday at 08:00 and on every `pom.xml` change merged to `main`
+- Known CVEs that cannot be fixed (false positives or awaiting upstream release) are
+  documented in `owasp-suppressions.xml` with a verdict, justification, and expiry date
+
+**Snyk** (`.github/workflows/snyk.yml`):
+
+```
+Job A: Dependency scan → SARIF upload to GitHub Security tab
+Job B: Code scan (SAST) → SARIF upload to GitHub Security tab
+```
+
+- **Dependency scan**: scans `pom.xml` against Snyk vulnerability database — adds fix
+  suggestions and exploit maturity data on top of OWASP
+- **Code scan (SAST)**: static analysis of Java source code for security issues —
+  SQL injection, XXE, path traversal, insecure deserialization, hardcoded secrets
+- Results visible in **Security → Code scanning alerts** in GitHub without opening CI logs
+- Dependency scan failures block the build; SAST findings are reported as alerts only
+  (manual review required before enforcing)
+- Unfixable CVEs documented in `.snyk` with reason and expiry date
+
+Required GitHub secrets: `SNYK_TOKEN`, `NVD_API_KEY` (optional — speeds NVD download from ~15 min to ~2 min).
+
+### Dependency Updates — Renovate
+
+Renovate Bot monitors `pom.xml` and Dockerfiles and opens pull requests automatically
+when newer versions are available.
+
+Key configuration (`renovate.json`):
+
+- **Schedule**: every weekend — avoids noise during the work week
+- **`minimumReleaseAge: 3 days`**: skips releases yanked within 72 hours
+- **Spring Framework / Spring Boot**: grouped into one PR, 7-day delay — gives time for
+  community reports before updating a core dependency
+- **Google Cloud SDK**: 14-day delay — large SDK, higher risk on major updates
+- **Vulnerability alerts**: when a CVE is published for any dependency, Renovate opens
+  a PR immediately regardless of schedule
+- **Major updates**: always labelled `major-update`, never auto-merged
+
+Setup: install the Renovate GitHub App at https://github.com/apps/renovate and authorize
+it for this repository. Renovate will open a "Configure Renovate" PR to confirm the setup.
 
 ### Pipeline Status
 
