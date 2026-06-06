@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Optional;
 
@@ -41,9 +42,14 @@ public class OncallClientImpl implements OncallClient {
                 tenantId, role);
 
         try {
+            final String uri = UriComponentsBuilder
+                    .fromHttpUrl(oncallServiceBaseUrl)
+                    .path("/api/v1/oncall/current")
+                    .queryParam("role", role)
+                    .toUriString();
+
             final String responseBody = restClient.get()
-                    .uri(oncallServiceBaseUrl +
-                            "/api/v1/oncall/current?role=" + role)
+                    .uri(uri)
                     .header("Authorization",
                             "Bearer " + serviceTokenProvider.getToken())
                     .header("X-Tenant-Id", tenantId)
@@ -72,9 +78,14 @@ public class OncallClientImpl implements OncallClient {
         log.debug("Looking up user by slackUserId: {}", slackUserId);
 
         try {
+            final String uri = UriComponentsBuilder
+                    .fromHttpUrl(oncallServiceBaseUrl)
+                    .path("/api/v1/oncall/by-slack/{slackUserId}")
+                    .buildAndExpand(slackUserId)
+                    .toUriString();
+
             final String responseBody = restClient.get()
-                    .uri(oncallServiceBaseUrl +
-                            "/api/v1/oncall/by-slack/" + slackUserId)
+                    .uri(uri)
                     .header("Authorization",
                             "Bearer " + serviceTokenProvider.getToken())
                     .retrieve()
