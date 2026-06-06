@@ -46,7 +46,7 @@
         <jjwt.version>0.12.6</jjwt.version>
         <wiremock.version>3.9.1</wiremock.version>
         <google-cloud.version>26.47.0</google-cloud.version>
-        <itext.version>8.0.4</itext.version>
+        <itext.version>8.0.5</itext.version>
         <owasp.version>10.0.4</owasp.version>
         <commons-compress.version>1.28.0</commons-compress.version>
         <!-- NVD API key for OWASP Dependency-Check — speeds up NVD database
