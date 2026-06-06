@@ -15,8 +15,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @DisplayName("JwtUtils")
 class JwtUtilsTest {
 
+    // HS512 requires minimum 64 characters (512 bits).
     private static final String TEST_SECRET =
-            "test-secret-key-minimum-32-characters-long-for-hs256";
+            "test-secret-key-minimum-64-characters-long-for-hs512-absolutely-not-for-production";
     private static final long EXPIRATION_MS = 3600_000L;
     private static final long SERVICE_EXPIRATION_MS = 2592000_000L; // 30 days
 
@@ -89,7 +90,7 @@ class JwtUtilsTest {
     void shouldReturnEmptyForWrongSignature() {
         // given
         final JwtUtils otherJwtUtils = new JwtUtils(
-                "other-secret-key-minimum-32-characters-long-different",
+                "other-secret-key-minimum-64-characters-long-for-hs512-absolutely-not-prod",
                 EXPIRATION_MS, SERVICE_EXPIRATION_MS);
         final String tokenWithWrongSignature = otherJwtUtils.generateToken(
                 UUID.randomUUID(), "acme", "user@acme.com", List.of());
@@ -218,12 +219,26 @@ class JwtUtilsTest {
     }
 
     @Test
-    @DisplayName("should throw when secret is shorter than 32 characters")
+    @DisplayName("should throw when secret is shorter than 64 characters")
     void shouldThrowWhenSecretTooShort() {
-        // then
+        // then — "short-secret" is only 12 chars, well below 64 minimum for HS512
         assertThatThrownBy(() -> new JwtUtils("short-secret", EXPIRATION_MS, SERVICE_EXPIRATION_MS))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("32 characters");
+                .hasMessageContaining("64 characters");
+    }
+
+    @Test
+    @DisplayName("should throw when secret is between 32 and 63 characters")
+    void shouldThrowWhenSecretBetween32And63Characters() {
+        // This was the gap in the old validation (threshold was 32, not 64).
+        // A 52-char secret passed the old check but would fail jjwt's internal
+        // WeakKeyException. The new check catches it earlier with a clear message.
+        final String secret52chars = "test-secret-key-minimum-32-characters-long-for-hs256";
+        assertThat(secret52chars).hasSize(52);
+
+        assertThatThrownBy(() -> new JwtUtils(secret52chars, EXPIRATION_MS, SERVICE_EXPIRATION_MS))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("64 characters");
     }
 
     @Test
@@ -235,13 +250,14 @@ class JwtUtilsTest {
     }
 
     @Test
-    @DisplayName("should accept secret with exactly 32 characters")
-    void shouldAcceptSecretWithExactly32Characters() {
-        // given
-        final String secret32 = "12345678901234567890123456789012";
+    @DisplayName("should accept secret with exactly 64 characters")
+    void shouldAcceptSecretWithExactly64Characters() {
+        // given — exactly 64 ASCII chars = 64 bytes = 512 bits, minimum for HS512
+        final String secret64 = "1234567890123456789012345678901234567890123456789012345678901234";
+        assertThat(secret64).hasSize(64);
 
         // when/then
-        final JwtUtils utils = new JwtUtils(secret32, EXPIRATION_MS, SERVICE_EXPIRATION_MS);
+        final JwtUtils utils = new JwtUtils(secret64, EXPIRATION_MS, SERVICE_EXPIRATION_MS);
         assertThat(utils).isNotNull();
     }
 
