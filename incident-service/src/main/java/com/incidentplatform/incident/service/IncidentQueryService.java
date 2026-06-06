@@ -78,7 +78,7 @@ public class IncidentQueryService {
         log.debug("Finding incident history: incidentId={}, tenantId={}",
                 incidentId, tenantId);
 
-        if (!incidentRepository.existsById(incidentId)) {
+        if (!incidentRepository.existsByIdAndTenantId(incidentId, tenantId)) {
             throw new ResourceNotFoundException("Incident", incidentId);
         }
 

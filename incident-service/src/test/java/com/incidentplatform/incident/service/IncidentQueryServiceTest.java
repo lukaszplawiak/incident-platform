@@ -325,7 +325,8 @@ class IncidentQueryServiceTest {
                             IncidentStatus.ACKNOWLEDGED, "REST_API")
             );
 
-            given(incidentRepository.existsById(incidentId)).willReturn(true);
+            given(incidentRepository.existsByIdAndTenantId(incidentId, TENANT_ID))
+                    .willReturn(true);
             given(historyRepository.findByIncidentIdAndTenantIdOrderByChangedAtAsc(
                     incidentId, TENANT_ID)).willReturn(historyEntries);
 
@@ -347,7 +348,8 @@ class IncidentQueryServiceTest {
         void shouldThrowWhenIncidentNotFound() {
             // given
             final UUID unknownId = UUID.randomUUID();
-            given(incidentRepository.existsById(unknownId)).willReturn(false);
+            given(incidentRepository.existsByIdAndTenantId(unknownId, TENANT_ID))
+                    .willReturn(false);
 
             // then
             assertThatThrownBy(() -> queryService.findHistory(unknownId, TENANT_ID))
@@ -356,11 +358,31 @@ class IncidentQueryServiceTest {
         }
 
         @Test
+        @DisplayName("should throw ResourceNotFoundException for incident belonging to another tenant")
+        void shouldThrowWhenIncidentBelongsToAnotherTenant() {
+            // This verifies tenant isolation — existsByIdAndTenantId(id, tenantA)
+            // returns false for an incident that exists but belongs to tenantB.
+            // The old existsById() would return true, leaking the information
+            // that the UUID is in use (even though history would be empty).
+            final UUID incidentId = UUID.randomUUID();
+            final String otherTenantId = "other-tenant";
+
+            given(incidentRepository.existsByIdAndTenantId(incidentId, otherTenantId))
+                    .willReturn(false);
+
+            // then — 404 instead of 200 with empty list
+            assertThatThrownBy(() -> queryService.findHistory(incidentId, otherTenantId))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining(incidentId.toString());
+        }
+
+        @Test
         @DisplayName("should return empty list when no history entries exist")
         void shouldReturnEmptyListWhenNoHistory() {
             // given
             final UUID incidentId = UUID.randomUUID();
-            given(incidentRepository.existsById(incidentId)).willReturn(true);
+            given(incidentRepository.existsByIdAndTenantId(incidentId, TENANT_ID))
+                    .willReturn(true);
             given(historyRepository.findByIncidentIdAndTenantIdOrderByChangedAtAsc(
                     incidentId, TENANT_ID)).willReturn(List.of());
 
@@ -385,7 +407,8 @@ class IncidentQueryServiceTest {
                             IncidentStatus.RESOLVED, "REST_API")
             );
 
-            given(incidentRepository.existsById(incidentId)).willReturn(true);
+            given(incidentRepository.existsByIdAndTenantId(incidentId, TENANT_ID))
+                    .willReturn(true);
             given(historyRepository.findByIncidentIdAndTenantIdOrderByChangedAtAsc(
                     incidentId, TENANT_ID)).willReturn(historyEntries);
 
