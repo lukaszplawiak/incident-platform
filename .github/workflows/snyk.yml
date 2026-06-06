@@ -6,13 +6,10 @@
 # insecure deserialization, and others).
 #
 # Two scans in one workflow:
-#   1. snyk test    — dependency CVE scan (like OWASP but cloud-based,
-#                     with fix suggestions and exploit maturity data)
-#   2. snyk code    — static application security testing (SAST),
-#                     finds vulnerabilities in application source code
+#   1. snyk test — dependency CVE scan
+#   2. snyk code — static application security testing (SAST)
 #
-# Results are uploaded to GitHub Security tab (Code scanning alerts)
-# via SARIF — visible at: Security -> Code scanning -> Snyk
+# Results uploaded to GitHub Security tab via SARIF.
 #
 # Runs on:
 #   - Push to main
@@ -21,7 +18,7 @@
 #
 # Required GitHub secret:
 #   SNYK_TOKEN — get free token at https://snyk.io
-#   Account Settings -> Auth Token
+#   Account Settings -> Personal Access Tokens -> Generate
 #   Add to: Settings -> Secrets and variables -> Actions -> SNYK_TOKEN
 # ============================================================
 
@@ -35,16 +32,17 @@ on:
       - '**/src/**'
       - '.github/workflows/snyk.yml'
   schedule:
-    # Every Monday 09:00 Warsaw time (07:00 UTC) — 1h after OWASP scan
+    # Every Monday 09:00 Warsaw time (07:00 UTC) -- 1h after OWASP scan
     - cron: '0 7 * * 1'
   workflow_dispatch:
+
+permissions:
+  security-events: write
+  contents: read
 
 jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Snyk dependency scan
-  # Scans pom.xml dependencies against Snyk vulnerability database.
-  # Complements OWASP Dependency-Check — Snyk adds fix suggestions,
-  # exploit maturity data, and license compliance information.
   # ──────────────────────────────────────────────────────────
   snyk-dependencies:
     name: Snyk — Dependency Scan
@@ -52,10 +50,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v4.7.1
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -72,10 +70,8 @@ jobs:
           args: >
             --severity-threshold=high
             --all-projects
-        # --severity-threshold=high: only fail on High and Critical CVEs
-        # --all-projects: scans all Maven modules
 
-      - name: Upload dependency scan results to GitHub Security tab
+      - name: Generate SARIF for GitHub Security tab
         uses: snyk/actions/maven@master
         if: always()
         continue-on-error: true
@@ -87,19 +83,15 @@ jobs:
             --all-projects
             --sarif-file-output=snyk-deps.sarif
 
-      - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+      - name: Upload dependency SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('snyk-deps.sarif') != ''
         with:
           sarif_file: snyk-deps.sarif
           category: snyk-dependencies
 
   # ──────────────────────────────────────────────────────────
   # Job 2: Snyk code scan (SAST)
-  # Analyses Java source code for security vulnerabilities.
-  # Finds issues that dependency scanning cannot detect:
-  # SQL injection, XXE, path traversal, insecure deserialization,
-  # hardcoded secrets, and other OWASP Top 10 issues.
   # ──────────────────────────────────────────────────────────
   snyk-code:
     name: Snyk — Code Scan (SAST)
@@ -107,10 +99,10 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v4.7.1
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -118,6 +110,7 @@ jobs:
 
       - name: Run Snyk code scan
         uses: snyk/actions/maven@master
+        continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
@@ -125,14 +118,13 @@ jobs:
           args: >
             --severity-threshold=high
             --sarif-file-output=snyk-code.sarif
-        continue-on-error: true
         # continue-on-error: true — SAST findings are reported as alerts
         # in the Security tab, not as build failures. Security issues in
         # application code require manual review before blocking the build.
 
-      - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
+      - name: Upload code SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: always() && hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
           category: snyk-code
