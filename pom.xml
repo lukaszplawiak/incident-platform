@@ -49,7 +49,7 @@
         <google-cloud.version>26.83.0</google-cloud.version>
         <itext.version>8.0.5</itext.version>
         <!-- OWASP plugin version, NVD_API_KEY speeds download from ~15min to ~2min -->
-        <owasp.version>10.0.4</owasp.version>
+        <owasp.version>12.2.2</owasp.version>
         <!-- ── Security overrides — versions higher than Spring Boot BOM defaults ── -->
         <!-- CVE-2024-25710, CVE-2024-26308 — fix in 1.26.0, override transitive via testcontainers -->
         <commons-compress.version>1.28.0</commons-compress.version>
