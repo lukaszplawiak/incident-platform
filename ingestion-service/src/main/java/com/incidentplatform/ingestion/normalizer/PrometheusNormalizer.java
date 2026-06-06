@@ -51,18 +51,10 @@ public class PrometheusNormalizer extends BaseNormalizer {
             final JsonNode alert = alerts.get(i);
             final String status = getText(alert, "status", STATUS_FIRING);
 
-            try {
-                if (STATUS_RESOLVED.equals(status)) {
-                    final ResolvedAlertNotification resolved =
-                            normalizeResolvedAlert(alert, tenantId, i);
-                    resolvedAlerts.add(resolved);
-                } else {
-                    final UnifiedAlertDto firing =
-                            normalizeFiringAlert(alert, tenantId, i);
-                    firingAlerts.add(firing);
-                }
-            } catch (NormalizationException e) {
-                throw e;
+            if (STATUS_RESOLVED.equals(status)) {
+                resolvedAlerts.add(normalizeResolvedAlert(alert, tenantId, i));
+            } else {
+                firingAlerts.add(normalizeFiringAlert(alert, tenantId, i));
             }
         }
 
