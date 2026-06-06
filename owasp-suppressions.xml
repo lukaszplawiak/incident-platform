@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+
+    <!--
+        OWASP Dependency-Check false positive suppressions.
+
+        How to add a suppression:
+        1. Run: ./mvnw dependency-check:aggregate
+        2. Open: target/dependency-check-report.html
+        3. Find the false positive — click "suppress" to generate the XML entry
+        4. Add the entry below with:
+              <notes>  — why this is a false positive
+              <until>  — expiration date (max 90 days, then re-evaluate)
+
+        Example entry:
+        <suppress until="2025-12-31Z">
+            <notes>
+                CVE-2024-XXXX: affects library X in context Y only.
+                We use it in context Z which is not affected.
+                Reviewed by: [name] on [date].
+            </notes>
+            <packageUrl regex="true">^pkg:maven/com\.example\/library@.*$</packageUrl>
+            <cve>CVE-2024-XXXX</cve>
+        </suppress>
+    -->
+
+</suppressions>

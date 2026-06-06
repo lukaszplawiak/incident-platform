@@ -1,0 +1,67 @@
+# ============================================================
+# OWASP Dependency-Check
+#
+# Compares all Maven dependencies against the NVD CVE database.
+# Fails when any dependency has a CVSS score >= 7.0 (High/Critical).
+#
+# Runs on:
+#   - Push to main when pom.xml changes
+#   - Every Monday at 08:00 Warsaw time (scheduled)
+#   - Manual trigger (workflow_dispatch)
+#
+# Separate from the main CI workflow — NVD database download
+# takes 2-15 minutes and should not slow down every build.
+#
+# Run locally:
+#   ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
+#   open target/dependency-check-report.html
+#
+# Required GitHub secret (optional but recommended):
+#   NVD_API_KEY — speeds up NVD download from ~15 min to ~2 min
+#   Free key at: https://nvd.nist.gov/developers/request-an-api-key
+#   Add to: Settings -> Secrets and variables -> Actions -> NVD_API_KEY
+# ============================================================
+
+name: OWASP Dependency-Check
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '**/pom.xml'
+      - 'owasp-suppressions.xml'
+      - '.github/workflows/owasp-dependency-check.yml'
+  schedule:
+    # Every Monday 08:00 Warsaw time (06:00 UTC)
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  owasp-dependency-check:
+    name: OWASP Dependency-Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Run OWASP Dependency-Check
+        run: |
+          ./mvnw dependency-check:aggregate \
+            --no-transfer-progress \
+            -Dnvd.api.key=${{ secrets.NVD_API_KEY }}
+
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owasp-dependency-check-report
+          path: target/dependency-check-report.html
+          retention-days: 30
