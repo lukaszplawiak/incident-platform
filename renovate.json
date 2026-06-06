@@ -19,9 +19,11 @@
   "packageRules": [
     {
       "description": "Spring Boot — group all Spring updates into one PR",
-      "matchPackagePatterns": ["^org.springframework"],
       "groupName": "Spring Framework",
-      "minimumReleaseAge": "7 days"
+      "minimumReleaseAge": "7 days",
+      "matchPackageNames": [
+        "/^org.springframework/"
+      ]
     },
     {
       "description": "Spring Boot parent — extra caution, wait 7 days",
@@ -31,22 +33,26 @@
     },
     {
       "description": "Kafka — group Kafka client and streams together",
-      "matchPackagePatterns": ["^org.apache.kafka"],
-      "groupName": "Apache Kafka"
+      "groupName": "Apache Kafka",
+      "matchPackageNames": [
+        "/^org.apache.kafka/"
+      ]
     },
     {
       "description": "Testcontainers — group all testcontainers modules",
-      "matchPackagePatterns": ["^org.testcontainers"],
-      "groupName": "Testcontainers"
+      "groupName": "Testcontainers",
+      "matchPackageNames": [
+        "/^org.testcontainers/"
+      ]
     },
     {
       "description": "AWS / GCP SDKs — major versions require manual review",
-      "matchPackagePatterns": [
-        "^com.google.cloud",
-        "^software.amazon"
-      ],
       "minimumReleaseAge": "14 days",
-      "labels": ["dependencies", "needs-review"]
+      "labels": ["dependencies", "needs-review"],
+      "matchPackageNames": [
+        "/^com.google.cloud/",
+        "/^software.amazon/"
+      ]
     },
     {
       "description": "GitHub Actions — pin to SHA and auto-update",
@@ -63,8 +69,10 @@
     {
       "description": "Patch and minor updates — auto-merge when CI passes",
       "matchUpdateTypes": ["patch", "minor"],
-      "matchPackagePatterns": ["*"],
-      "automerge": false
+      "automerge": false,
+      "matchPackageNames": [
+        "*"
+      ]
     },
     {
       "description": "Major updates — always require manual review",
