@@ -49,7 +49,6 @@
         <itext.version>8.0.4</itext.version>
         <owasp.version>10.0.3</owasp.version>
         <commons-compress.version>1.28.0</commons-compress.version>
-        <hibernate-validator.version>8.0.4.Final</hibernate-validator.version>
         <!-- NVD API key for OWASP Dependency-Check — speeds up NVD database
              download from ~15 min to ~2 min. Empty by default — override via:
                ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
