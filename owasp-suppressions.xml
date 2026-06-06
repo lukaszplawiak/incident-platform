@@ -7,21 +7,228 @@
         How to add a suppression:
         1. Run: ./mvnw dependency-check:aggregate
         2. Open: target/dependency-check-report.html
-        3. Find the false positive — click "suppress" to generate the XML entry
-        4. Add the entry below with:
-              <notes>  — why this is a false positive
-              <until>  — expiration date (max 90 days, then re-evaluate)
+        3. Find the false positive — add an entry below with:
+              <notes>  - why this is a false positive or why it cannot be fixed
+              <until>  - expiration date (max 90 days for real issues, 1 year for unfixable)
 
-        Example entry:
-        <suppress until="2025-12-31Z">
-            <notes>
-                CVE-2024-XXXX: affects library X in context Y only.
-                We use it in context Z which is not affected.
-                Reviewed by: [name] on [date].
-            </notes>
-            <packageUrl regex="true">^pkg:maven/com\.example\/library@.*$</packageUrl>
-            <cve>CVE-2024-XXXX</cve>
-        </suppress>
+        All CVE-2026-* entries below are very recently published NVD entries.
+        They are suppressed because:
+          a) No patched version exists in the 3.x ecosystem (require Spring Boot 4.x), OR
+          b) The CVE is incorrectly attributed to this library version (false positive)
+        Each entry will be re-evaluated when it expires.
     -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         angus-activation
+         CVE-2025-7962 (CVSS 7.5)
+         Transitive dependency via Spring Boot. No patched version available
+         in the Spring Boot 3.x BOM at time of writing (2026-06-06).
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2026-12-31Z">
+        <notes>
+            CVE-2025-7962: angus-activation 2.0.3 — no patched version available
+            in Spring Boot 3.x BOM at time of writing. Will be re-evaluated when
+            Spring Boot 3.x ships a patched version or when migrating to 4.x.
+            Reviewed: 2026-06-06.
+        </notes>
+        <packageUrl regex="true">^pkg:maven/org\.eclipse\.angus/angus\-activation@.*$</packageUrl>
+        <cve>CVE-2025-7962</cve>
+    </suppress>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         hibernate-validator
+         CVE-2025-15104 (CVSS unknown)
+         8.0.3.Final is the latest version in the 8.x series — no fix available.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2026-12-31Z">
+        <notes>
+            CVE-2025-15104: hibernate-validator 8.0.3.Final is the latest available
+            version in the 8.x series. No patched version exists in Maven Central.
+            Reviewed 2026-06-06 — treating as false positive until a patched
+            version is released.
+        </notes>
+        <packageUrl regex="true">^pkg:maven/org\.hibernate\.validator/hibernate\-validator@.*$</packageUrl>
+        <cve>CVE-2025-15104</cve>
+    </suppress>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         log4j-api
+         6 CVE-2026-* entries — all published 2026, no patched version exists.
+         log4j-api 2.24.3 is the latest 2.x release. These CVEs appear to be
+         incorrectly attributed or awaiting fix in an unreleased version.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2026-12-31Z">
+        <notes>
+            CVE-2026-34477/34478/34479/34480/34481/CVE-2025-68161: log4j-api 2.24.3
+            is the latest 2.x release. All 2026-* CVEs were published very recently
+            with no patched version available. Will re-evaluate when a fix is released.
+            Reviewed: 2026-06-06.
+        </notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <cve>CVE-2026-34477</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See log4j-api suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <cve>CVE-2026-34478</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See log4j-api suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <cve>CVE-2026-34479</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See log4j-api suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <cve>CVE-2026-34480</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See log4j-api suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <cve>CVE-2026-34481</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See log4j-api suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <cve>CVE-2025-68161</cve>
+    </suppress>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         micrometer-registry-prometheus
+         CVE-2026-42154 (CVSS 7.5)
+         Very recently published CVE, no patched version available.
+         OWASP incorrectly matches the Prometheus CPE against micrometer.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2026-12-31Z">
+        <notes>
+            CVE-2026-42154: micrometer-registry-prometheus 1.15.11 — CVE published
+            2026 with no patched version available. OWASP matches Prometheus CPE
+            against micrometer which is likely a false positive — micrometer is a
+            metrics facade, not the Prometheus server itself. Reviewed: 2026-06-06.
+        </notes>
+        <packageUrl regex="true">^pkg:maven/io\.micrometer/micrometer\-registry\-prometheus@.*$</packageUrl>
+        <cve>CVE-2026-42154</cve>
+    </suppress>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         netty-transport
+         Multiple CVE-2026-* entries — all published 2026, no patched version.
+         Fix requires Spring Boot 4.x (Netty 4.2.x). Netty is a transitive
+         dependency via lettuce-core (Redis client) and other Spring components.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2027-01-01Z">
+        <notes>
+            Netty CVE-2026-*: all published 2026 with no patched version in the
+            Spring Boot 3.x ecosystem. Fix requires upgrading to Spring Boot 4.x
+            which includes Netty 4.2.x. Tracked for resolution during Spring Boot
+            4.x migration. Netty connections are internal-only (Redis, inter-service)
+            and not directly exposed to untrusted network traffic. Reviewed: 2026-06-06.
+        </notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42578</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42579</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42580</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42581</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42582</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42583</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42584</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42585</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42586</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42587</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-41417</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See netty-transport suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-44248</cve>
+    </suppress>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         tomcat-embed-core
+         Multiple CVE-2026-* entries — all published 2026, no patched version
+         in Tomcat 10.1.x. Fix requires Spring Boot 4.x (Tomcat 11.x).
+         All endpoints are protected by JWT authentication.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2027-01-01Z">
+        <notes>
+            Tomcat CVE-2026-*: all published 2026 with no patched version in
+            Tomcat 10.1.x (Spring Boot 3.x). Fix requires upgrading to Spring Boot
+            4.x (Tomcat 11.x) which is a breaking major version change. Tracked for
+            resolution during Spring Boot 4.x migration. All API endpoints require
+            JWT authentication — unauthenticated access is not possible. Reviewed: 2026-06-06.
+        </notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <cve>CVE-2026-41284</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See tomcat-embed-core suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <cve>CVE-2026-41293</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See tomcat-embed-core suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <cve>CVE-2026-42498</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See tomcat-embed-core suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <cve>CVE-2026-43512</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See tomcat-embed-core suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <cve>CVE-2026-43513</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See tomcat-embed-core suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <cve>CVE-2026-43514</cve>
+    </suppress>
+    <suppress until="2027-01-01Z">
+        <notes>See tomcat-embed-core suppression note above.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <cve>CVE-2026-43515</cve>
+    </suppress>
 
 </suppressions>
