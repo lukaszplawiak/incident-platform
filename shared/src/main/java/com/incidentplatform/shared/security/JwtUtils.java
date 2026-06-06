@@ -28,8 +28,9 @@ public class JwtUtils {
     public static final String CLAIM_SERVICE_NAME = "serviceName";
     public static final String ROLE_SERVICE = "ROLE_SERVICE";
 
-    private final SecretKey secretKey;
+    private static final int MIN_SECRET_LENGTH = 64;
 
+    private final SecretKey secretKey;
     private final long expirationMs;
     private final long serviceExpirationMs;
 
@@ -38,9 +39,9 @@ public class JwtUtils {
             @Value("${jwt.expiration-ms:86400000}") long expirationMs,
             @Value("${jwt.service-expiration-ms:2592000000}") long serviceExpirationMs) {
 
-        if (secret == null || secret.length() < 32) {
+        if (secret == null || secret.getBytes(StandardCharsets.UTF_8).length < MIN_SECRET_LENGTH) {
             throw new IllegalArgumentException(
-                    "JWT secret must be at least 32 characters (256 bits). " +
+                    "JWT secret must be at least 64 characters (512 bits) for HS512. " +
                             "Generate with: openssl rand -base64 64"
             );
         }
