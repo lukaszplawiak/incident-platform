@@ -71,7 +71,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Add coverage comment to PR
-        uses: madrapps/jacoco-report@v1.7.1
+        uses: madrapps/jacoco-report@v1.8.0
         if: github.event_name == 'pull_request'
         with:
           paths: |
