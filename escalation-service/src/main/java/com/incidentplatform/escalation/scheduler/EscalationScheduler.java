@@ -33,20 +33,21 @@ public class EscalationScheduler {
     private final ObjectMapper objectMapper;
     private final EscalationService escalationService;
     private final AuditEventPublisher auditEventPublisher;
+    private final String incidentsLifecycleTopic;
 
-    @Value("${kafka.topics.incidents-lifecycle}")
-    private String incidentsLifecycleTopic;
-
-    public EscalationScheduler(EscalationTaskRepository taskRepository,
-                               KafkaTemplate<String, String> kafkaTemplate,
-                               ObjectMapper objectMapper,
-                               EscalationService escalationService,
-                               AuditEventPublisher auditEventPublisher) {
+    public EscalationScheduler(
+            EscalationTaskRepository taskRepository,
+            KafkaTemplate<String, String> kafkaTemplate,
+            ObjectMapper objectMapper,
+            EscalationService escalationService,
+            AuditEventPublisher auditEventPublisher,
+            @Value("${kafka.topics.incidents-lifecycle}") String incidentsLifecycleTopic) {
         this.taskRepository = taskRepository;
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.escalationService = escalationService;
         this.auditEventPublisher = auditEventPublisher;
+        this.incidentsLifecycleTopic = incidentsLifecycleTopic;
     }
 
     @Scheduled(

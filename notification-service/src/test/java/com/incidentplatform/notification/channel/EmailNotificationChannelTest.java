@@ -11,7 +11,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import jakarta.mail.Session;
 import java.util.UUID;
@@ -37,9 +36,7 @@ class EmailNotificationChannelTest {
 
     @BeforeEach
     void setUp() {
-        channel = new EmailNotificationChannel(mailSender);
-        ReflectionTestUtils.setField(channel, "enabled", true);
-        ReflectionTestUtils.setField(channel, "fromAddress", FROM_ADDRESS);
+        channel = new EmailNotificationChannel(mailSender, true, FROM_ADDRESS);
     }
 
     @Nested
@@ -61,8 +58,9 @@ class EmailNotificationChannelTest {
         @Test
         @DisplayName("isEnabled should return false when enabled=false")
         void shouldBeDisabledWhenConfigured() {
-            ReflectionTestUtils.setField(channel, "enabled", false);
-            assertThat(channel.isEnabled()).isFalse();
+            final EmailNotificationChannel disabled =
+                    new EmailNotificationChannel(mailSender, false, FROM_ADDRESS);
+            assertThat(disabled.isEnabled()).isFalse();
         }
     }
 

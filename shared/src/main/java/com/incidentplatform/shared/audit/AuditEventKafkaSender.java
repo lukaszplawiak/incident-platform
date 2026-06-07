@@ -32,16 +32,22 @@ class AuditEventKafkaSender {
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
+    private final String auditEventsTopic;
 
-    @Value("${kafka.topics.audit-events:audit.events}")
-    private String auditEventsTopic;
-
-    AuditEventKafkaSender(KafkaTemplate<String, String> kafkaTemplate,
-                          ObjectMapper objectMapper) {
+    AuditEventKafkaSender(
+            KafkaTemplate<String, String> kafkaTemplate,
+            ObjectMapper objectMapper,
+            @Value("${kafka.topics.audit-events:audit.events}") String auditEventsTopic) {
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
+        this.auditEventsTopic = auditEventsTopic;
     }
 
+    // @Retryable works here because AuditEventPublisher calls this method
+    // through the Spring proxy (cross-bean call), not via this.method().
+    // Retries: 3 attempts, 500ms → 1000ms → 2000ms backoff.
+    // JsonProcessingException is excluded — serialization failures are not
+    // transient and retrying them would always fail.
     @Retryable(
             retryFor = Exception.class,
             noRetryFor = JsonProcessingException.class,

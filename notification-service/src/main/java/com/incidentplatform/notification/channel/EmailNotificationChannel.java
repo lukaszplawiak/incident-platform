@@ -16,16 +16,17 @@ public class EmailNotificationChannel implements NotificationChannel {
     private static final Logger log =
             LoggerFactory.getLogger(EmailNotificationChannel.class);
 
-    @Value("${notification.channels.email.enabled:true}")
-    private boolean enabled;
-
-    @Value("${notification.channels.email.from:alerts@incidentplatform.com}")
-    private String fromAddress;
-
+    private final boolean enabled;
+    private final String fromAddress;
     private final JavaMailSender mailSender;
 
-    public EmailNotificationChannel(JavaMailSender mailSender) {
+    public EmailNotificationChannel(
+            JavaMailSender mailSender,
+            @Value("${notification.channels.email.enabled:true}") boolean enabled,
+            @Value("${notification.channels.email.from:alerts@incidentplatform.com}") String fromAddress) {
         this.mailSender = mailSender;
+        this.enabled = enabled;
+        this.fromAddress = fromAddress;
     }
 
     @Override

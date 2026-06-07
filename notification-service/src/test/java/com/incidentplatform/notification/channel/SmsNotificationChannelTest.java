@@ -8,7 +8,6 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.UUID;
 
@@ -25,9 +24,7 @@ class SmsNotificationChannelTest {
 
     @BeforeEach
     void setUp() {
-        channel = new SmsNotificationChannel();
-        ReflectionTestUtils.setField(channel, "enabled", true);
-        ReflectionTestUtils.setField(channel, "fromNumber", FROM_NUMBER);
+        channel = new SmsNotificationChannel(true, FROM_NUMBER);
     }
 
     @Nested
@@ -49,8 +46,9 @@ class SmsNotificationChannelTest {
         @Test
         @DisplayName("isEnabled should return false when enabled=false")
         void shouldBeDisabledWhenConfigured() {
-            ReflectionTestUtils.setField(channel, "enabled", false);
-            assertThat(channel.isEnabled()).isFalse();
+            final SmsNotificationChannel disabled =
+                    new SmsNotificationChannel(false, FROM_NUMBER);
+            assertThat(disabled.isEnabled()).isFalse();
         }
     }
 

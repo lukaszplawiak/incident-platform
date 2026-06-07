@@ -4,7 +4,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -22,8 +21,7 @@ class SlackSignatureVerifierTest {
 
     @BeforeEach
     void setUp() {
-        verifier = new SlackSignatureVerifier();
-        ReflectionTestUtils.setField(verifier, "signingSecret", TEST_SIGNING_SECRET);
+        verifier = new SlackSignatureVerifier(TEST_SIGNING_SECRET);
     }
 
     @Nested

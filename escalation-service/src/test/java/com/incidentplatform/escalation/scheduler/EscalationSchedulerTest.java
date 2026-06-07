@@ -17,7 +17,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Instant;
 import java.util.List;
@@ -64,10 +63,8 @@ class EscalationSchedulerTest {
                 kafkaTemplate,
                 objectMapper,
                 escalationService,
-                auditEventPublisher);
-
-        ReflectionTestUtils.setField(scheduler,
-                "incidentsLifecycleTopic", TOPIC);
+                auditEventPublisher,
+                TOPIC);
     }
 
     @Nested

@@ -21,8 +21,12 @@ public class SlackSignatureVerifier {
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     private static final long MAX_TIMESTAMP_DIFF_SECONDS = 5 * 60;
 
-    @Value("${notification.channels.slack.signing-secret}")
-    private String signingSecret;
+    private final String signingSecret;
+
+    public SlackSignatureVerifier(
+            @Value("${notification.channels.slack.signing-secret}") String signingSecret) {
+        this.signingSecret = signingSecret;
+    }
 
     public boolean verify(String slackSignature,
                           String slackTimestamp,

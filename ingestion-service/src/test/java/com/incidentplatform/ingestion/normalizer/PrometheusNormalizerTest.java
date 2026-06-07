@@ -8,7 +8,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -22,9 +21,8 @@ class PrometheusNormalizerTest {
 
     @BeforeEach
     void setUp() {
-        normalizer = new PrometheusNormalizer();
+        normalizer = new PrometheusNormalizer(500);
         objectMapper = new ObjectMapper();
-        ReflectionTestUtils.setField(normalizer, "maxBatchSize", 500);
     }
 
     @Nested
@@ -331,7 +329,8 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should limit batch to maxBatchSize")
         void shouldLimitBatchSize() throws Exception {
-            ReflectionTestUtils.setField(normalizer, "maxBatchSize", 2);
+            final PrometheusNormalizer smallBatchNormalizer = new PrometheusNormalizer(2);
+
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [
@@ -350,7 +349,7 @@ class PrometheusNormalizerTest {
                       ]
                     }
                     """);
-            assertThat(normalizer.normalize(payload, TENANT_ID).firingAlerts()).hasSize(2);
+            assertThat(smallBatchNormalizer.normalize(payload, TENANT_ID).firingAlerts()).hasSize(2);
         }
     }
 
