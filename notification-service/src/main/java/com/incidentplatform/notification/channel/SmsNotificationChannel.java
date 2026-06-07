@@ -6,27 +6,21 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/**
- * Kanał SMS — symulacja przez logi.
- *
- * Na produkcji:
- * - Twilio SDK (com.twilio.sdk:twilio)
- * - AWS SNS SDK
- *
- * SMS używamy tylko dla eskalacji (CRITICAL/HIGH) —
- * drogi kanał, nie wysyłamy wszystkiego.
- */
 @Component
 public class SmsNotificationChannel implements NotificationChannel {
 
     private static final Logger log =
             LoggerFactory.getLogger(SmsNotificationChannel.class);
 
-    @Value("${notification.channels.sms.enabled:true}")
-    private boolean enabled;
+    private final boolean enabled;
+    private final String fromNumber;
 
-    @Value("${notification.channels.sms.from-number:+1234567890}")
-    private String fromNumber;
+    public SmsNotificationChannel(
+            @Value("${notification.channels.sms.enabled:true}") boolean enabled,
+            @Value("${notification.channels.sms.from-number:+1234567890}") String fromNumber) {
+        this.enabled = enabled;
+        this.fromNumber = fromNumber;
+    }
 
     @Override
     public String channelName() {
@@ -40,7 +34,6 @@ public class SmsNotificationChannel implements NotificationChannel {
 
     @Override
     public void send(NotificationRequest request) {
-        // Na produkcji: twilioClient.messages.create(to, from, body)
         log.info("""
                 [SMS SIMULATION] Sending SMS:
                   From: {}

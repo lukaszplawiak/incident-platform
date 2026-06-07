@@ -23,17 +23,18 @@ public class GeminiClientImpl implements GeminiClient {
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    private final String apiKey;
+    private final String model;
 
-    @Value("${gemini.api-key}")
-    private String apiKey;
-
-    @Value("${gemini.model:gemini-2.0-flash}")
-    private String model;
-
-    public GeminiClientImpl(@Qualifier("geminiRestClient") RestClient restClient,
-                            ObjectMapper objectMapper) {
+    public GeminiClientImpl(
+            @Qualifier("geminiRestClient") RestClient restClient,
+            ObjectMapper objectMapper,
+            @Value("${gemini.api-key}") String apiKey,
+            @Value("${gemini.model:gemini-2.0-flash}") String model) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
+        this.apiKey = apiKey;
+        this.model = model;
     }
 
     @Retry(name = "gemini", fallbackMethod = "generateFallback")

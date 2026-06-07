@@ -42,24 +42,25 @@ public class NotificationRouter {
 
     private final Map<String, NotificationChannel> channelsByName;
     private final OncallClient oncallClient;
+    private final String fallbackEmail;
+    private final String fallbackSlackChannel;
+    private final String fallbackPhone;
 
-    @Value("${notification.fallback.email:oncall@example.com}")
-    private String fallbackEmail;
-
-    @Value("${notification.fallback.slack-channel:#incidents}")
-    private String fallbackSlackChannel;
-
-    @Value("${notification.fallback.phone:}")
-    private String fallbackPhone;
-
-    public NotificationRouter(List<NotificationChannel> channels,
-                              OncallClient oncallClient) {
+    public NotificationRouter(
+            List<NotificationChannel> channels,
+            OncallClient oncallClient,
+            @Value("${notification.fallback.email:oncall@example.com}") String fallbackEmail,
+            @Value("${notification.fallback.slack-channel:#incidents}") String fallbackSlackChannel,
+            @Value("${notification.fallback.phone:}") String fallbackPhone) {
         this.channelsByName = channels.stream()
                 .collect(Collectors.toMap(
                         NotificationChannel::channelName,
                         ch -> ch
                 ));
         this.oncallClient = oncallClient;
+        this.fallbackEmail = fallbackEmail;
+        this.fallbackSlackChannel = fallbackSlackChannel;
+        this.fallbackPhone = fallbackPhone;
         log.info("NotificationRouter initialized with channels: {}",
                 channelsByName.keySet());
     }

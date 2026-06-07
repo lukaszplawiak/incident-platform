@@ -22,8 +22,12 @@ public class PrometheusNormalizer extends BaseNormalizer {
     private static final String STATUS_RESOLVED = "resolved";
     private static final String STATUS_FIRING = "firing";
 
-    @Value("${ingestion.prometheus.max-batch-size:500}")
-    private int maxBatchSize;
+    private final int maxBatchSize;
+
+    public PrometheusNormalizer(
+            @Value("${ingestion.prometheus.max-batch-size:500}") int maxBatchSize) {
+        this.maxBatchSize = maxBatchSize;
+    }
 
     @Override
     public NormalizationResult normalize(JsonNode rawPayload, String tenantId) {
@@ -51,6 +55,9 @@ public class PrometheusNormalizer extends BaseNormalizer {
             final JsonNode alert = alerts.get(i);
             final String status = getText(alert, "status", STATUS_FIRING);
 
+            // NormalizationException is unchecked — it propagates naturally
+            // without a try-catch block. The removed catch { throw e; } was
+            // a no-op that added noise and implied unfinished error handling.
             if (STATUS_RESOLVED.equals(status)) {
                 resolvedAlerts.add(normalizeResolvedAlert(alert, tenantId, i));
             } else {

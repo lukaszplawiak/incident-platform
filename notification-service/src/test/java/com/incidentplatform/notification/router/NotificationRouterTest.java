@@ -50,7 +50,10 @@ class NotificationRouterTest {
 
         router = new NotificationRouter(
                 List.of(emailChannel, slackChannel, smsChannel),
-                oncallClient);
+                oncallClient,
+                "oncall@example.com",
+                "#incidents",
+                "");
     }
 
     @Nested
@@ -242,7 +245,10 @@ class NotificationRouterTest {
             final NotificationRouter routerWithDisabledSms =
                     new NotificationRouter(
                             List.of(emailChannel, slackChannel, disabledSms),
-                            oncallClient);
+                            oncallClient,
+                            "oncall@example.com",
+                            "#incidents",
+                            "");
 
             // when
             final var result = routerWithDisabledSms.route(
