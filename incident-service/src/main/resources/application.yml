@@ -81,6 +81,7 @@ kafka:
     alerts-resolved: alerts.resolved
     incidents-lifecycle: incidents.lifecycle
     audit-events: audit.events
+    incidents-dead-letter: incidents.dead-letter
 
 server:
   port: ${SERVER_PORT:8082}

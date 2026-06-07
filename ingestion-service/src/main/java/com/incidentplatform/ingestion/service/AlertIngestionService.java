@@ -7,6 +7,7 @@ import com.incidentplatform.ingestion.normalizer.NormalizationResult;
 import com.incidentplatform.ingestion.normalizer.UnknownSourceException;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

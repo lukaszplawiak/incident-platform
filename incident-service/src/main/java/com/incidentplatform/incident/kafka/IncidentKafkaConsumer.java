@@ -5,6 +5,7 @@ import com.incidentplatform.incident.service.IncidentCommandService;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -25,11 +26,14 @@ public class IncidentKafkaConsumer {
 
     private final IncidentCommandService commandService;
     private final ObjectMapper objectMapper;
+    private final DeadLetterPublisher deadLetterPublisher;
 
     public IncidentKafkaConsumer(IncidentCommandService commandService,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 DeadLetterPublisher deadLetterPublisher) {
         this.commandService = commandService;
         this.objectMapper = objectMapper;
+        this.deadLetterPublisher = deadLetterPublisher;
     }
 
     @KafkaListener(
@@ -42,10 +46,6 @@ public class IncidentKafkaConsumer {
         log.debug("Received alert: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        // Extract tenantId from this specific record's header.
-        // We cannot use TenantContext here because it may contain a tenantId
-        // from a different record in the same Kafka batch — this topic is
-        // multi-tenant and each record carries its own tenantId header.
         final String tenantId = extractTenantId(record);
         TenantContext.set(tenantId);
 
@@ -64,7 +64,6 @@ public class IncidentKafkaConsumer {
             // alerts.raw.high     → concurrency=3
             // alerts.raw.medium   → concurrency=2
             // alerts.raw.low      → concurrency=1
-
             if (Severity.CRITICAL.equals(alert.severity())) {
                 log.warn("CRITICAL alert received — high priority processing: " +
                                 "alertId={}, fingerprint={}, tenant={}",
@@ -77,14 +76,34 @@ public class IncidentKafkaConsumer {
             }
 
             commandService.createFromAlert(alert, tenantId);
-            acknowledgment.acknowledge();
 
             log.info("Alert processed successfully: alertId={}, tenant={}",
                     alert.alertId(), tenantId);
 
+        } catch (IllegalArgumentException e) {
+            log.error("Poison pill detected — routing to DLT: " +
+                            "topic={}, partition={}, offset={}, tenant={}, error={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenantId, e.getMessage());
+
+            deadLetterPublisher.publish(
+                    record.value(),
+                    record.topic(),
+                    tenantId,
+                    e.getMessage());
+
+        } catch (Exception e) {
+            log.error("Transient error processing alert — message will be redelivered: " +
+                            "topic={}, partition={}, offset={}, tenant={}, error={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenantId, e.getMessage(), e);
+            return;
+
         } finally {
             TenantContext.clear();
         }
+
+        acknowledgment.acknowledge();
     }
 
     @KafkaListener(
@@ -108,18 +127,40 @@ public class IncidentKafkaConsumer {
                     notification.alertFingerprint(), notification.source(), tenantId);
 
             commandService.autoResolve(notification, tenantId);
-            acknowledgment.acknowledge();
 
             log.info("Resolved alert processed: fingerprint={}, tenant={}",
                     notification.alertFingerprint(), tenantId);
 
+        } catch (IllegalArgumentException e) {
+            // Poison pill — route to DLT and acknowledge to unblock partition.
+            log.error("Poison pill detected — routing to DLT: " +
+                            "topic={}, partition={}, offset={}, tenant={}, error={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenantId, e.getMessage());
+
+            deadLetterPublisher.publish(
+                    record.value(),
+                    record.topic(),
+                    tenantId,
+                    e.getMessage());
+
+        } catch (Exception e) {
+            // Transient error — do NOT acknowledge, allow redelivery.
+            log.error("Transient error processing resolved alert — will be redelivered: " +
+                            "topic={}, partition={}, offset={}, tenant={}, error={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenantId, e.getMessage(), e);
+            return;
+
         } finally {
             TenantContext.clear();
         }
+
+        acknowledgment.acknowledge();
     }
 
     // Reads tenantId from the Kafka record header set by TenantKafkaProducerInterceptor.
-    // Each record on a multi-tenant topic carries its own tenantId header —
+    // Each record on a multi-tenant topic carries its own tenantId header.
     private String extractTenantId(ConsumerRecord<?, ?> record) {
         final Header header = record.headers()
                 .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);

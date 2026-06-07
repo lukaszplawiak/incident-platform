@@ -7,6 +7,7 @@ import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -24,12 +25,15 @@ import org.springframework.kafka.support.Acknowledgment;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
@@ -42,6 +46,9 @@ class IncidentKafkaConsumerTest {
     @Mock
     private Acknowledgment acknowledgment;
 
+    @Mock
+    private DeadLetterPublisher deadLetterPublisher;
+
     private IncidentKafkaConsumer consumer;
     private ObjectMapper objectMapper;
 
@@ -53,7 +60,8 @@ class IncidentKafkaConsumerTest {
     void setUp() {
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
-        consumer = new IncidentKafkaConsumer(commandService, objectMapper);
+        consumer = new IncidentKafkaConsumer(
+                commandService, objectMapper, deadLetterPublisher);
     }
 
     @AfterEach
@@ -81,7 +89,7 @@ class IncidentKafkaConsumerTest {
                 "High CPU usage", "CPU exceeded 95%",
                 Instant.now().minusSeconds(60),
                 "prometheus:highcpu:server-1",
-                java.util.Map.of("instance", "server-1:9100")
+                Map.of("instance", "server-1:9100")
         );
         return objectMapper.writeValueAsString(alert);
     }
@@ -132,7 +140,7 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should clear TenantContext after processing")
+        @DisplayName("should clear TenantContext after successful processing")
         void shouldClearTenantContextAfterProcessing() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
@@ -146,22 +154,78 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should clear TenantContext even when processing throws")
-        void shouldClearTenantContextOnException() throws Exception {
+        @DisplayName("should NOT acknowledge on transient error — allows Kafka redelivery")
+        void shouldNotAcknowledgeOnTransientError() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
 
-            org.mockito.BDDMockito.willThrow(new RuntimeException("DB error"))
+            willThrow(new RuntimeException("DB unavailable"))
                     .given(commandService).createFromAlert(any(), any());
 
-            // when / then
-            assertThatThrownBy(() -> consumer.consumeAlert(record, acknowledgment))
-                    .isInstanceOf(RuntimeException.class);
+            // when — consumer handles exception internally (no rethrow)
+            consumer.consumeAlert(record, acknowledgment);
 
+            // then — NOT acknowledged: Kafka will redeliver after restart
+            then(acknowledgment).should(never()).acknowledge();
+        }
+
+        @Test
+        @DisplayName("should clear TenantContext even on transient error")
+        void shouldClearTenantContextOnTransientError() throws Exception {
+            // given
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
+
+            willThrow(new RuntimeException("DB unavailable"))
+                    .given(commandService).createFromAlert(any(), any());
+
+            // when
+            consumer.consumeAlert(record, acknowledgment);
+
+            // then
             assertThat(TenantContext.getOrNull())
-                    .as("TenantContext must be cleared even when processing fails")
+                    .as("TenantContext must be cleared even on transient errors")
                     .isNull();
+        }
+
+        @Test
+        @DisplayName("should route poison pill to DLT and acknowledge — unblocks partition")
+        void shouldRoutePoisonPillToDltAndAcknowledge() {
+            // given — malformed JSON that cannot be deserialized
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RAW, "{ invalid json }", TENANT_ID);
+
+            // when
+            consumer.consumeAlert(record, acknowledgment);
+
+            // then — published to DLT
+            then(deadLetterPublisher).should()
+                    .publish(anyString(), anyString(), anyString(), anyString());
+
+            // then — acknowledged to unblock partition (no infinite retry)
+            then(acknowledgment).should().acknowledge();
+
+            // then — service never called with garbage data
+            then(commandService).should(never()).createFromAlert(any(), any());
+        }
+
+        @Test
+        @DisplayName("should NOT route transient error to DLT")
+        void shouldNotRouteToDltOnTransientError() throws Exception {
+            // given
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
+
+            willThrow(new RuntimeException("DB unavailable"))
+                    .given(commandService).createFromAlert(any(), any());
+
+            // when
+            consumer.consumeAlert(record, acknowledgment);
+
+            // then — transient errors are NOT published to DLT (they may recover)
+            then(deadLetterPublisher).should(never())
+                    .publish(any(), anyString(), anyString(), anyString());
         }
 
         @Test
@@ -171,7 +235,7 @@ class IncidentKafkaConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), null);
 
-            // when / then
+            // when / then — missing header is a config error, not a message error
             assertThatThrownBy(() -> consumer.consumeAlert(record, acknowledgment))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Missing tenantId header");
@@ -186,7 +250,6 @@ class IncidentKafkaConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), "tenant-xyz");
 
-            // capture what TenantContext has when service is called
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);
 
@@ -276,6 +339,40 @@ class IncidentKafkaConsumerTest {
 
             // then
             assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("should NOT acknowledge on transient error — allows Kafka redelivery")
+        void shouldNotAcknowledgeOnTransientError() throws Exception {
+            // given
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RESOLVED, buildResolvedJson(), TENANT_ID);
+
+            willThrow(new RuntimeException("DB unavailable"))
+                    .given(commandService).autoResolve(any(), any());
+
+            // when
+            consumer.consumeResolvedAlert(record, acknowledgment);
+
+            // then
+            then(acknowledgment).should(never()).acknowledge();
+        }
+
+        @Test
+        @DisplayName("should route poison pill resolved alert to DLT and acknowledge")
+        void shouldRoutePoisonPillToDltAndAcknowledge() {
+            // given — malformed JSON
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RESOLVED, "{ invalid json }", TENANT_ID);
+
+            // when
+            consumer.consumeResolvedAlert(record, acknowledgment);
+
+            // then
+            then(deadLetterPublisher).should()
+                    .publish(anyString(), anyString(), anyString(), anyString());
+            then(acknowledgment).should().acknowledge();
+            then(commandService).should(never()).autoResolve(any(), any());
         }
 
         @Test
