@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.StreamSupport;
 
 @Component
 public class WazuhNormalizer extends BaseNormalizer {
@@ -95,13 +96,12 @@ public class WazuhNormalizer extends BaseNormalizer {
         metadata.put("agent_id", agentId);
 
         final JsonNode groups = rule.get("groups");
-        if (groups != null && groups.isArray()) {
-            final StringBuilder sb = new StringBuilder();
-            groups.forEach(g -> {
-                if (sb.length() > 0) sb.append(",");
-                sb.append(g.asText());
-            });
-            metadata.put("rule_groups", sb.toString());
+        if (groups != null && groups.isArray() && groups.size() > 0) {
+            final String ruleGroups = StreamSupport
+                    .stream(groups.spliterator(), false)
+                    .map(JsonNode::asText)
+                    .collect(java.util.stream.Collectors.joining(","));
+            metadata.put("rule_groups", ruleGroups);
         }
 
         final JsonNode data = payload.get("data");
