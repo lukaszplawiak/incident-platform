@@ -10,11 +10,20 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
-import java.util.Objects;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
+import static com.incidentplatform.notification.router.NotificationChannels.EMAIL;
+import static com.incidentplatform.notification.router.NotificationChannels.SLACK;
+import static com.incidentplatform.notification.router.NotificationChannels.SMS;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_ACKNOWLEDGED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_CLOSED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_ESCALATED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_OPENED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_RESOLVED;
 
 @Component
 public class NotificationRouter {
@@ -24,11 +33,11 @@ public class NotificationRouter {
 
     private static final Map<String, Set<String>> EVENT_TO_CHANNELS =
             Map.of(
-                    "IncidentOpenedEvent",       Set.of("EMAIL", "SLACK"),
-                    "IncidentEscalatedEvent",    Set.of("EMAIL", "SLACK", "SMS"),
-                    "IncidentAcknowledgedEvent", Set.of("SLACK"),
-                    "IncidentResolvedEvent",     Set.of("EMAIL", "SLACK"),
-                    "IncidentClosedEvent",       Set.of("EMAIL")
+                    INCIDENT_OPENED,       Set.of(EMAIL, SLACK),
+                    INCIDENT_ESCALATED,    Set.of(EMAIL, SLACK, SMS),
+                    INCIDENT_ACKNOWLEDGED, Set.of(SLACK),
+                    INCIDENT_RESOLVED,     Set.of(EMAIL, SLACK),
+                    INCIDENT_CLOSED,       Set.of(EMAIL)
             );
 
     private final Map<String, NotificationChannel> channelsByName;
@@ -117,35 +126,35 @@ public class NotificationRouter {
                                     OncallClient.OncallInfo oncall) {
         if (oncall != null) {
             return switch (channelName) {
-                case "EMAIL" -> oncall.email() != null
+                case EMAIL -> oncall.email() != null
                         ? oncall.email() : fallbackEmail;
-                case "SLACK" -> oncall.hasDm()
+                case SLACK -> oncall.hasDm()
                         ? oncall.slackUserId() : fallbackSlackChannel;
-                case "SMS"   -> oncall.hasSms()
+                case SMS   -> oncall.hasSms()
                         ? oncall.phone() : fallbackPhone;
                 default -> "unknown";
             };
         }
 
         return switch (channelName) {
-            case "EMAIL" -> fallbackEmail;
-            case "SLACK" -> fallbackSlackChannel;
-            case "SMS"   -> fallbackPhone;
+            case EMAIL -> fallbackEmail;
+            case SLACK -> fallbackSlackChannel;
+            case SMS   -> fallbackPhone;
             default -> "unknown";
         };
     }
 
     private String buildSubject(String eventType, String title, Severity severity) {
         return switch (eventType) {
-            case "IncidentOpenedEvent"    ->
+            case INCIDENT_OPENED       ->
                     "[" + severity.name() + "] New incident: " + title;
-            case "IncidentEscalatedEvent" ->
+            case INCIDENT_ESCALATED    ->
                     "[ESCALATED][" + severity.name() + "] " + title;
-            case "IncidentResolvedEvent"  ->
+            case INCIDENT_RESOLVED     ->
                     "[RESOLVED] " + title;
-            case "IncidentAcknowledgedEvent" ->
+            case INCIDENT_ACKNOWLEDGED ->
                     "[ACK] " + title;
-            case "IncidentClosedEvent"    ->
+            case INCIDENT_CLOSED       ->
                     "[CLOSED] " + title;
             default -> "Incident update: " + title;
         };
@@ -154,23 +163,23 @@ public class NotificationRouter {
     private String buildMessage(String eventType, String title,
                                 Severity severity, UUID incidentId) {
         return switch (eventType) {
-            case "IncidentOpenedEvent" ->
+            case INCIDENT_OPENED ->
                     String.format("New %s incident opened: '%s' (ID: %s). " +
                                     "Please acknowledge immediately.",
                             severity.name(), title, incidentId);
-            case "IncidentEscalatedEvent" ->
+            case INCIDENT_ESCALATED ->
                     String.format("ESCALATION: Incident '%s' (ID: %s) has been " +
                                     "escalated due to no acknowledgment. " +
                                     "Severity: %s. Immediate action required.",
                             title, incidentId, severity.name());
-            case "IncidentResolvedEvent" ->
+            case INCIDENT_RESOLVED ->
                     String.format("Incident '%s' (ID: %s) has been resolved.",
                             title, incidentId);
-            case "IncidentAcknowledgedEvent" ->
+            case INCIDENT_ACKNOWLEDGED ->
                     String.format("Incident '%s' (ID: %s) has been acknowledged " +
                                     "and is being worked on.",
                             title, incidentId);
-            case "IncidentClosedEvent" ->
+            case INCIDENT_CLOSED ->
                     String.format("Incident '%s' (ID: %s) has been closed. " +
                                     "Postmortem may follow.",
                             title, incidentId);

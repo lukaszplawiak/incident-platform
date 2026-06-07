@@ -13,6 +13,14 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.incidentplatform.notification.router.NotificationChannels.EMAIL;
+import static com.incidentplatform.notification.router.NotificationChannels.SLACK;
+import static com.incidentplatform.notification.router.NotificationChannels.SMS;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_ACKNOWLEDGED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_CLOSED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_ESCALATED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_OPENED;
+import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_RESOLVED;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -32,9 +40,9 @@ class NotificationRouterTest {
 
     @BeforeEach
     void setUp() {
-        emailChannel = new FakeChannel("EMAIL");
-        slackChannel = new FakeChannel("SLACK");
-        smsChannel   = new FakeChannel("SMS");
+        emailChannel = new FakeChannel(EMAIL);
+        slackChannel = new FakeChannel(SLACK);
+        smsChannel   = new FakeChannel(SMS);
 
         final OncallClient oncallClient = mock(OncallClient.class);
         when(oncallClient.getCurrentOncall(anyString(), anyString()))
@@ -54,7 +62,7 @@ class NotificationRouterTest {
         void shouldRouteToEmailAndSlack() {
             // when
             final var result = router.route(
-                    "IncidentOpenedEvent", INCIDENT_ID,
+                    INCIDENT_OPENED, INCIDENT_ID,
                     TENANT_ID, Severity.CRITICAL, "High CPU");
 
             // then
@@ -63,8 +71,8 @@ class NotificationRouterTest {
                     .toList();
 
             assertThat(channelNames)
-                    .containsExactlyInAnyOrder("EMAIL", "SLACK");
-            assertThat(channelNames).doesNotContain("SMS");
+                    .containsExactlyInAnyOrder(EMAIL, SLACK);
+            assertThat(channelNames).doesNotContain(SMS);
         }
 
         @Test
@@ -72,7 +80,7 @@ class NotificationRouterTest {
         void shouldBuildCorrectSubject() {
             // when
             final var result = router.route(
-                    "IncidentOpenedEvent", INCIDENT_ID,
+                    INCIDENT_OPENED, INCIDENT_ID,
                     TENANT_ID, Severity.CRITICAL, "High CPU Usage");
 
             // then
@@ -88,15 +96,14 @@ class NotificationRouterTest {
         void shouldSetTenantAndIncidentId() {
             // when
             final var result = router.route(
-                    "IncidentOpenedEvent", INCIDENT_ID,
+                    INCIDENT_OPENED, INCIDENT_ID,
                     TENANT_ID, Severity.HIGH, "Test Incident");
 
             // then
             result.forEach(cr -> {
                 assertThat(cr.request().tenantId()).isEqualTo(TENANT_ID);
                 assertThat(cr.request().incidentId()).isEqualTo(INCIDENT_ID);
-                assertThat(cr.request().eventType())
-                        .isEqualTo("IncidentOpenedEvent");
+                assertThat(cr.request().eventType()).isEqualTo(INCIDENT_OPENED);
             });
         }
     }
@@ -110,7 +117,7 @@ class NotificationRouterTest {
         void shouldRouteToAllChannels() {
             // when
             final var result = router.route(
-                    "IncidentEscalatedEvent", INCIDENT_ID,
+                    INCIDENT_ESCALATED, INCIDENT_ID,
                     TENANT_ID, Severity.CRITICAL, "Database Down");
 
             // then
@@ -119,7 +126,7 @@ class NotificationRouterTest {
                     .toList();
 
             assertThat(channelNames)
-                    .containsExactlyInAnyOrder("EMAIL", "SLACK", "SMS");
+                    .containsExactlyInAnyOrder(EMAIL, SLACK, SMS);
         }
 
         @Test
@@ -127,7 +134,7 @@ class NotificationRouterTest {
         void shouldIncludeEscalatedInSubject() {
             // when
             final var result = router.route(
-                    "IncidentEscalatedEvent", INCIDENT_ID,
+                    INCIDENT_ESCALATED, INCIDENT_ID,
                     TENANT_ID, Severity.CRITICAL, "Database Down");
 
             // then
@@ -146,7 +153,7 @@ class NotificationRouterTest {
         void shouldRouteToEmailAndSlack() {
             // when
             final var result = router.route(
-                    "IncidentResolvedEvent", INCIDENT_ID,
+                    INCIDENT_RESOLVED, INCIDENT_ID,
                     TENANT_ID, Severity.HIGH, "API Outage");
 
             // then
@@ -155,7 +162,7 @@ class NotificationRouterTest {
                     .toList();
 
             assertThat(channelNames)
-                    .containsExactlyInAnyOrder("EMAIL", "SLACK");
+                    .containsExactlyInAnyOrder(EMAIL, SLACK);
         }
     }
 
@@ -168,7 +175,7 @@ class NotificationRouterTest {
         void shouldRouteToSlackOnly() {
             // when
             final var result = router.route(
-                    "IncidentAcknowledgedEvent", INCIDENT_ID,
+                    INCIDENT_ACKNOWLEDGED, INCIDENT_ID,
                     TENANT_ID, Severity.MEDIUM, "Memory Leak");
 
             // then
@@ -176,7 +183,7 @@ class NotificationRouterTest {
                     .map(cr -> cr.channel().channelName())
                     .toList();
 
-            assertThat(channelNames).containsExactly("SLACK");
+            assertThat(channelNames).containsExactly(SLACK);
         }
     }
 
@@ -189,7 +196,7 @@ class NotificationRouterTest {
         void shouldRouteToEmailOnly() {
             // when
             final var result = router.route(
-                    "IncidentClosedEvent", INCIDENT_ID,
+                    INCIDENT_CLOSED, INCIDENT_ID,
                     TENANT_ID, Severity.LOW, "Disk Space");
 
             // then
@@ -197,7 +204,7 @@ class NotificationRouterTest {
                     .map(cr -> cr.channel().channelName())
                     .toList();
 
-            assertThat(channelNames).containsExactly("EMAIL");
+            assertThat(channelNames).containsExactly(EMAIL);
         }
     }
 
@@ -225,8 +232,8 @@ class NotificationRouterTest {
         @Test
         @DisplayName("should skip disabled channels")
         void shouldSkipDisabledChannels() {
-            // given — SMS off
-            final FakeChannel disabledSms = new FakeChannel("SMS", false);
+            // given — SMS disabled
+            final FakeChannel disabledSms = new FakeChannel(SMS, false);
 
             final OncallClient oncallClient = mock(OncallClient.class);
             when(oncallClient.getCurrentOncall(anyString(), anyString()))
@@ -239,7 +246,7 @@ class NotificationRouterTest {
 
             // when
             final var result = routerWithDisabledSms.route(
-                    "IncidentEscalatedEvent", INCIDENT_ID,
+                    INCIDENT_ESCALATED, INCIDENT_ID,
                     TENANT_ID, Severity.CRITICAL, "Critical Incident");
 
             // then
@@ -247,8 +254,8 @@ class NotificationRouterTest {
                     .map(cr -> cr.channel().channelName())
                     .toList();
 
-            assertThat(channelNames).doesNotContain("SMS");
-            assertThat(channelNames).containsExactlyInAnyOrder("EMAIL", "SLACK");
+            assertThat(channelNames).doesNotContain(SMS);
+            assertThat(channelNames).containsExactlyInAnyOrder(EMAIL, SLACK);
         }
     }
 
@@ -273,7 +280,6 @@ class NotificationRouterTest {
         public boolean isEnabled() { return enabled; }
 
         @Override
-        public void send(NotificationRequest request) {
-        }
+        public void send(NotificationRequest request) {}
     }
 }
