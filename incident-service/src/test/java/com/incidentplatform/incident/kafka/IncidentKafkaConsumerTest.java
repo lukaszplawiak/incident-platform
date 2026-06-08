@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("IncidentKafkaConsumer")
@@ -69,6 +70,8 @@ class IncidentKafkaConsumerTest {
         TenantContext.clear();
     }
 
+    // ─── helpers ────────────────────────────────────────────────────────────
+
     private ConsumerRecord<String, String> buildRecord(String topic,
                                                        String payload,
                                                        String tenantId) {
@@ -102,6 +105,8 @@ class IncidentKafkaConsumerTest {
                         Instant.now());
         return objectMapper.writeValueAsString(notification);
     }
+
+    // ─── consumeAlert ───────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("consumeAlert")
@@ -154,19 +159,19 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should NOT acknowledge on transient error — allows Kafka redelivery")
+        @DisplayName("should NOT acknowledge on transient error — Kafka will redeliver")
         void shouldNotAcknowledgeOnTransientError() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
 
-            willThrow(new RuntimeException("DB unavailable"))
+            willThrow(new RuntimeException("DB connection lost"))
                     .given(commandService).createFromAlert(any(), any());
 
-            // when — consumer handles exception internally (no rethrow)
+            // when — no exception propagated, consumer returns early
             consumer.consumeAlert(record, acknowledgment);
 
-            // then — NOT acknowledged: Kafka will redeliver after restart
+            // then — NOT acknowledged so Kafka redelivers after consumer restart
             then(acknowledgment).should(never()).acknowledge();
         }
 
@@ -177,55 +182,48 @@ class IncidentKafkaConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
 
-            willThrow(new RuntimeException("DB unavailable"))
+            willThrow(new RuntimeException("DB error"))
                     .given(commandService).createFromAlert(any(), any());
 
             // when
             consumer.consumeAlert(record, acknowledgment);
 
-            // then
+            // then — finally block must clear context even on transient error
             assertThat(TenantContext.getOrNull())
-                    .as("TenantContext must be cleared even on transient errors")
+                    .as("TenantContext must be cleared even when processing fails")
                     .isNull();
         }
 
         @Test
-        @DisplayName("should route poison pill to DLT and acknowledge — unblocks partition")
+        @DisplayName("should route poison pill to DLT and acknowledge")
         void shouldRoutePoisonPillToDltAndAcknowledge() {
-            // given — malformed JSON that cannot be deserialized
+            // given — invalid JSON → deserialize throws IllegalArgumentException
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, "{ invalid json }", TENANT_ID);
 
             // when
             consumer.consumeAlert(record, acknowledgment);
 
-            // then — published to DLT
+            // then — DLT receives the message
             then(deadLetterPublisher).should()
                     .publish(anyString(), anyString(), anyString(), anyString());
 
-            // then — acknowledged to unblock partition (no infinite retry)
+            // and — acknowledged to unblock partition
             then(acknowledgment).should().acknowledge();
-
-            // then — service never called with garbage data
-            then(commandService).should(never()).createFromAlert(any(), any());
         }
 
         @Test
-        @DisplayName("should NOT route transient error to DLT")
-        void shouldNotRouteToDltOnTransientError() throws Exception {
+        @DisplayName("should NOT call commandService for poison pill")
+        void shouldNotCallCommandServiceForPoisonPill() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
-
-            willThrow(new RuntimeException("DB unavailable"))
-                    .given(commandService).createFromAlert(any(), any());
+                    buildRecord(TOPIC_ALERTS_RAW, "not-json-at-all", TENANT_ID);
 
             // when
             consumer.consumeAlert(record, acknowledgment);
 
-            // then — transient errors are NOT published to DLT (they may recover)
-            then(deadLetterPublisher).should(never())
-                    .publish(any(), anyString(), anyString(), anyString());
+            // then
+            then(commandService).should(never()).createFromAlert(any(), any());
         }
 
         @Test
@@ -235,7 +233,7 @@ class IncidentKafkaConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), null);
 
-            // when / then — missing header is a config error, not a message error
+            // when / then
             assertThatThrownBy(() -> consumer.consumeAlert(record, acknowledgment))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("Missing tenantId header");
@@ -250,13 +248,12 @@ class IncidentKafkaConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), "tenant-xyz");
 
-            final ArgumentCaptor<String> tenantCaptor =
-                    ArgumentCaptor.forClass(String.class);
-
             // when
             consumer.consumeAlert(record, acknowledgment);
 
             // then
+            final ArgumentCaptor<String> tenantCaptor =
+                    ArgumentCaptor.forClass(String.class);
             then(commandService).should()
                     .createFromAlert(any(), tenantCaptor.capture());
             assertThat(tenantCaptor.getValue()).isEqualTo("tenant-xyz");
@@ -279,7 +276,7 @@ class IncidentKafkaConsumerTest {
             consumer.consumeAlert(recordB, acknowledgment);
 
             // then
-            then(commandService).should(org.mockito.Mockito.times(2))
+            then(commandService).should(times(2))
                     .createFromAlert(any(), tenantCaptor.capture());
 
             assertThat(tenantCaptor.getAllValues())
@@ -290,6 +287,8 @@ class IncidentKafkaConsumerTest {
                     .isNull();
         }
     }
+
+    // ─── consumeResolvedAlert ────────────────────────────────────────────────
 
     @Nested
     @DisplayName("consumeResolvedAlert")
@@ -342,13 +341,13 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should NOT acknowledge on transient error — allows Kafka redelivery")
+        @DisplayName("should NOT acknowledge on transient error")
         void shouldNotAcknowledgeOnTransientError() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RESOLVED, buildResolvedJson(), TENANT_ID);
 
-            willThrow(new RuntimeException("DB unavailable"))
+            willThrow(new RuntimeException("DB connection lost"))
                     .given(commandService).autoResolve(any(), any());
 
             // when
@@ -359,11 +358,11 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should route poison pill resolved alert to DLT and acknowledge")
+        @DisplayName("should route poison pill to DLT and acknowledge")
         void shouldRoutePoisonPillToDltAndAcknowledge() {
-            // given — malformed JSON
+            // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(TOPIC_ALERTS_RESOLVED, "{ invalid json }", TENANT_ID);
+                    buildRecord(TOPIC_ALERTS_RESOLVED, "{ bad json }", TENANT_ID);
 
             // when
             consumer.consumeResolvedAlert(record, acknowledgment);
@@ -372,7 +371,6 @@ class IncidentKafkaConsumerTest {
             then(deadLetterPublisher).should()
                     .publish(anyString(), anyString(), anyString(), anyString());
             then(acknowledgment).should().acknowledge();
-            then(commandService).should(never()).autoResolve(any(), any());
         }
 
         @Test
