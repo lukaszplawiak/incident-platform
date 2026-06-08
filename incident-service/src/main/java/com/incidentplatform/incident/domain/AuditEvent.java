@@ -10,6 +10,7 @@ import jakarta.validation.constraints.NotNull;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import com.incidentplatform.shared.audit.ActorType;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -79,7 +80,7 @@ public class AuditEvent {
                                     String detail,
                                     Map<String, Object> metadata) {
         return create(incidentId, tenantId, eventType,
-                sourceService, sourceService, "SYSTEM",
+                sourceService, sourceService, ActorType.SYSTEM,
                 detail, metadata);
     }
 
@@ -91,7 +92,7 @@ public class AuditEvent {
                                   String detail,
                                   Map<String, Object> metadata) {
         return create(incidentId, tenantId, eventType,
-                sourceService, userId, "USER",
+                sourceService, userId, ActorType.USER,
                 detail, metadata);
     }
 

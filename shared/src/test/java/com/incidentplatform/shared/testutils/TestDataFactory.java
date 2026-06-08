@@ -9,6 +9,7 @@ import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentOpenedEvent;
 import com.incidentplatform.shared.events.IncidentResolvedEvent;
 import com.incidentplatform.shared.events.SourceType;
+import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.UserPrincipal;
 
 import java.time.Instant;
@@ -189,7 +190,7 @@ public final class TestDataFactory {
                 TEST_USER_ID,
                 TEST_TENANT_ID,
                 "responder@acme.com",
-                List.of("ROLE_RESPONDER")
+                List.of(SecurityRoles.ROLE_RESPONDER)
         );
     }
 
@@ -198,7 +199,7 @@ public final class TestDataFactory {
                 UUID.randomUUID(),
                 TEST_TENANT_ID,
                 "admin@acme.com",
-                List.of("ROLE_ADMIN", "ROLE_RESPONDER")
+                List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER)
         );
     }
 
@@ -207,7 +208,7 @@ public final class TestDataFactory {
                 UUID.randomUUID(),
                 tenantId,
                 "user@" + tenantId + ".com",
-                List.of("ROLE_RESPONDER")
+                List.of(SecurityRoles.ROLE_RESPONDER)
         );
     }
 }

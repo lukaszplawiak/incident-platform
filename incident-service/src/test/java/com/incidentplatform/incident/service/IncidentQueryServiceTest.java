@@ -8,6 +8,7 @@ import com.incidentplatform.incident.dto.IncidentFilter;
 import com.incidentplatform.incident.dto.IncidentHistoryDto;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
 import com.incidentplatform.incident.repository.IncidentRepository;
+import com.incidentplatform.shared.audit.ChangeSource;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -320,9 +321,9 @@ class IncidentQueryServiceTest {
             final UUID incidentId = UUID.randomUUID();
             final List<IncidentHistory> historyEntries = List.of(
                     buildHistory(incidentId, null, IncidentStatus.OPEN,
-                            "KAFKA_CONSUMER"),
+                            ChangeSource.KAFKA_CONSUMER),
                     buildHistory(incidentId, IncidentStatus.OPEN,
-                            IncidentStatus.ACKNOWLEDGED, "REST_API")
+                            IncidentStatus.ACKNOWLEDGED, ChangeSource.REST_API)
             );
 
             given(incidentRepository.existsByIdAndTenantId(incidentId, TENANT_ID))
@@ -338,7 +339,7 @@ class IncidentQueryServiceTest {
             assertThat(result).hasSize(2);
             assertThat(result.get(0).toStatus()).isEqualTo(IncidentStatus.OPEN);
             assertThat(result.get(0).fromStatus()).isNull();
-            assertThat(result.get(0).changeSource()).isEqualTo("KAFKA_CONSUMER");
+            assertThat(result.get(0).changeSource()).isEqualTo(ChangeSource.KAFKA_CONSUMER);
             assertThat(result.get(1).toStatus()).isEqualTo(IncidentStatus.ACKNOWLEDGED);
             assertThat(result.get(1).fromStatus()).isEqualTo(IncidentStatus.OPEN);
         }
@@ -400,11 +401,11 @@ class IncidentQueryServiceTest {
             // given
             final UUID incidentId = UUID.randomUUID();
             final List<IncidentHistory> historyEntries = List.of(
-                    buildHistory(incidentId, null, IncidentStatus.OPEN, "KAFKA_CONSUMER"),
+                    buildHistory(incidentId, null, IncidentStatus.OPEN, ChangeSource.KAFKA_CONSUMER),
                     buildHistory(incidentId, IncidentStatus.OPEN,
-                            IncidentStatus.ACKNOWLEDGED, "REST_API"),
+                            IncidentStatus.ACKNOWLEDGED, ChangeSource.REST_API),
                     buildHistory(incidentId, IncidentStatus.ACKNOWLEDGED,
-                            IncidentStatus.RESOLVED, "REST_API")
+                            IncidentStatus.RESOLVED, ChangeSource.REST_API)
             );
 
             given(incidentRepository.existsByIdAndTenantId(incidentId, TENANT_ID))

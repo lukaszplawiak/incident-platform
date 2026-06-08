@@ -1,6 +1,7 @@
 package com.incidentplatform.incident.api;
 
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.SecurityRoles;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
@@ -35,12 +36,12 @@ public class DevTokenController {
     @Operation(summary = "Generate test JWT token (LOCAL ONLY)")
     public ResponseEntity<Map<String, String>> generateToken(
             @RequestParam(defaultValue = "test-tenant") String tenantId,
-            @RequestParam(defaultValue = "ROLE_ADMIN") String role) {
+            @RequestParam(defaultValue = SecurityRoles.ROLE_ADMIN) String role) {
 
         final UUID userId = UUID.randomUUID();
         final String email = "dev-user@" + tenantId + ".local";
         final List<String> roles = List.of(
-                "ROLE_ADMIN", "ROLE_RESPONDER", "ROLE_INGESTOR");
+                SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER, SecurityRoles.ROLE_INGESTOR);
 
         final String token = jwtUtils.generateToken(userId, tenantId, email, roles);
 

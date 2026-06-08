@@ -3,6 +3,7 @@ package com.incidentplatform.incident.kafka;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.domain.AuditEvent;
 import com.incidentplatform.incident.repository.AuditEventRepository;
+import com.incidentplatform.shared.audit.ActorType;
 import com.incidentplatform.shared.dto.AuditEventMessage;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.slf4j.Logger;
@@ -57,7 +58,7 @@ public class AuditEventConsumer {
     }
 
     private AuditEvent toEntity(AuditEventMessage message) {
-        if ("USER".equals(message.actorType())) {
+        if (ActorType.USER.equals(message.actorType())) {
             return AuditEvent.user(
                     message.incidentId(),
                     message.tenantId(),

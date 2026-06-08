@@ -5,6 +5,7 @@ import com.incidentplatform.notification.domain.NotificationLog;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -79,7 +80,7 @@ public class NotificationService {
 
                 auditEventPublisher.publishSystem(
                         incidentId, tenantId,
-                        "NOTIFICATION_SENT", SERVICE_NAME,
+                        AuditEventTypes.NOTIFICATION_SENT, SERVICE_NAME,
                         String.format("Notification sent via %s to %s",
                                 channel.channelName(), request.recipient()),
                         Map.of("channel", channel.channelName(),
@@ -101,7 +102,7 @@ public class NotificationService {
 
                 auditEventPublisher.publishSystem(
                         incidentId, tenantId,
-                        "NOTIFICATION_FAILED", SERVICE_NAME,
+                        AuditEventTypes.NOTIFICATION_FAILED, SERVICE_NAME,
                         String.format("Notification failed via %s to %s: %s",
                                 channel.channelName(), request.recipient(),
                                 e.getMessage()),

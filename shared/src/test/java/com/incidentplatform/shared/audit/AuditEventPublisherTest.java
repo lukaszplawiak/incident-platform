@@ -1,6 +1,7 @@
 package com.incidentplatform.shared.audit;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.dto.AuditEventMessage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -49,7 +50,7 @@ class AuditEventPublisherTest {
             // when
             publisher.publishSystem(
                     INCIDENT_ID, TENANT_ID,
-                    "INCIDENT_CREATED", "incident-service",
+                    AuditEventTypes.INCIDENT_CREATED, "incident-service",
                     "Incident created", Map.of());
 
             // then
@@ -68,7 +69,7 @@ class AuditEventPublisherTest {
             org.assertj.core.api.Assertions.assertThatCode(() ->
                     publisher.publishSystem(
                             INCIDENT_ID, TENANT_ID,
-                            "INCIDENT_CREATED", "incident-service",
+                            AuditEventTypes.INCIDENT_CREATED, "incident-service",
                             "Incident created", Map.of())
             ).doesNotThrowAnyException();
         }
@@ -84,7 +85,7 @@ class AuditEventPublisherTest {
             org.assertj.core.api.Assertions.assertThatCode(() ->
                     publisher.publishSystem(
                             INCIDENT_ID, TENANT_ID,
-                            "INCIDENT_CREATED", "incident-service",
+                            AuditEventTypes.INCIDENT_CREATED, "incident-service",
                             "Incident created", Map.of())
             ).doesNotThrowAnyException();
         }
@@ -103,7 +104,7 @@ class AuditEventPublisherTest {
             // when
             publisher.publishUser(
                     INCIDENT_ID, TENANT_ID,
-                    "INCIDENT_ACKNOWLEDGED", "incident-service",
+                    AuditEventTypes.INCIDENT_ACKNOWLEDGED, "incident-service",
                     UUID.randomUUID().toString(),
                     "Incident acknowledged", Map.of());
 
