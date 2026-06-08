@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
-import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -28,6 +27,9 @@ public class EscalationScheduler {
             LoggerFactory.getLogger(EscalationScheduler.class);
 
     private static final String SERVICE_NAME = "escalation-service";
+
+    private static final String ESCALATION_ROLE_LEVEL_1 = "SECONDARY";
+    private static final String ESCALATION_ROLE_LEVEL_2 = "MANAGER";
 
     private final EscalationTaskRepository taskRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
@@ -111,7 +113,7 @@ public class EscalationScheduler {
                 task.getSeverity(), task.getEscalationLevel());
 
         final String role = task.getEscalationLevel() == 1
-                ? OncallRole.SECONDARY.name() : OncallRole.MANAGER.name();
+                ? ESCALATION_ROLE_LEVEL_1 : ESCALATION_ROLE_LEVEL_2;
 
         auditEventPublisher.publishSystem(
                 task.getIncidentId(), task.getTenantId(),

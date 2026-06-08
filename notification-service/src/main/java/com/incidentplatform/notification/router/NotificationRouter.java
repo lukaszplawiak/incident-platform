@@ -1,7 +1,6 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
-import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
@@ -31,6 +30,8 @@ public class NotificationRouter {
 
     private static final Logger log =
             LoggerFactory.getLogger(NotificationRouter.class);
+
+    private static final String PRIMARY_ONCALL_ROLE = "PRIMARY";
 
     private static final Map<String, Set<String>> EVENT_TO_CHANNELS =
             Map.of(
@@ -81,7 +82,7 @@ public class NotificationRouter {
         }
 
         final OncallClient.OncallInfo oncall = oncallClient
-                .getCurrentOncall(tenantId, OncallRole.PRIMARY.name())
+                .getCurrentOncall(tenantId, PRIMARY_ONCALL_ROLE)
                 .orElse(null);
 
         if (oncall != null) {

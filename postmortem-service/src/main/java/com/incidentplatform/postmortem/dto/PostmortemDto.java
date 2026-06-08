@@ -30,7 +30,7 @@ public record PostmortemDto(
                 postmortem.getIncidentOpenedAt(),
                 postmortem.getIncidentResolvedAt(),
                 postmortem.getDurationMinutes(),
-                postmortem.getStatus(),
+                postmortem.getStatus().name(),
                 postmortem.getContent(),
                 postmortem.getErrorMessage(),
                 postmortem.getCreatedAt(),

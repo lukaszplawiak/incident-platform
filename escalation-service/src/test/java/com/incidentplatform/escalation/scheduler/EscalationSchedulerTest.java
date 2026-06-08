@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.incidentplatform.escalation.domain.EscalationTask;
+import com.incidentplatform.escalation.domain.EscalationTaskStatus;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
@@ -88,7 +89,7 @@ class EscalationSchedulerTest {
             // then
             then(kafkaTemplate).should()
                     .send(eq(TOPIC), eq(TENANT_ID), anyString());
-            assertThat(task.getStatus()).isEqualTo("ESCALATED");
+            assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
 
             then(escalationService).should().scheduleLevel2Escalation(
                     task.getIncidentId(), TENANT_ID,
@@ -112,7 +113,7 @@ class EscalationSchedulerTest {
             // then
             then(kafkaTemplate).should()
                     .send(eq(TOPIC), eq(TENANT_ID), anyString());
-            assertThat(task.getStatus()).isEqualTo("ESCALATED");
+            assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
 
             then(escalationService).should(never())
                     .scheduleLevel2Escalation(any(), any(), any(), any());
