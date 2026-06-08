@@ -6,6 +6,7 @@ import com.incidentplatform.notification.channel.SlackNotificationChannel;
 import com.incidentplatform.notification.client.IncidentAckClient;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.notification.router.NotificationEventTypes;
 import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -131,7 +132,7 @@ public class SlackActionService {
                                      String acknowledgedByName) {
         final NotificationRequest minimalRequest = new NotificationRequest(
                 incidentId, tenantId,
-                "IncidentAcknowledgedEvent",
+                NotificationEventTypes.INCIDENT_ACKNOWLEDGED,
                 channel,
                 "Incident acknowledged",
                 "Incident acknowledged via Slack",
