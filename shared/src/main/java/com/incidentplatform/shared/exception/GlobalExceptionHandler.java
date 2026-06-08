@@ -41,7 +41,7 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.NOT_FOUND)
                 .body(ErrorResponse.of(
                         HttpStatus.NOT_FOUND.value(),
-                        "RESOURCE_NOT_FOUND",
+                        ErrorCodes.RESOURCE_NOT_FOUND,
                         ex.getMessage(),
                         getRequestId()
                 ));
@@ -113,7 +113,7 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.BAD_REQUEST)
                 .body(ErrorResponse.of(
                         HttpStatus.BAD_REQUEST.value(),
-                        "INVALID_PARAMETER_TYPE",
+                        ErrorCodes.INVALID_PARAMETER_TYPE,
                         String.format("Parameter '%s' has invalid type", ex.getName()),
                         getRequestId()
                 ));
@@ -129,7 +129,7 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.UNAUTHORIZED)
                 .body(ErrorResponse.of(
                         HttpStatus.UNAUTHORIZED.value(),
-                        "UNAUTHORIZED",
+                        ErrorCodes.UNAUTHORIZED,
                         "Authentication required. Please provide a valid token.",
                         getRequestId()
                 ));
@@ -145,7 +145,7 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.FORBIDDEN)
                 .body(ErrorResponse.of(
                         HttpStatus.FORBIDDEN.value(),
-                        "FORBIDDEN",
+                        ErrorCodes.FORBIDDEN,
                         "You do not have permission to perform this action.",
                         getRequestId()
                 ));
@@ -162,7 +162,7 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.CONFLICT)
                 .body(ErrorResponse.of(
                         HttpStatus.CONFLICT.value(),
-                        "OPTIMISTIC_LOCK_CONFLICT",
+                        ErrorCodes.OPTIMISTIC_LOCK_CONFLICT,
                         "The resource was modified by another request. " +
                                 "Please fetch the latest version and retry.",
                         getRequestId()
@@ -187,7 +187,7 @@ public class GlobalExceptionHandler {
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ErrorResponse.of(
                         HttpStatus.INTERNAL_SERVER_ERROR.value(),
-                        "INTERNAL_SERVER_ERROR",
+                        ErrorCodes.INTERNAL_SERVER_ERROR,
                         "An unexpected error occurred. Please contact support " +
                                 "with request id: " + getRequestId(),
                         getRequestId()

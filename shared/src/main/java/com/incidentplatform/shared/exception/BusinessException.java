@@ -42,7 +42,7 @@ public class BusinessException extends RuntimeException {
 
     public static BusinessException incidentAlreadyClosed(String incidentId) {
         return new BusinessException(
-                "INCIDENT_ALREADY_CLOSED",
+                ErrorCodes.INCIDENT_ALREADY_CLOSED,
                 String.format("Incident '%s' is already closed and cannot be modified",
                         incidentId)
         );
@@ -51,7 +51,7 @@ public class BusinessException extends RuntimeException {
     public static BusinessException invalidStatusTransition(
             String currentStatus, String targetStatus) {
         return new BusinessException(
-                "INVALID_STATUS_TRANSITION",
+                ErrorCodes.INVALID_STATUS_TRANSITION,
                 String.format("Cannot transition incident from '%s' to '%s'",
                         currentStatus, targetStatus)
         );
@@ -59,7 +59,7 @@ public class BusinessException extends RuntimeException {
 
     public static BusinessException onCallNotConfigured(String tenantId) {
         return new BusinessException(
-                "ON_CALL_NOT_CONFIGURED",
+                ErrorCodes.ON_CALL_NOT_CONFIGURED,
                 String.format("No on-call schedule configured for tenant '%s'. " +
                         "Please configure escalation policies first.", tenantId)
         );
@@ -67,7 +67,7 @@ public class BusinessException extends RuntimeException {
 
     public static BusinessException scheduleOverlap(String tenantId, String role) {
         return new BusinessException(
-                "SCHEDULE_OVERLAP",
+                ErrorCodes.SCHEDULE_OVERLAP,
                 String.format(
                         "On-call schedule overlaps with an existing entry " +
                                 "for tenant='%s', role='%s'. " +
