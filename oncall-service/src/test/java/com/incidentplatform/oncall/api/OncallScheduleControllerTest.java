@@ -1,5 +1,6 @@
 package com.incidentplatform.oncall.api;
 
+import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.security.TenantContext;
@@ -41,7 +42,7 @@ class OncallScheduleControllerTest {
                     "john@example.com",
                     null,
                     null,
-                    "PRIMARY",
+                    OncallRole.PRIMARY.name(),
                     Instant.now().plusSeconds(3600)
             );
 
@@ -79,8 +80,7 @@ class OncallScheduleControllerTest {
         @Test
         @DisplayName("empty string role fetches all current on-call — same as absent")
         void emptyStringRoleFetchesAllCurrentOncall() {
-            // Old behaviour: @NotBlank would reject empty string with 400.
-            // New behaviour: empty string is treated as absent — fetch all on-call.
+            // given
             given(service.getAllCurrentOncall(TENANT_ID))
                     .willReturn(List.of(ONCALL_RESPONSE));
 
@@ -112,16 +112,16 @@ class OncallScheduleControllerTest {
         @DisplayName("valid role delegates to getCurrentOncall with that role")
         void validRoleDelegatesToGetCurrentOncall() {
             // given
-            given(service.getCurrentOncall(TENANT_ID, "PRIMARY"))
+            given(service.getCurrentOncall(TENANT_ID, OncallRole.PRIMARY.name()))
                     .willReturn(Optional.of(ONCALL_RESPONSE));
 
             // when
             final ResponseEntity<?> response =
-                    controller.getCurrentOncall("PRIMARY");
+                    controller.getCurrentOncall(OncallRole.PRIMARY.name());
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
-            then(service).should().getCurrentOncall(TENANT_ID, "PRIMARY");
+            then(service).should().getCurrentOncall(TENANT_ID, OncallRole.PRIMARY.name());
             then(service).should(never()).getAllCurrentOncall(TENANT_ID);
         }
 
@@ -129,12 +129,12 @@ class OncallScheduleControllerTest {
         @DisplayName("valid role with no oncall returns 204 No Content")
         void validRoleWithNoOncallReturns204() {
             // given
-            given(service.getCurrentOncall(TENANT_ID, "SECONDARY"))
+            given(service.getCurrentOncall(TENANT_ID, OncallRole.SECONDARY.name()))
                     .willReturn(Optional.empty());
 
             // when
             final ResponseEntity<?> response =
-                    controller.getCurrentOncall("SECONDARY");
+                    controller.getCurrentOncall(OncallRole.SECONDARY.name());
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);

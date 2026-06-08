@@ -1,10 +1,12 @@
 package com.incidentplatform.oncall.service;
 
+import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.domain.OncallSchedule;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
+import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -58,10 +60,11 @@ class OncallScheduleServiceTest {
         @DisplayName("should create schedule when no overlap exists")
         void shouldCreateScheduleWhenNoOverlap() {
             // given
-            final CreateOncallScheduleRequest request = buildRequest("PRIMARY");
+            final CreateOncallScheduleRequest request =
+                    buildRequest(OncallRole.PRIMARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    eq(TENANT_ID), eq("PRIMARY"), any(), any()))
+                    eq(TENANT_ID), eq(OncallRole.PRIMARY.name()), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
@@ -73,7 +76,8 @@ class OncallScheduleServiceTest {
             // then
             assertThat(result.tenantId()).isEqualTo(TENANT_ID);
             assertThat(result.userId()).isEqualTo("user-1");
-            assertThat(result.role()).isEqualTo("PRIMARY");
+            // OncallScheduleDto.role() is String (via getRole().name() in from())
+            assertThat(result.role()).isEqualTo(OncallRole.PRIMARY.name());
             assertThat(result.email()).isEqualTo("jan@example.com");
             then(repository).should().save(any());
         }
@@ -82,7 +86,9 @@ class OncallScheduleServiceTest {
         @DisplayName("should save schedule with correct fields")
         void shouldSaveScheduleWithCorrectFields() {
             // given
-            final CreateOncallScheduleRequest request = buildRequest("SECONDARY");
+            final CreateOncallScheduleRequest request =
+                    buildRequest(OncallRole.SECONDARY.name());
+
             given(repository.existsOverlappingForCreate(
                     anyString(), anyString(), any(), any()))
                     .willReturn(false);
@@ -99,22 +105,26 @@ class OncallScheduleServiceTest {
 
             final OncallSchedule saved = captor.getValue();
             assertThat(saved.getTenantId()).isEqualTo(TENANT_ID);
-            assertThat(saved.getRole()).isEqualTo("SECONDARY");
+            // saved.getRole() returns OncallRole enum — compare with enum constant
+            assertThat(saved.getRole()).isEqualTo(OncallRole.SECONDARY);
             assertThat(saved.getSlackUserId()).isEqualTo("U0123456789");
         }
 
         @Test
-        @DisplayName("should throw when schedule overlaps existing")
+        @DisplayName("should throw BusinessException when schedule overlaps existing")
         void shouldThrowWhenOverlap() {
             // given
-            final CreateOncallScheduleRequest request = buildRequest("PRIMARY");
+            final CreateOncallScheduleRequest request =
+                    buildRequest(OncallRole.PRIMARY.name());
+
             given(repository.existsOverlappingForCreate(
                     anyString(), anyString(), any(), any()))
                     .willReturn(true);
 
             // when / then
+            // BusinessException → GlobalExceptionHandler → 409 Conflict.
             assertThatThrownBy(() -> service.create(TENANT_ID, request))
-                    .isInstanceOf(IllegalArgumentException.class)
+                    .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("overlaps");
 
             then(repository).should(never()).save(any());
@@ -129,18 +139,18 @@ class OncallScheduleServiceTest {
         @DisplayName("should return current PRIMARY oncall")
         void shouldReturnCurrentPrimaryOncall() {
             // given
-            final OncallSchedule schedule = buildSchedule("PRIMARY");
+            final OncallSchedule schedule = buildSchedule(OncallRole.PRIMARY);
             given(repository.findCurrentOncallByRole(
-                    eq(TENANT_ID), eq("PRIMARY"), any()))
+                    eq(TENANT_ID), eq(OncallRole.PRIMARY.name()), any()))
                     .willReturn(Optional.of(schedule));
 
             // when
             final Optional<CurrentOncallResponse> result =
-                    service.getCurrentOncall(TENANT_ID, "PRIMARY");
+                    service.getCurrentOncall(TENANT_ID, OncallRole.PRIMARY.name());
 
             // then
             assertThat(result).isPresent();
-            assertThat(result.get().role()).isEqualTo("PRIMARY");
+            assertThat(result.get().role()).isEqualTo(OncallRole.PRIMARY.name());
             assertThat(result.get().email()).isEqualTo("jan@example.com");
             assertThat(result.get().slackUserId()).isEqualTo("U0123456789");
         }
@@ -155,7 +165,7 @@ class OncallScheduleServiceTest {
 
             // when
             final Optional<CurrentOncallResponse> result =
-                    service.getCurrentOncall(TENANT_ID, "PRIMARY");
+                    service.getCurrentOncall(TENANT_ID, OncallRole.PRIMARY.name());
 
             // then
             assertThat(result).isEmpty();
@@ -172,8 +182,8 @@ class OncallScheduleServiceTest {
             // given
             given(repository.findAllCurrentOncall(eq(TENANT_ID), any()))
                     .willReturn(List.of(
-                            buildSchedule("PRIMARY"),
-                            buildSchedule("SECONDARY")
+                            buildSchedule(OncallRole.PRIMARY),
+                            buildSchedule(OncallRole.SECONDARY)
                     ));
 
             // when
@@ -183,7 +193,9 @@ class OncallScheduleServiceTest {
             // then
             assertThat(result).hasSize(2);
             assertThat(result.stream().map(CurrentOncallResponse::role))
-                    .containsExactlyInAnyOrder("PRIMARY", "SECONDARY");
+                    .containsExactlyInAnyOrder(
+                            OncallRole.PRIMARY.name(),
+                            OncallRole.SECONDARY.name());
         }
 
         @Test
@@ -210,7 +222,7 @@ class OncallScheduleServiceTest {
         @DisplayName("should return schedule by id")
         void shouldReturnScheduleById() {
             // given
-            final OncallSchedule schedule = buildSchedule("PRIMARY");
+            final OncallSchedule schedule = buildSchedule(OncallRole.PRIMARY);
             given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
                     .willReturn(Optional.of(schedule));
 
@@ -220,7 +232,7 @@ class OncallScheduleServiceTest {
 
             // then
             assertThat(result.tenantId()).isEqualTo(TENANT_ID);
-            assertThat(result.role()).isEqualTo("PRIMARY");
+            assertThat(result.role()).isEqualTo(OncallRole.PRIMARY.name());
         }
 
         @Test
@@ -246,7 +258,7 @@ class OncallScheduleServiceTest {
         @DisplayName("should delete schedule")
         void shouldDeleteSchedule() {
             // given
-            final OncallSchedule schedule = buildSchedule("PRIMARY");
+            final OncallSchedule schedule = buildSchedule(OncallRole.PRIMARY);
             given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
                     .willReturn(Optional.of(schedule));
 
@@ -288,7 +300,7 @@ class OncallScheduleServiceTest {
         );
     }
 
-    private OncallSchedule buildSchedule(String role) {
+    private OncallSchedule buildSchedule(OncallRole role) {
         return OncallSchedule.create(
                 TENANT_ID,
                 "user-1",

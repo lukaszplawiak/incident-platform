@@ -2,6 +2,8 @@ package com.incidentplatform.postmortem.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
@@ -55,9 +57,10 @@ public class Postmortem {
     @Column(name = "duration_minutes", nullable = false, updatable = false)
     private Integer durationMinutes;
 
-    @NotBlank
+    @NotNull
+    @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
-    private String status;
+    private PostmortemStatus status;
 
     @Column(name = "content", columnDefinition = "TEXT")
     private String content;
@@ -98,7 +101,7 @@ public class Postmortem {
         p.incidentOpenedAt = incidentOpenedAt;
         p.incidentResolvedAt = incidentResolvedAt;
         p.durationMinutes = durationMinutes;
-        p.status = "GENERATING";
+        p.status = PostmortemStatus.GENERATING;
         p.retryCount = 0;
         p.createdAt = Instant.now();
         p.updatedAt = Instant.now();
@@ -108,19 +111,19 @@ public class Postmortem {
     public void markDraft(String content, String promptUsed) {
         this.content = content;
         this.promptUsed = promptUsed;
-        this.status = "DRAFT";
+        this.status = PostmortemStatus.DRAFT;
         this.updatedAt = Instant.now();
     }
 
     public void markFailed(String errorMessage) {
         this.errorMessage = errorMessage;
-        this.status = "FAILED";
+        this.status = PostmortemStatus.FAILED;
         this.updatedAt = Instant.now();
     }
 
     public void markPermanentlyFailed(String errorMessage) {
         this.errorMessage = errorMessage;
-        this.status = "PERMANENTLY_FAILED";
+        this.status = PostmortemStatus.PERMANENTLY_FAILED;
         this.updatedAt = Instant.now();
     }
 
@@ -135,13 +138,13 @@ public class Postmortem {
     }
 
     public void markReviewed() {
-        this.status = "REVIEWED";
+        this.status = PostmortemStatus.REVIEWED;
         this.updatedAt = Instant.now();
     }
 
-    public boolean isDraft()             { return "DRAFT".equals(this.status); }
-    public boolean isFailed()            { return "FAILED".equals(this.status); }
-    public boolean isPermanentlyFailed() { return "PERMANENTLY_FAILED".equals(this.status); }
+    public boolean isDraft()             { return PostmortemStatus.DRAFT.equals(this.status); }
+    public boolean isFailed()            { return PostmortemStatus.FAILED.equals(this.status); }
+    public boolean isPermanentlyFailed() { return PostmortemStatus.PERMANENTLY_FAILED.equals(this.status); }
 
     public UUID getId()                    { return id; }
     public UUID getIncidentId()            { return incidentId; }
@@ -151,7 +154,7 @@ public class Postmortem {
     public Instant getIncidentOpenedAt()   { return incidentOpenedAt; }
     public Instant getIncidentResolvedAt() { return incidentResolvedAt; }
     public Integer getDurationMinutes()    { return durationMinutes; }
-    public String getStatus()              { return status; }
+    public PostmortemStatus getStatus()    { return status; }
     public String getContent()             { return content; }
     public String getErrorMessage()        { return errorMessage; }
     public String getPromptUsed()          { return promptUsed; }

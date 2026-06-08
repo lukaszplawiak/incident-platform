@@ -3,6 +3,7 @@ package com.incidentplatform.postmortem.service;
 import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
+import com.incidentplatform.postmortem.domain.PostmortemStatus;
 import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
@@ -92,7 +93,7 @@ class PostmortemServiceTest {
             then(postmortemRepository).should(times(2)).save(captor.capture());
 
             final Postmortem saved = captor.getAllValues().get(1);
-            assertThat(saved.getStatus()).isEqualTo("DRAFT");
+            assertThat(saved.getStatus()).isEqualTo(PostmortemStatus.DRAFT);
             assertThat(saved.getContent())
                     .contains("High CPU incident postmortem");
         }
@@ -119,7 +120,7 @@ class PostmortemServiceTest {
             then(postmortemRepository).should(times(2)).save(captor.capture());
 
             final Postmortem saved = captor.getAllValues().get(1);
-            assertThat(saved.getStatus()).isEqualTo("FAILED");
+            assertThat(saved.getStatus()).isEqualTo(PostmortemStatus.FAILED);
             assertThat(saved.getErrorMessage()).contains("API quota exceeded");
         }
 

@@ -1,6 +1,7 @@
 package com.incidentplatform.escalation.service;
 
 import com.incidentplatform.escalation.domain.EscalationTask;
+import com.incidentplatform.escalation.domain.EscalationTaskStatus;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
@@ -64,7 +65,7 @@ class EscalationServiceTest {
             final EscalationTask saved = captor.getValue();
             assertThat(saved.getIncidentId()).isEqualTo(INCIDENT_ID);
             assertThat(saved.getTenantId()).isEqualTo(TENANT_ID);
-            assertThat(saved.getStatus()).isEqualTo("PENDING");
+            assertThat(saved.getStatus()).isEqualTo(EscalationTaskStatus.PENDING);
             assertThat(saved.getSeverity()).isEqualTo(Severity.CRITICAL);
             assertThat(saved.getEscalationLevel()).isEqualTo(1);
         }
@@ -174,7 +175,7 @@ class EscalationServiceTest {
             then(taskRepository).should().save(captor.capture());
 
             assertThat(captor.getValue().getEscalationLevel()).isEqualTo(2);
-            assertThat(captor.getValue().getStatus()).isEqualTo("PENDING");
+            assertThat(captor.getValue().getStatus()).isEqualTo(EscalationTaskStatus.PENDING);
         }
 
         @Test
@@ -216,8 +217,8 @@ class EscalationServiceTest {
             escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID);
 
             // then
-            assertThat(task1.getStatus()).isEqualTo("CANCELLED");
-            assertThat(task2.getStatus()).isEqualTo("CANCELLED");
+            assertThat(task1.getStatus()).isEqualTo(EscalationTaskStatus.CANCELLED);
+            assertThat(task2.getStatus()).isEqualTo(EscalationTaskStatus.CANCELLED);
         }
 
         @Test
@@ -250,7 +251,7 @@ class EscalationServiceTest {
             escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID);
 
             // then
-            assertThat(task.getStatus()).isEqualTo("ESCALATED");
+            assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
             then(taskRepository).should(never()).save(any());
         }
     }

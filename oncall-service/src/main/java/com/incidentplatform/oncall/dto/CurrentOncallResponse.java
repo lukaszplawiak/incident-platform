@@ -20,7 +20,7 @@ public record CurrentOncallResponse(
                 schedule.getEmail(),
                 schedule.getPhone(),
                 schedule.getSlackUserId(),
-                schedule.getRole(),
+                schedule.getRole().name(),
                 schedule.getEndsAt()
         );
     }

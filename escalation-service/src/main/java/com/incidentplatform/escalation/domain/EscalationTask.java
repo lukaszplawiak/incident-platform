@@ -8,7 +8,6 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.Instant;
@@ -39,7 +38,7 @@ public class EscalationTask {
     @Column(name = "incident_id", nullable = false, updatable = false)
     private UUID incidentId;
 
-    @NotBlank
+    @NotNull
     @Column(name = "tenant_id", nullable = false, updatable = false)
     private String tenantId;
 
@@ -51,16 +50,17 @@ public class EscalationTask {
     @Column(name = "scheduled_escalation_at", nullable = false)
     private Instant scheduledEscalationAt;
 
-    @NotBlank
+    @NotNull
+    @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
-    private String status;
+    private EscalationTaskStatus status;
 
     @NotNull
     @Enumerated(EnumType.STRING)
     @Column(name = "severity", nullable = false, updatable = false)
     private Severity severity;
 
-    @NotBlank
+    @NotNull
     @Column(name = "title", nullable = false, updatable = false)
     private String title;
 
@@ -111,7 +111,7 @@ public class EscalationTask {
         task.tenantId = tenantId;
         task.incidentOpenedAt = startAt;
         task.scheduledEscalationAt = startAt.plusSeconds(timeoutMinutes * 60L);
-        task.status = "PENDING";
+        task.status = EscalationTaskStatus.PENDING;
         task.severity = severity;
         task.title = title;
         task.escalationLevel = escalationLevel;
@@ -130,17 +130,23 @@ public class EscalationTask {
     }
 
     public void markEscalated() {
-        this.status = "ESCALATED";
+        this.status = EscalationTaskStatus.ESCALATED;
         this.updatedAt = Instant.now();
     }
 
     public void cancel() {
-        this.status = "CANCELLED";
+        this.status = EscalationTaskStatus.CANCELLED;
         this.updatedAt = Instant.now();
     }
 
-    public boolean isPending()          { return "PENDING".equals(this.status); }
-    public boolean isMaxLevel()         { return this.escalationLevel >= 2; }
+    public boolean isPending() {
+        return EscalationTaskStatus.PENDING.equals(this.status);
+    }
+
+    public boolean isMaxLevel() {
+        return this.escalationLevel >= 2;
+    }
+
     public boolean isDueForEscalation() {
         return isPending() && Instant.now().isAfter(scheduledEscalationAt);
     }
@@ -150,7 +156,7 @@ public class EscalationTask {
     public String getTenantId()               { return tenantId; }
     public Instant getIncidentOpenedAt()      { return incidentOpenedAt; }
     public Instant getScheduledEscalationAt() { return scheduledEscalationAt; }
-    public String getStatus()                 { return status; }
+    public EscalationTaskStatus getStatus()   { return status; }
     public Severity getSeverity()             { return severity; }
     public String getTitle()                  { return title; }
     public int getEscalationLevel()           { return escalationLevel; }

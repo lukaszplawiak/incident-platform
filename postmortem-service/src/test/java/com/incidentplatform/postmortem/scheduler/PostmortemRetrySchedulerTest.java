@@ -3,6 +3,7 @@ package com.incidentplatform.postmortem.scheduler;
 import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
+import com.incidentplatform.postmortem.domain.PostmortemStatus;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,7 +83,7 @@ class PostmortemRetrySchedulerTest {
             scheduler.retryFailedPostmortems();
 
             // then
-            assertThat(postmortem.getStatus()).isEqualTo("DRAFT");
+            assertThat(postmortem.getStatus()).isEqualTo(PostmortemStatus.DRAFT);
             assertThat(postmortem.getContent())
                     .contains("Retried postmortem content");
             then(postmortemRepository).should().save(postmortem);
@@ -104,7 +105,7 @@ class PostmortemRetrySchedulerTest {
             scheduler.retryFailedPostmortems();
 
             // then
-            assertThat(postmortem.getStatus()).isEqualTo("PERMANENTLY_FAILED");
+            assertThat(postmortem.getStatus()).isEqualTo(PostmortemStatus.PERMANENTLY_FAILED);
             assertThat(postmortem.getErrorMessage())
                     .contains("Still unavailable");
         }
@@ -125,7 +126,7 @@ class PostmortemRetrySchedulerTest {
             scheduler.retryFailedPostmortems();
 
             // then
-            assertThat(postmortem.getStatus()).isEqualTo("PERMANENTLY_FAILED");
+            assertThat(postmortem.getStatus()).isEqualTo(PostmortemStatus.PERMANENTLY_FAILED);
             assertThat(postmortem.getErrorMessage()).contains("API down");
         }
 
@@ -150,7 +151,7 @@ class PostmortemRetrySchedulerTest {
 
             // then
             then(geminiClient).should(times(2)).generate(anyString());
-            assertThat(postmortem2.getStatus()).isEqualTo("DRAFT");
+            assertThat(postmortem2.getStatus()).isEqualTo(PostmortemStatus.DRAFT);
         }
 
         @Test

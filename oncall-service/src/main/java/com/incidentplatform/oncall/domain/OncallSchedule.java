@@ -2,6 +2,8 @@ package com.incidentplatform.oncall.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
@@ -51,9 +53,10 @@ public class OncallSchedule {
     @Column(name = "slack_user_id")
     private String slackUserId;
 
-    @NotBlank
+    @NotNull
+    @Enumerated(EnumType.STRING)
     @Column(name = "role", nullable = false)
-    private String role;
+    private OncallRole role;
 
     @NotNull
     @Column(name = "starts_at", nullable = false)
@@ -82,7 +85,7 @@ public class OncallSchedule {
                                         String email,
                                         String phone,
                                         String slackUserId,
-                                        String role,
+                                        OncallRole role,
                                         Instant startsAt,
                                         Instant endsAt,
                                         String notes) {
@@ -107,21 +110,21 @@ public class OncallSchedule {
         return !moment.isBefore(startsAt) && moment.isBefore(endsAt);
     }
 
-    public boolean isPrimary()   { return "PRIMARY".equals(this.role); }
-    public boolean isSecondary() { return "SECONDARY".equals(this.role); }
-    public boolean isManager()   { return "MANAGER".equals(this.role); }
+    public boolean isPrimary()   { return OncallRole.PRIMARY.equals(this.role); }
+    public boolean isSecondary() { return OncallRole.SECONDARY.equals(this.role); }
+    public boolean isManager()   { return OncallRole.MANAGER.equals(this.role); }
 
-    public UUID getId()           { return id; }
-    public String getTenantId()   { return tenantId; }
-    public String getUserId()     { return userId; }
-    public String getUserName()   { return userName; }
-    public String getEmail()      { return email; }
-    public String getPhone()      { return phone; }
-    public String getSlackUserId(){ return slackUserId; }
-    public String getRole()       { return role; }
-    public Instant getStartsAt()  { return startsAt; }
-    public Instant getEndsAt()    { return endsAt; }
-    public String getNotes()      { return notes; }
-    public Instant getCreatedAt() { return createdAt; }
-    public Instant getUpdatedAt() { return updatedAt; }
+    public UUID getId()            { return id; }
+    public String getTenantId()    { return tenantId; }
+    public String getUserId()      { return userId; }
+    public String getUserName()    { return userName; }
+    public String getEmail()       { return email; }
+    public String getPhone()       { return phone; }
+    public String getSlackUserId() { return slackUserId; }
+    public OncallRole getRole()    { return role; }
+    public Instant getStartsAt()   { return startsAt; }
+    public Instant getEndsAt()     { return endsAt; }
+    public String getNotes()       { return notes; }
+    public Instant getCreatedAt()  { return createdAt; }
+    public Instant getUpdatedAt()  { return updatedAt; }
 }

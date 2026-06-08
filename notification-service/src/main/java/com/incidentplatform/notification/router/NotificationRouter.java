@@ -31,6 +31,8 @@ public class NotificationRouter {
     private static final Logger log =
             LoggerFactory.getLogger(NotificationRouter.class);
 
+    private static final String PRIMARY_ONCALL_ROLE = "PRIMARY";
+
     private static final Map<String, Set<String>> EVENT_TO_CHANNELS =
             Map.of(
                     INCIDENT_OPENED,       Set.of(EMAIL, SLACK),
@@ -80,7 +82,7 @@ public class NotificationRouter {
         }
 
         final OncallClient.OncallInfo oncall = oncallClient
-                .getCurrentOncall(tenantId, "PRIMARY")
+                .getCurrentOncall(tenantId, PRIMARY_ONCALL_ROLE)
                 .orElse(null);
 
         if (oncall != null) {
