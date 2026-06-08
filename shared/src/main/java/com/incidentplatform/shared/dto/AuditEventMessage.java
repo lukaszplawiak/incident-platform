@@ -1,5 +1,6 @@
 package com.incidentplatform.shared.dto;
 
+import com.incidentplatform.shared.audit.ActorType;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -23,7 +24,7 @@ public record AuditEventMessage(
                                            Map<String, Object> metadata) {
         return new AuditEventMessage(
                 incidentId, tenantId, eventType,
-                sourceService, "SYSTEM",
+                sourceService, ActorType.SYSTEM,
                 sourceService, detail, metadata,
                 Instant.now());
     }
@@ -37,7 +38,7 @@ public record AuditEventMessage(
                                          Map<String, Object> metadata) {
         return new AuditEventMessage(
                 incidentId, tenantId, eventType,
-                userId, "USER",
+                userId, ActorType.USER,
                 sourceService, detail, metadata,
                 Instant.now());
     }

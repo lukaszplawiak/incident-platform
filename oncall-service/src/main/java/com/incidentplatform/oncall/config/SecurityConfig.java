@@ -1,6 +1,7 @@
 package com.incidentplatform.oncall.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
+import com.incidentplatform.shared.security.SecurityRoles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -36,7 +37,7 @@ public class SecurityConfig {
                                 "/actuator/prometheus").permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/v1/oncall/current")
-                        .hasAnyRole("SERVICE", "ADMIN")
+                        .hasAnyRole(SecurityRoles.SERVICE, SecurityRoles.ADMIN)
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthFilter,

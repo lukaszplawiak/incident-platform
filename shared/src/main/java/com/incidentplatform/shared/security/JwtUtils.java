@@ -26,7 +26,6 @@ public class JwtUtils {
     public static final String CLAIM_ROLES = "roles";
     public static final String CLAIM_EMAIL = "email";
     public static final String CLAIM_SERVICE_NAME = "serviceName";
-    public static final String ROLE_SERVICE = "ROLE_SERVICE";
 
     private static final int MIN_SECRET_LENGTH = 64;
 
@@ -82,7 +81,7 @@ public class JwtUtils {
         final String token = Jwts.builder()
                 .subject(serviceName)
                 .claim(CLAIM_SERVICE_NAME, serviceName)
-                .claim(CLAIM_ROLES, List.of(ROLE_SERVICE))
+                .claim(CLAIM_ROLES, List.of(SecurityRoles.ROLE_SERVICE))
                 .claim(CLAIM_TENANT_ID, "system")
                 .issuedAt(now)
                 .expiration(expiration)

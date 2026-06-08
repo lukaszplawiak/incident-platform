@@ -8,6 +8,7 @@ import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
 import com.incidentplatform.incident.repository.IncidentRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.ChangeSource;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
@@ -391,7 +392,7 @@ class IncidentCommandServiceTest {
             assertThat(history.getFromStatus()).isEqualTo(IncidentStatus.OPEN);
             assertThat(history.getToStatus()).isEqualTo(IncidentStatus.ACKNOWLEDGED);
             assertThat(history.getChangedBy()).isEqualTo(USER_ID);
-            assertThat(history.getChangeSource()).isEqualTo("REST_API");
+            assertThat(history.getChangeSource()).isEqualTo(ChangeSource.REST_API);
             assertThat(history.getComment()).isEqualTo("Investigating now");
         }
     }

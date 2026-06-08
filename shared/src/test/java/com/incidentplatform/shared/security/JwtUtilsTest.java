@@ -33,7 +33,7 @@ class JwtUtilsTest {
     void shouldGenerateNonNullToken() {
         // given
         final UUID userId = UUID.randomUUID();
-        final List<String> roles = List.of("ROLE_ADMIN");
+        final List<String> roles = List.of(SecurityRoles.ROLE_ADMIN);
 
         // when
         final String token = jwtUtils.generateToken(
@@ -49,10 +49,10 @@ class JwtUtilsTest {
         // when
         final String token1 = jwtUtils.generateToken(
                 UUID.randomUUID(), "tenant1", "user1@test.com",
-                List.of("ROLE_ADMIN"));
+                List.of(SecurityRoles.ROLE_ADMIN));
         final String token2 = jwtUtils.generateToken(
                 UUID.randomUUID(), "tenant2", "user2@test.com",
-                List.of("ROLE_RESPONDER"));
+                List.of(SecurityRoles.ROLE_RESPONDER));
 
         // then
         assertThat(token1).isNotEqualTo(token2);
@@ -65,7 +65,7 @@ class JwtUtilsTest {
         final UUID userId = UUID.randomUUID();
         final String token = jwtUtils.generateToken(
                 userId, "acme-corp", "user@acme.com",
-                List.of("ROLE_ADMIN"));
+                List.of(SecurityRoles.ROLE_ADMIN));
 
         // when
         final Optional<Claims> claims = jwtUtils.validateAndGetClaims(token);
@@ -189,7 +189,7 @@ class JwtUtilsTest {
     @DisplayName("should extract roles from claims")
     void shouldExtractRoles() {
         // given
-        final List<String> roles = List.of("ROLE_ADMIN", "ROLE_RESPONDER");
+        final List<String> roles = List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER);
         final String token = jwtUtils.generateToken(
                 UUID.randomUUID(), "acme-corp", "user@acme.com", roles);
         final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
@@ -200,7 +200,7 @@ class JwtUtilsTest {
         // then
         assertThat(extractedRoles)
                 .hasSize(2)
-                .containsExactlyInAnyOrder("ROLE_ADMIN", "ROLE_RESPONDER");
+                .containsExactlyInAnyOrder(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER);
     }
 
     @Test
@@ -230,9 +230,6 @@ class JwtUtilsTest {
     @Test
     @DisplayName("should throw when secret is between 32 and 63 characters")
     void shouldThrowWhenSecretBetween32And63Characters() {
-        // This was the gap in the old validation (threshold was 32, not 64).
-        // A 52-char secret passed the old check but would fail jjwt's internal
-        // WeakKeyException. The new check catches it earlier with a clear message.
         final String secret52chars = "test-secret-key-minimum-32-characters-long-for-hs256";
         assertThat(secret52chars).hasSize(52);
 
@@ -268,7 +265,7 @@ class JwtUtilsTest {
         final UUID userId = UUID.randomUUID();
         final String tenantId = "acme-corp";
         final String email = "admin@acme.com";
-        final List<String> roles = List.of("ROLE_ADMIN", "ROLE_INGESTOR");
+        final List<String> roles = List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_INGESTOR);
 
         // when
         final String token = jwtUtils.generateToken(userId, tenantId, email, roles);
@@ -279,6 +276,6 @@ class JwtUtilsTest {
         assertThat(jwtUtils.extractTenantId(claims)).contains(tenantId);
         assertThat(jwtUtils.extractEmail(claims)).contains(email);
         assertThat(jwtUtils.extractRoles(claims))
-                .containsExactlyInAnyOrder("ROLE_ADMIN", "ROLE_INGESTOR");
+                .containsExactlyInAnyOrder(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_INGESTOR);
     }
 }

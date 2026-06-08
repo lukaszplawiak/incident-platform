@@ -8,7 +8,10 @@ import com.incidentplatform.incident.dto.IncidentDto;
 import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
 import com.incidentplatform.incident.repository.IncidentRepository;
+import com.incidentplatform.shared.audit.ActorType;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.audit.ChangeSource;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -95,7 +98,7 @@ public class IncidentCommandService {
         historyRepository.save(IncidentHistory.forAutomaticChange(
                 incident.getId(), tenantId,
                 previousStatus, IncidentStatus.RESOLVED,
-                "AUTO_RESOLVE",
+                ChangeSource.AUTO_RESOLVE,
                 String.format("Auto-resolved by source '%s'", notification.source())
         ));
 
@@ -108,7 +111,7 @@ public class IncidentCommandService {
 
         auditEventPublisher.publishSystem(
                 incident.getId(), tenantId,
-                "INCIDENT_RESOLVED", SERVICE_NAME,
+                AuditEventTypes.INCIDENT_RESOLVED, SERVICE_NAME,
                 String.format("Auto-resolved by source '%s' after alert cleared",
                         notification.source()),
                 Map.of("source", notification.source(),
@@ -143,7 +146,7 @@ public class IncidentCommandService {
         historyRepository.save(new IncidentHistory(
                 incident.getId(), tenantId,
                 previousStatus, command.status(),
-                changedBy, "REST_API",
+                changedBy, ChangeSource.REST_API,
                 command.comment()
         ));
 
@@ -189,7 +192,7 @@ public class IncidentCommandService {
 
         auditEventPublisher.publishUser(
                 incidentId, tenantId,
-                "INCIDENT_ASSIGNED", SERVICE_NAME,
+                AuditEventTypes.INCIDENT_ASSIGNED, SERVICE_NAME,
                 assignToId.toString(),
                 String.format("Incident assigned to userId=%s", assignToId),
                 Map.of("assignedTo", assignToId.toString())
@@ -215,7 +218,7 @@ public class IncidentCommandService {
         incidentRepository.save(incident);
 
         historyRepository.save(IncidentHistory.forCreation(
-                incident.getId(), tenantId, "KAFKA_CONSUMER"));
+                incident.getId(), tenantId, ChangeSource.KAFKA_CONSUMER));
 
         log.info("New incident created: incidentId={}, title='{}', " +
                         "severity={}, tenant={}",
@@ -226,7 +229,7 @@ public class IncidentCommandService {
 
         auditEventPublisher.publishSystem(
                 incident.getId(), tenantId,
-                "INCIDENT_CREATED", SERVICE_NAME,
+                AuditEventTypes.INCIDENT_CREATED, SERVICE_NAME,
                 String.format("Incident created from %s alert: '%s'",
                         alert.source(), alert.title()),
                 Map.of("source", alert.source(),
@@ -259,7 +262,7 @@ public class IncidentCommandService {
             historyRepository.save(IncidentHistory.forAutomaticChange(
                     existing.getId(), tenantId,
                     existing.getStatus(), existing.getStatus(),
-                    "KAFKA_CONSUMER",
+                    ChangeSource.KAFKA_CONSUMER,
                     String.format("Severity escalated: %s → %s",
                             previousSeverity, alert.severity().name())
             ));
@@ -270,7 +273,7 @@ public class IncidentCommandService {
 
             auditEventPublisher.publishSystem(
                     existing.getId(), tenantId,
-                    "INCIDENT_SEVERITY_UPDATED", SERVICE_NAME,
+                    AuditEventTypes.INCIDENT_SEVERITY_UPDATED, SERVICE_NAME,
                     String.format("Severity updated: %s → %s",
                             previousSeverity, alert.severity().name()),
                     Map.of("previousSeverity", previousSeverity,
@@ -283,11 +286,11 @@ public class IncidentCommandService {
 
     private String resolveAuditEventType(IncidentStatus status) {
         return switch (status) {
-            case ACKNOWLEDGED -> "INCIDENT_ACKNOWLEDGED";
-            case RESOLVED     -> "INCIDENT_RESOLVED";
-            case CLOSED       -> "INCIDENT_CLOSED";
-            case ESCALATED    -> "INCIDENT_ESCALATED";
-            default           -> "INCIDENT_STATUS_CHANGED";
+            case ACKNOWLEDGED -> AuditEventTypes.INCIDENT_ACKNOWLEDGED;
+            case RESOLVED     -> AuditEventTypes.INCIDENT_RESOLVED;
+            case CLOSED       -> AuditEventTypes.INCIDENT_CLOSED;
+            case ESCALATED    -> AuditEventTypes.INCIDENT_ESCALATED;
+            default           -> AuditEventTypes.INCIDENT_STATUS_CHANGED;
         };
     }
 
