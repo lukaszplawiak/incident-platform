@@ -2,6 +2,8 @@ package com.incidentplatform.notification.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
@@ -55,9 +57,10 @@ public class NotificationLog {
     @Column(name = "message", columnDefinition = "TEXT", updatable = false)
     private String message;
 
-    @NotBlank
+    @NotNull
+    @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, updatable = false)
-    private String status;
+    private NotificationLogStatus status;
 
     @Column(name = "error_message", columnDefinition = "TEXT", updatable = false)
     private String errorMessage;
@@ -70,7 +73,8 @@ public class NotificationLog {
 
     private NotificationLog(UUID incidentId, String tenantId, String eventType,
                             String channel, String recipient, String subject,
-                            String message, String status, String errorMessage) {
+                            String message, NotificationLogStatus status,
+                            String errorMessage) {
         this.id = UUID.randomUUID();
         this.incidentId = incidentId;
         this.tenantId = tenantId;
@@ -89,32 +93,35 @@ public class NotificationLog {
                                        String recipient, String subject,
                                        String message) {
         return new NotificationLog(incidentId, tenantId, eventType,
-                channel, recipient, subject, message, "SENT", null);
+                channel, recipient, subject, message,
+                NotificationLogStatus.SENT, null);
     }
 
     public static NotificationLog failed(UUID incidentId, String tenantId,
                                          String eventType, String channel,
                                          String recipient, String errorMessage) {
         return new NotificationLog(incidentId, tenantId, eventType,
-                channel, recipient, null, null, "FAILED", errorMessage);
+                channel, recipient, null, null,
+                NotificationLogStatus.FAILED, errorMessage);
     }
 
     public static NotificationLog skipped(UUID incidentId, String tenantId,
                                           String eventType, String channel,
                                           String recipient, String reason) {
         return new NotificationLog(incidentId, tenantId, eventType,
-                channel, recipient, null, null, "SKIPPED", reason);
+                channel, recipient, null, null,
+                NotificationLogStatus.SKIPPED, reason);
     }
 
-    public UUID getId() { return id; }
-    public UUID getIncidentId() { return incidentId; }
-    public String getTenantId() { return tenantId; }
-    public String getEventType() { return eventType; }
-    public String getChannel() { return channel; }
-    public String getRecipient() { return recipient; }
-    public String getSubject() { return subject; }
-    public String getMessage() { return message; }
-    public String getStatus() { return status; }
-    public String getErrorMessage() { return errorMessage; }
-    public Instant getSentAt() { return sentAt; }
+    public UUID getId()                      { return id; }
+    public UUID getIncidentId()              { return incidentId; }
+    public String getTenantId()              { return tenantId; }
+    public String getEventType()             { return eventType; }
+    public String getChannel()               { return channel; }
+    public String getRecipient()             { return recipient; }
+    public String getSubject()               { return subject; }
+    public String getMessage()               { return message; }
+    public NotificationLogStatus getStatus() { return status; }
+    public String getErrorMessage()          { return errorMessage; }
+    public Instant getSentAt()               { return sentAt; }
 }

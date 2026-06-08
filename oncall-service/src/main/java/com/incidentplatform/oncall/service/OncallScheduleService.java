@@ -1,11 +1,13 @@
 package com.incidentplatform.oncall.service;
 
+import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.domain.OncallSchedule;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
+import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,10 +42,10 @@ public class OncallScheduleService {
         );
 
         if (overlapping) {
-            throw new IllegalArgumentException(
-                    "Schedule overlaps with existing entry for tenant=" +
-                            tenantId + ", role=" + request.role());
+            throw BusinessException.scheduleOverlap(tenantId, request.role());
         }
+
+        final OncallRole role = OncallRole.valueOf(request.role());
 
         final OncallSchedule schedule = OncallSchedule.create(
                 tenantId,
@@ -52,7 +54,7 @@ public class OncallScheduleService {
                 request.email(),
                 request.phone(),
                 request.slackUserId(),
-                request.role(),
+                role,
                 request.startsAt(),
                 request.endsAt(),
                 request.notes()
@@ -62,7 +64,7 @@ public class OncallScheduleService {
 
         log.info("OncallSchedule created: tenantId={}, userId={}, " +
                         "role={}, startsAt={}, endsAt={}",
-                tenantId, request.userId(), request.role(),
+                tenantId, request.userId(), role,
                 request.startsAt(), request.endsAt());
 
         return OncallScheduleDto.from(schedule);

@@ -5,8 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
+import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
-import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -111,11 +111,11 @@ public class EscalationScheduler {
                 task.getSeverity(), task.getEscalationLevel());
 
         final String role = task.getEscalationLevel() == 1
-                ? "SECONDARY" : "MANAGER";
+                ? OncallRole.SECONDARY.name() : OncallRole.MANAGER.name();
 
         auditEventPublisher.publishSystem(
                 task.getIncidentId(), task.getTenantId(),
-                AuditEventTypes.ESCALATION_FIRED, SERVICE_NAME,
+                "ESCALATION_FIRED", SERVICE_NAME,
                 String.format("Escalation level %d fired — %s notified. " +
                                 "No ACK within timeout for severity %s.",
                         task.getEscalationLevel(), role,
@@ -140,7 +140,7 @@ public class EscalationScheduler {
 
             auditEventPublisher.publishSystem(
                     task.getIncidentId(), task.getTenantId(),
-                    AuditEventTypes.ESCALATION_SCHEDULED, SERVICE_NAME,
+                    "ESCALATION_SCHEDULED", SERVICE_NAME,
                     String.format("Level 2 escalation scheduled — MANAGER " +
                                     "will be notified if no ACK within %d minutes.",
                             EscalationTask.resolveTimeout(task.getSeverity())),

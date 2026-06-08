@@ -65,6 +65,18 @@ public class BusinessException extends RuntimeException {
         );
     }
 
+    public static BusinessException scheduleOverlap(String tenantId, String role) {
+        return new BusinessException(
+                "SCHEDULE_OVERLAP",
+                String.format(
+                        "On-call schedule overlaps with an existing entry " +
+                                "for tenant='%s', role='%s'. " +
+                                "Adjust the start/end times to avoid conflicts.",
+                        tenantId, role),
+                HttpStatus.CONFLICT
+        );
+    }
+
     public static BusinessException conflict(String errorCode, String message) {
         return new BusinessException(errorCode, message, HttpStatus.CONFLICT);
     }

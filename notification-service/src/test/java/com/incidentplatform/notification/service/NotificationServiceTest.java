@@ -3,6 +3,7 @@ package com.incidentplatform.notification.service;
 import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.channel.NotificationException;
 import com.incidentplatform.notification.domain.NotificationLog;
+import com.incidentplatform.notification.domain.NotificationLogStatus;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
@@ -112,7 +113,7 @@ class NotificationServiceTest {
             then(logRepository).should().save(logCaptor.capture());
 
             final NotificationLog savedLog = logCaptor.getValue();
-            assertThat(savedLog.getStatus()).isEqualTo("SENT");
+            assertThat(savedLog.getStatus()).isEqualTo(NotificationLogStatus.SENT);
             assertThat(savedLog.getIncidentId()).isEqualTo(INCIDENT_ID);
             assertThat(savedLog.getTenantId()).isEqualTo(TENANT_ID);
             assertThat(savedLog.getChannel()).isEqualTo("EMAIL");
@@ -172,7 +173,7 @@ class NotificationServiceTest {
                     ArgumentCaptor.forClass(NotificationLog.class);
             then(logRepository).should().save(logCaptor.capture());
 
-            assertThat(logCaptor.getValue().getStatus()).isEqualTo("FAILED");
+            assertThat(logCaptor.getValue().getStatus()).isEqualTo(NotificationLogStatus.FAILED);
             assertThat(logCaptor.getValue().getErrorMessage())
                     .contains("SMTP connection failed");
         }

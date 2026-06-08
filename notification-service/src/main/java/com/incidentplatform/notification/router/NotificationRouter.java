@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
+import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
@@ -80,7 +81,7 @@ public class NotificationRouter {
         }
 
         final OncallClient.OncallInfo oncall = oncallClient
-                .getCurrentOncall(tenantId, "PRIMARY")
+                .getCurrentOncall(tenantId, OncallRole.PRIMARY.name())
                 .orElse(null);
 
         if (oncall != null) {

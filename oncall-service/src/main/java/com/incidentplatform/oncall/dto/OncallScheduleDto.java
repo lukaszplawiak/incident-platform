@@ -28,7 +28,7 @@ public record OncallScheduleDto(
                 schedule.getEmail(),
                 schedule.getPhone(),
                 schedule.getSlackUserId(),
-                schedule.getRole(),
+                schedule.getRole().name(),
                 schedule.getStartsAt(),
                 schedule.getEndsAt(),
                 schedule.getNotes(),
