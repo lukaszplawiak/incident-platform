@@ -1,6 +1,7 @@
 package com.incidentplatform.ingestion.normalizer;
 
 import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ErrorCodes;
 import org.springframework.http.HttpStatus;
 
 public class NormalizationException extends BusinessException {
@@ -10,7 +11,7 @@ public class NormalizationException extends BusinessException {
 
     public NormalizationException(String source, String reason) {
         super(
-                "NORMALIZATION_FAILED",
+                ErrorCodes.NORMALIZATION_FAILED,
                 String.format("Failed to normalize alert from source '%s': %s",
                         source, reason),
                 HttpStatus.BAD_REQUEST
@@ -21,7 +22,7 @@ public class NormalizationException extends BusinessException {
 
     public NormalizationException(String source, String reason, Throwable cause) {
         super(
-                "NORMALIZATION_FAILED",
+                ErrorCodes.NORMALIZATION_FAILED,
                 String.format("Failed to normalize alert from source '%s': %s",
                         source, reason),
                 cause

@@ -3,6 +3,7 @@ package com.incidentplatform.shared.dto;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
+import com.incidentplatform.shared.exception.ErrorCodes;
 import java.time.Instant;
 import java.util.List;
 
@@ -57,7 +58,7 @@ public record ErrorResponse(
                                                  List<ValidationError> errors) {
         return new ErrorResponse(
                 400,
-                "VALIDATION_FAILED",
+                ErrorCodes.VALIDATION_FAILED,
                 "Request validation failed. Please check the provided data.",
                 requestId,
                 Instant.now(),

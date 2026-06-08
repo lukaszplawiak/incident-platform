@@ -1,6 +1,7 @@
 package com.incidentplatform.ingestion.normalizer;
 
 import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ErrorCodes;
 import org.springframework.http.HttpStatus;
 
 import java.util.List;
@@ -12,7 +13,7 @@ public class UnknownSourceException extends BusinessException {
 
     public UnknownSourceException(String source, List<String> availableSources) {
         super(
-                "UNKNOWN_ALERT_SOURCE",
+                ErrorCodes.UNKNOWN_ALERT_SOURCE,
                 String.format("Unknown alert source: '%s'. Available sources: %s",
                         source, availableSources),
                 HttpStatus.BAD_REQUEST
