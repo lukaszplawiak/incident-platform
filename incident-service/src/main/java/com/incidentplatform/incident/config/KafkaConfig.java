@@ -1,15 +1,13 @@
 package com.incidentplatform.incident.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.common.TopicPartition;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
-import org.springframework.kafka.core.KafkaOperations;
-import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
-import org.springframework.kafka.listener.DefaultErrorHandler;
-import org.springframework.util.backoff.FixedBackOff;
+import org.springframework.kafka.core.KafkaTemplate;
 
 @Configuration
 public class KafkaConfig {
@@ -26,6 +24,9 @@ public class KafkaConfig {
     @Value("${kafka.topics.audit-events}")
     private String auditEventsTopic;
 
+    @Value("${kafka.topics.incidents-dead-letter:incidents.dead-letter}")
+    private String incidentsDeadLetterTopic;
+
     @Bean
     public NewTopic incidentsLifecycleTopic() {
         return TopicBuilder
@@ -36,24 +37,20 @@ public class KafkaConfig {
     }
 
     @Bean
-    public NewTopic alertsRawDltTopic() {
+    public NewTopic alertsRawTopic() {
         return TopicBuilder
-                .name(alertsRawTopic + ".DLT")
-                .partitions(1)
+                .name(alertsRawTopic)
+                .partitions(3)
                 .replicas(1)
-                .config("retention.ms",
-                        String.valueOf(30L * 24 * 60 * 60 * 1000))
                 .build();
     }
 
     @Bean
-    public NewTopic alertsResolvedDltTopic() {
+    public NewTopic alertsResolvedTopic() {
         return TopicBuilder
-                .name(alertsResolvedTopic + ".DLT")
-                .partitions(1)
+                .name(alertsResolvedTopic)
+                .partitions(3)
                 .replicas(1)
-                .config("retention.ms",
-                        String.valueOf(30L * 24 * 60 * 60 * 1000))
                 .build();
     }
 
@@ -67,18 +64,33 @@ public class KafkaConfig {
     }
 
     @Bean
-    public DefaultErrorHandler defaultErrorHandler(
-            KafkaOperations<String, String> kafkaTemplate) {
+    public NewTopic incidentsDeadLetterTopic() {
+        return TopicBuilder
+                .name(incidentsDeadLetterTopic)
+                .partitions(1)
+                .replicas(1)
+                .config("retention.ms",
+                        String.valueOf(30L * 24 * 60 * 60 * 1000))
+                .build();
+    }
 
-        final DeadLetterPublishingRecoverer recoverer =
-                new DeadLetterPublishingRecoverer(
-                        kafkaTemplate,
-                        (record, exception) -> new TopicPartition(
-                                record.topic() + ".DLT", 0)
-                );
-
-        final FixedBackOff backOff = new FixedBackOff(1000L, 3L);
-
-        return new DefaultErrorHandler(recoverer, backOff);
+    // Dead-letter publisher for IncidentKafkaConsumer — handles poison pills
+    // (permanently malformed messages) in MANUAL_IMMEDIATE ack mode.
+    // We use MANUAL ack to distinguish:
+    //   - poison pill (acknowledge + DLT) — always fails, skip immediately
+    //   - transient error (no acknowledge) — may recover, Kafka redelivers
+    // DefaultErrorHandler with DeadLetterPublishingRecoverer was removed because
+    // it only works with AUTO ack mode. In MANUAL_IMMEDIATE mode the listener
+    // owns offset management and DefaultErrorHandler is never invoked.
+    @Bean
+    public DeadLetterPublisher deadLetterPublisher(
+            KafkaTemplate<String, String> kafkaTemplate,
+            ObjectMapper objectMapper) {
+        return new DeadLetterPublisher(
+                kafkaTemplate,
+                objectMapper,
+                incidentsDeadLetterTopic,
+                "incident-service"
+        );
     }
 }
