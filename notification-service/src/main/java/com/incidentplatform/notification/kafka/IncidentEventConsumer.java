@@ -76,22 +76,42 @@ public class IncidentEventConsumer {
             notificationService.processEvent(
                     eventType, incidentId, tenantId, severity, title);
 
-            acknowledgment.acknowledge();
-
         } catch (UnrecognizedSeverityException e) {
-            log.error("Skipping notification event — {}", e.getMessage());
+            // Poison pill — unrecognized severity cannot be fixed by retrying.
+            // Acknowledge to skip and unblock the partition.
+            log.error("Skipping notification event — unrecognized severity: {}",
+                    e.getMessage());
             acknowledgment.acknowledge();
+            return;
+
+        } catch (IllegalArgumentException e) {
+            // Poison pill — malformed payload (bad UUID, missing required field).
+            // Our own IncidentEventPublisher produces these events so this should
+            // not happen in production, but if it does retrying won't help.
+            log.error("Poison pill in incident lifecycle event — skipping: " +
+                            "topic={}, partition={}, offset={}, error={}",
+                    record.topic(), record.partition(),
+                    record.offset(), e.getMessage());
+            acknowledgment.acknowledge();
+            return;
 
         } catch (Exception e) {
-            log.error("Failed to process incident event: topic={}, " +
-                            "partition={}, offset={}, error={}",
+            // Transient error (Slack API down, DB unavailable, network issue).
+            // Do NOT acknowledge — Kafka will redeliver after consumer restart.
+            // Notification may be delayed but will not be lost.
+            log.error("Transient error processing incident event — " +
+                            "will be redelivered: topic={}, partition={}, " +
+                            "offset={}, error={}",
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage(), e);
-            acknowledgment.acknowledge();
+            return;
 
         } finally {
             TenantContext.clear();
         }
+
+        // Reached only on success — all error paths return early above.
+        acknowledgment.acknowledge();
     }
 
     private Severity parseSeverity(String rawSeverity, UUID incidentId) {
@@ -128,7 +148,7 @@ public class IncidentEventConsumer {
                 return tenantId;
             }
         }
-        log.warn("Missing tenantId Kafka header, falling back to payload: " +
+        log.warn("Missing tenantId Kafka header, falling back to 'unknown': " +
                         "topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
         return "unknown";
