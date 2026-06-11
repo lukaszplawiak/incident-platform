@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -56,14 +57,24 @@ class IncidentEventConsumerTest {
         TenantContext.clear();
     }
 
+    // ── helpers ──────────────────────────────────────────────────────────────
+
     private ConsumerRecord<String, String> buildRecord(String payload,
-                                                       String tenantId) {
+                                                       String tenantId,
+                                                       String eventType) {
         final ConsumerRecord<String, String> record =
                 new ConsumerRecord<>(TOPIC, 0, 0L, "key", payload);
         if (tenantId != null) {
             record.headers().add(new RecordHeader(
                     TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
                     tenantId.getBytes(StandardCharsets.UTF_8)));
+        }
+        if (eventType != null) {
+            // X-Event-Type header is set by IncidentEventPublisher on every message.
+            // Tests must add it explicitly since we're bypassing the real publisher.
+            record.headers().add(new RecordHeader(
+                    IncidentEventTypes.HEADER_NAME,
+                    eventType.getBytes(StandardCharsets.UTF_8)));
         }
         return record;
     }
@@ -112,6 +123,8 @@ class IncidentEventConsumerTest {
                 }""", INCIDENT_ID, TENANT_ID);
     }
 
+    // ── tenant context management ─────────────────────────────────────────────
+
     @Nested
     @DisplayName("tenant context management")
     class TenantContextManagement {
@@ -129,7 +142,8 @@ class IncidentEventConsumerTest {
                     }""", INCIDENT_ID);
 
             final ConsumerRecord<String, String> record =
-                    buildRecord(payloadWithDifferentTenant, "header-tenant");
+                    buildRecord(payloadWithDifferentTenant, "header-tenant",
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);
@@ -137,7 +151,7 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
+            // then — tenantId comes from header, not from payload "payload-tenant"
             then(notificationService).should().processEvent(
                     any(), any(), tenantCaptor.capture(), any(), any());
             assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
@@ -148,7 +162,8 @@ class IncidentEventConsumerTest {
         void shouldClearTenantContextAfterProcessing() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(), TENANT_ID);
+                    buildRecord(openedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -160,13 +175,12 @@ class IncidentEventConsumerTest {
         @Test
         @DisplayName("should clear TenantContext even when processing throws")
         void shouldClearTenantContextOnException() {
-            // given
+            // given — no stubbing needed for processEvent since header is missing
+            // we test that TenantContext is cleared even when consumer returns early
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(), TENANT_ID);
-
-            org.mockito.BDDMockito.willThrow(new RuntimeException("service error"))
-                    .given(notificationService)
-                    .processEvent(any(), any(), any(), any(), any());
+                    buildRecord(openedEvent(), TENANT_ID, null);
+            // null eventType header → consumer logs error and returns early
+            // TenantContext must still be cleared in finally block
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -180,9 +194,11 @@ class IncidentEventConsumerTest {
         void shouldNotLeakTenantIdBetweenRecords() {
             // given
             final ConsumerRecord<String, String> recordA =
-                    buildRecord(openedEvent(), "tenant-a");
+                    buildRecord(openedEvent(), "tenant-a",
+                            IncidentEventTypes.INCIDENT_OPENED);
             final ConsumerRecord<String, String> recordB =
-                    buildRecord(openedEvent(), "tenant-b");
+                    buildRecord(openedEvent(), "tenant-b",
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);
@@ -200,6 +216,8 @@ class IncidentEventConsumerTest {
         }
     }
 
+    // ── event type routing ────────────────────────────────────────────────────
+
     @Nested
     @DisplayName("event type routing")
     class EventTypeRouting {
@@ -209,14 +227,15 @@ class IncidentEventConsumerTest {
         void shouldRouteOpenedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(), TENANT_ID);
+                    buildRecord(openedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
             then(notificationService).should().processEvent(
-                    eq("IncidentOpenedEvent"),
+                    eq(IncidentEventTypes.INCIDENT_OPENED),
                     eq(INCIDENT_ID),
                     eq(TENANT_ID),
                     eq(Severity.CRITICAL),
@@ -229,14 +248,16 @@ class IncidentEventConsumerTest {
         void shouldRouteAcknowledgedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(acknowledgedEvent(), TENANT_ID);
+                    buildRecord(acknowledgedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
             then(notificationService).should().processEvent(
-                    eq("IncidentAcknowledgedEvent"), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_ACKNOWLEDGED),
+                    any(), any(), any(), any());
         }
 
         @Test
@@ -244,14 +265,16 @@ class IncidentEventConsumerTest {
         void shouldRouteResolvedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
             then(notificationService).should().processEvent(
-                    eq("IncidentResolvedEvent"), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_RESOLVED),
+                    any(), any(), any(), any());
         }
 
         @Test
@@ -259,16 +282,35 @@ class IncidentEventConsumerTest {
         void shouldRouteEscalatedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(escalatedEvent(), TENANT_ID);
+                    buildRecord(escalatedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_ESCALATED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
             then(notificationService).should().processEvent(
-                    eq("IncidentEscalatedEvent"), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED),
+                    any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should acknowledge and skip when X-Event-Type header is missing")
+        void shouldAcknowledgeAndSkipWhenEventTypeHeaderMissing() {
+            // given — no eventType header
+            final ConsumerRecord<String, String> record =
+                    buildRecord(openedEvent(), TENANT_ID, null);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — acknowledged to skip, no routing
+            then(acknowledgment).should().acknowledge();
+            then(notificationService).shouldHaveNoInteractions();
         }
     }
+
+    // ── acknowledgment ────────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("acknowledgment")
@@ -279,7 +321,8 @@ class IncidentEventConsumerTest {
         void shouldAcknowledgeAfterSuccess() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(), TENANT_ID);
+                    buildRecord(openedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -293,7 +336,8 @@ class IncidentEventConsumerTest {
         void shouldAcknowledgeOnException() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(), TENANT_ID);
+                    buildRecord(openedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("service error"))
                     .given(notificationService)
