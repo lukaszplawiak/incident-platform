@@ -243,7 +243,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().processEvent(
-                    eq("IncidentAcknowledgedEvent"), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_ACKNOWLEDGED), any(), any(), any(), any());
         }
 
         @Test
@@ -258,7 +258,22 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().processEvent(
-                    eq("IncidentResolvedEvent"), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_RESOLVED), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should acknowledge and skip when X-Event-Type header is missing")
+        void shouldAcknowledgeAndSkipWhenEventTypeHeaderMissing() {
+            // given — no eventType header
+            final ConsumerRecord<String, String> record =
+                    buildRecord(openedEvent(), TENANT_ID, null);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — acknowledged to skip, no routing
+            then(acknowledgment).should().acknowledge();
+            then(notificationService).shouldHaveNoInteractions();
         }
 
         @Test
@@ -273,7 +288,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().processEvent(
-                    eq("IncidentEscalatedEvent"), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(), any(), any());
         }
     }
 
