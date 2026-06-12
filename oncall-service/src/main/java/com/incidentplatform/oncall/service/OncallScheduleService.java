@@ -8,6 +8,7 @@ import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +46,19 @@ public class OncallScheduleService {
             throw BusinessException.scheduleOverlap(tenantId, request.role());
         }
 
-        final OncallRole role = OncallRole.valueOf(request.role());
+        final OncallRole role;
+        try {
+            role = OncallRole.valueOf(request.role());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(
+                    ErrorCodes.VALIDATION_FAILED,
+                    String.format("Invalid on-call role '%s'. " +
+                                    "Allowed values: PRIMARY, SECONDARY, MANAGER",
+                            request.role()),
+                    org.springframework.http.HttpStatus.BAD_REQUEST
+            );
+        }
+
 
         final OncallSchedule schedule = OncallSchedule.create(
                 tenantId,
