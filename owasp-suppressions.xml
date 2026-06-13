@@ -11,7 +11,7 @@
               <notes>  - why suppressed (false positive or unfixable with justification)
               <until>  - expiration date — forces re-evaluation when it passes
 
-        Reviewed: 2026-06-06
+        Reviewed: 2026-06-13
     -->
 
     <!-- ═══════════════════════════════════════════════════════════════════════
@@ -61,70 +61,80 @@
     </suppress>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         log4j-api — CVE-2026-34477/34478/34479/34480/34481, CVE-2025-68161
+         log4j-api / log4j-to-slf4j — CVE-2026-34477/34478/34479/34480/34481,
+                                       CVE-2025-68161
          VERDICT: FALSE POSITIVE
 
          All six CVEs affect log4j-core (the implementation module) — specifically
          XmlLayout, Rfc5424Layout, SMTP/Socket/Syslog appenders with TLS, and the
          Log4j1 bridge. Fix is in log4j-core 2.25.4.
 
-         This project uses only log4j-api (the API/facade module) which contains
-         no appenders, no layouts, and no network code. OWASP incorrectly matches
-         CVEs from log4j-core against log4j-api because both share the same
-         groupId and similar CPE identifiers.
+         This project depends only on log4j-api (API/facade module) and
+         log4j-to-slf4j (bridge module that redirects log4j2 API calls to
+         SLF4J) — neither contains appenders, layouts, or network code.
+         OWASP incorrectly matches log4j-core CVEs against these sibling
+         artifacts because they share the same groupId and release version.
+
+         Regex widened from log4j-api only to log4j-(api|to-slf4j) after
+         log4j-to-slf4j-2.24.3.jar started reporting CVE-2026-34477 and
+         CVE-2026-34479 (2026-06-13) — same false-positive cause, different
+         sibling artifact from the same log4j2 release.
 
          Reference: https://logging.apache.org/security.html
          ═══════════════════════════════════════════════════════════════════════ -->
     <suppress until="2026-12-31Z">
         <notes>
-            FALSE POSITIVE: CVE-2026-34477 affects log4j-core (XmlLayout/appenders),
-            not log4j-api. This project uses only log4j-api which contains no
-            appenders or network code. OWASP incorrectly maps CVEs between modules.
-            Fix: log4j-core 2.25.4. See: https://logging.apache.org/security.html
+            FALSE POSITIVE: CVE-2026-34477 affects log4j-core (XmlLayout/appenders).
+            This project uses only log4j-api and log4j-to-slf4j, neither of which
+            contains appenders or network code. OWASP incorrectly maps CVEs
+            between log4j2 sibling modules sharing the same groupId/version.
         </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-(api|to\-slf4j)@.*$</packageUrl>
         <cve>CVE-2026-34477</cve>
     </suppress>
     <suppress until="2026-12-31Z">
         <notes>
             FALSE POSITIVE: CVE-2026-34478 affects log4j-core (Rfc5424Layout CRLF
-            injection). This project uses only log4j-api. See CVE-2026-34477 note.
+            injection). This project uses only log4j-api and log4j-to-slf4j.
+            See CVE-2026-34477 note.
         </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-(api|to\-slf4j)@.*$</packageUrl>
         <cve>CVE-2026-34478</cve>
     </suppress>
     <suppress until="2026-12-31Z">
         <notes>
             FALSE POSITIVE: CVE-2026-34479 affects log4j-core (Log4j1XmlLayout XML
-            escaping). This project uses only log4j-api. See CVE-2026-34477 note.
+            escaping). This project uses only log4j-api and log4j-to-slf4j.
+            See CVE-2026-34477 note.
         </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-(api|to\-slf4j)@.*$</packageUrl>
         <cve>CVE-2026-34479</cve>
     </suppress>
     <suppress until="2026-12-31Z">
         <notes>
             FALSE POSITIVE: CVE-2026-34480 affects log4j-core (XmlLayout via
-            Log4jXmlObjectMapper). This project uses only log4j-api.
-            See CVE-2026-34477 note.
+            Log4jXmlObjectMapper). This project uses only log4j-api and
+            log4j-to-slf4j. See CVE-2026-34477 note.
         </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-(api|to\-slf4j)@.*$</packageUrl>
         <cve>CVE-2026-34480</cve>
     </suppress>
     <suppress until="2026-12-31Z">
         <notes>
             FALSE POSITIVE: CVE-2026-34481 affects log4j-core appenders.
-            This project uses only log4j-api. See CVE-2026-34477 note.
+            This project uses only log4j-api and log4j-to-slf4j.
+            See CVE-2026-34477 note.
         </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-(api|to\-slf4j)@.*$</packageUrl>
         <cve>CVE-2026-34481</cve>
     </suppress>
     <suppress until="2026-12-31Z">
         <notes>
             FALSE POSITIVE: CVE-2025-68161 affects log4j-core TLS hostname
             verification in SMTP/Socket/Syslog appenders. This project uses only
-            log4j-api. See CVE-2026-34477 note.
+            log4j-api and log4j-to-slf4j. See CVE-2026-34477 note.
         </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-api@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.logging\.log4j/log4j\-(api|to\-slf4j)@.*$</packageUrl>
         <cve>CVE-2025-68161</cve>
     </suppress>
 
@@ -150,9 +160,9 @@
     </suppress>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         tomcat-embed-core — CVE-2026-41284, CVE-2026-41293, CVE-2026-42498,
-                             CVE-2026-43512, CVE-2026-43513, CVE-2026-43514,
-                             CVE-2026-43515
+         tomcat-embed-* — CVE-2026-41284, CVE-2026-41293, CVE-2026-42498,
+                          CVE-2026-43512, CVE-2026-43513, CVE-2026-43514,
+                          CVE-2026-43515
          VERDICT: REAL — AWAITING FIX RELEASE
 
          Fix committed to Tomcat 10.1.55 but not yet available in Maven Central
@@ -166,6 +176,13 @@
 
          All endpoints in this application require JWT authentication, limiting
          the practical attack surface until the patched version is available.
+
+         Regex widened from tomcat-embed-core only to tomcat-embed-.* after
+         tomcat-embed-websocket-10.1.54.jar started reporting the same 7 CVEs
+         (2026-06-13). Both artifacts ship from the same Tomcat 10.1.54 release
+         and will be fixed together by the 10.1.55 bump — one suppression
+         family covers the whole tomcat-embed-* group instead of needing a new
+         entry for every embed artifact (core, websocket, el, jasper, ...).
          ═══════════════════════════════════════════════════════════════════════ -->
     <suppress until="2026-09-30Z">
         <notes>
@@ -174,37 +191,37 @@
             Renovate will open a PR automatically. All endpoints require JWT auth.
             Re-evaluate by 2026-09-30 — Spring Boot 3.5.15 expected sooner.
         </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-41284</cve>
     </suppress>
     <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-core suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-41293</cve>
     </suppress>
     <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-core suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-42498</cve>
     </suppress>
     <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-core suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-43512</cve>
     </suppress>
     <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-core suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-43513</cve>
     </suppress>
     <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-core suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-43514</cve>
     </suppress>
     <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-core suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-core@.*$</packageUrl>
+        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
+        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-43515</cve>
     </suppress>
 
