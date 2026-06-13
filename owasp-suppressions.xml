@@ -160,20 +160,29 @@
     </suppress>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         netty-transport — CVE-2026-42582
+         netty-transport* — CVE-2026-42582
          VERDICT: FALSE POSITIVE (wrong module + already-fixed version)
 
-         CVE-2026-42582 affects netty-codec-http3, not netty-transport. OWASP
-         maps all Netty CVEs to the broad CPE cpe:2.3:a:netty:netty:* which
-         matches any io.netty:* artifact regardless of which specific module
-         is actually affected — same root cause as the angus-activation and
-         micrometer-registry-prometheus suppressions above.
+         CVE-2026-42582 affects netty-codec-http3, not any netty-transport*
+         artifact. OWASP maps all Netty CVEs to the broad CPE
+         cpe:2.3:a:netty:netty:* which matches any io.netty:* artifact
+         regardless of which specific module is actually affected — same root
+         cause as the angus-activation and micrometer-registry-prometheus
+         suppressions above.
 
          Independently of the module mismatch: the fix for CVE-2026-42582
-         shipped in the 4.1.133.Final release itself. netty-transport-4.1.133.Final
-         (provided transitively via the Spring Boot 3.5.14 BOM / spring-kafka)
-         IS that version — there is no newer patched release to upgrade to for
-         this CVE.
+         shipped in the 4.1.133.Final release. Every io.netty:netty-transport*
+         artifact in this project is now >= 4.1.135.Final (via Spring Boot
+         3.5.15's managed Netty version) — there is no newer patched release to
+         upgrade to for this CVE.
+
+         Regex widened from netty-transport only to netty-transport.* after
+         netty-transport-native-unix-common-4.1.135.Final.jar started reporting
+         this CVE (2026-06-13) once the plain netty-transport artifact was fixed
+         by the Spring Boot 3.5.15 upgrade — same false-positive cause, different
+         sibling artifact from the same Netty release. Covers netty-transport,
+         netty-transport-native-unix-common, and any future netty-transport-native-*
+         artifact from the same release.
 
          Tracked upstream: a near-identical report (5 different Netty CVEs
          mismatched onto netty-transport) was filed against OWASP
@@ -182,14 +191,15 @@
          ═══════════════════════════════════════════════════════════════════════ -->
     <suppress until="2026-12-31Z">
         <notes>
-            FALSE POSITIVE: CVE-2026-42582 affects netty-codec-http3, not
-            netty-transport. OWASP matches via the broad cpe:2.3:a:netty:netty:*
-            CPE that applies to any io.netty:* artifact. Additionally,
-            netty-transport-4.1.133.Final IS the version that fixed this CVE in
-            the 4.1.133.Final release — no newer patch exists for it.
+            FALSE POSITIVE: CVE-2026-42582 affects netty-codec-http3, not any
+            netty-transport* artifact. OWASP matches via the broad
+            cpe:2.3:a:netty:netty:* CPE that applies to any io.netty:* artifact.
+            Additionally, the fix for this CVE shipped in 4.1.133.Final — every
+            netty-transport* artifact here is 4.1.135.Final (via Spring Boot
+            3.5.15), already past the fixed version.
             Tracked upstream: dependency-check/DependencyCheck#8576
         </notes>
-        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport.*@.*$</packageUrl>
         <cve>CVE-2026-42582</cve>
     </suppress>
 
@@ -197,33 +207,26 @@
          tomcat-embed-* — CVE-2026-41284, CVE-2026-41293, CVE-2026-42498,
                           CVE-2026-43512, CVE-2026-43513, CVE-2026-43514,
                           CVE-2026-43515
-         VERDICT: REAL — AWAITING FIX RELEASE
+         VERDICT: NO LONGER MATCHES (kept for traceability)
 
-         Fix committed to Tomcat 10.1.55 but not yet available in Maven Central
-         as of 2026-06-06. Spring Boot 3.5.15 will bundle Tomcat 10.1.55 when
-         released. Renovate will open a PR automatically.
+         These suppressions were added on 2026-06-13 while CVEs were being
+         reported against tomcat-embed-core and tomcat-embed-websocket on
+         Tomcat 10.1.54. After the Spring Boot 3.5.14 -> 3.5.15 upgrade and/or
+         the NVD database update completing, these no longer match anything
+         ("Suppression Rule had zero matches" for all 7 CVEs).
 
-         Note on CVSS discrepancy: NIST scores CVE-2026-41293 as 9.8 Critical
-         based on automated analysis. Apache Tomcat security team rates it Low —
-         HTTP/2 header validation issue with no direct exploit path demonstrated.
-         OWASP fails the build using the NIST score.
+         Left in place until 2026-09-30 in case they reappear with a different
+         tomcat-embed-* artifact from the same release; safe to remove at the
+         next review if still zero matches.
 
          All endpoints in this application require JWT authentication, limiting
-         the practical attack surface until the patched version is available.
-
-         Regex widened from tomcat-embed-core only to tomcat-embed-.* after
-         tomcat-embed-websocket-10.1.54.jar started reporting the same 7 CVEs
-         (2026-06-13). Both artifacts ship from the same Tomcat 10.1.54 release
-         and will be fixed together by the 10.1.55 bump — one suppression
-         family covers the whole tomcat-embed-* group instead of needing a new
-         entry for every embed artifact (core, websocket, el, jasper, ...).
+         the practical attack surface in any case.
          ═══════════════════════════════════════════════════════════════════════ -->
     <suppress until="2026-09-30Z">
         <notes>
-            AWAITING FIX: fix committed to Tomcat 10.1.55 (not yet in Maven Central
-            as of 2026-06-06). Spring Boot 3.5.15 will include it when released.
-            Renovate will open a PR automatically. All endpoints require JWT auth.
-            Re-evaluate by 2026-09-30 — Spring Boot 3.5.15 expected sooner.
+            NO LONGER MATCHES as of 2026-06-13 (zero matches). Kept for
+            traceability until next review — safe to remove if still unmatched.
+            All endpoints require JWT auth.
         </notes>
         <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-41284</cve>
