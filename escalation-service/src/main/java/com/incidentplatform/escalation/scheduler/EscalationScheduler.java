@@ -1,18 +1,16 @@
 package com.incidentplatform.escalation.scheduler;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
+import com.incidentplatform.shared.events.IncidentEventKafkaSender;
+import com.incidentplatform.shared.events.IncidentEventTypes;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,25 +31,19 @@ public class EscalationScheduler {
     private static final String ESCALATION_ROLE_LEVEL_2 = "MANAGER";
 
     private final EscalationTaskRepository taskRepository;
-    private final KafkaTemplate<String, String> kafkaTemplate;
-    private final ObjectMapper objectMapper;
+    private final IncidentEventKafkaSender kafkaSender;
     private final EscalationService escalationService;
     private final AuditEventPublisher auditEventPublisher;
-    private final String incidentsLifecycleTopic;
 
     public EscalationScheduler(
             EscalationTaskRepository taskRepository,
-            KafkaTemplate<String, String> kafkaTemplate,
-            ObjectMapper objectMapper,
+            IncidentEventKafkaSender kafkaSender,
             EscalationService escalationService,
-            AuditEventPublisher auditEventPublisher,
-            @Value("${kafka.topics.incidents-lifecycle}") String incidentsLifecycleTopic) {
+            AuditEventPublisher auditEventPublisher) {
         this.taskRepository = taskRepository;
-        this.kafkaTemplate = kafkaTemplate;
-        this.objectMapper = objectMapper;
+        this.kafkaSender = kafkaSender;
         this.escalationService = escalationService;
         this.auditEventPublisher = auditEventPublisher;
-        this.incidentsLifecycleTopic = incidentsLifecycleTopic;
     }
 
     @Scheduled(
@@ -97,13 +89,11 @@ public class EscalationScheduler {
                 Instant.now()
         );
 
-        final String payload = serializeEvent(event);
-
-        kafkaTemplate.send(
-                incidentsLifecycleTopic,
-                task.getTenantId(),
-                payload
-        );
+        // Delegates to shared IncidentEventKafkaSender — sets the X-Event-Type
+        // header (read by notification-service to route this to EMAIL/SLACK/SMS)
+        // and uses incidentId as the Kafka key, consistent with
+        // IncidentEventPublisher in incident-service.
+        kafkaSender.send(event, IncidentEventTypes.INCIDENT_ESCALATED);
 
         task.markEscalated();
         taskRepository.save(task);
@@ -154,17 +144,6 @@ public class EscalationScheduler {
         } else {
             log.info("Max escalation level reached: incidentId={}, tenant={}",
                     task.getIncidentId(), task.getTenantId());
-        }
-    }
-
-    private String serializeEvent(IncidentEscalatedEvent event) {
-        try {
-            return objectMapper.writeValueAsString(event);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException(
-                    String.format("Failed to serialize IncidentEscalatedEvent " +
-                                    "for incidentId=%s: %s",
-                            event.incidentId(), e.getMessage()), e);
         }
     }
 }

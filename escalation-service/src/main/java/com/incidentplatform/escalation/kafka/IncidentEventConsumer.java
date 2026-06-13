@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
@@ -50,12 +51,26 @@ public class IncidentEventConsumer {
         TenantContext.set(tenantId);
 
         try {
+            // Read eventType from the X-Event-Type header set by
+            // IncidentEventKafkaSender (used by both incident-service and
+            // escalation-service producers). Header-based routing is explicit
+            // and stable — no guessing from payload field presence.
+            final String eventType = extractEventType(record);
+            if (eventType == null) {
+                log.error("Missing {} header — skipping: topic={}, partition={}, offset={}",
+                        IncidentEventTypes.HEADER_NAME,
+                        record.topic(), record.partition(), record.offset());
+                acknowledgment.acknowledge();
+                return;
+            }
+
             final JsonNode event = objectMapper.readTree(record.value());
-            final String eventType = resolveEventType(event);
 
             switch (eventType) {
-                case "IncidentOpenedEvent" -> handleOpened(record, event, tenantId);
-                case "IncidentAcknowledgedEvent" -> handleAcknowledged(event, tenantId);
+                case IncidentEventTypes.INCIDENT_OPENED ->
+                        handleOpened(record, event, tenantId);
+                case IncidentEventTypes.INCIDENT_ACKNOWLEDGED ->
+                        handleAcknowledged(event, tenantId);
                 default -> log.debug("Ignoring event type: {}", eventType);
             }
 
@@ -118,13 +133,18 @@ public class IncidentEventConsumer {
         }
     }
 
-    private String resolveEventType(JsonNode event) {
-        if (event.has("acknowledgedBy")) return "IncidentAcknowledgedEvent";
-        if (event.has("resolvedBy") && event.has("durationMinutes")) return "IncidentResolvedEvent";
-        if (event.has("closedBy") || event.has("postmortemId")) return "IncidentClosedEvent";
-        if (event.has("escalationLevel")) return "IncidentEscalatedEvent";
-        if (event.has("severity") && event.has("title")) return "IncidentOpenedEvent";
-        return "UNKNOWN";
+    // Reads the eventType header set by IncidentEventKafkaSender.
+    // Returns null if the header is absent or blank.
+    private String extractEventType(ConsumerRecord<?, ?> record) {
+        final Header header = record.headers()
+                .lastHeader(IncidentEventTypes.HEADER_NAME);
+        if (header != null) {
+            final String value = new String(header.value(), StandardCharsets.UTF_8);
+            if (!value.isBlank()) {
+                return value;
+            }
+        }
+        return null;
     }
 
     // Reads tenantId from the Kafka record header set by TenantKafkaProducerInterceptor.

@@ -1,14 +1,14 @@
 package com.incidentplatform.escalation.scheduler;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.domain.EscalationTaskStatus;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.events.IncidentEscalatedEvent;
+import com.incidentplatform.shared.events.IncidentEventKafkaSender;
+import com.incidentplatform.shared.events.IncidentEventTypes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -17,7 +17,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.core.KafkaTemplate;
 
 import java.time.Instant;
 import java.util.List;
@@ -25,10 +24,11 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willDoNothing;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
@@ -40,7 +40,7 @@ class EscalationSchedulerTest {
     private EscalationTaskRepository taskRepository;
 
     @Mock
-    private KafkaTemplate<String, String> kafkaTemplate;
+    private IncidentEventKafkaSender kafkaSender;
 
     @Mock
     private EscalationService escalationService;
@@ -50,22 +50,15 @@ class EscalationSchedulerTest {
 
     private EscalationScheduler scheduler;
 
-    private static final String TOPIC = "incidents.lifecycle";
     private static final String TENANT_ID = "test-tenant";
 
     @BeforeEach
     void setUp() {
-        final ObjectMapper objectMapper = new ObjectMapper()
-                .registerModule(new JavaTimeModule())
-                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-
         scheduler = new EscalationScheduler(
                 taskRepository,
-                kafkaTemplate,
-                objectMapper,
+                kafkaSender,
                 escalationService,
-                auditEventPublisher,
-                TOPIC);
+                auditEventPublisher);
     }
 
     @Nested
@@ -80,15 +73,14 @@ class EscalationSchedulerTest {
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
-            given(kafkaTemplate.send(anyString(), anyString(), anyString()))
-                    .willReturn(null);
 
             // when
             scheduler.checkAndEscalate();
 
             // then
-            then(kafkaTemplate).should()
-                    .send(eq(TOPIC), eq(TENANT_ID), anyString());
+            then(kafkaSender).should().send(
+                    any(IncidentEscalatedEvent.class),
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED));
             assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
 
             then(escalationService).should().scheduleLevel2Escalation(
@@ -104,15 +96,14 @@ class EscalationSchedulerTest {
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
-            given(kafkaTemplate.send(anyString(), anyString(), anyString()))
-                    .willReturn(null);
 
             // when
             scheduler.checkAndEscalate();
 
             // then
-            then(kafkaTemplate).should()
-                    .send(eq(TOPIC), eq(TENANT_ID), anyString());
+            then(kafkaSender).should().send(
+                    any(IncidentEscalatedEvent.class),
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED));
             assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
 
             then(escalationService).should(never())
@@ -130,8 +121,7 @@ class EscalationSchedulerTest {
             scheduler.checkAndEscalate();
 
             // then
-            then(kafkaTemplate).should(never())
-                    .send(anyString(), anyString(), anyString());
+            then(kafkaSender).should(never()).send(any(), any());
             then(taskRepository).should(never()).save(any());
         }
 
@@ -146,63 +136,63 @@ class EscalationSchedulerTest {
                     .willReturn(List.of(task1, task2));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            given(kafkaTemplate.send(anyString(), anyString(), anyString()))
-                    .willThrow(new RuntimeException("Kafka unavailable"))
-                    .willReturn(null);
+            // First call (task1) throws — simulates IncidentEventKafkaSender
+            // failure. Second call (task2) succeeds.
+            willThrow(new RuntimeException("Kafka unavailable"))
+                    .willDoNothing()
+                    .given(kafkaSender).send(any(), any());
 
             // when
             scheduler.checkAndEscalate();
 
-            // then
-            then(kafkaTemplate).should(times(2))
-                    .send(anyString(), anyString(), anyString());
+            // then — both tasks attempted despite task1's failure
+            then(kafkaSender).should(times(2)).send(any(), any());
         }
 
         @Test
-        @DisplayName("should send valid JSON payload to Kafka")
-        void shouldSendValidJsonPayload() {
+        @DisplayName("should send IncidentEscalatedEvent with correct fields")
+        void shouldSendEventWithCorrectFields() {
             // given
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
-            given(kafkaTemplate.send(anyString(), anyString(), anyString()))
-                    .willReturn(null);
 
             // when
             scheduler.checkAndEscalate();
 
             // then
-            final ArgumentCaptor<String> payloadCaptor =
-                    ArgumentCaptor.forClass(String.class);
-            then(kafkaTemplate).should()
-                    .send(anyString(), anyString(), payloadCaptor.capture());
+            final ArgumentCaptor<IncidentEscalatedEvent> eventCaptor =
+                    ArgumentCaptor.forClass(IncidentEscalatedEvent.class);
+            then(kafkaSender).should().send(
+                    eventCaptor.capture(), eq(IncidentEventTypes.INCIDENT_ESCALATED));
 
-            final String payload = payloadCaptor.getValue();
-            assertThat(payload).contains("incidentId");
-            assertThat(payload).contains("tenantId");
-            assertThat(payload).contains("severity");
-            assertThat(payload).contains("\"CRITICAL\"");
-            assertThat(payload).contains("escalationLevel");
+            final IncidentEscalatedEvent event = eventCaptor.getValue();
+            assertThat(event.incidentId()).isEqualTo(task.getIncidentId());
+            assertThat(event.tenantId()).isEqualTo(TENANT_ID);
+            assertThat(event.severity()).isEqualTo(Severity.CRITICAL);
+            assertThat(event.escalationLevel()).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("should send payload with tenantId as Kafka key")
-        void shouldUseTenantIdAsKafkaKey() {
+        @DisplayName("should send with INCIDENT_ESCALATED event type")
+        void shouldSendWithEscalatedEventType() {
             // given
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
-            given(kafkaTemplate.send(anyString(), anyString(), anyString()))
-                    .willReturn(null);
 
             // when
             scheduler.checkAndEscalate();
 
-            // then
-            then(kafkaTemplate).should()
-                    .send(eq(TOPIC), eq(TENANT_ID), anyString());
+            // then — X-Event-Type header value is set via the eventType argument;
+            // IncidentEventKafkaSender attaches it as a Kafka header so
+            // notification-service can route IncidentEscalatedEvent to
+            // EMAIL/SLACK/SMS without inspecting the payload.
+            then(kafkaSender).should().send(
+                    any(IncidentEscalatedEvent.class),
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED));
         }
     }
 
