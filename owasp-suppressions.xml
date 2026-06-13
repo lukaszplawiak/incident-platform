@@ -160,46 +160,45 @@
     </suppress>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
-         netty-transport* — CVE-2026-42582
+         io.netty:* (any module) — CVE-2026-42582
          VERDICT: FALSE POSITIVE (wrong module + already-fixed version)
 
-         CVE-2026-42582 affects netty-codec-http3, not any netty-transport*
-         artifact. OWASP maps all Netty CVEs to the broad CPE
-         cpe:2.3:a:netty:netty:* which matches any io.netty:* artifact
-         regardless of which specific module is actually affected — same root
-         cause as the angus-activation and micrometer-registry-prometheus
-         suppressions above.
+         CVE-2026-42582 affects netty-codec-http3, a module this project does
+         not depend on (no HTTP/3 usage — this is a Kafka/Spring Boot backend).
 
-         Independently of the module mismatch: the fix for CVE-2026-42582
-         shipped in the 4.1.133.Final release. Every io.netty:netty-transport*
-         artifact in this project is now >= 4.1.135.Final (via Spring Boot
-         3.5.15's managed Netty version) — there is no newer patched release to
-         upgrade to for this CVE.
+         OWASP maps every io.netty:* artifact to the same broad CPE
+         cpe:2.3:a:netty:netty:<version>, with no module-level distinction.
+         CVE-2026-42582's NVD configuration matches this broad CPE regardless
+         of version — netty-transport@4.1.135.Final, then
+         netty-transport-native-unix-common@4.1.135.Final, and now
+         netty-codec@4.1.135.Final have each in turn been flagged with the
+         identical CVE as NVD data refreshed, even though 4.1.135.Final is
+         already past the 4.1.133.Final release that fixed this CVE upstream.
 
-         Regex widened from netty-transport only to netty-transport.* after
-         netty-transport-native-unix-common-4.1.135.Final.jar started reporting
-         this CVE (2026-06-13) once the plain netty-transport artifact was fixed
-         by the Spring Boot 3.5.15 upgrade — same false-positive cause, different
-         sibling artifact from the same Netty release. Covers netty-transport,
-         netty-transport-native-unix-common, and any future netty-transport-native-*
-         artifact from the same release.
+         Narrower regexes (netty-transport@.*, then netty-transport.*@.*) were
+         tried first but this is whack-a-mole: Netty has dozens of modules
+         (netty-buffer, netty-common, netty-handler, netty-resolver, ...) and
+         any of them can be the one that surfaces in dependency:tree after the
+         next NVD refresh. Widened to the full io.netty groupId — this project
+         doesn't use netty-codec-http3 regardless of which sibling module NVD
+         maps the CVE onto next.
 
-         Tracked upstream: a near-identical report (5 different Netty CVEs
-         mismatched onto netty-transport) was filed against OWASP
-         Dependency-Check as issue #8576 on 2026-06-08.
-         Reference: https://github.com/dependency-check/DependencyCheck/issues/8576
+         Tracked upstream: dependency-check/DependencyCheck#8576 (Netty CVEs
+         mismatched across sibling modules via the shared broad CPE).
          ═══════════════════════════════════════════════════════════════════════ -->
     <suppress until="2026-12-31Z">
         <notes>
-            FALSE POSITIVE: CVE-2026-42582 affects netty-codec-http3, not any
-            netty-transport* artifact. OWASP matches via the broad
-            cpe:2.3:a:netty:netty:* CPE that applies to any io.netty:* artifact.
-            Additionally, the fix for this CVE shipped in 4.1.133.Final — every
-            netty-transport* artifact here is 4.1.135.Final (via Spring Boot
-            3.5.15), already past the fixed version.
-            Tracked upstream: dependency-check/DependencyCheck#8576
+            FALSE POSITIVE: CVE-2026-42582 affects netty-codec-http3, which this
+            project does not use (no HTTP/3). OWASP maps every io.netty:*
+            artifact to the same broad cpe:2.3:a:netty:netty:* CPE with no
+            module distinction — netty-transport, then
+            netty-transport-native-unix-common, then netty-codec have each been
+            flagged in turn at 4.1.135.Final, already past the 4.1.133.Final fix.
+            Widened to the whole io.netty groupId to stop the whack-a-mole across
+            Netty's dozens of modules. Tracked upstream:
+            dependency-check/DependencyCheck#8576
         </notes>
-        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport.*@.*$</packageUrl>
+        <packageUrl regex="true">^pkg:maven/io\.netty/.*@.*$</packageUrl>
         <cve>CVE-2026-42582</cve>
     </suppress>
 
