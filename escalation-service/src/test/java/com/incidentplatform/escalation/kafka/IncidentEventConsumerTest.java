@@ -326,11 +326,32 @@ class IncidentEventConsumerTest {
             assertThat(scheduleCaptor.getValue()).isEqualTo("tenant-a");
             assertThat(cancelCaptor.getValue()).isEqualTo("tenant-b");
         }
+    }
+
+    @Nested
+    @DisplayName("acknowledgment")
+    class AcknowledgmentBehavior {
 
         @Test
-        @DisplayName("should acknowledge even when service throws")
-        void shouldAcknowledgeOnException() {
+        @DisplayName("should acknowledge after successful processing")
+        void shouldAcknowledgeAfterSuccess() {
             // given
+            final ConsumerRecord<String, String> record =
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("should NOT acknowledge when escalationService throws transient error")
+        void shouldNotAcknowledgeOnTransientException() {
+            // given — RuntimeException is transient (DB down, network issue)
+            // consumer should return without acknowledging so Kafka redelivers
             final ConsumerRecord<String, String> record =
                     buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
                             IncidentEventTypes.INCIDENT_OPENED);
@@ -342,9 +363,33 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
-            then(acknowledgment).should().acknowledge();
+            // then — NOT acknowledged, Kafka will redeliver
+            then(acknowledgment).should(never()).acknowledge();
             assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("should acknowledge when severity is unrecognized — poison pill")
+        void shouldAcknowledgeOnUnrecognizedSeverity() {
+            // given — bad severity cannot be fixed by retrying
+            final String badSeverityPayload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "UNKNOWN_SEVERITY",
+                      "occurredAt": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, Instant.now());
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(badSeverityPayload, TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — acknowledged to skip the poison pill
+            then(acknowledgment).should().acknowledge();
         }
     }
 }

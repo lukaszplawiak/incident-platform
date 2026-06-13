@@ -72,22 +72,43 @@ public class IncidentEventConsumer {
                 log.debug("Ignoring event type: {}", eventType);
             }
 
-            acknowledgment.acknowledge();
-
         } catch (UnrecognizedSeverityException e) {
-            log.error("Skipping postmortem generation — {}", e.getMessage());
+            // Poison pill — unrecognized severity cannot be fixed by retrying.
+            // Acknowledge to skip and unblock the partition.
+            log.error("Skipping postmortem generation — unrecognized severity: {}",
+                    e.getMessage());
             acknowledgment.acknowledge();
+            return;
+
+        } catch (IllegalArgumentException e) {
+            // Poison pill — malformed payload (bad UUID, missing required field).
+            // Our own IncidentEventKafkaSender produces these events so this
+            // should not happen in production, but if it does retrying won't help.
+            log.error("Poison pill in incident lifecycle event — skipping: " +
+                            "topic={}, partition={}, offset={}, error={}",
+                    record.topic(), record.partition(),
+                    record.offset(), e.getMessage());
+            acknowledgment.acknowledge();
+            return;
 
         } catch (Exception e) {
-            log.error("Failed to process event: topic={}, partition={}, " +
+            // Transient error (DB unavailable, Gemini API issue while saving the
+            // postmortem entity). Do NOT acknowledge — Kafka will redeliver after
+            // consumer restart. Postmortem generation may be delayed but will
+            // not be lost.
+            log.error("Transient error processing event — " +
+                            "will be redelivered: topic={}, partition={}, " +
                             "offset={}, error={}",
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage(), e);
-            acknowledgment.acknowledge();
+            return;
 
         } finally {
             TenantContext.clear();
         }
+
+        // Reached only on success — all error paths return early above.
+        acknowledgment.acknowledge();
     }
 
     private void handleResolved(JsonNode event, String tenantId) {

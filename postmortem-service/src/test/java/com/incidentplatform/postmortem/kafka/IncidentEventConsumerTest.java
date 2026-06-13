@@ -291,27 +291,6 @@ class IncidentEventConsumerTest {
         }
 
         @Test
-        @DisplayName("should clear TenantContext even when postmortemService throws")
-        void shouldClearTenantContextOnException() {
-            // given
-            final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID,
-                            IncidentEventTypes.INCIDENT_RESOLVED);
-
-            org.mockito.BDDMockito.willThrow(new RuntimeException("Gemini error"))
-                    .given(postmortemService)
-                    .generatePostmortem(any(), any(), any(),
-                            any(), any(), any(), anyInt());
-
-            // when
-            consumer.consumeIncidentEvent(record, acknowledgment);
-
-            // then
-            assertThat(TenantContext.getOrNull()).isNull();
-            then(acknowledgment).should().acknowledge();
-        }
-
-        @Test
         @DisplayName("header tenant wins over payload tenant")
         void headerTenantWinsOverPayloadTenant() {
             // given
@@ -340,6 +319,59 @@ class IncidentEventConsumerTest {
             then(postmortemService).should().generatePostmortem(
                     any(), tenantCaptor.capture(), any(), any(), any(), any(), anyInt());
             assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
+        }
+    }
+
+    @Nested
+    @DisplayName("acknowledgment")
+    class AcknowledgmentBehavior {
+
+        @Test
+        @DisplayName("should NOT acknowledge when postmortemService throws transient error")
+        void shouldNotAcknowledgeOnTransientException() {
+            // given — RuntimeException is transient (DB down, Gemini API issue)
+            // consumer should return without acknowledging so Kafka redelivers
+            final ConsumerRecord<String, String> record =
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
+
+            org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
+                    .given(postmortemService)
+                    .generatePostmortem(any(), any(), any(),
+                            any(), any(), any(), anyInt());
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — NOT acknowledged, Kafka will redeliver
+            then(acknowledgment).should(never()).acknowledge();
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("should acknowledge when severity is unrecognized — poison pill")
+        void shouldAcknowledgeOnUnrecognizedSeverity() {
+            // given — bad severity cannot be fixed by retrying
+            final String badSeverityPayload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "UNKNOWN_SEVERITY",
+                      "resolvedBy": "%s",
+                      "durationMinutes": 10,
+                      "occurredAt": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, UUID.randomUUID(), Instant.now());
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(badSeverityPayload, TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — acknowledged to skip the poison pill
+            then(acknowledgment).should().acknowledge();
         }
     }
 }
