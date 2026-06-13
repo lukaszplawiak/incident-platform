@@ -160,6 +160,40 @@
     </suppress>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
+         netty-transport — CVE-2026-42582
+         VERDICT: FALSE POSITIVE (wrong module + already-fixed version)
+
+         CVE-2026-42582 affects netty-codec-http3, not netty-transport. OWASP
+         maps all Netty CVEs to the broad CPE cpe:2.3:a:netty:netty:* which
+         matches any io.netty:* artifact regardless of which specific module
+         is actually affected — same root cause as the angus-activation and
+         micrometer-registry-prometheus suppressions above.
+
+         Independently of the module mismatch: the fix for CVE-2026-42582
+         shipped in the 4.1.133.Final release itself. netty-transport-4.1.133.Final
+         (provided transitively via the Spring Boot 3.5.14 BOM / spring-kafka)
+         IS that version — there is no newer patched release to upgrade to for
+         this CVE.
+
+         Tracked upstream: a near-identical report (5 different Netty CVEs
+         mismatched onto netty-transport) was filed against OWASP
+         Dependency-Check as issue #8576 on 2026-06-08.
+         Reference: https://github.com/dependency-check/DependencyCheck/issues/8576
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2026-12-31Z">
+        <notes>
+            FALSE POSITIVE: CVE-2026-42582 affects netty-codec-http3, not
+            netty-transport. OWASP matches via the broad cpe:2.3:a:netty:netty:*
+            CPE that applies to any io.netty:* artifact. Additionally,
+            netty-transport-4.1.133.Final IS the version that fixed this CVE in
+            the 4.1.133.Final release — no newer patch exists for it.
+            Tracked upstream: dependency-check/DependencyCheck#8576
+        </notes>
+        <packageUrl regex="true">^pkg:maven/io\.netty/netty\-transport@.*$</packageUrl>
+        <cve>CVE-2026-42582</cve>
+    </suppress>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
          tomcat-embed-* — CVE-2026-41284, CVE-2026-41293, CVE-2026-42498,
                           CVE-2026-43512, CVE-2026-43513, CVE-2026-43514,
                           CVE-2026-43515
