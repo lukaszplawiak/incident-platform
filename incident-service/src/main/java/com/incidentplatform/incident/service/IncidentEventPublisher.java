@@ -1,43 +1,33 @@
 package com.incidentplatform.incident.service;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.shared.events.IncidentAcknowledgedEvent;
 import com.incidentplatform.shared.events.IncidentClosedEvent;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
+import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.events.IncidentOpenedEvent;
 import com.incidentplatform.shared.events.IncidentResolvedEvent;
-import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * Builds {@link com.incidentplatform.shared.events.IncidentEvent} records from
+ * {@link Incident} state and publishes them via {@link IncidentEventKafkaSender}.
+ *
+ * <p>Serialization, Kafka headers and send logging are handled by
+ * {@link IncidentEventKafkaSender} — this class is only responsible for
+ * mapping domain state to the correct event type.
+ */
 @Component
 public class IncidentEventPublisher {
 
-    private static final Logger log =
-            LoggerFactory.getLogger(IncidentEventPublisher.class);
+    private final IncidentEventKafkaSender kafkaSender;
 
-    private final KafkaTemplate<String, String> kafkaTemplate;
-    private final ObjectMapper objectMapper;
-    private final String incidentsLifecycleTopic;
-
-    public IncidentEventPublisher(
-            KafkaTemplate<String, String> kafkaTemplate,
-            ObjectMapper objectMapper,
-            @Value("${kafka.topics.incidents-lifecycle}") String incidentsLifecycleTopic) {
-        this.kafkaTemplate = kafkaTemplate;
-        this.objectMapper = objectMapper;
-        this.incidentsLifecycleTopic = incidentsLifecycleTopic;
+    public IncidentEventPublisher(IncidentEventKafkaSender kafkaSender) {
+        this.kafkaSender = kafkaSender;
     }
 
     public void publishOpened(Incident incident) {
@@ -51,7 +41,7 @@ public class IncidentEventPublisher {
                 incident.getSourceType(),
                 Instant.now()
         );
-        publish(incident.getId(), event, IncidentEventTypes.INCIDENT_OPENED);
+        kafkaSender.send(event, IncidentEventTypes.INCIDENT_OPENED);
     }
 
     public void publishAcknowledged(Incident incident, UUID acknowledgedBy) {
@@ -61,7 +51,7 @@ public class IncidentEventPublisher {
                 acknowledgedBy,
                 Instant.now()
         );
-        publish(incident.getId(), event, IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
+        kafkaSender.send(event, IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
     }
 
     public void publishResolved(Incident incident, UUID resolvedBy) {
@@ -80,7 +70,7 @@ public class IncidentEventPublisher {
                 incident.getSeverity(),
                 Instant.now()
         );
-        publish(incident.getId(), event, IncidentEventTypes.INCIDENT_RESOLVED);
+        kafkaSender.send(event, IncidentEventTypes.INCIDENT_RESOLVED);
     }
 
     public void publishClosed(Incident incident, UUID closedBy, UUID postmortemId) {
@@ -91,7 +81,7 @@ public class IncidentEventPublisher {
                 postmortemId,
                 Instant.now()
         );
-        publish(incident.getId(), event, IncidentEventTypes.INCIDENT_CLOSED);
+        kafkaSender.send(event, IncidentEventTypes.INCIDENT_CLOSED);
     }
 
     public void publishEscalated(Incident incident,
@@ -106,44 +96,6 @@ public class IncidentEventPublisher {
                 incident.getTitle(),
                 Instant.now()
         );
-        publish(incident.getId(), event, IncidentEventTypes.INCIDENT_ESCALATED);
-    }
-
-    private void publish(UUID incidentId, Object event, String eventType) {
-        try {
-            final String payload = objectMapper.writeValueAsString(event);
-
-            final ProducerRecord<String, String> record = new ProducerRecord<>(
-                    incidentsLifecycleTopic,
-                    null,
-                    incidentId.toString(),
-                    payload
-            );
-            record.headers().add(new RecordHeader(
-                    IncidentEventTypes.HEADER_NAME,
-                    eventType.getBytes(StandardCharsets.UTF_8)
-            ));
-
-            kafkaTemplate.send(record)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            log.error("Failed to publish {} to Kafka: " +
-                                            "topic={}, incidentId={}",
-                                    eventType, incidentsLifecycleTopic,
-                                    incidentId, ex);
-                        } else {
-                            log.debug("{} published: topic={}, partition={}, " +
-                                            "offset={}, incidentId={}",
-                                    eventType, incidentsLifecycleTopic,
-                                    result.getRecordMetadata().partition(),
-                                    result.getRecordMetadata().offset(),
-                                    incidentId);
-                        }
-                    });
-
-        } catch (JsonProcessingException e) {
-            log.error("Failed to serialize {}: incidentId={}",
-                    eventType, incidentId, e);
-        }
+        kafkaSender.send(event, IncidentEventTypes.INCIDENT_ESCALATED);
     }
 }

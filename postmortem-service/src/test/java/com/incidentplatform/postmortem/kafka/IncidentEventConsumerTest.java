@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.incidentplatform.postmortem.service.PostmortemService;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -60,13 +61,22 @@ class IncidentEventConsumerTest {
     }
 
     private ConsumerRecord<String, String> buildRecord(String payload,
-                                                       String tenantId) {
+                                                       String tenantId,
+                                                       String eventType) {
         final ConsumerRecord<String, String> record =
                 new ConsumerRecord<>(TOPIC, 0, 0L, "key", payload);
         if (tenantId != null) {
             record.headers().add(new RecordHeader(
                     TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
                     tenantId.getBytes(StandardCharsets.UTF_8)));
+        }
+        if (eventType != null) {
+            // X-Event-Type header is set by IncidentEventKafkaSender on every
+            // message. Tests add it explicitly since we're bypassing the
+            // real producer.
+            record.headers().add(new RecordHeader(
+                    IncidentEventTypes.HEADER_NAME,
+                    eventType.getBytes(StandardCharsets.UTF_8)));
         }
         return record;
     }
@@ -116,7 +126,8 @@ class IncidentEventConsumerTest {
         void shouldTriggerPostmortemGenerationWithTenantIdFromHeader() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -135,7 +146,8 @@ class IncidentEventConsumerTest {
         void shouldPassCorrectIncidentId() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -150,7 +162,8 @@ class IncidentEventConsumerTest {
         void shouldPassCorrectSeverity() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -166,7 +179,8 @@ class IncidentEventConsumerTest {
         void shouldPassCorrectDurationMinutes() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -185,7 +199,8 @@ class IncidentEventConsumerTest {
         void shouldAcknowledgeAfterTriggeringPostmortem() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -204,7 +219,8 @@ class IncidentEventConsumerTest {
         void shouldIgnoreOpenedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(), TENANT_ID);
+                    buildRecord(openedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -221,7 +237,8 @@ class IncidentEventConsumerTest {
         void shouldIgnoreAcknowledgedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(acknowledgedEvent(), TENANT_ID);
+                    buildRecord(acknowledgedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -230,6 +247,27 @@ class IncidentEventConsumerTest {
             then(postmortemService).should(never())
                     .generatePostmortem(any(), any(), any(),
                             any(), any(), any(), anyInt());
+            then(acknowledgment).should().acknowledge();
+        }
+    }
+
+    @Nested
+    @DisplayName("missing event type header")
+    class MissingEventTypeHeader {
+
+        @Test
+        @DisplayName("should acknowledge and skip when X-Event-Type header is missing")
+        void shouldAcknowledgeAndSkipWhenEventTypeHeaderMissing() {
+            // given — no eventType header (e.g. a producer that forgot to set it)
+            final ConsumerRecord<String, String> record =
+                    buildRecord(resolvedEvent(), TENANT_ID, null);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — acknowledged to skip, no routing
+            then(acknowledgment).should().acknowledge();
+            then(postmortemService).shouldHaveNoInteractions();
         }
     }
 
@@ -242,7 +280,8 @@ class IncidentEventConsumerTest {
         void shouldClearTenantContextAfterProcessing() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -256,7 +295,8 @@ class IncidentEventConsumerTest {
         void shouldClearTenantContextOnException() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("Gemini error"))
                     .given(postmortemService)
@@ -287,7 +327,8 @@ class IncidentEventConsumerTest {
                     }""", INCIDENT_ID, UUID.randomUUID(), Instant.now());
 
             final ConsumerRecord<String, String> record =
-                    buildRecord(payloadWithDifferentTenant, "header-tenant");
+                    buildRecord(payloadWithDifferentTenant, "header-tenant",
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);

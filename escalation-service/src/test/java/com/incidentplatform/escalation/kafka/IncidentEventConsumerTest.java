@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -59,13 +60,22 @@ class IncidentEventConsumerTest {
     }
 
     private ConsumerRecord<String, String> buildRecord(String payload,
-                                                       String tenantId) {
+                                                       String tenantId,
+                                                       String eventType) {
         final ConsumerRecord<String, String> record =
                 new ConsumerRecord<>(TOPIC, 0, 0L, "key", payload);
         if (tenantId != null) {
             record.headers().add(new RecordHeader(
                     TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
                     tenantId.getBytes(StandardCharsets.UTF_8)));
+        }
+        if (eventType != null) {
+            // X-Event-Type header is set by IncidentEventKafkaSender on every
+            // message. Tests add it explicitly since we're bypassing the
+            // real producer.
+            record.headers().add(new RecordHeader(
+                    IncidentEventTypes.HEADER_NAME,
+                    eventType.getBytes(StandardCharsets.UTF_8)));
         }
         return record;
     }
@@ -109,7 +119,8 @@ class IncidentEventConsumerTest {
         void shouldScheduleEscalationWithTenantId() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID);
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -128,7 +139,8 @@ class IncidentEventConsumerTest {
         void shouldScheduleEscalationWithCorrectSeverity() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(Severity.HIGH), TENANT_ID);
+                    buildRecord(openedEvent(Severity.HIGH), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -143,7 +155,8 @@ class IncidentEventConsumerTest {
         void shouldNotCancelEscalationOnOpenedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID);
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -163,7 +176,8 @@ class IncidentEventConsumerTest {
         void shouldCancelEscalationWithTenantId() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(acknowledgedEvent(), TENANT_ID);
+                    buildRecord(acknowledgedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -178,7 +192,8 @@ class IncidentEventConsumerTest {
         void shouldNotScheduleEscalationOnAcknowledgedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(acknowledgedEvent(), TENANT_ID);
+                    buildRecord(acknowledgedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -198,7 +213,8 @@ class IncidentEventConsumerTest {
         void shouldIgnoreResolvedEvent() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(resolvedEvent(), TENANT_ID);
+                    buildRecord(resolvedEvent(), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_RESOLVED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -208,6 +224,56 @@ class IncidentEventConsumerTest {
                     .scheduleEscalation(any(), any(), any(), any(), any());
             then(escalationService).should(never())
                     .cancelEscalation(any(), any());
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("should ignore IncidentEscalatedEvent (own published event)")
+        void shouldIgnoreEscalatedEvent() {
+            // given — escalation-service also consumes incidents-lifecycle,
+            // so it receives the IncidentEscalatedEvent it just published.
+            final String escalatedEvent = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "escalationLevel": 1,
+                      "severity": "CRITICAL",
+                      "title": "High CPU"
+                    }""", INCIDENT_ID, TENANT_ID);
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(escalatedEvent, TENANT_ID,
+                            IncidentEventTypes.INCIDENT_ESCALATED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then
+            then(escalationService).should(never())
+                    .scheduleEscalation(any(), any(), any(), any(), any());
+            then(escalationService).should(never())
+                    .cancelEscalation(any(), any());
+            then(acknowledgment).should().acknowledge();
+        }
+    }
+
+    @Nested
+    @DisplayName("missing event type header")
+    class MissingEventTypeHeader {
+
+        @Test
+        @DisplayName("should acknowledge and skip when X-Event-Type header is missing")
+        void shouldAcknowledgeAndSkipWhenEventTypeHeaderMissing() {
+            // given — no eventType header (e.g. a producer that forgot to set it)
+            final ConsumerRecord<String, String> record =
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID, null);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — acknowledged to skip, no routing
+            then(acknowledgment).should().acknowledge();
+            then(escalationService).shouldHaveNoInteractions();
         }
     }
 
@@ -220,7 +286,8 @@ class IncidentEventConsumerTest {
         void shouldClearTenantContextAfterProcessing() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID);
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -234,9 +301,11 @@ class IncidentEventConsumerTest {
         void shouldNotLeakTenantIdBetweenRecords() {
             // given
             final ConsumerRecord<String, String> recordA =
-                    buildRecord(openedEvent(Severity.CRITICAL), "tenant-a");
+                    buildRecord(openedEvent(Severity.CRITICAL), "tenant-a",
+                            IncidentEventTypes.INCIDENT_OPENED);
             final ConsumerRecord<String, String> recordB =
-                    buildRecord(acknowledgedEvent(), "tenant-b");
+                    buildRecord(acknowledgedEvent(), "tenant-b",
+                            IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
 
             final ArgumentCaptor<String> scheduleCaptor =
                     ArgumentCaptor.forClass(String.class);
@@ -263,7 +332,8 @@ class IncidentEventConsumerTest {
         void shouldAcknowledgeOnException() {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID);
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
                     .given(escalationService)
