@@ -169,19 +169,16 @@
          OWASP maps every io.netty:* artifact to the same broad CPE
          cpe:2.3:a:netty:netty:<version>, with no module-level distinction.
          CVE-2026-42582's NVD configuration matches this broad CPE regardless
-         of version — netty-transport@4.1.135.Final, then
-         netty-transport-native-unix-common@4.1.135.Final, and now
-         netty-codec@4.1.135.Final have each in turn been flagged with the
-         identical CVE as NVD data refreshed, even though 4.1.135.Final is
-         already past the 4.1.133.Final release that fixed this CVE upstream.
+         of version — netty-transport, netty-transport-native-unix-common, and
+         netty-codec each in turn were flagged at 4.1.135.Final, even though
+         4.1.135.Final is past the 4.1.133.Final release that fixed this CVE
+         upstream.
 
-         Narrower regexes (netty-transport@.*, then netty-transport.*@.*) were
-         tried first but this is whack-a-mole: Netty has dozens of modules
-         (netty-buffer, netty-common, netty-handler, netty-resolver, ...) and
-         any of them can be the one that surfaces in dependency:tree after the
-         next NVD refresh. Widened to the full io.netty groupId — this project
-         doesn't use netty-codec-http3 regardless of which sibling module NVD
-         maps the CVE onto next.
+         Narrower regexes were tried (netty-transport@.*, then
+         netty-transport.*@.*) but this is whack-a-mole: Netty has dozens of
+         modules and any can surface after the next NVD refresh. Widened to the
+         full io.netty groupId — this project doesn't use netty-codec-http3
+         regardless of which sibling module NVD maps the CVE onto next.
 
          Tracked upstream: dependency-check/DependencyCheck#8576 (Netty CVEs
          mismatched across sibling modules via the shared broad CPE).
@@ -189,17 +186,71 @@
     <suppress until="2026-12-31Z">
         <notes>
             FALSE POSITIVE: CVE-2026-42582 affects netty-codec-http3, which this
-            project does not use (no HTTP/3). OWASP maps every io.netty:*
-            artifact to the same broad cpe:2.3:a:netty:netty:* CPE with no
-            module distinction — netty-transport, then
-            netty-transport-native-unix-common, then netty-codec have each been
-            flagged in turn at 4.1.135.Final, already past the 4.1.133.Final fix.
-            Widened to the whole io.netty groupId to stop the whack-a-mole across
-            Netty's dozens of modules. Tracked upstream:
-            dependency-check/DependencyCheck#8576
+            project does not use (no HTTP/3). OWASP maps every io.netty:* artifact
+            to the same broad cpe:2.3:a:netty:netty:* CPE. netty-transport,
+            netty-transport-native-unix-common, and netty-codec each appeared in
+            turn at 4.1.135.Final (past the 4.1.133.Final fix). Suppression widened
+            to full io.netty groupId to stop the whack-a-mole.
+            Tracked upstream: dependency-check/DependencyCheck#8576
         </notes>
         <packageUrl regex="true">^pkg:maven/io\.netty/.*@.*$</packageUrl>
         <cve>CVE-2026-42582</cve>
+    </suppress>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════
+         swagger-ui (embedded in springdoc-openapi) — DOMPurify CVEs
+         CVE-2026-41238, CVE-2026-41239, CVE-2026-41240, GHSA-39q2-94rc-95cp
+         VERDICT: AWAITING FIX IN SPRINGDOC-OPENAPI
+
+         These CVEs affect DOMPurify 3.3.2 bundled inside swagger-ui-5.32.2.jar
+         which ships with springdoc-openapi 2.8.17 (current latest). The fix
+         exists in DOMPurify 3.4.0 and has been available since April 2026, but
+         springdoc-openapi has not yet released a version bundling it.
+
+         DOMPurify is a client-side JavaScript XSS sanitizer used by the
+         Swagger UI HTML/JS bundle. None of the CVEs affect Java server-side
+         code. Swagger UI in this project is:
+           - Accessible only in development/staging (not production)
+           - Protected by JWT authentication on all API endpoints
+           - Not exposed to untrusted HTML input from end-users
+
+         CVE-2026-41238 (CVSS 6.9): prototype pollution XSS bypass — requires
+           a prior prototype pollution gadget in the same browser context.
+         CVE-2026-41239 (CVSS 6.8): SAFE_FOR_TEMPLATES bypass in RETURN_DOM mode.
+         CVE-2026-41240 (CVSS 6.0): FORBID_TAGS/FORBID_ATTR inconsistency.
+         GHSA-39q2-94rc-95cp (CVSS 5.3): ADD_TAGS short-circuit bypass.
+
+         All CVSS scores < 7.0 — do not block the build, but suppressed here
+         to keep the report clean and document the tracking status.
+
+         Renovate will open a PR when springdoc-openapi releases a version
+         bundling DOMPurify >= 3.4.0. Re-evaluate by 2026-12-31.
+         ═══════════════════════════════════════════════════════════════════════ -->
+    <suppress until="2026-12-31Z">
+        <notes>
+            AWAITING FIX: DOMPurify 3.4.0 fixes all four CVEs but springdoc-openapi
+            2.8.17 (current latest) still bundles swagger-ui with DOMPurify 3.3.2.
+            All CVEs are client-side JS only (CVSS 5.3-6.9, non-blocking). Swagger
+            UI is JWT-protected and not exposed to untrusted HTML input in this
+            project. Renovate will PR when springdoc-openapi ships DOMPurify 3.4.0+.
+        </notes>
+        <packageUrl regex="true">^pkg:javascript/DOMPurify@.*$</packageUrl>
+        <cve>CVE-2026-41238</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See DOMPurify suppression note for CVE-2026-41238.</notes>
+        <packageUrl regex="true">^pkg:javascript/DOMPurify@.*$</packageUrl>
+        <cve>CVE-2026-41239</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See DOMPurify suppression note for CVE-2026-41238.</notes>
+        <packageUrl regex="true">^pkg:javascript/DOMPurify@.*$</packageUrl>
+        <cve>CVE-2026-41240</cve>
+    </suppress>
+    <suppress until="2026-12-31Z">
+        <notes>See DOMPurify suppression note for CVE-2026-41238.</notes>
+        <packageUrl regex="true">^pkg:javascript/DOMPurify@.*$</packageUrl>
+        <ghsaId>GHSA-39q2-94rc-95cp</ghsaId>
     </suppress>
 
     <!-- ═══════════════════════════════════════════════════════════════════════
@@ -208,24 +259,15 @@
                           CVE-2026-43515
          VERDICT: NO LONGER MATCHES (kept for traceability)
 
-         These suppressions were added on 2026-06-13 while CVEs were being
-         reported against tomcat-embed-core and tomcat-embed-websocket on
-         Tomcat 10.1.54. After the Spring Boot 3.5.14 -> 3.5.15 upgrade and/or
-         the NVD database update completing, these no longer match anything
-         ("Suppression Rule had zero matches" for all 7 CVEs).
-
-         Left in place until 2026-09-30 in case they reappear with a different
-         tomcat-embed-* artifact from the same release; safe to remove at the
-         next review if still zero matches.
-
-         All endpoints in this application require JWT authentication, limiting
-         the practical attack surface in any case.
+         These suppressions were added while CVEs were reported against Tomcat
+         10.1.54. After the Spring Boot 3.5.15 upgrade they no longer match
+         anything ("Suppression Rule had zero matches" for all 7 CVEs).
+         Safe to remove at the next review if still zero matches.
          ═══════════════════════════════════════════════════════════════════════ -->
     <suppress until="2026-09-30Z">
         <notes>
-            NO LONGER MATCHES as of 2026-06-13 (zero matches). Kept for
-            traceability until next review — safe to remove if still unmatched.
-            All endpoints require JWT auth.
+            NO LONGER MATCHES as of 2026-06-13 (zero matches after Spring Boot
+            3.5.15 upgrade). Kept for traceability — safe to remove at next review.
         </notes>
         <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
         <cve>CVE-2026-41284</cve>
