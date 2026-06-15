@@ -19,6 +19,7 @@ public final class AuditEventTypes {
     public static final String INCIDENT_STATUS_CHANGED   = "INCIDENT_STATUS_CHANGED";
     public static final String INCIDENT_ASSIGNED         = "INCIDENT_ASSIGNED";
     public static final String INCIDENT_SEVERITY_UPDATED = "INCIDENT_SEVERITY_UPDATED";
+    public static final String INCIDENT_OPENED           = "INCIDENT_OPENED";
 
     // ── Escalation ──────────────────────────────────────────────────────────
     public static final String ESCALATION_FIRED          = "ESCALATION_FIRED";

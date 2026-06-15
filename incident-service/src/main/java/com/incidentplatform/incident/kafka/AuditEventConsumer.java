@@ -12,6 +12,8 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
+
 @Component
 public class AuditEventConsumer {
 
@@ -48,13 +50,38 @@ public class AuditEventConsumer {
                             "tenant={}", message.eventType(), message.incidentId(),
                     message.tenantId());
 
-        } catch (Exception e) {
-            log.error("Failed to process audit event: partition={}, " +
-                            "offset={}, error={}", record.partition(),
-                    record.offset(), e.getMessage(), e);
-        } finally {
+        } catch (IOException | IllegalArgumentException e) {
+            // Poison pill — unparseable JSON or structurally invalid payload.
+            // Retrying will never succeed. Acknowledge to skip and unblock the
+            // partition. A gap in the audit trail is preferable to an infinite
+            // retry loop blocking all subsequent audit events.
+            //
+            // Note: audit trail completeness is best-effort by design — the
+            // audit.events topic carries observability data, not business-critical
+            // state. Gaps caused by poison pills are acceptable and should be
+            // investigated via the logged error below.
+            log.error("Poison pill in audit event — skipping: " +
+                            "topic={}, partition={}, offset={}, error={}",
+                    record.topic(), record.partition(),
+                    record.offset(), e.getMessage());
             acknowledgment.acknowledge();
+            return;
+
+        } catch (Exception e) {
+            // Transient error (DB unavailable, connection pool exhausted).
+            // Do NOT acknowledge — Kafka will redeliver after consumer restart.
+            // At-least-once delivery for audit events is preferred over losing
+            // entries permanently when the DB is temporarily unavailable.
+            log.error("Transient error persisting audit event — " +
+                            "will be redelivered: topic={}, partition={}, " +
+                            "offset={}, error={}",
+                    record.topic(), record.partition(),
+                    record.offset(), e.getMessage(), e);
+            return;
         }
+
+        // Reached only on success — all error paths return early above.
+        acknowledgment.acknowledge();
     }
 
     private AuditEvent toEntity(AuditEventMessage message) {
