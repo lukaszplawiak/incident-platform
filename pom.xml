@@ -50,13 +50,11 @@
         <!-- OWASP plugin version, NVD_API_KEY speeds download from ~15min to ~2min -->
         <owasp.version>12.2.2</owasp.version>
         <!-- ── Security overrides — versions higher than Spring Boot BOM defaults ── -->
-        <!-- CVE-2024-25710, CVE-2024-26308 — fix in 1.26.0, override transitive via testcontainers -->
+        <!-- CVE-2024-25710, CVE-2024-26308 — fix in 1.26.0. Not managed by Spring Boot BOM;
+             declared explicitly in <dependencies> below. Property centralises the version. -->
         <commons-compress.version>1.28.0</commons-compress.version>
-        <!-- CVE-2025-48924 — fix in 3.18.0 -->
-        <commons-lang3.version>3.18.0</commons-lang3.version>
         <!-- CVE-2026-42198 — fix in 42.7.11 -->
         <postgresql.version>42.7.11</postgresql.version>
-
         <!-- NVD API key for OWASP Dependency-Check — speeds up NVD database
              download from ~15 min to ~2 min. Empty by default — override via:
                ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
@@ -196,7 +194,7 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-compress</artifactId>
-            <version>1.28.0</version>
+            <version>${commons-compress.version}</version>
             <scope>test</scope>
         </dependency>
 
