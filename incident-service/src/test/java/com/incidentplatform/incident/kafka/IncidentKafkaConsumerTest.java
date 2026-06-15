@@ -29,7 +29,6 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.then;
@@ -195,9 +194,10 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should route poison pill to DLT and acknowledge")
+        @DisplayName("should route unparseable JSON to DLT and acknowledge — poison pill")
         void shouldRoutePoisonPillToDltAndAcknowledge() {
-            // given — invalid JSON → deserialize throws IllegalArgumentException
+            // given — completely invalid JSON: parseJson() wraps IOException as
+            // IllegalArgumentException → caught by poison-pill catch → DLT
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, "{ invalid json }", TENANT_ID);
 
@@ -215,7 +215,7 @@ class IncidentKafkaConsumerTest {
         @Test
         @DisplayName("should NOT call commandService for poison pill")
         void shouldNotCallCommandServiceForPoisonPill() {
-            // given
+            // given — invalid JSON is caught before commandService is reached
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, "not-json-at-all", TENANT_ID);
 
@@ -227,17 +227,41 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should throw when X-Tenant-Id header is missing")
-        void shouldThrowWhenTenantHeaderMissing() throws Exception {
-            // given
+        @DisplayName("should fall back to payload tenantId when X-Tenant-Id header is missing")
+        void shouldFallBackToPayloadTenantIdWhenHeaderMissing() throws Exception {
+            // given — no header, but payload contains tenantId (step 2 of extraction)
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), null);
 
-            // when / then
-            assertThatThrownBy(() -> consumer.consumeAlert(record, acknowledgment))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Missing tenantId header");
+            // when
+            consumer.consumeAlert(record, acknowledgment);
 
+            // then — tenantId resolved from payload, processing succeeds
+            final ArgumentCaptor<String> tenantCaptor =
+                    ArgumentCaptor.forClass(String.class);
+            then(commandService).should()
+                    .createFromAlert(any(), tenantCaptor.capture());
+            assertThat(tenantCaptor.getValue()).isEqualTo(TENANT_ID);
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("should route to DLT when tenantId missing in both header and payload")
+        void shouldRouteToDltWhenTenantIdMissingInBothHeaderAndPayload() {
+            // given — no header AND payload has no tenantId → step 3: poison pill
+            final String payloadWithoutTenant =
+                    "{\"alertId\":\"" + UUID.randomUUID() + "\",\"severity\":\"CRITICAL\"}";
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RAW, payloadWithoutTenant, null);
+
+            // when
+            consumer.consumeAlert(record, acknowledgment);
+
+            // then — routed to DLT, partition unblocked
+            then(deadLetterPublisher).should()
+                    .publish(anyString(), anyString(), anyString(), anyString());
+            then(acknowledgment).should().acknowledge();
             then(commandService).should(never()).createFromAlert(any(), any());
         }
 
@@ -358,9 +382,9 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should route poison pill to DLT and acknowledge")
+        @DisplayName("should route unparseable JSON to DLT and acknowledge — poison pill")
         void shouldRoutePoisonPillToDltAndAcknowledge() {
-            // given
+            // given — invalid JSON: parseJson() wraps IOException → poison pill
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RESOLVED, "{ bad json }", TENANT_ID);
 
@@ -374,18 +398,41 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should throw when X-Tenant-Id header is missing")
-        void shouldThrowWhenTenantHeaderMissing() throws Exception {
-            // given
+        @DisplayName("should fall back to payload tenantId when X-Tenant-Id header is missing")
+        void shouldFallBackToPayloadTenantIdWhenHeaderMissing() throws Exception {
+            // given — no header, but payload contains tenantId
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RESOLVED, buildResolvedJson(), null);
 
-            // when / then
-            assertThatThrownBy(() ->
-                    consumer.consumeResolvedAlert(record, acknowledgment))
-                    .isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("Missing tenantId header");
+            // when
+            consumer.consumeResolvedAlert(record, acknowledgment);
 
+            // then — tenantId resolved from payload, processing succeeds
+            final ArgumentCaptor<String> tenantCaptor =
+                    ArgumentCaptor.forClass(String.class);
+            then(commandService).should()
+                    .autoResolve(any(), tenantCaptor.capture());
+            assertThat(tenantCaptor.getValue()).isEqualTo(TENANT_ID);
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("should route to DLT when tenantId missing in both header and payload")
+        void shouldRouteToDltWhenTenantIdMissingInBothHeaderAndPayload() {
+            // given — no header AND payload has no tenantId → poison pill
+            final String payloadWithoutTenant =
+                    "{\"alertFingerprint\":\"fp-1\",\"source\":\"prometheus\"}";
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RESOLVED, payloadWithoutTenant, null);
+
+            // when
+            consumer.consumeResolvedAlert(record, acknowledgment);
+
+            // then
+            then(deadLetterPublisher).should()
+                    .publish(anyString(), anyString(), anyString(), anyString());
+            then(acknowledgment).should().acknowledge();
             then(commandService).should(never()).autoResolve(any(), any());
         }
     }

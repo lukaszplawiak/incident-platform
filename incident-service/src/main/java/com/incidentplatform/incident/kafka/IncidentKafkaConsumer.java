@@ -17,6 +17,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 @Component
@@ -52,7 +53,7 @@ public class IncidentKafkaConsumer {
         TenantContext.set("unknown");
 
         try {
-            final JsonNode raw = objectMapper.readTree(record.value());
+            final JsonNode raw = parseJson(record.value());
             final String tenantId = extractTenantId(record, raw);
             TenantContext.set(tenantId);
 
@@ -125,7 +126,7 @@ public class IncidentKafkaConsumer {
         TenantContext.set("unknown");
 
         try {
-            final JsonNode raw = objectMapper.readTree(record.value());
+            final JsonNode raw = parseJson(record.value());
             final String tenantId = extractTenantId(record, raw);
             TenantContext.set(tenantId);
 
@@ -167,6 +168,21 @@ public class IncidentKafkaConsumer {
         }
 
         acknowledgment.acknowledge();
+    }
+
+    /**
+     * Parses the record value as JSON. Wraps {@link IOException} as
+     * {@link IllegalArgumentException} so that an unparseable payload is
+     * treated as a poison pill (routed to DLT) rather than a transient error
+     * (which would cause infinite retry on a permanently broken message).
+     */
+    private JsonNode parseJson(String value) {
+        try {
+            return objectMapper.readTree(value);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Unparseable JSON payload: " + e.getMessage(), e);
+        }
     }
 
     /**

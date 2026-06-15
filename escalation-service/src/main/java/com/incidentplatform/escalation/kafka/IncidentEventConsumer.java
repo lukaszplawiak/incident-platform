@@ -16,6 +16,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
@@ -63,7 +64,7 @@ public class IncidentEventConsumer {
                 return;
             }
 
-            final JsonNode event = objectMapper.readTree(record.value());
+            final JsonNode event = parseJson(record.value());
             final String tenantId = extractTenantId(record, event);
             TenantContext.set(tenantId);
 
@@ -84,8 +85,8 @@ public class IncidentEventConsumer {
             return;
 
         } catch (IllegalArgumentException e) {
-            // Poison pill — missing tenantId, bad UUID, or missing required field.
-            // Retrying will never succeed.
+            // Poison pill — unparseable JSON, missing tenantId, bad UUID, or
+            // missing required field. Retrying will never succeed.
             log.error("Poison pill in incident lifecycle event — skipping: " +
                             "topic={}, partition={}, offset={}, error={}",
                     record.topic(), record.partition(),
@@ -152,6 +153,23 @@ public class IncidentEventConsumer {
         }
     }
 
+    /**
+     * Parses the record value as JSON. Wraps {@link IOException} as
+     * {@link IllegalArgumentException} so that an unparseable payload is
+     * treated as a poison pill (acknowledge + skip) rather than a transient
+     * error (which would cause infinite retry on a permanently broken message).
+     */
+    private JsonNode parseJson(String value) {
+        try {
+            return objectMapper.readTree(value);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Unparseable JSON payload: " + e.getMessage(), e);
+        }
+    }
+
+    // Reads the eventType header set by IncidentEventKafkaSender.
+    // Returns null if the header is absent or blank.
     private String extractEventType(ConsumerRecord<?, ?> record) {
         final Header header = record.headers()
                 .lastHeader(IncidentEventTypes.HEADER_NAME);
