@@ -70,6 +70,17 @@
                 <artifactId>shared</artifactId>
                 <version>${project.version}</version>
             </dependency>
+
+            <!-- CVE-2025-48924 - Uncontrolled Recursion [High] in commons-lang3 < 3.18.0.
+                 Introduced transitively via commons-compress@1.28.0 -> commons-lang3@3.17.0.
+                 Spring Boot BOM does not manage commons-lang3 in user projects, so a direct
+                 dependencyManagement override is required to force 3.18.0 across all modules.
+                 Verified fix: https://security.snyk.io/vuln/SNYK-JAVA-ORGAPACHECOMMONS-10734078 -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.18.0</version>
+            </dependency>
             <dependency>
                 <groupId>org.testcontainers</groupId>
                 <artifactId>testcontainers-bom</artifactId>
