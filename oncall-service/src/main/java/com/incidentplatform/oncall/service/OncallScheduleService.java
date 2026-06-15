@@ -12,6 +12,7 @@ import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,7 +56,7 @@ public class OncallScheduleService {
                     String.format("Invalid on-call role '%s'. " +
                                     "Allowed values: PRIMARY, SECONDARY, MANAGER",
                             request.role()),
-                    org.springframework.http.HttpStatus.BAD_REQUEST
+                    HttpStatus.BAD_REQUEST
             );
         }
 
