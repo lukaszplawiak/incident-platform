@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -27,8 +28,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
-import static org.mockito.BDDMockito.willDoNothing;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
@@ -126,8 +127,32 @@ class EscalationSchedulerTest {
         }
 
         @Test
-        @DisplayName("should continue escalating other tasks if one fails")
-        void shouldContinueAfterOneFailure() {
+        @DisplayName("should persist state before publishing to Kafka — prevents duplicate notifications")
+        void shouldPersistBeforePublishingToKafka() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(task));
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — save() must happen strictly before kafkaSender.send().
+            // If this order were reversed and taskRepository.save() threw after
+            // kafkaSender.send(), @Transactional would roll back the DB state but
+            // the Kafka event would already be in-flight — causing duplicate
+            // on-call notifications on the next scheduler tick.
+            final InOrder order = inOrder(taskRepository, kafkaSender);
+            order.verify(taskRepository).save(any(EscalationTask.class));
+            order.verify(kafkaSender).send(
+                    any(IncidentEscalatedEvent.class),
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED));
+        }
+
+        @Test
+        @DisplayName("should continue escalating other tasks if one Kafka send fails")
+        void shouldContinueAfterOneKafkaSendFailure() {
             // given
             final EscalationTask task1 = buildOverdueTask(1);
             final EscalationTask task2 = buildOverdueTask(1);
@@ -136,8 +161,12 @@ class EscalationSchedulerTest {
                     .willReturn(List.of(task1, task2));
             given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            // First call (task1) throws — simulates IncidentEventKafkaSender
-            // failure. Second call (task2) succeeds.
+            // First kafkaSender.send() (task1) throws after the DB state has
+            // already been persisted. Second call (task2) succeeds.
+            // NOTE: with persist-first ordering, task1 is saved as ESCALATED
+            // in DB even though its Kafka send failed — it will NOT be retried
+            // by the scheduler. This is the at-most-once trade-off documented
+            // in EscalationScheduler (see Outbox Pattern TODO).
             willThrow(new RuntimeException("Kafka unavailable"))
                     .willDoNothing()
                     .given(kafkaSender).send(any(), any());
@@ -145,8 +174,32 @@ class EscalationSchedulerTest {
             // when
             scheduler.checkAndEscalate();
 
-            // then — both tasks attempted despite task1's failure
+            // then — both tasks attempted despite task1's Kafka failure
             then(kafkaSender).should(times(2)).send(any(), any());
+            // task2 was also saved
+            then(taskRepository).should(times(2)).save(any());
+        }
+
+        @Test
+        @DisplayName("should NOT send Kafka event when DB save fails — prevents stale task from being re-escalated")
+        void shouldNotSendKafkaEventWhenDbSaveFails() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(task));
+
+            // DB save throws — simulates connection pool exhaustion or timeout
+            willThrow(new RuntimeException("DB connection lost"))
+                    .given(taskRepository).save(any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — kafkaSender.send() must NOT be called.
+            // Since DB rolled back, findDueForEscalation() will return this task
+            // again on the next tick and escalation will be retried cleanly —
+            // no duplicate notification sent.
+            then(kafkaSender).should(never()).send(any(), any());
         }
 
         @Test

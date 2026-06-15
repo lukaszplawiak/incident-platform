@@ -89,14 +89,41 @@ public class EscalationScheduler {
                 Instant.now()
         );
 
-        // Delegates to shared IncidentEventKafkaSender — sets the X-Event-Type
-        // header (read by notification-service to route this to EMAIL/SLACK/SMS)
-        // and uses incidentId as the Kafka key, consistent with
-        // IncidentEventPublisher in incident-service.
-        kafkaSender.send(event, IncidentEventTypes.INCIDENT_ESCALATED);
+        // ── Ordering: persist state BEFORE publishing to Kafka ───────────────
+        //
+        // task.markEscalated() + taskRepository.save() happen first so that if
+        // kafkaSender.send() throws afterwards, the @Transactional context on
+        // checkAndEscalate() has already committed the ESCALATED status to the
+        // database (save() is called inside the same transaction).
+        // findDueForEscalation() will therefore NOT return this task again on the
+        // next scheduler tick — preventing duplicate notifications (double SMS /
+        // email / Slack) to the on-call engineer.
+        //
+        // Trade-off — at-most-once Kafka delivery:
+        // If the process crashes between save() and kafkaSender.send(), the task
+        // is marked ESCALATED in the DB but the Kafka event was never sent —
+        // the on-call engineer will not be notified for this escalation level.
+        //
+        // TODO: For true exactly-once delivery, replace the direct kafkaSender.send()
+        //  call with the Transactional Outbox Pattern:
+        //  1. Persist an OutboxEvent row (same DB transaction as markEscalated()).
+        //  2. A separate OutboxEventRelay scheduler polls PENDING outbox rows,
+        //     sends them to Kafka, then marks them SENT.
+        //  This guarantees that state change and Kafka publish either both happen
+        //  or neither does, even across process crashes.
+        //  Cost: ~5 new classes (OutboxEvent, OutboxEventRepository,
+        //  OutboxEventRelay, OutboxEventStatus, Flyway migration) + idempotent
+        //  consumer in notification-service to handle relay-induced at-least-once.
+        //  Justified when running multiple instances (Kubernetes HPA) or when
+        //  duplicate on-call notifications have business/regulatory consequences.
+        // ────────────────────────────────────────────────────────────────────
 
         task.markEscalated();
         taskRepository.save(task);
+
+        // Publishes to incidents-lifecycle with X-Event-Type header so that
+        // notification-service routes this event to EMAIL/SLACK/SMS.
+        kafkaSender.send(event, IncidentEventTypes.INCIDENT_ESCALATED);
 
         log.info("Incident escalated: incidentId={}, tenant={}, " +
                         "severity={}, escalationLevel={}",
