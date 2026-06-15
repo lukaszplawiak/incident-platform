@@ -17,16 +17,19 @@ public class IncidentAckClient {
     private static final Logger log =
             LoggerFactory.getLogger(IncidentAckClient.class);
 
+    private static final String STATUS_ACKNOWLEDGED = "ACKNOWLEDGED";
+
     private final RestClient restClient;
     private final ServiceTokenProvider serviceTokenProvider;
-
-    @Value("${incident-service.base-url:http://localhost:8082}")
-    private String incidentServiceBaseUrl;
+    private final String incidentServiceBaseUrl;
 
     public IncidentAckClient(RestClient.Builder restClientBuilder,
-                             ServiceTokenProvider serviceTokenProvider) {
+                             ServiceTokenProvider serviceTokenProvider,
+                             @Value("${incident-service.base-url:http://localhost:8082}")
+                             String incidentServiceBaseUrl) {
         this.restClient = restClientBuilder.build();
         this.serviceTokenProvider = serviceTokenProvider;
+        this.incidentServiceBaseUrl = incidentServiceBaseUrl;
     }
 
     public boolean acknowledgeIncident(UUID incidentId,
@@ -37,7 +40,7 @@ public class IncidentAckClient {
 
         try {
             final Map<String, Object> body = Map.of(
-                    "status", "ACKNOWLEDGED",
+                    "status", STATUS_ACKNOWLEDGED,
                     "acknowledgedBy", acknowledgedByUserId.toString()
             );
 
