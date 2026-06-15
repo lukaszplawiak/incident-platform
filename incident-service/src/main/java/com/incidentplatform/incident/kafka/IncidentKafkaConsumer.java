@@ -1,5 +1,6 @@
 package com.incidentplatform.incident.kafka;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.service.IncidentCommandService;
 import com.incidentplatform.shared.domain.Severity;
@@ -16,6 +17,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 @Component
@@ -46,12 +48,16 @@ public class IncidentKafkaConsumer {
         log.debug("Received alert: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        final String tenantId = extractTenantId(record);
-        TenantContext.set(tenantId);
+        // TenantContext is pre-initialised so that finally { TenantContext.clear() }
+        // is always safe, even if extractTenantId() throws before setting it.
+        TenantContext.set("unknown");
 
         try {
-            final UnifiedAlertDto alert = deserialize(record.value(),
-                    UnifiedAlertDto.class);
+            final JsonNode raw = parseJson(record.value());
+            final String tenantId = extractTenantId(record, raw);
+            TenantContext.set(tenantId);
+
+            final UnifiedAlertDto alert = objectMapper.treeToValue(raw, UnifiedAlertDto.class);
 
             // Layer 4 — consumer-side severity prioritization.
             // CRITICAL alerts logged at higher priority for faster identification.
@@ -81,6 +87,7 @@ public class IncidentKafkaConsumer {
                     alert.alertId(), tenantId);
 
         } catch (IllegalArgumentException e) {
+            final String tenantId = TenantContext.getOrNull();
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
@@ -89,14 +96,14 @@ public class IncidentKafkaConsumer {
             deadLetterPublisher.publish(
                     record.value(),
                     record.topic(),
-                    tenantId,
+                    tenantId != null ? tenantId : "unknown",
                     e.getMessage());
 
         } catch (Exception e) {
             log.error("Transient error processing alert — message will be redelivered: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, e.getMessage(), e);
+                    TenantContext.getOrNull(), e.getMessage(), e);
             return;
 
         } finally {
@@ -116,12 +123,15 @@ public class IncidentKafkaConsumer {
         log.debug("Received resolved alert: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        final String tenantId = extractTenantId(record);
-        TenantContext.set(tenantId);
+        TenantContext.set("unknown");
 
         try {
-            final ResolvedAlertNotification notification = deserialize(
-                    record.value(), ResolvedAlertNotification.class);
+            final JsonNode raw = parseJson(record.value());
+            final String tenantId = extractTenantId(record, raw);
+            TenantContext.set(tenantId);
+
+            final ResolvedAlertNotification notification =
+                    objectMapper.treeToValue(raw, ResolvedAlertNotification.class);
 
             log.info("Processing resolved alert: fingerprint={}, source={}, tenant={}",
                     notification.alertFingerprint(), notification.source(), tenantId);
@@ -133,6 +143,7 @@ public class IncidentKafkaConsumer {
 
         } catch (IllegalArgumentException e) {
             // Poison pill — route to DLT and acknowledge to unblock partition.
+            final String tenantId = TenantContext.getOrNull();
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
@@ -141,7 +152,7 @@ public class IncidentKafkaConsumer {
             deadLetterPublisher.publish(
                     record.value(),
                     record.topic(),
-                    tenantId,
+                    tenantId != null ? tenantId : "unknown",
                     e.getMessage());
 
         } catch (Exception e) {
@@ -149,7 +160,7 @@ public class IncidentKafkaConsumer {
             log.error("Transient error processing resolved alert — will be redelivered: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, e.getMessage(), e);
+                    TenantContext.getOrNull(), e.getMessage(), e);
             return;
 
         } finally {
@@ -159,9 +170,37 @@ public class IncidentKafkaConsumer {
         acknowledgment.acknowledge();
     }
 
-    // Reads tenantId from the Kafka record header set by TenantKafkaProducerInterceptor.
-    // Each record on a multi-tenant topic carries its own tenantId header.
-    private String extractTenantId(ConsumerRecord<?, ?> record) {
+    /**
+     * Parses the record value as JSON. Wraps {@link IOException} as
+     * {@link IllegalArgumentException} so that an unparseable payload is
+     * treated as a poison pill (routed to DLT) rather than a transient error
+     * (which would cause infinite retry on a permanently broken message).
+     */
+    private JsonNode parseJson(String value) {
+        try {
+            return objectMapper.readTree(value);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Unparseable JSON payload: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Resolves the tenant for a Kafka record using a three-step strategy:
+     *
+     * <ol>
+     *   <li><b>Header</b> — reads {@code X-Tenant-Id} set by
+     *       {@link TenantKafkaProducerInterceptor} (fast path, no deserialization needed).
+     *   <li><b>Payload</b> — falls back to the {@code tenantId} field in the JSON body.
+     *       This covers replay scenarios, manual publishes, or messages produced by a
+     *       non-standard producer that skipped the interceptor.
+     *   <li><b>Poison pill</b> — if absent in both, throws {@link IllegalArgumentException}
+     *       so the caller's catch block routes the record to the dead-letter topic.
+     *       Creating an incident with an unknown tenant would corrupt domain data.
+     * </ol>
+     */
+    private String extractTenantId(ConsumerRecord<?, ?> record, JsonNode payload) {
+        // Step 1 — Kafka header (set by TenantKafkaProducerInterceptor)
         final Header header = record.headers()
                 .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
         if (header != null) {
@@ -170,19 +209,21 @@ public class IncidentKafkaConsumer {
                 return tenantId;
             }
         }
-        throw new IllegalStateException(
-                "Missing tenantId header in Kafka record: topic=" + record.topic() +
+
+        // Step 2 — payload field (fallback for replay / non-interceptor producers)
+        final String payloadTenantId = payload.path("tenantId").asText(null);
+        if (payloadTenantId != null && !payloadTenantId.isBlank()) {
+            log.warn("X-Tenant-Id header missing — resolved tenantId from payload: " +
+                            "topic={}, partition={}, offset={}, tenantId={}",
+                    record.topic(), record.partition(), record.offset(), payloadTenantId);
+            return payloadTenantId;
+        }
+
+        // Step 3 — poison pill: tenantId absent in both header and payload
+        throw new IllegalArgumentException(
+                "Missing tenantId in both X-Tenant-Id header and payload.tenantId: " +
+                        "topic=" + record.topic() +
                         ", partition=" + record.partition() +
                         ", offset=" + record.offset());
-    }
-
-    private <T> T deserialize(String json, Class<T> type) {
-        try {
-            return objectMapper.readValue(json, type);
-        } catch (Exception e) {
-            throw new IllegalArgumentException(
-                    String.format("Failed to deserialize Kafka message to %s: %s",
-                            type.getSimpleName(), e.getMessage()), e);
-        }
     }
 }

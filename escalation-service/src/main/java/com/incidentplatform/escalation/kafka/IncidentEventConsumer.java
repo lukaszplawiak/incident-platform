@@ -16,6 +16,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
@@ -45,10 +46,9 @@ public class IncidentEventConsumer {
         log.debug("Received incident event: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        // Extract tenantId from this specific record's Kafka header.
-        // The incidents-lifecycle topic is multi-tenant — each record must be
-        final String tenantId = extractTenantId(record);
-        TenantContext.set(tenantId);
+        // TenantContext is pre-initialised so that finally { TenantContext.clear() }
+        // is always safe, even if extractTenantId() throws before setting it.
+        TenantContext.set("unknown");
 
         try {
             // Read eventType from the X-Event-Type header set by
@@ -64,11 +64,13 @@ public class IncidentEventConsumer {
                 return;
             }
 
-            final JsonNode event = objectMapper.readTree(record.value());
+            final JsonNode event = parseJson(record.value());
+            final String tenantId = extractTenantId(record, event);
+            TenantContext.set(tenantId);
 
             switch (eventType) {
                 case IncidentEventTypes.INCIDENT_OPENED ->
-                        handleOpened(record, event, tenantId);
+                        handleOpened(event, tenantId);
                 case IncidentEventTypes.INCIDENT_ACKNOWLEDGED ->
                         handleAcknowledged(event, tenantId);
                 default -> log.debug("Ignoring event type: {}", eventType);
@@ -83,9 +85,8 @@ public class IncidentEventConsumer {
             return;
 
         } catch (IllegalArgumentException e) {
-            // Poison pill — malformed payload (bad UUID, missing required field).
-            // Our own IncidentEventKafkaSender produces these events so this
-            // should not happen in production, but if it does retrying won't help.
+            // Poison pill — unparseable JSON, missing tenantId, bad UUID, or
+            // missing required field. Retrying will never succeed.
             log.error("Poison pill in incident lifecycle event — skipping: " +
                             "topic={}, partition={}, offset={}, error={}",
                     record.topic(), record.partition(),
@@ -113,9 +114,7 @@ public class IncidentEventConsumer {
         acknowledgment.acknowledge();
     }
 
-    private void handleOpened(ConsumerRecord<?, ?> record,
-                              JsonNode event,
-                              String tenantId) {
+    private void handleOpened(JsonNode event, String tenantId) {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
         final String title = event.path("title").asText("Unknown incident");
@@ -154,6 +153,21 @@ public class IncidentEventConsumer {
         }
     }
 
+    /**
+     * Parses the record value as JSON. Wraps {@link IOException} as
+     * {@link IllegalArgumentException} so that an unparseable payload is
+     * treated as a poison pill (acknowledge + skip) rather than a transient
+     * error (which would cause infinite retry on a permanently broken message).
+     */
+    private JsonNode parseJson(String value) {
+        try {
+            return objectMapper.readTree(value);
+        } catch (IOException e) {
+            throw new IllegalArgumentException(
+                    "Unparseable JSON payload: " + e.getMessage(), e);
+        }
+    }
+
     // Reads the eventType header set by IncidentEventKafkaSender.
     // Returns null if the header is absent or blank.
     private String extractEventType(ConsumerRecord<?, ?> record) {
@@ -168,9 +182,21 @@ public class IncidentEventConsumer {
         return null;
     }
 
-    // Reads tenantId from the Kafka record header set by TenantKafkaProducerInterceptor.
-    // Each record on a multi-tenant topic carries its own tenantId header —
-    private String extractTenantId(ConsumerRecord<?, ?> record) {
+    /**
+     * Resolves the tenant for a Kafka record using a three-step strategy:
+     *
+     * <ol>
+     *   <li><b>Header</b> — reads {@code X-Tenant-Id} set by
+     *       {@link TenantKafkaProducerInterceptor} (fast path, no deserialization needed).
+     *   <li><b>Payload</b> — falls back to the {@code tenantId} field in the JSON body.
+     *       This covers replay scenarios, manual publishes, or messages produced by a
+     *       non-standard producer that skipped the interceptor.
+     *   <li><b>Poison pill</b> — if absent in both, throws {@link IllegalArgumentException}
+     *       so the caller's catch block routes the record to acknowledge + skip.
+     * </ol>
+     */
+    private String extractTenantId(ConsumerRecord<?, ?> record, JsonNode payload) {
+        // Step 1 — Kafka header (set by TenantKafkaProducerInterceptor)
         final Header header = record.headers()
                 .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
         if (header != null) {
@@ -179,9 +205,21 @@ public class IncidentEventConsumer {
                 return tenantId;
             }
         }
-        log.warn("Missing tenantId Kafka header, falling back to unknown: " +
-                        "topic={}, partition={}, offset={}",
-                record.topic(), record.partition(), record.offset());
-        return "unknown";
+
+        // Step 2 — payload field (fallback for replay / non-interceptor producers)
+        final String payloadTenantId = payload.path("tenantId").asText(null);
+        if (payloadTenantId != null && !payloadTenantId.isBlank()) {
+            log.warn("X-Tenant-Id header missing — resolved tenantId from payload: " +
+                            "topic={}, partition={}, offset={}, tenantId={}",
+                    record.topic(), record.partition(), record.offset(), payloadTenantId);
+            return payloadTenantId;
+        }
+
+        // Step 3 — poison pill: tenantId absent in both header and payload
+        throw new IllegalArgumentException(
+                "Missing tenantId in both X-Tenant-Id header and payload.tenantId: " +
+                        "topic=" + record.topic() +
+                        ", partition=" + record.partition() +
+                        ", offset=" + record.offset());
     }
 }
