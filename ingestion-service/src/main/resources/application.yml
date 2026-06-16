@@ -72,6 +72,11 @@ kafka:
     alerts-resolved: alerts.resolved
     alerts-dead-letter: alerts.dead-letter
     incidents-lifecycle: incidents.lifecycle
+  dead-letter:
+    # How long DLT messages are retained before Kafka deletes them.
+    # Gives operators time to inspect, replay or discard poison pills.
+    # Override per environment: dev=1, staging=7, prod=30.
+    retention-days: ${DEAD_LETTER_RETENTION_DAYS:30}
 
 ingestion:
   prometheus:
