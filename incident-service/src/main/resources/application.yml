@@ -82,6 +82,11 @@ kafka:
     incidents-lifecycle: incidents.lifecycle
     audit-events: audit.events
     incidents-dead-letter: incidents.dead-letter
+  dead-letter:
+    # How long DLT messages are retained before Kafka deletes them.
+    # Gives operators time to inspect, replay or discard poison pills.
+    # Override per environment: dev=1, staging=7, prod=30.
+    retention-days: ${DEAD_LETTER_RETENTION_DAYS:30}
 
 server:
   port: ${SERVER_PORT:8082}

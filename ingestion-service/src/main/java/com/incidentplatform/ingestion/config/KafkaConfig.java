@@ -21,6 +21,9 @@ public class KafkaConfig {
     @Value("${kafka.topics.alerts-dead-letter}")
     private String alertsDeadLetterTopic;
 
+    @Value("${kafka.dead-letter.retention-days:30}")
+    private int deadLetterRetentionDays;
+
     @Bean
     public NewTopic alertsRawTopic() {
         return TopicBuilder
@@ -46,7 +49,7 @@ public class KafkaConfig {
                 .partitions(1)
                 .replicas(1)
                 .config("retention.ms",
-                        String.valueOf(30L * 24 * 60 * 60 * 1000))
+                        String.valueOf((long) deadLetterRetentionDays * 24 * 60 * 60 * 1000))
                 .build();
     }
 
