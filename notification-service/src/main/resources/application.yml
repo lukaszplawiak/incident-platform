@@ -50,7 +50,7 @@ spring:
       enable-auto-commit: false
       properties:
         interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaConsumerInterceptor
-        max.poll.interval.ms: 30000
+        max.poll.interval.ms: 300000
         session.timeout.ms: 15000
         heartbeat.interval.ms: 5000
         max.poll.records: 10
