@@ -12,6 +12,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
+import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -121,13 +122,27 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         return Optional.of(token);
     }
 
+    /**
+     * Skips JWT processing for public paths defined in
+     * {@link SharedSecurityAutoConfiguration#PUBLIC_PATHS}.
+     *
+     * <p>This list is intentionally kept in sync with the Spring Security
+     * {@code permitAll()} matchers in {@link SharedSecurityAutoConfiguration}
+     * by referencing the same constant — a single source of truth for all
+     * public path definitions across the platform.
+     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         final String path = request.getRequestURI();
-        return path.startsWith("/actuator/health")
-                || path.startsWith("/actuator/info")
-                || path.startsWith("/actuator/prometheus")
-                || path.startsWith("/v3/api-docs")
-                || path.startsWith("/swagger-ui");
+        for (final String publicPath : SharedSecurityAutoConfiguration.PUBLIC_PATHS) {
+            // Strip trailing /** for prefix matching
+            final String prefix = publicPath.endsWith("/**")
+                    ? publicPath.substring(0, publicPath.length() - 3)
+                    : publicPath;
+            if (path.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 }
