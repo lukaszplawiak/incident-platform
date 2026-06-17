@@ -6,21 +6,57 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Provides cached JWT service tokens for inter-service authentication.
+ *
+ * <h2>Thread safety</h2>
+ * Tokens are cached in an {@link AtomicReference} holding an immutable
+ * {@link TokenHolder} record. This eliminates two thread-safety issues
+ * present in a naive two-field {@code volatile} approach:
+ *
+ * <ul>
+ *   <li><b>Torn read</b> — two separate {@code volatile} fields
+ *       ({@code cachedToken} and {@code tokenExpiresAt}) can be seen in an
+ *       inconsistent state by a reader thread between the two writes.
+ *       {@code AtomicReference<TokenHolder>} makes the (token, expiresAt) pair
+ *       an atomic unit — a reader always sees either both old or both new values.
+ *   <li><b>Multiple refresh on cold start</b> — multiple threads can pass
+ *       the initial null check before any token is generated. The
+ *       {@code synchronized} {@link #refreshAndGet()} method with an internal
+ *       double-check ensures only one token is ever generated per refresh cycle.
+ * </ul>
+ *
+ * <p>The fast path ({@link #getToken()} reading a non-null, non-expired holder)
+ * is lock-free — only the infrequent refresh path acquires the monitor.
+ */
 @Component
 public class ServiceTokenProvider {
 
     private static final Logger log =
             LoggerFactory.getLogger(ServiceTokenProvider.class);
 
-    private static final long REFRESH_BUFFER_SECONDS = 300L; // 5 minut
+    private static final long REFRESH_BUFFER_SECONDS = 300L;
+
+    /**
+     * Immutable holder for a token and its expiry.
+     * Stored as a single atomic unit to prevent torn reads between
+     * the token string and its associated expiry timestamp.
+     */
+    private record TokenHolder(String token, Instant expiresAt) {
+
+        boolean isValid() {
+            return Instant.now()
+                    .isBefore(expiresAt.minusSeconds(REFRESH_BUFFER_SECONDS));
+        }
+    }
 
     private final JwtUtils jwtUtils;
     private final String serviceName;
     private final long serviceExpirationMs;
 
-    private volatile String cachedToken;
-    private volatile Instant tokenExpiresAt;
+    private final AtomicReference<TokenHolder> tokenRef = new AtomicReference<>();
 
     public ServiceTokenProvider(
             JwtUtils jwtUtils,
@@ -31,31 +67,44 @@ public class ServiceTokenProvider {
         this.serviceExpirationMs = serviceExpirationMs;
     }
 
+    /**
+     * Returns a valid service JWT token, refreshing it if necessary.
+     *
+     * <p>Fast path (token valid): lock-free read from {@link AtomicReference}.
+     * Slow path (missing or expiring token): delegates to {@link #refreshAndGet()}
+     * which is {@code synchronized} to prevent concurrent token generation.
+     */
     public String getToken() {
-        if (needsRefresh()) {
-            refresh();
+        final TokenHolder current = tokenRef.get();
+        if (current != null && current.isValid()) {
+            return current.token();
         }
-        return cachedToken;
+        return refreshAndGet();
     }
 
-    private boolean needsRefresh() {
-        if (cachedToken == null || tokenExpiresAt == null) {
-            return true;
+    /**
+     * Refreshes the cached token under a monitor lock.
+     *
+     * <p>Double-checks validity after acquiring the lock so that only the
+     * first thread actually generates a new token — subsequent threads that
+     * were waiting at the monitor entry will find a valid token and return
+     * immediately.
+     */
+    private synchronized String refreshAndGet() {
+        final TokenHolder current = tokenRef.get();
+        if (current != null && current.isValid()) {
+            return current.token();
         }
-        return Instant.now().isAfter(
-                tokenExpiresAt.minusSeconds(REFRESH_BUFFER_SECONDS));
-    }
 
-    private synchronized void refresh() {
-        if (!needsRefresh()) {
-            return;
-        }
+        final String token = jwtUtils.generateServiceToken(serviceName);
+        final Instant expiresAt = Instant.now().plusMillis(serviceExpirationMs);
+        final TokenHolder fresh = new TokenHolder(token, expiresAt);
 
-        cachedToken = jwtUtils.generateServiceToken(serviceName);
-        tokenExpiresAt = Instant.now()
-                .plusMillis(serviceExpirationMs);
+        tokenRef.set(fresh);
 
-        log.debug("Service token refreshed for service={}, expiresAt={}",
-                serviceName, tokenExpiresAt);
+        log.debug("Service token refreshed: service={}, expiresAt={}",
+                serviceName, expiresAt);
+
+        return token;
     }
 }
