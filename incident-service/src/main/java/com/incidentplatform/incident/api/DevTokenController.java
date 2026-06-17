@@ -4,9 +4,11 @@ import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.SecurityRoles;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,9 +29,41 @@ public class DevTokenController {
     private static final Logger log = LoggerFactory.getLogger(DevTokenController.class);
 
     private final JwtUtils jwtUtils;
+    private final Environment environment;
 
-    public DevTokenController(JwtUtils jwtUtils) {
+    public DevTokenController(JwtUtils jwtUtils,
+                              Environment environment) {
         this.jwtUtils = jwtUtils;
+        this.environment = environment;
+    }
+
+    /**
+     * Fail-fast guard — second line of defence after {@code @Profile}.
+     *
+     * <p>If this bean is somehow instantiated outside the expected profiles
+     * (e.g. misconfigured deployment with SPRING_PROFILES_ACTIVE=dev on prod),
+     * the application will refuse to start rather than expose a token
+     * generation endpoint without authentication.
+     */
+    @PostConstruct
+    void validateNotProduction() {
+        final java.util.List<String> activeProfiles =
+                java.util.Arrays.asList(environment.getActiveProfiles());
+        final boolean isDevOrLocal = activeProfiles.contains("local")
+                || activeProfiles.contains("dev");
+
+        if (!isDevOrLocal) {
+            throw new IllegalStateException(
+                    "DevTokenController must not run outside local/dev profile. " +
+                            "Active profiles: " + activeProfiles + ". " +
+                            "This is a critical security misconfiguration — " +
+                            "set SPRING_PROFILES_ACTIVE=prod to fix."
+            );
+        }
+
+        log.warn("DevTokenController is ACTIVE — profile(s): {}. " +
+                "Token generation is available at /dev/token. " +
+                "This must NOT run in production.", activeProfiles);
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
