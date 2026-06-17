@@ -1,92 +1,43 @@
 package com.incidentplatform.ingestion.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
+import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
-import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-import org.springframework.web.cors.CorsConfigurationSource;
 
-import java.util.List;
-
+/**
+ * ingestion-service security configuration.
+ *
+ * <p>Extends the platform baseline from
+ * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} with
+ * service-specific public path rules.
+ *
+ * <p>CORS and security headers are provided by the shared auto-configuration
+ * {@link SharedSecurityAutoConfiguration#corsConfigurationSource()} and
+ * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} respectively.
+ * Override {@code security.cors.allowed-origins} in {@code application.yml}
+ * to change allowed origins per environment.
+ */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
 
-    private final JwtAuthFilter jwtAuthFilter;
-
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
-        this.jwtAuthFilter = jwtAuthFilter;
-    }
-
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        return http
-                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                .csrf(AbstractHttpConfigurer::disable)
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-
+    public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   JwtAuthFilter jwtAuthFilter,
+                                                   org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource)
+            throws Exception {
+        return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
-                                "/actuator/health",
-                                "/actuator/health/**",
-                                "/actuator/info",
-                                "/actuator/prometheus").permitAll()
-
-                        .requestMatchers(
-                                "/v3/api-docs/**",
-                                "/swagger-ui/**",
-                                "/swagger-ui.html").permitAll()
-                        .requestMatchers(
-                                "/actuator/health",
-                                "/actuator/health/**",
-                                "/actuator/info",
-                                "/actuator/prometheus").permitAll()
-                        .requestMatchers("/error").permitAll()
-                        .requestMatchers("/api/v1/alerts/**").authenticated()
+                        .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
                         .anyRequest().authenticated()
                 )
-
-                .headers(headers -> headers
-                        .frameOptions(frame -> frame.deny())
-                        .xssProtection(xss -> xss.disable())
-                        .contentTypeOptions(content -> {})
-                        .httpStrictTransportSecurity(hsts -> hsts
-                                .maxAgeInSeconds(31536000)
-                                .includeSubDomains(true))
-                        .referrerPolicy(referrer -> referrer
-                                .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy
-                                        .STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
-                )
-
-                .addFilterBefore(jwtAuthFilter,
-                        UsernamePasswordAuthenticationFilter.class)
                 .build();
-    }
-
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of(
-                "http://localhost:4200"
-                // TODO: add production domain before deploy
-        ));
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
-        config.setAllowCredentials(true);
-
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", config);
-        return source;
     }
 }

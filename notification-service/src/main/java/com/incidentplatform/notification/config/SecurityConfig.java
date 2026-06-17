@@ -1,45 +1,37 @@
 package com.incidentplatform.notification.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
+import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
-import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
+/**
+ * notification-service security configuration.
+ *
+ * <p>Extends the platform baseline with a public path for Slack interactive
+ * action callbacks. Slack sends signed POST requests to this endpoint without
+ * a JWT token — authentication is handled by
+ * {@code SlackSignatureVerifier} which validates the {@code X-Slack-Signature}
+ * HMAC header instead.
+ */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
-    private final JwtAuthFilter jwtAuthFilter;
-
-    public SecurityConfig(JwtAuthFilter jwtAuthFilter) {
-        this.jwtAuthFilter = jwtAuthFilter;
-    }
-
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http)
+    public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   JwtAuthFilter jwtAuthFilter)
             throws Exception {
-        return http
-                .csrf(AbstractHttpConfigurer::disable)
-                .sessionManagement(session ->
-                        session.sessionCreationPolicy(
-                                SessionCreationPolicy.STATELESS))
+        return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(
-                                "/actuator/health",
-                                "/actuator/health/**",
-                                "/actuator/info",
-                                "/actuator/prometheus").permitAll()
-                        .requestMatchers("/error").permitAll()
+                        .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
+                        // Slack sends signed callbacks without JWT — verified by SlackSignatureVerifier
                         .requestMatchers("/api/v1/slack/actions").permitAll()
                         .anyRequest().authenticated()
                 )
-                .addFilterBefore(jwtAuthFilter,
-                        UsernamePasswordAuthenticationFilter.class)
                 .build();
     }
 }
