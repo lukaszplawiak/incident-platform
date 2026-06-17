@@ -53,7 +53,6 @@ public class SecurityConfig {
                                 "/actuator/info",
                                 "/actuator/prometheus").permitAll()
                         .requestMatchers("/error").permitAll()
-                        .requestMatchers("/dev/**").permitAll()
                         .requestMatchers("/api/v1/alerts/**").authenticated()
                         .anyRequest().authenticated()
                 )
