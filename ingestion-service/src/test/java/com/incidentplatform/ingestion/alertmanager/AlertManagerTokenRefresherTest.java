@@ -34,7 +34,7 @@ class AlertManagerTokenRefresherTest {
 
     private Path tokenFile;
     private static final String FAKE_TOKEN = "eyJhbGciOiJIUzUxMiJ9.fake.token";
-    private static final long EXPIRATION_MS = 86_400_000L;
+    private static final long SERVICE_EXPIRATION_MS = 3_600_000L; // 1h — matches PT1H default
 
     @BeforeEach
     void setUp() {
@@ -42,19 +42,22 @@ class AlertManagerTokenRefresherTest {
     }
 
     private AlertManagerTokenRefresher createRefresher(boolean enabled) {
+        // getServiceExpirationMs() is called inside refreshToken() — stub it
+        org.mockito.BDDMockito.lenient()
+                .when(jwtUtils.getServiceExpirationMs()).thenReturn(SERVICE_EXPIRATION_MS);
         return new AlertManagerTokenRefresher(
                 jwtUtils,
                 tokenFile.toString(),
-                EXPIRATION_MS,
                 enabled
         );
     }
 
     private AlertManagerTokenRefresher createRefresherWithPath(String path) {
+        org.mockito.BDDMockito.lenient()
+                .when(jwtUtils.getServiceExpirationMs()).thenReturn(SERVICE_EXPIRATION_MS);
         return new AlertManagerTokenRefresher(
                 jwtUtils,
                 path,
-                EXPIRATION_MS,
                 true
         );
     }
