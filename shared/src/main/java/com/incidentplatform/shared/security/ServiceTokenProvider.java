@@ -54,17 +54,14 @@ public class ServiceTokenProvider {
 
     private final JwtUtils jwtUtils;
     private final String serviceName;
-    private final long serviceExpirationMs;
 
     private final AtomicReference<TokenHolder> tokenRef = new AtomicReference<>();
 
     public ServiceTokenProvider(
             JwtUtils jwtUtils,
-            @Value("${spring.application.name:unknown-service}") String serviceName,
-            @Value("${jwt.service-expiration-ms:2592000000}") long serviceExpirationMs) {
-        this.jwtUtils = jwtUtils;
+            @Value("${spring.application.name:unknown-service}") String serviceName) {
+        this.jwtUtils    = jwtUtils;
         this.serviceName = serviceName;
-        this.serviceExpirationMs = serviceExpirationMs;
     }
 
     /**
@@ -97,7 +94,8 @@ public class ServiceTokenProvider {
         }
 
         final String token = jwtUtils.generateServiceToken(serviceName);
-        final Instant expiresAt = Instant.now().plusMillis(serviceExpirationMs);
+        final Instant expiresAt = Instant.now()
+                .plusMillis(jwtUtils.getServiceExpirationMs());
         final TokenHolder fresh = new TokenHolder(token, expiresAt);
 
         tokenRef.set(fresh);

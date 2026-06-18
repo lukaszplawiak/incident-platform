@@ -3,7 +3,9 @@ package com.incidentplatform.shared.security;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import java.time.Duration;
 
 import java.util.List;
 import java.util.Optional;
@@ -19,13 +21,14 @@ class JwtUtilsTest {
     private static final String TEST_SECRET =
             "test-secret-key-minimum-64-characters-long-for-hs512-absolutely-not-for-production";
     private static final long EXPIRATION_MS = 3600_000L;
-    private static final long SERVICE_EXPIRATION_MS = 2592000_000L; // 30 days
+    private static final Duration SERVICE_EXPIRATION = Duration.ofHours(1);
 
     private JwtUtils jwtUtils;
 
     @BeforeEach
     void setUp() {
-        jwtUtils = new JwtUtils(TEST_SECRET, EXPIRATION_MS, SERVICE_EXPIRATION_MS);
+        jwtUtils = new JwtUtils(TEST_SECRET, EXPIRATION_MS, SERVICE_EXPIRATION);
+        jwtUtils.validateServiceExpiration();
     }
 
     @Test
@@ -91,7 +94,7 @@ class JwtUtilsTest {
         // given
         final JwtUtils otherJwtUtils = new JwtUtils(
                 "other-secret-key-minimum-64-characters-long-for-hs512-absolutely-not-prod",
-                EXPIRATION_MS, SERVICE_EXPIRATION_MS);
+                EXPIRATION_MS, SERVICE_EXPIRATION);
         final String tokenWithWrongSignature = otherJwtUtils.generateToken(
                 UUID.randomUUID(), "acme", "user@acme.com", List.of());
 
@@ -107,7 +110,8 @@ class JwtUtilsTest {
     @DisplayName("should return empty for expired token")
     void shouldReturnEmptyForExpiredToken() {
         // given
-        final JwtUtils expiredJwtUtils = new JwtUtils(TEST_SECRET, 0L, SERVICE_EXPIRATION_MS);
+        final JwtUtils expiredJwtUtils = new JwtUtils(TEST_SECRET, 0L, SERVICE_EXPIRATION);
+        expiredJwtUtils.validateServiceExpiration();
         final String expiredToken = expiredJwtUtils.generateToken(
                 UUID.randomUUID(), "acme", "user@acme.com", List.of());
 
@@ -222,7 +226,7 @@ class JwtUtilsTest {
     @DisplayName("should throw when secret is shorter than 64 characters")
     void shouldThrowWhenSecretTooShort() {
         // then — "short-secret" is only 12 chars, well below 64 minimum for HS512
-        assertThatThrownBy(() -> new JwtUtils("short-secret", EXPIRATION_MS, SERVICE_EXPIRATION_MS))
+        assertThatThrownBy(() -> new JwtUtils("short-secret", EXPIRATION_MS, SERVICE_EXPIRATION))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("64 characters");
     }
@@ -233,7 +237,7 @@ class JwtUtilsTest {
         final String secret52chars = "test-secret-key-minimum-32-characters-long-for-hs256";
         assertThat(secret52chars).hasSize(52);
 
-        assertThatThrownBy(() -> new JwtUtils(secret52chars, EXPIRATION_MS, SERVICE_EXPIRATION_MS))
+        assertThatThrownBy(() -> new JwtUtils(secret52chars, EXPIRATION_MS, SERVICE_EXPIRATION))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("64 characters");
     }
@@ -242,7 +246,7 @@ class JwtUtilsTest {
     @DisplayName("should throw when secret is null")
     void shouldThrowWhenSecretIsNull() {
         // then
-        assertThatThrownBy(() -> new JwtUtils(null, EXPIRATION_MS, SERVICE_EXPIRATION_MS))
+        assertThatThrownBy(() -> new JwtUtils(null, EXPIRATION_MS, SERVICE_EXPIRATION))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -254,7 +258,8 @@ class JwtUtilsTest {
         assertThat(secret64).hasSize(64);
 
         // when/then
-        final JwtUtils utils = new JwtUtils(secret64, EXPIRATION_MS, SERVICE_EXPIRATION_MS);
+        final JwtUtils utils = new JwtUtils(secret64, EXPIRATION_MS, SERVICE_EXPIRATION);
+        utils.validateServiceExpiration();
         assertThat(utils).isNotNull();
     }
 
@@ -277,5 +282,57 @@ class JwtUtilsTest {
         assertThat(jwtUtils.extractEmail(claims)).contains(email);
         assertThat(jwtUtils.extractRoles(claims))
                 .containsExactlyInAnyOrder(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_INGESTOR);
+    }
+
+    // ─── service expiration validation ───────────────────────────────────────
+
+    @Nested
+    @DisplayName("service expiration validation")
+    class ServiceExpirationValidation {
+
+        @Test
+        @DisplayName("should throw when service-expiration is below minimum (10 minutes)")
+        void shouldThrowWhenServiceExpirationTooShort() {
+            final JwtUtils utils = new JwtUtils(
+                    TEST_SECRET, EXPIRATION_MS, Duration.ofMinutes(5));
+
+            assertThatThrownBy(utils::validateServiceExpiration)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("jwt.service-expiration");
+        }
+
+        @Test
+        @DisplayName("should throw when service-expiration exceeds maximum (24 hours)")
+        void shouldThrowWhenServiceExpirationTooLong() {
+            final JwtUtils utils = new JwtUtils(
+                    TEST_SECRET, EXPIRATION_MS, Duration.ofHours(25));
+
+            assertThatThrownBy(utils::validateServiceExpiration)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("jwt.service-expiration");
+        }
+
+        @Test
+        @DisplayName("should accept minimum valid duration (10 minutes)")
+        void shouldAcceptMinimumValidDuration() {
+            final JwtUtils utils = new JwtUtils(
+                    TEST_SECRET, EXPIRATION_MS, Duration.ofMinutes(10));
+            utils.validateServiceExpiration(); // should not throw
+        }
+
+        @Test
+        @DisplayName("should accept maximum valid duration (24 hours)")
+        void shouldAcceptMaximumValidDuration() {
+            final JwtUtils utils = new JwtUtils(
+                    TEST_SECRET, EXPIRATION_MS, Duration.ofHours(24));
+            utils.validateServiceExpiration(); // should not throw
+        }
+
+        @Test
+        @DisplayName("getServiceExpirationMs should return duration in milliseconds")
+        void shouldReturnServiceExpirationMs() {
+            assertThat(jwtUtils.getServiceExpirationMs())
+                    .isEqualTo(Duration.ofHours(1).toMillis());
+        }
     }
 }

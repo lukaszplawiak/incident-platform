@@ -30,14 +30,16 @@ class ServiceTokenProviderTest {
     private JwtUtils jwtUtils;
 
     private static final String SERVICE_NAME  = "notification-service";
-    private static final long   EXPIRATION_MS = 2_592_000_000L; // 30 days
+    // 1 hour in millis — matches PT1H default in JwtUtils
+    private static final long   SERVICE_EXPIRATION_MS = 3_600_000L;
     private static final String FAKE_TOKEN    = "eyJhbGciOiJIUzUxMiJ9.fake.token";
 
     private ServiceTokenProvider provider;
 
     @BeforeEach
     void setUp() {
-        provider = new ServiceTokenProvider(jwtUtils, SERVICE_NAME, EXPIRATION_MS);
+        given(jwtUtils.getServiceExpirationMs()).willReturn(SERVICE_EXPIRATION_MS);
+        provider = new ServiceTokenProvider(jwtUtils, SERVICE_NAME);
     }
 
     // ─── basic caching ────────────────────────────────────────────────────────
@@ -90,11 +92,13 @@ class ServiceTokenProviderTest {
         }
 
         @Test
-        @DisplayName("uses serviceExpirationMs — not user expirationMs")
+        @DisplayName("caches token — expiration configured in JwtUtils")
         void usesServiceExpirationMs() {
             // given — provider with 24h expiration (would be user-level, not service)
+            // Duration is configured in JwtUtils, not ServiceTokenProvider
+            // This test verifies single-call caching still holds
             final ServiceTokenProvider shortProvider =
-                    new ServiceTokenProvider(jwtUtils, SERVICE_NAME, 86_400_000L);
+                    new ServiceTokenProvider(jwtUtils, SERVICE_NAME);
 
             given(jwtUtils.generateServiceToken(SERVICE_NAME)).willReturn(FAKE_TOKEN);
 

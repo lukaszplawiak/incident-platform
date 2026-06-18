@@ -38,28 +38,27 @@ public class AlertManagerTokenRefresher {
 
     private final JwtUtils jwtUtils;
     private final String tokenFilePath;
-    private final long serviceExpirationMs;
     private final boolean enabled;
+
+    private static final double REFRESH_FACTOR = 0.8;
 
     private static final String SERVICE_NAME = "alertmanager";
 
     public AlertManagerTokenRefresher(
             JwtUtils jwtUtils,
             @Value("${alertmanager.token-file-path:}") String tokenFilePath,
-            @Value("${jwt.service-expiration-ms:2592000000}") long serviceExpirationMs,
             @Value("${alertmanager.token-refresh-enabled:true}") boolean enabled) {
-        this.jwtUtils = jwtUtils;
+        this.jwtUtils      = jwtUtils;
         this.tokenFilePath = tokenFilePath;
-        this.serviceExpirationMs = serviceExpirationMs;
-        this.enabled = enabled;
+        this.enabled       = enabled;
     }
 
     // Rotates the token file at 80% of the token lifetime.
     // The initial token is created by scripts/generate-alertmanager-token.sh —
     // this method only refreshes it to prevent expiry during long-running deployments.
     @Scheduled(fixedDelayString =
-            "${alertmanager.token-refresh-delay-ms:" +
-                    "#{${jwt.service-expiration-ms:2592000000} * 8 / 10}}")
+            "${alertmanager.token-refresh-delay-ms:"
+                    + "#{@jwtUtils.getServiceExpirationMs() * 8 / 10}}")
     public void refreshToken() {
         if (!isConfigured()) return;
 
@@ -67,11 +66,12 @@ public class AlertManagerTokenRefresher {
             final String token = jwtUtils.generateServiceToken(SERVICE_NAME);
             writeTokenToFile(token);
 
+            final long expirationMs = jwtUtils.getServiceExpirationMs();
             log.info("Alertmanager ingestor token rotated: file={}, " +
                             "expiresInMs={}, nextRotationInMs={}",
                     tokenFilePath,
-                    serviceExpirationMs,
-                    (long) (serviceExpirationMs * 0.8));
+                    expirationMs,
+                    (long) (expirationMs * REFRESH_FACTOR));
 
         } catch (Exception e) {
             log.error("Failed to rotate Alertmanager ingestor token: file={}, error={}",
