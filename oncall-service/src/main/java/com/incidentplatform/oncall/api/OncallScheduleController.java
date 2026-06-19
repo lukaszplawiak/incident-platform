@@ -40,7 +40,7 @@ public class OncallScheduleController {
     @GetMapping("/current")
     public ResponseEntity<?> getCurrentOncall(
             @RequestParam(required = false) String role) {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
 
         if (role != null && !role.isBlank()) {
             log.debug("GET /api/v1/oncall/current?role={}, tenant={}",
@@ -63,7 +63,7 @@ public class OncallScheduleController {
 
     @GetMapping("/schedules")
     public ResponseEntity<List<OncallScheduleDto>> getSchedules() {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
         log.debug("GET /api/v1/oncall/schedules, tenant={}", tenantId);
         return ResponseEntity.ok(service.getSchedules(tenantId));
     }
@@ -71,7 +71,7 @@ public class OncallScheduleController {
     @GetMapping("/schedules/{id}")
     public ResponseEntity<OncallScheduleDto> getById(
             @PathVariable UUID id) {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
         log.debug("GET /api/v1/oncall/schedules/{}, tenant={}", id, tenantId);
         return ResponseEntity.ok(service.getById(id, tenantId));
     }
@@ -79,7 +79,7 @@ public class OncallScheduleController {
     @PostMapping("/schedules")
     public ResponseEntity<OncallScheduleDto> create(
             @Valid @RequestBody CreateOncallScheduleRequest request) {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
         log.debug("POST /api/v1/oncall/schedules, tenant={}, role={}",
                 tenantId, request.role());
 
@@ -89,7 +89,7 @@ public class OncallScheduleController {
 
     @DeleteMapping("/schedules/{id}")
     public ResponseEntity<Void> delete(@PathVariable UUID id) {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
         log.debug("DELETE /api/v1/oncall/schedules/{}, tenant={}", id, tenantId);
         service.delete(id, tenantId);
         return ResponseEntity.noContent().build();

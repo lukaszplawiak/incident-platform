@@ -4,6 +4,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+/**
+ * Thread-local holder for the current request's tenant ID.
+ *
+ * <p>Set by {@link JwtAuthFilter} after validating the JWT for every
+ * authenticated request, and cleared at the end of request processing
+ * (or at the end of Kafka record processing — see the various
+ * {@code IncidentEventConsumer} implementations).
+ */
 public final class TenantContext {
 
     private static final Logger log =
@@ -29,6 +37,18 @@ public final class TenantContext {
         log.debug("TenantContext set for tenant: {}", tenantId);
     }
 
+    /**
+     * Returns the tenant ID for the current thread.
+     *
+     * <p>{@code set()} rejects {@code null}/blank values, so a non-null
+     * return from this method is always a valid, non-blank tenant ID.
+     *
+     * @throws IllegalStateException if no tenant ID has been set for the
+     *         current thread — indicates a programming error (calling code
+     *         outside an authenticated request or Kafka record processing
+     *         context). Use {@link #getOrNull()} or {@link #isSet()} for
+     *         call sites where an unset tenant is an expected, handled case.
+     */
     public static String get() {
         final String tenantId = TENANT_ID.get();
         if (tenantId == null) {
@@ -40,15 +60,11 @@ public final class TenantContext {
         return tenantId;
     }
 
-    public static String getRequired() {
-        final String tenantId = TENANT_ID.get();
-        if (tenantId == null || tenantId.isBlank()) {
-            throw new IllegalStateException(
-                    "TenantContext is empty — JWT filter should have set it");
-        }
-        return tenantId;
-    }
-
+    /**
+     * Returns the tenant ID for the current thread, or {@code null} if unset.
+     * Use when an unset tenant is a valid, expected state that the caller
+     * handles explicitly (e.g. poison-pill detection in Kafka consumers).
+     */
     public static String getOrNull() {
         return TENANT_ID.get();
     }
