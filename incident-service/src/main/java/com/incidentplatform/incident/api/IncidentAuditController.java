@@ -52,7 +52,7 @@ public class IncidentAuditController {
     public ResponseEntity<List<AuditEventDto>> getAuditLog(
             @PathVariable UUID incidentId) {
 
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
 
         log.debug("GET /api/v1/incidents/{}/audit, tenant={}",
                 incidentId, tenantId);

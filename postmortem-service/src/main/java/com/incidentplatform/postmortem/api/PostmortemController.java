@@ -33,7 +33,7 @@ public class PostmortemController {
 
     @GetMapping
     public ResponseEntity<List<PostmortemDto>> getPostmortems() {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
         log.debug("GET /api/v1/postmortems, tenant={}", tenantId);
         return ResponseEntity.ok(postmortemService.getPostmortems(tenantId));
     }
@@ -41,7 +41,7 @@ public class PostmortemController {
     @GetMapping("/incident/{incidentId}")
     public ResponseEntity<PostmortemDto> getByIncidentId(
             @PathVariable UUID incidentId) {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
         log.debug("GET /api/v1/postmortems/incident/{}, tenant={}",
                 incidentId, tenantId);
         return ResponseEntity.ok(
@@ -52,7 +52,7 @@ public class PostmortemController {
     public ResponseEntity<PostmortemDto> updateContent(
             @PathVariable UUID incidentId,
             @Valid @RequestBody UpdatePostmortemRequest request) {
-        final String tenantId = TenantContext.getRequired();
+        final String tenantId = TenantContext.get();
         log.debug("PATCH /api/v1/postmortems/incident/{}, tenant={}",
                 incidentId, tenantId);
         return ResponseEntity.ok(
