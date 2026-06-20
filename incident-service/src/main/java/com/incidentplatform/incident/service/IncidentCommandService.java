@@ -286,16 +286,22 @@ public class IncidentCommandService {
      * and separately deciding what side effects to apply here.
      *
      * <p>Each branch delegates entirely to the entity — acknowledge() handles
-     * its own auto-assign rule, resolve()/close()/escalate() are pure status
-     * transitions. This service no longer inspects incident state to decide
-     * what to do; it only decides *which* domain operation the request maps to.
+     * its own auto-assign rule, resolve()/close() are pure status transitions.
+     * This service no longer inspects incident state to decide what to do;
+     * it only decides *which* domain operation the request maps to.
+     *
+     * <p>ESCALATED is not a reachable target here — escalation is tracked as
+     * an independent attribute (see {@link Incident#getEscalationLevel()}),
+     * not a status this endpoint can set. OPEN is also unreachable since
+     * IncidentFsm has no transitions back to it. The exhaustive switch over
+     * all 4 IncidentStatus values forces a compile error if either is ever
+     * added back without updating this dispatcher.
      */
     private void applyTransition(Incident incident,
                                  IncidentStatus targetStatus,
                                  UUID changedBy) {
         switch (targetStatus) {
             case ACKNOWLEDGED -> incident.acknowledge(changedBy);
-            case ESCALATED    -> incident.escalate();
             case RESOLVED     -> incident.resolve();
             case CLOSED       -> incident.close();
             case OPEN         -> throw BusinessException.invalidStatusTransition(
@@ -308,8 +314,7 @@ public class IncidentCommandService {
             case ACKNOWLEDGED -> AuditEventTypes.INCIDENT_ACKNOWLEDGED;
             case RESOLVED     -> AuditEventTypes.INCIDENT_RESOLVED;
             case CLOSED       -> AuditEventTypes.INCIDENT_CLOSED;
-            case ESCALATED    -> AuditEventTypes.INCIDENT_ESCALATED;
-            default           -> AuditEventTypes.INCIDENT_STATUS_CHANGED;
+            case OPEN         -> AuditEventTypes.INCIDENT_STATUS_CHANGED;
         };
     }
 
@@ -323,9 +328,7 @@ public class IncidentCommandService {
                     eventPublisher.publishResolved(incident, changedBy);
             case CLOSED       ->
                     eventPublisher.publishClosed(incident, changedBy, null);
-            case ESCALATED    ->
-                    eventPublisher.publishEscalated(incident, changedBy, 1);
-            default -> log.debug("No event for status: {}", newStatus);
+            case OPEN -> log.debug("No event for status: {}", newStatus);
         }
     }
 }

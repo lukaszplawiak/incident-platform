@@ -29,24 +29,10 @@ class IncidentFsmTest {
         }
 
         @Test
-        @DisplayName("OPEN → ESCALATED should be allowed")
-        void openToEscalatedShouldBeAllowed() {
-            IncidentFsm.validateTransition(
-                    IncidentStatus.OPEN, IncidentStatus.ESCALATED);
-        }
-
-        @Test
         @DisplayName("ACKNOWLEDGED → RESOLVED should be allowed")
         void acknowledgedToResolvedShouldBeAllowed() {
             IncidentFsm.validateTransition(
                     IncidentStatus.ACKNOWLEDGED, IncidentStatus.RESOLVED);
-        }
-
-        @Test
-        @DisplayName("ESCALATED → ACKNOWLEDGED should be allowed")
-        void escalatedToAcknowledgedShouldBeAllowed() {
-            IncidentFsm.validateTransition(
-                    IncidentStatus.ESCALATED, IncidentStatus.ACKNOWLEDGED);
         }
 
         @Test
@@ -71,25 +57,16 @@ class IncidentFsmTest {
                 // From ACKNOWLEDGED
                 "ACKNOWLEDGED, OPEN",
                 "ACKNOWLEDGED, ACKNOWLEDGED",
-                "ACKNOWLEDGED, ESCALATED",
                 "ACKNOWLEDGED, CLOSED",
-
-                // From ESCALATED
-                "ESCALATED, OPEN",
-                "ESCALATED, ESCALATED",
-                "ESCALATED, RESOLVED",
-                "ESCALATED, CLOSED",
 
                 // From RESOLVED
                 "RESOLVED, OPEN",
                 "RESOLVED, ACKNOWLEDGED",
-                "RESOLVED, ESCALATED",
                 "RESOLVED, RESOLVED",
 
                 // From CLOSED
                 "CLOSED, OPEN",
                 "CLOSED, ACKNOWLEDGED",
-                "CLOSED, ESCALATED",
                 "CLOSED, RESOLVED",
                 "CLOSED, CLOSED"
         })
@@ -110,9 +87,7 @@ class IncidentFsmTest {
         @ParameterizedTest(name = "{0} → {1} should return true")
         @CsvSource({
                 "OPEN, ACKNOWLEDGED",
-                "OPEN, ESCALATED",
                 "ACKNOWLEDGED, RESOLVED",
-                "ESCALATED, ACKNOWLEDGED",
                 "RESOLVED, CLOSED"
         })
         void shouldReturnTrueForAllowedTransitions(
@@ -163,15 +138,12 @@ class IncidentFsmTest {
     class GetAllowedTransitions {
 
         @Test
-        @DisplayName("OPEN should allow ACKNOWLEDGED and ESCALATED")
-        void openShouldAllowAcknowledgedAndEscalated() {
+        @DisplayName("OPEN should allow only ACKNOWLEDGED")
+        void openShouldAllowOnlyAcknowledged() {
             final Set<IncidentStatus> allowed =
                     IncidentFsm.getAllowedTransitions(IncidentStatus.OPEN);
 
-            assertThat(allowed)
-                    .containsExactlyInAnyOrder(
-                            IncidentStatus.ACKNOWLEDGED,
-                            IncidentStatus.ESCALATED);
+            assertThat(allowed).containsExactly(IncidentStatus.ACKNOWLEDGED);
         }
 
         @Test
@@ -180,18 +152,7 @@ class IncidentFsmTest {
             final Set<IncidentStatus> allowed =
                     IncidentFsm.getAllowedTransitions(IncidentStatus.ACKNOWLEDGED);
 
-            assertThat(allowed)
-                    .containsExactly(IncidentStatus.RESOLVED);
-        }
-
-        @Test
-        @DisplayName("ESCALATED should allow only ACKNOWLEDGED")
-        void escalatedShouldAllowOnlyAcknowledged() {
-            final Set<IncidentStatus> allowed =
-                    IncidentFsm.getAllowedTransitions(IncidentStatus.ESCALATED);
-
-            assertThat(allowed)
-                    .containsExactly(IncidentStatus.ACKNOWLEDGED);
+            assertThat(allowed).containsExactly(IncidentStatus.RESOLVED);
         }
 
         @Test
@@ -200,8 +161,7 @@ class IncidentFsmTest {
             final Set<IncidentStatus> allowed =
                     IncidentFsm.getAllowedTransitions(IncidentStatus.RESOLVED);
 
-            assertThat(allowed)
-                    .containsExactly(IncidentStatus.CLOSED);
+            assertThat(allowed).containsExactly(IncidentStatus.CLOSED);
         }
 
         @Test
@@ -223,19 +183,6 @@ class IncidentFsmTest {
         void happyPathShouldBeValid() {
             IncidentFsm.validateTransition(
                     IncidentStatus.OPEN, IncidentStatus.ACKNOWLEDGED);
-            IncidentFsm.validateTransition(
-                    IncidentStatus.ACKNOWLEDGED, IncidentStatus.RESOLVED);
-            IncidentFsm.validateTransition(
-                    IncidentStatus.RESOLVED, IncidentStatus.CLOSED);
-        }
-
-        @Test
-        @DisplayName("escalation path: OPEN → ESCALATED → ACKNOWLEDGED → RESOLVED → CLOSED")
-        void escalationPathShouldBeValid() {
-            IncidentFsm.validateTransition(
-                    IncidentStatus.OPEN, IncidentStatus.ESCALATED);
-            IncidentFsm.validateTransition(
-                    IncidentStatus.ESCALATED, IncidentStatus.ACKNOWLEDGED);
             IncidentFsm.validateTransition(
                     IncidentStatus.ACKNOWLEDGED, IncidentStatus.RESOLVED);
             IncidentFsm.validateTransition(

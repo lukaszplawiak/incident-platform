@@ -475,29 +475,22 @@ class IncidentCommandServiceTest {
      * Test-only dispatcher mirroring IncidentCommandService.applyTransition() —
      * drives an incident to an arbitrary target status using the entity's
      * domain methods, since Incident no longer exposes a generic transitionTo().
-     * Intermediate states are walked in FSM order so multi-step targets
-     * (e.g. CLOSED) pass through their required predecessors.
+     * Walks through ACKNOWLEDGED first when needed, matching IncidentFsm's
+     * linear OPEN -> ACKNOWLEDGED -> RESOLVED -> CLOSED path.
      */
     private void applyTestTransition(Incident incident, IncidentStatus target) {
         if (target == IncidentStatus.OPEN) {
             return;
         }
-        if (incident.getStatus() == IncidentStatus.OPEN
-                && (target == IncidentStatus.ACKNOWLEDGED
-                || target == IncidentStatus.RESOLVED
-                || target == IncidentStatus.CLOSED)) {
-            incident.acknowledge(UUID.randomUUID());
-        }
-        if (target == IncidentStatus.ESCALATED) {
-            incident.escalate();
+        incident.acknowledge(UUID.randomUUID());
+        if (target == IncidentStatus.ACKNOWLEDGED) {
             return;
         }
-        if (target == IncidentStatus.RESOLVED || target == IncidentStatus.CLOSED) {
-            incident.resolve();
+        incident.resolve();
+        if (target == IncidentStatus.RESOLVED) {
+            return;
         }
-        if (target == IncidentStatus.CLOSED) {
-            incident.close();
-        }
+        incident.close();
     }
 
     private ResolvedAlertNotification buildResolvedNotification(String fingerprint) {
