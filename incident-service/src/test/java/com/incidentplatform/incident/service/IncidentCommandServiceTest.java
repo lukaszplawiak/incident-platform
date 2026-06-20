@@ -140,6 +140,30 @@ class IncidentCommandServiceTest {
         }
 
         @Test
+        @DisplayName("should NOT publish any WebSocket event when duplicate severity is unchanged")
+        void shouldNotPublishWebSocketEventWhenSeverityUnchanged() {
+            // given — repeated alert re-fire with identical severity should not
+            // spam the dashboard with a misleading event; nothing changed.
+            final UnifiedAlertDto alert = buildAlert(Severity.HIGH,
+                    "prometheus:highcpuusage:server-1");
+            final Incident existingIncident = buildIncident(Severity.HIGH,
+                    "prometheus:highcpuusage:server-1");
+
+            given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
+                    TENANT_ID, alert.fingerprint())).willReturn(true);
+            given(incidentRepository.findActiveByAlertFingerprintAndTenantId(
+                    alert.fingerprint(), TENANT_ID))
+                    .willReturn(Optional.of(existingIncident));
+
+            // when
+            commandService.createFromAlert(alert, TENANT_ID);
+
+            // then
+            then(webSocketPublisher).should(never()).publishCreated(any());
+            then(webSocketPublisher).should(never()).publishUpdate(any());
+        }
+
+        @Test
         @DisplayName("should update severity when duplicate has lower severity")
         void shouldUpdateSeverityWhenDuplicateHasLowerSeverity() {
             // given
@@ -167,6 +191,35 @@ class IncidentCommandServiceTest {
             then(incidentRepository).should().save(incidentCaptor.capture());
             assertThat(incidentCaptor.getValue().getSeverity())
                     .isEqualTo(Severity.CRITICAL);
+        }
+
+        @Test
+        @DisplayName("should publish WebSocket UPDATE (not CREATED) when duplicate severity changes")
+        void shouldPublishUpdateNotCreatedWhenSeverityChanges() {
+            // given — this is the core regression test for the bug: a duplicate
+            // alert with an escalated severity must never be announced to the
+            // dashboard as a brand new incident.
+            final UnifiedAlertDto alert = buildAlert(Severity.CRITICAL,
+                    "prometheus:highcpuusage:server-1");
+            final Incident existingIncident = buildIncident(Severity.LOW,
+                    "prometheus:highcpuusage:server-1");
+
+            given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
+                    TENANT_ID, alert.fingerprint())).willReturn(true);
+            given(incidentRepository.findActiveByAlertFingerprintAndTenantId(
+                    alert.fingerprint(), TENANT_ID))
+                    .willReturn(Optional.of(existingIncident));
+            given(incidentRepository.save(any(Incident.class)))
+                    .willAnswer(inv -> inv.getArgument(0));
+            given(historyRepository.save(any(IncidentHistory.class)))
+                    .willAnswer(inv -> inv.getArgument(0));
+
+            // when
+            commandService.createFromAlert(alert, TENANT_ID);
+
+            // then
+            then(webSocketPublisher).should(never()).publishCreated(any());
+            then(webSocketPublisher).should().publishUpdate(any(IncidentDto.class));
         }
 
         @Test
