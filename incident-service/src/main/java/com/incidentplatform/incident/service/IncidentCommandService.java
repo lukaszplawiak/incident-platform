@@ -165,10 +165,9 @@ public class IncidentCommandService {
         publishStatusChangeEvent(incident, command.status(), changedBy);
         webSocketPublisher.publishStatusChanged(dto, previousStatus.name());
 
-        final String eventType = resolveAuditEventType(command.status());
         auditEventPublisher.publishUser(
                 incidentId, tenantId,
-                eventType, SERVICE_NAME,
+                command.status().auditEventType(), SERVICE_NAME,
                 changedBy.toString(),
                 String.format("Status changed: %s → %s. %s",
                         previousStatus, command.status(),
@@ -263,13 +262,11 @@ public class IncidentCommandService {
         if (existingOpt.isEmpty()) {
             log.warn("Race condition in dedup: fingerprint={}, tenant={}",
                     alert.fingerprint(), tenantId);
-            // This path creates a brand new incident despite being called from
-            // the "duplicate" branch (TOCTOU race between the exists() check
-            // and this lookup) — treat it as a creation, not an update, by
-            // signalling severityChanged=false and letting the caller in
-            // createFromAlert() know via a dedicated marker. Simpler: just
-            // create it directly here and publish CREATED ourselves, since
-            // this is genuinely a new incident from the client's perspective.
+            // TOCTOU race between the exists() check and this lookup — the
+            // incident was deleted/resolved between the two calls. This is
+            // genuinely a new incident from the client's perspective, so we
+            // create and publish CREATED directly here rather than via the
+            // caller's duplicate-branch logic.
             final IncidentDto created = createNewIncident(alert, tenantId);
             webSocketPublisher.publishCreated(created);
             return new DuplicateAlertResult(created, false);
@@ -326,6 +323,48 @@ public class IncidentCommandService {
      * all 4 IncidentStatus values forces a compile error if either is ever
      * added back without updating this dispatcher.
      */
+    /**
+     * Dispatches a REST-API-driven status change to the corresponding domain
+     * method on {@link Incident}, rather than calling a generic transitionTo()
+     * and separately deciding what side effects to apply here.
+     *
+     * <p>Each branch delegates entirely to the entity — acknowledge() handles
+     * its own auto-assign rule, resolve()/close() are pure status transitions.
+     * This service no longer inspects incident state to decide what to do;
+     * it only decides *which* domain operation the request maps to.
+     *
+     * <h2>Why this is a separate method from {@link #publishStatusChangeEvent}</h2>
+     * Both switches map the same {@link IncidentStatus} and could in
+     * principle be merged into one — each case would mutate the entity AND
+     * publish its Kafka event together, reducing three status-keyed switches
+     * (this one, this audit lookup formerly done by resolveAuditEventType(),
+     * and the publish dispatch below) down to a single one.
+     *
+     * <p>They are kept separate because {@link #updateStatus} persists the
+     * entity (incidentRepository.save() + historyRepository.save() using
+     * the pre-mutation previousStatus) <em>between</em> the mutation and the
+     * Kafka publish — the same persist-before-publish ordering used in
+     * EscalationScheduler to avoid duplicate-notification risk if the DB
+     * save fails. Merging these two switches into one call would either
+     * require publishing before the DB commit (reintroducing that risk) or
+     * threading the save/history calls awkwardly into the middle of a single
+     * switch body (worse readability than two short, clearly-sequenced ones).
+     *
+     * <p>auditEventType has already been eliminated as a third switch — see
+     * {@link IncidentStatus#auditEventType()}.
+     *
+     * <p>TODO: The principled fix for this whole class of duplication is the
+     *  Domain Events pattern: Incident.acknowledge()/resolve()/close() would
+     *  internally register a domain event (e.g. IncidentAcknowledgedEvent) on
+     *  the entity instead of the caller inferring what happened from the
+     *  target status. After save(), the service drains the entity's recorded
+     *  events and publishes each one through a uniform dispatcher — no
+     *  status-keyed switch needed at all, because the entity itself reports
+     *  what occurred. This is a larger architectural change (new event
+     *  collection mechanism on Incident, a generic publish-after-save hook)
+     *  deferred until it's justified by a second entity needing the same
+     *  treatment or by this dispatch logic growing beyond 4 statuses.
+     */
     private void applyTransition(Incident incident,
                                  IncidentStatus targetStatus,
                                  UUID changedBy) {
@@ -336,15 +375,6 @@ public class IncidentCommandService {
             case OPEN         -> throw BusinessException.invalidStatusTransition(
                     incident.getStatus().name(), targetStatus.name());
         }
-    }
-
-    private String resolveAuditEventType(IncidentStatus status) {
-        return switch (status) {
-            case ACKNOWLEDGED -> AuditEventTypes.INCIDENT_ACKNOWLEDGED;
-            case RESOLVED     -> AuditEventTypes.INCIDENT_RESOLVED;
-            case CLOSED       -> AuditEventTypes.INCIDENT_CLOSED;
-            case OPEN         -> AuditEventTypes.INCIDENT_STATUS_CHANGED;
-        };
     }
 
     private void publishStatusChangeEvent(Incident incident,
