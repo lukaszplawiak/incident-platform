@@ -20,18 +20,31 @@ public class IncidentWebSocketPublisher {
         this.messagingTemplate = messagingTemplate;
     }
 
+    /**
+     * Publishes a generic update for an incident whose status did NOT change
+     * (e.g. severity update on a duplicate alert, assignee change). Uses the
+     * {@code INCIDENT_UPDATED} event type so frontend clients can distinguish
+     * "this incident's data changed" from {@link #publishCreated} (new row)
+     * and {@link #publishStatusChanged} (status transition, different toast
+     * copy). Previously this method sent the raw {@link IncidentDto} without
+     * any {@code eventType} wrapper — inconsistent with the other two publish
+     * methods and unrecognized by the frontend's event switch, so updates
+     * silently failed to refresh the UI.
+     */
     public void publishUpdate(IncidentDto incident) {
         final String topic = INCIDENTS_TOPIC_PREFIX + incident.tenantId();
 
         try {
-            messagingTemplate.convertAndSend(topic, incident);
+            final WebSocketMessage message = new WebSocketMessage(
+                    "INCIDENT_UPDATED", incident);
+            messagingTemplate.convertAndSend(topic, message);
 
-            log.debug("WebSocket update published: topic={}, incidentId={}, " +
+            log.debug("WebSocket UPDATED published: topic={}, incidentId={}, " +
                             "status={}, tenant={}",
                     topic, incident.id(), incident.status(), incident.tenantId());
 
         } catch (Exception e) {
-            log.error("Failed to publish WebSocket update: topic={}, " +
+            log.error("Failed to publish WebSocket UPDATED: topic={}, " +
                             "incidentId={}, tenant={}",
                     topic, incident.id(), incident.tenantId(), e);
         }
