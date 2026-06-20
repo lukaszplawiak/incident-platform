@@ -101,6 +101,9 @@ public class Incident {
     @Column(name = "version", nullable = false)
     private Long version;
 
+    @Column(name = "escalation_level", nullable = false)
+    private int escalationLevel = 0;
+
     protected Incident() {}
 
     public Incident(String tenantId,
@@ -146,12 +149,6 @@ public class Incident {
         }
     }
 
-    public void escalate() {
-        IncidentFsm.validateTransition(this.status, IncidentStatus.ESCALATED);
-        this.status = IncidentStatus.ESCALATED;
-        this.updatedAt = Instant.now();
-    }
-
     public void resolve() {
         IncidentFsm.validateTransition(this.status, IncidentStatus.RESOLVED);
         this.status = IncidentStatus.RESOLVED;
@@ -168,6 +165,25 @@ public class Incident {
 
     public void assignTo(UUID userId) {
         this.assignedTo = userId;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Records the current escalation level as reported by escalation-service's
+     * IncidentEscalatedEvent. This is an independent attribute, not a status
+     * transition — it does not go through IncidentFsm and does not affect
+     * {@link #getStatus()}. An incident can be ACKNOWLEDGED and escalated to
+     * level 2 at the same time.
+     *
+     * <p>Called by IncidentEscalationEventConsumer when incident-service
+     * consumes its own published event back from incidents.lifecycle —
+     * closing the loop so the locally stored escalation level always reflects
+     * what escalation-service's EscalationScheduler has actually done,
+     * including automatic (timeout-driven) escalations that never go through
+     * the REST API.
+     */
+    public void recordEscalation(int escalationLevel) {
+        this.escalationLevel = escalationLevel;
         this.updatedAt = Instant.now();
     }
 
@@ -208,4 +224,5 @@ public class Incident {
     public Instant getCreatedAt()          { return createdAt; }
     public Instant getUpdatedAt()          { return updatedAt; }
     public Long getVersion()               { return version; }
+    public int getEscalationLevel()        { return escalationLevel; }
 }

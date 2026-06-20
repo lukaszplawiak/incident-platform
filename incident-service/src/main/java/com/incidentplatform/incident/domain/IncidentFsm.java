@@ -10,14 +10,10 @@ public final class IncidentFsm {
     private static final Map<IncidentStatus, Set<IncidentStatus>> ALLOWED_TRANSITIONS =
             Map.of(
                     IncidentStatus.OPEN, Set.of(
-                            IncidentStatus.ACKNOWLEDGED,
-                            IncidentStatus.ESCALATED
+                            IncidentStatus.ACKNOWLEDGED
                     ),
                     IncidentStatus.ACKNOWLEDGED, Set.of(
                             IncidentStatus.RESOLVED
-                    ),
-                    IncidentStatus.ESCALATED, Set.of(
-                            IncidentStatus.ACKNOWLEDGED
                     ),
                     IncidentStatus.RESOLVED, Set.of(
                             IncidentStatus.CLOSED

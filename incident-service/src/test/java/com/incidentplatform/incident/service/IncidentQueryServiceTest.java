@@ -304,9 +304,7 @@ class IncidentQueryServiceTest {
 
             // then
             assertThat(result.allowedTransitions())
-                    .containsExactlyInAnyOrder(
-                            IncidentStatus.ACKNOWLEDGED,
-                            IncidentStatus.ESCALATED);
+                    .containsExactly(IncidentStatus.ACKNOWLEDGED);
         }
     }
 
