@@ -60,11 +60,22 @@ public class IncidentCommandService {
                 incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
                         tenantId, alert.fingerprint());
 
-        final IncidentDto result = duplicateExists
-                ? handleDuplicateAlert(alert, tenantId)
-                : createNewIncident(alert, tenantId);
-
-        webSocketPublisher.publishCreated(result);
+        if (duplicateExists) {
+            // An existing incident with this fingerprint is still active —
+            // this is never a "new incident" from the client's point of view.
+            // handleDuplicateAlert() reports whether anything actually changed
+            // (severity escalation) so we only publish a WebSocket event when
+            // there is something for the UI to refresh — repeated re-fires of
+            // the same alert with unchanged severity produce no event at all,
+            // rather than a misleading INCIDENT_CREATED for an incident the
+            // dashboard already has.
+            final DuplicateAlertResult result = handleDuplicateAlert(alert, tenantId);
+            if (result.severityChanged()) {
+                webSocketPublisher.publishUpdate(result.dto());
+            }
+        } else {
+            webSocketPublisher.publishCreated(createNewIncident(alert, tenantId));
+        }
     }
 
     @Transactional
@@ -235,8 +246,15 @@ public class IncidentCommandService {
         return IncidentDto.from(incident);
     }
 
-    private IncidentDto handleDuplicateAlert(UnifiedAlertDto alert,
-                                             String tenantId) {
+    /**
+     * Result of processing a duplicate alert — the resulting DTO and whether
+     * severity was actually changed, so the caller knows whether a
+     * WebSocket update needs to be published.
+     */
+    private record DuplicateAlertResult(IncidentDto dto, boolean severityChanged) {}
+
+    private DuplicateAlertResult handleDuplicateAlert(UnifiedAlertDto alert,
+                                                      String tenantId) {
         final var existingOpt = incidentRepository
                 .findActiveByAlertFingerprintAndTenantId(
                         alert.fingerprint(), tenantId);
@@ -244,39 +262,48 @@ public class IncidentCommandService {
         if (existingOpt.isEmpty()) {
             log.warn("Race condition in dedup: fingerprint={}, tenant={}",
                     alert.fingerprint(), tenantId);
-            return createNewIncident(alert, tenantId);
+            // TOCTOU race between the exists() check and this lookup — the
+            // incident was deleted/resolved between the two calls. This is
+            // genuinely a new incident from the client's perspective, so we
+            // create and publish CREATED directly here rather than via the
+            // caller's duplicate-branch logic.
+            final IncidentDto created = createNewIncident(alert, tenantId);
+            webSocketPublisher.publishCreated(created);
+            return new DuplicateAlertResult(created, false);
         }
 
         final Incident existing = existingOpt.get();
 
-        if (alert.severity().isHigherThan(existing.getSeverity())) {
-            final String previousSeverity = existing.getSeverity().name();
-            existing.updateSeverity(alert.severity());
-            incidentRepository.save(existing);
-
-            historyRepository.save(IncidentHistory.forAutomaticChange(
-                    existing.getId(), tenantId,
-                    existing.getStatus(), existing.getStatus(),
-                    ChangeSource.KAFKA_CONSUMER,
-                    String.format("Severity escalated: %s → %s",
-                            previousSeverity, alert.severity().name())
-            ));
-
-            log.info("Severity updated: incidentId={}, {} → {}, tenant={}",
-                    existing.getId(), previousSeverity,
-                    alert.severity(), tenantId);
-
-            auditEventPublisher.publishSystem(
-                    existing.getId(), tenantId,
-                    AuditEventTypes.INCIDENT_SEVERITY_UPDATED, SERVICE_NAME,
-                    String.format("Severity updated: %s → %s",
-                            previousSeverity, alert.severity().name()),
-                    Map.of("previousSeverity", previousSeverity,
-                            "newSeverity", alert.severity().name())
-            );
+        if (!alert.severity().isHigherThan(existing.getSeverity())) {
+            return new DuplicateAlertResult(IncidentDto.from(existing), false);
         }
 
-        return IncidentDto.from(existing);
+        final String previousSeverity = existing.getSeverity().name();
+        existing.updateSeverity(alert.severity());
+        incidentRepository.save(existing);
+
+        historyRepository.save(IncidentHistory.forAutomaticChange(
+                existing.getId(), tenantId,
+                existing.getStatus(), existing.getStatus(),
+                ChangeSource.KAFKA_CONSUMER,
+                String.format("Severity escalated: %s → %s",
+                        previousSeverity, alert.severity().name())
+        ));
+
+        log.info("Severity updated: incidentId={}, {} → {}, tenant={}",
+                existing.getId(), previousSeverity,
+                alert.severity(), tenantId);
+
+        auditEventPublisher.publishSystem(
+                existing.getId(), tenantId,
+                AuditEventTypes.INCIDENT_SEVERITY_UPDATED, SERVICE_NAME,
+                String.format("Severity updated: %s → %s",
+                        previousSeverity, alert.severity().name()),
+                Map.of("previousSeverity", previousSeverity,
+                        "newSeverity", alert.severity().name())
+        );
+
+        return new DuplicateAlertResult(IncidentDto.from(existing), true);
     }
 
     /**
