@@ -14,6 +14,7 @@ import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.audit.ChangeSource;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
+import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -92,7 +93,7 @@ public class IncidentCommandService {
         }
 
         final IncidentStatus previousStatus = incident.getStatus();
-        incident.transitionTo(IncidentStatus.RESOLVED);
+        incident.resolve();
         incidentRepository.save(incident);
 
         historyRepository.save(IncidentHistory.forAutomaticChange(
@@ -134,12 +135,7 @@ public class IncidentCommandService {
 
         final IncidentStatus previousStatus = incident.getStatus();
 
-        incident.transitionTo(command.status());
-
-        if (command.status() == IncidentStatus.ACKNOWLEDGED
-                && incident.getAssignedTo() == null) {
-            incident.assignTo(changedBy);
-        }
+        applyTransition(incident, command.status(), changedBy);
 
         incidentRepository.save(incident);
 
@@ -282,6 +278,29 @@ public class IncidentCommandService {
         }
 
         return IncidentDto.from(existing);
+    }
+
+    /**
+     * Dispatches a REST-API-driven status change to the corresponding domain
+     * method on {@link Incident}, rather than calling a generic transitionTo()
+     * and separately deciding what side effects to apply here.
+     *
+     * <p>Each branch delegates entirely to the entity — acknowledge() handles
+     * its own auto-assign rule, resolve()/close()/escalate() are pure status
+     * transitions. This service no longer inspects incident state to decide
+     * what to do; it only decides *which* domain operation the request maps to.
+     */
+    private void applyTransition(Incident incident,
+                                 IncidentStatus targetStatus,
+                                 UUID changedBy) {
+        switch (targetStatus) {
+            case ACKNOWLEDGED -> incident.acknowledge(changedBy);
+            case ESCALATED    -> incident.escalate();
+            case RESOLVED     -> incident.resolve();
+            case CLOSED       -> incident.close();
+            case OPEN         -> throw BusinessException.invalidStatusTransition(
+                    incident.getStatus().name(), targetStatus.name());
+        }
     }
 
     private String resolveAuditEventType(IncidentStatus status) {
