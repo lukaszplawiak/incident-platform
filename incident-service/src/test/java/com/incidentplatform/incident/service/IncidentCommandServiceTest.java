@@ -253,7 +253,7 @@ class IncidentCommandServiceTest {
             final String fingerprint = "prometheus:alert:server-1";
             final Incident resolvedIncident = buildIncidentWithStatus(
                     fingerprint, IncidentStatus.ACKNOWLEDGED);
-            resolvedIncident.transitionTo(IncidentStatus.RESOLVED);
+            resolvedIncident.resolve();
 
             final ResolvedAlertNotification notification =
                     buildResolvedNotification(fingerprint);
@@ -467,10 +467,37 @@ class IncidentCommandServiceTest {
     private Incident buildIncidentWithStatus(String fingerprint,
                                              IncidentStatus status) {
         final Incident incident = buildIncident(Severity.HIGH, fingerprint);
-        if (status != IncidentStatus.OPEN) {
-            incident.transitionTo(status);
-        }
+        applyTestTransition(incident, status);
         return incident;
+    }
+
+    /**
+     * Test-only dispatcher mirroring IncidentCommandService.applyTransition() —
+     * drives an incident to an arbitrary target status using the entity's
+     * domain methods, since Incident no longer exposes a generic transitionTo().
+     * Intermediate states are walked in FSM order so multi-step targets
+     * (e.g. CLOSED) pass through their required predecessors.
+     */
+    private void applyTestTransition(Incident incident, IncidentStatus target) {
+        if (target == IncidentStatus.OPEN) {
+            return;
+        }
+        if (incident.getStatus() == IncidentStatus.OPEN
+                && (target == IncidentStatus.ACKNOWLEDGED
+                || target == IncidentStatus.RESOLVED
+                || target == IncidentStatus.CLOSED)) {
+            incident.acknowledge(UUID.randomUUID());
+        }
+        if (target == IncidentStatus.ESCALATED) {
+            incident.escalate();
+            return;
+        }
+        if (target == IncidentStatus.RESOLVED || target == IncidentStatus.CLOSED) {
+            incident.resolve();
+        }
+        if (target == IncidentStatus.CLOSED) {
+            incident.close();
+        }
     }
 
     private ResolvedAlertNotification buildResolvedNotification(String fingerprint) {

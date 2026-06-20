@@ -127,17 +127,43 @@ public class Incident {
         this.updatedAt = Instant.now();
     }
 
-    public void transitionTo(IncidentStatus newStatus) {
-        IncidentFsm.validateTransition(this.status, newStatus);
-        this.status = newStatus;
+    /**
+     * Acknowledges the incident: transitions to {@link IncidentStatus#ACKNOWLEDGED}
+     * and, if nobody is assigned yet, assigns the acknowledging user.
+     *
+     * <p>The auto-assign rule lives here rather than in the calling service so
+     * it cannot be bypassed by a future caller that forgets to apply it —
+     * acknowledging an incident always atomically claims it if unclaimed.
+     */
+    public void acknowledge(UUID acknowledgedBy) {
+        IncidentFsm.validateTransition(this.status, IncidentStatus.ACKNOWLEDGED);
+        this.status = IncidentStatus.ACKNOWLEDGED;
+        this.acknowledgedAt = Instant.now();
         this.updatedAt = Instant.now();
 
-        switch (newStatus) {
-            case ACKNOWLEDGED -> this.acknowledgedAt = Instant.now();
-            case RESOLVED -> this.resolvedAt = Instant.now();
-            case CLOSED -> this.closedAt = Instant.now();
-            default -> {}
+        if (this.assignedTo == null) {
+            this.assignedTo = acknowledgedBy;
         }
+    }
+
+    public void escalate() {
+        IncidentFsm.validateTransition(this.status, IncidentStatus.ESCALATED);
+        this.status = IncidentStatus.ESCALATED;
+        this.updatedAt = Instant.now();
+    }
+
+    public void resolve() {
+        IncidentFsm.validateTransition(this.status, IncidentStatus.RESOLVED);
+        this.status = IncidentStatus.RESOLVED;
+        this.resolvedAt = Instant.now();
+        this.updatedAt = Instant.now();
+    }
+
+    public void close() {
+        IncidentFsm.validateTransition(this.status, IncidentStatus.CLOSED);
+        this.status = IncidentStatus.CLOSED;
+        this.closedAt = Instant.now();
+        this.updatedAt = Instant.now();
     }
 
     public void assignTo(UUID userId) {
