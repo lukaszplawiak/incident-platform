@@ -4,6 +4,7 @@ import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
+import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -12,9 +13,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.UUID;
 
 @Component
 public class PostmortemRetryScheduler {
@@ -22,34 +23,45 @@ public class PostmortemRetryScheduler {
     private static final Logger log =
             LoggerFactory.getLogger(PostmortemRetryScheduler.class);
 
-    @Value("${postmortem.max-retry-attempts:3}")
-    private int maxRetryAttempts;
-
     private final PostmortemRepository postmortemRepository;
     private final GeminiClient geminiClient;
     private final PostmortemPromptBuilder promptBuilder;
+    private final PostmortemPersistenceService persistenceService;
+    private final int maxRetryAttempts;
 
     public PostmortemRetryScheduler(PostmortemRepository postmortemRepository,
                                     GeminiClient geminiClient,
-                                    PostmortemPromptBuilder promptBuilder) {
+                                    PostmortemPromptBuilder promptBuilder,
+                                    PostmortemPersistenceService persistenceService,
+                                    @Value("${postmortem.max-retry-attempts:3}")
+                                    int maxRetryAttempts) {
         this.postmortemRepository = postmortemRepository;
         this.geminiClient = geminiClient;
         this.promptBuilder = promptBuilder;
+        this.persistenceService = persistenceService;
+        this.maxRetryAttempts = maxRetryAttempts;
     }
 
     /**
      * Finds FAILED postmortems across all tenants and retries each one.
      *
+     * <p>Deliberately NOT {@code @Transactional} at this level — this method
+     * loops over potentially many candidates, calling
+     * {@code geminiClient.generate(prompt)} (an external HTTP call typically
+     * taking seconds) for each. Wrapping the whole loop in one transaction
+     * would hold a database connection for the combined duration of every
+     * Gemini call in the batch — tens of seconds under a large backlog. Each
+     * database write (increment retry count, then mark DRAFT or FAILED/
+     * PERMANENTLY_FAILED) is its own short transaction via
+     * {@link PostmortemPersistenceService}, called before and after each
+     * Gemini call rather than wrapping it.
+     *
      * <p>{@code findFailedWithRemainingRetries()} deliberately queries across
      * all tenants in a single statement — this service runs as one shared
-     * process against one shared database (not a database-per-tenant
-     * deployment), so a single cross-tenant query here is the correct,
-     * efficient pattern, equivalent to {@code EscalationScheduler}'s
-     * {@code findDueForEscalation()}. Running N separate per-tenant queries
-     * instead would be an N+1-style anti-pattern, not an improvement.
-     *
-     * <p>What matters is that {@link TenantContext} is set for the duration
-     * of processing each individual record — see {@link #retryOne}.
+     * process against one shared database, so a single cross-tenant query
+     * here is the correct, efficient pattern. What matters is that
+     * {@link TenantContext} is set for the duration of processing each
+     * individual record — see {@link #retryOne}.
      */
     @Scheduled(
             fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
@@ -60,7 +72,6 @@ public class PostmortemRetryScheduler {
             lockAtMostFor = "9m",
             lockAtLeastFor = "30s"
     )
-    @Transactional
     public void retryFailedPostmortems() {
         final List<Postmortem> candidates =
                 postmortemRepository.findFailedWithRemainingRetries(maxRetryAttempts);
@@ -93,42 +104,50 @@ public class PostmortemRetryScheduler {
     }
 
     private void retryOne(Postmortem postmortem) {
-        postmortem.incrementRetryCount();
+        final UUID postmortemId = postmortem.getId();
+        final UUID incidentId = postmortem.getIncidentId();
+        final String tenantId = postmortem.getTenantId();
+
+        // Committed in its own short transaction BEFORE the Gemini call —
+        // if the process crashes mid-retry, the attempt is still durably
+        // counted, preventing the scheduler from retrying past
+        // maxRetryAttempts indefinitely.
+        final int retryCount = persistenceService.incrementRetryCount(postmortemId);
 
         log.info("Retrying postmortem generation: incidentId={}, tenant={}, attempt={}/{}",
-                postmortem.getIncidentId(), postmortem.getTenantId(),
-                postmortem.getRetryCount(), maxRetryAttempts);
+                incidentId, tenantId, retryCount, maxRetryAttempts);
+
+        final String prompt = promptBuilder.build(postmortem);
 
         try {
-            final String prompt = promptBuilder.build(postmortem);
+            // No transaction open during this call — see class Javadoc.
             final String content = geminiClient.generate(prompt);
 
-            postmortem.markDraft(content, prompt);
-            postmortemRepository.save(postmortem);
+            persistenceService.markDraftAndPublish(
+                    postmortemId, incidentId, tenantId,
+                    content, prompt, postmortem.getDurationMinutes());
 
             log.info("Postmortem retry succeeded: incidentId={}, tenant={}, attempt={}",
-                    postmortem.getIncidentId(), postmortem.getTenantId(),
-                    postmortem.getRetryCount());
+                    incidentId, tenantId, retryCount);
 
         } catch (GeminiException e) {
             final String errorMessage = e.getMessage();
 
-            if (postmortem.getRetryCount() >= maxRetryAttempts) {
-                postmortem.markPermanentlyFailed(errorMessage);
-                postmortemRepository.save(postmortem);
+            if (retryCount >= maxRetryAttempts) {
+                persistenceService.markPermanentlyFailedAndPublish(
+                        postmortemId, incidentId, tenantId,
+                        errorMessage, maxRetryAttempts);
 
                 log.error("Postmortem permanently failed after {} attempts: " +
                                 "incidentId={}, tenant={}, lastError={}",
-                        maxRetryAttempts, postmortem.getIncidentId(),
-                        postmortem.getTenantId(), errorMessage);
+                        maxRetryAttempts, incidentId, tenantId, errorMessage);
             } else {
-                postmortem.markFailed(errorMessage);
-                postmortemRepository.save(postmortem);
+                persistenceService.markFailedAndPublish(
+                        postmortemId, incidentId, tenantId, errorMessage);
 
                 log.warn("Postmortem retry failed, will retry later: " +
                                 "incidentId={}, attempt={}/{}, error={}",
-                        postmortem.getIncidentId(), postmortem.getRetryCount(),
-                        maxRetryAttempts, errorMessage);
+                        incidentId, retryCount, maxRetryAttempts, errorMessage);
             }
         }
     }
