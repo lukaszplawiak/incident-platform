@@ -27,6 +27,8 @@ import java.util.UUID;
 )
 public class IncidentHistory {
 
+    private static final String CREATION_COMMENT = "Incident created from alert";
+
     @Id
     @Column(name = "id", updatable = false, nullable = false)
     private UUID id;
@@ -91,7 +93,7 @@ public class IncidentHistory {
                 IncidentStatus.OPEN,
                 null,
                 changeSource,
-                "Incident created from alert"
+                CREATION_COMMENT
         );
     }
 
