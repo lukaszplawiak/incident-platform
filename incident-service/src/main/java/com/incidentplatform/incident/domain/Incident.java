@@ -14,6 +14,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -193,13 +194,26 @@ public class Incident {
     }
 
     public Long getMttaMinutes() {
-        if (acknowledgedAt == null) return null;
-        return (acknowledgedAt.toEpochMilli() - createdAt.toEpochMilli()) / 60_000;
+        return minutesBetween(createdAt, acknowledgedAt);
     }
 
     public Long getMttrMinutes() {
-        if (resolvedAt == null) return null;
-        return (resolvedAt.toEpochMilli() - createdAt.toEpochMilli()) / 60_000;
+        return minutesBetween(createdAt, resolvedAt);
+    }
+
+    /**
+     * Minutes between {@code start} and {@code end}, or {@code null} if
+     * {@code end} hasn't happened yet (incident not yet acknowledged/resolved).
+     * Uses {@link Duration} rather than raw epoch-millisecond arithmetic —
+     * the standard Java time API for this kind of calculation, and shared
+     * here so MTTA/MTTR don't each repeat the same null-check-and-subtract
+     * pattern.
+     */
+    private static Long minutesBetween(Instant start, Instant end) {
+        if (end == null) {
+            return null;
+        }
+        return Duration.between(start, end).toMinutes();
     }
 
     public boolean isActive() {
