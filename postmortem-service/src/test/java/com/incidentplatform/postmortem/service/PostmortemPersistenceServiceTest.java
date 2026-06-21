@@ -159,7 +159,7 @@ class PostmortemPersistenceServiceTest {
         }
 
         @Test
-        @DisplayName("should publish POSTMORTEM_FAILED audit event")
+        @DisplayName("should publish POSTMORTEM_FAILED audit event (not PERMANENTLY_FAILED)")
         void shouldPublishFailedAuditEvent() {
             // given
             final Postmortem postmortem = Postmortem.createGenerating(
@@ -174,10 +174,117 @@ class PostmortemPersistenceServiceTest {
             persistenceService.markFailedAndPublish(
                     POSTMORTEM_ID, INCIDENT_ID, TENANT_ID, "timeout");
 
-            // then
+            // then — must be the transient FAILED type, not the terminal
+            // PERMANENTLY_FAILED type, since the scheduler will retry this record
             then(auditEventPublisher).should().publishSystem(
                     eq(INCIDENT_ID), eq(TENANT_ID),
                     eq(AuditEventTypes.POSTMORTEM_FAILED), anyString(),
+                    anyString(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("incrementRetryCount")
+    class IncrementRetryCount {
+
+        @Test
+        @DisplayName("should increment the retry count and return the new value")
+        void shouldIncrementAndReturnNewCount() {
+            // given
+            final Postmortem postmortem = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            postmortem.markFailed("first failure");
+            given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
+                    .willReturn(postmortem);
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // when
+            final int result = persistenceService.incrementRetryCount(POSTMORTEM_ID);
+
+            // then
+            assertThat(result).isEqualTo(1);
+            assertThat(postmortem.getRetryCount()).isEqualTo(1);
+            then(postmortemRepository).should().save(postmortem);
+        }
+
+        @Test
+        @DisplayName("should not publish an audit event — purely a counter update")
+        void shouldNotPublishAuditEvent() {
+            // given — incrementRetryCount is purely a counter update, the audit
+            // trail is owned by markFailedAndPublish/markPermanentlyFailedAndPublish
+            // which run after the Gemini call completes or fails
+            final Postmortem postmortem = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            postmortem.markFailed("first failure");
+            given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
+                    .willReturn(postmortem);
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // when
+            persistenceService.incrementRetryCount(POSTMORTEM_ID);
+
+            // then
+            then(auditEventPublisher).shouldHaveNoInteractions();
+        }
+    }
+
+    @Nested
+    @DisplayName("markPermanentlyFailedAndPublish")
+    class MarkPermanentlyFailedAndPublish {
+
+        @Test
+        @DisplayName("should mark the postmortem PERMANENTLY_FAILED with the error message")
+        void shouldMarkPermanentlyFailedWithErrorMessage() {
+            // given
+            final Postmortem postmortem = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
+                    .willReturn(postmortem);
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // when
+            persistenceService.markPermanentlyFailedAndPublish(
+                    POSTMORTEM_ID, INCIDENT_ID, TENANT_ID,
+                    "API quota exceeded", 3);
+
+            // then
+            assertThat(postmortem.getStatus())
+                    .isEqualTo(PostmortemStatus.PERMANENTLY_FAILED);
+            assertThat(postmortem.getErrorMessage())
+                    .isEqualTo("API quota exceeded");
+            then(postmortemRepository).should().save(postmortem);
+        }
+
+        @Test
+        @DisplayName("should publish POSTMORTEM_PERMANENTLY_FAILED audit event " +
+                "(not the transient POSTMORTEM_FAILED type)")
+        void shouldPublishPermanentlyFailedAuditEvent() {
+            // given — this is the core regression test distinguishing this
+            // method from markFailedAndPublish: the audit event type must be
+            // the terminal one, so operational alerting can filter on
+            // "needs a human" without being swamped by transient retries.
+            final Postmortem postmortem = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
+                    .willReturn(postmortem);
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // when
+            persistenceService.markPermanentlyFailedAndPublish(
+                    POSTMORTEM_ID, INCIDENT_ID, TENANT_ID, "API down", 3);
+
+            // then
+            then(auditEventPublisher).should().publishSystem(
+                    eq(INCIDENT_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.POSTMORTEM_PERMANENTLY_FAILED), anyString(),
                     anyString(), any());
         }
     }

@@ -32,6 +32,7 @@ public final class AuditEventTypes {
     // ── Postmortem ──────────────────────────────────────────────────────────
     public static final String POSTMORTEM_GENERATED      = "POSTMORTEM_GENERATED";
     public static final String POSTMORTEM_FAILED         = "POSTMORTEM_FAILED";
+    public static final String POSTMORTEM_PERMANENTLY_FAILED = "POSTMORTEM_PERMANENTLY_FAILED";
     public static final String POSTMORTEM_UPDATED        = "POSTMORTEM_UPDATED";
 
     private AuditEventTypes() {}

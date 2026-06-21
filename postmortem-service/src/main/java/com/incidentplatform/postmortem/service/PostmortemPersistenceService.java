@@ -14,33 +14,32 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Isolates the three short, independent database transactions involved in
- * postmortem generation from the long-running Gemini API call that sits
- * between them.
+ * Isolates the short, independent database transactions involved in
+ * postmortem generation and retry from the long-running Gemini API call
+ * that sits between them.
  *
- * <h2>Why this is a separate class, not three {@code @Transactional} methods
- * on {@link PostmortemService}</h2>
+ * <h2>Why this is a separate class, not {@code @Transactional} methods on
+ * the calling services</h2>
  * Spring's {@code @Transactional} is implemented via a proxy — calling
  * {@code this.someTransactionalMethod()} from within the same class bypasses
  * the proxy entirely, silently ignoring the annotation (the classic
- * self-invocation pitfall). Putting these three methods in a separate,
- * injected {@code @Service} guarantees each call goes through Spring's proxy
- * and actually opens/commits its own short transaction.
+ * self-invocation pitfall). Putting these methods in a separate, injected
+ * {@code @Service} guarantees each call goes through Spring's proxy and
+ * actually opens/commits its own short transaction.
  *
  * <h2>Why this matters</h2>
- * {@code PostmortemService.generatePostmortem()} previously wrapped the
- * entire flow — including {@code geminiClient.generate(prompt)}, an external
- * HTTP call typically taking seconds — in a single {@code @Transactional}
- * method. A database connection (from a typically 10-connection HikariCP
- * pool) was held for the full duration of that external call. Under
- * concurrent load (e.g. a mass outage resolving many incidents at once),
- * this could exhaust the connection pool and stall unrelated REST requests
- * being served by the same service.
- *
- * <p>Each method here is a short, independent transaction containing only
- * database writes — the connection is acquired and released in milliseconds.
- * The Gemini call in {@link PostmortemService#generatePostmortem} now happens
- * entirely outside any open transaction.
+ * Both {@code PostmortemService.generatePostmortem()} and
+ * {@code PostmortemRetryScheduler.retryFailedPostmortems()} call
+ * {@code geminiClient.generate(prompt)} — an external HTTP call typically
+ * taking seconds. The retry scheduler is the more severe case: it processes
+ * a batch of FAILED candidates in a single scheduler run, so wrapping the
+ * whole loop in one transaction (as it previously did) could hold a database
+ * connection for the combined duration of every Gemini call in that batch —
+ * potentially tens of seconds across many candidates. Each method here is a
+ * short, independent transaction containing only database writes — the
+ * connection is acquired and released in milliseconds. Neither
+ * {@code generatePostmortem()} nor {@code retryFailedPostmortems()} hold any
+ * transaction open while waiting on Gemini.
  */
 @Service
 public class PostmortemPersistenceService {
@@ -106,6 +105,13 @@ public class PostmortemPersistenceService {
      * Marks the postmortem as {@code FAILED} and publishes the failure audit
      * event. Short transaction — UPDATE only, called after the Gemini call
      * has already failed.
+     *
+     * <p>Used both for the initial generation attempt
+     * ({@code PostmortemService}) and for a retry attempt that still has
+     * remaining attempts left ({@code PostmortemRetryScheduler}) — in both
+     * cases the scheduler will pick this record up again later, so this is
+     * a transient, self-healing state. See {@link #markPermanentlyFailedAndPublish}
+     * for the terminal case.
      */
     @Transactional
     public void markFailedAndPublish(UUID postmortemId,
@@ -122,6 +128,60 @@ public class PostmortemPersistenceService {
                 String.format("Postmortem generation failed: %s", errorMessage),
                 Map.of("error", errorMessage,
                         "status", PostmortemStatus.FAILED.name())
+        );
+    }
+
+    /**
+     * Increments the retry counter on an existing FAILED postmortem. Short
+     * transaction — UPDATE only, called by the retry scheduler before
+     * attempting another Gemini call.
+     *
+     * <p>Separated from {@link #markFailedAndPublish}/
+     * {@link #markPermanentlyFailedAndPublish} because the increment needs
+     * to happen and be durably committed <em>before</em> the Gemini call —
+     * otherwise a crash mid-retry would leave the attempt uncounted and the
+     * scheduler could retry the same record indefinitely past
+     * {@code maxRetryAttempts}.
+     */
+    @Transactional
+    public int incrementRetryCount(UUID postmortemId) {
+        final Postmortem postmortem = postmortemRepository.getReferenceById(postmortemId);
+        postmortem.incrementRetryCount();
+        postmortemRepository.save(postmortem);
+        return postmortem.getRetryCount();
+    }
+
+    /**
+     * Marks the postmortem as {@code PERMANENTLY_FAILED} (all retry attempts
+     * exhausted) and publishes the corresponding audit event. Short
+     * transaction — UPDATE only, called after the final Gemini retry attempt
+     * has failed.
+     *
+     * <p>Uses {@link AuditEventTypes#POSTMORTEM_PERMANENTLY_FAILED} rather
+     * than {@link AuditEventTypes#POSTMORTEM_FAILED} — this is a terminal
+     * state requiring manual investigation, not a transient failure the
+     * scheduler will retry. Keeping the audit event type distinct lets
+     * operational alerting and dashboards filter on "needs a human" without
+     * being swamped by self-healing transient failures.
+     */
+    @Transactional
+    public void markPermanentlyFailedAndPublish(UUID postmortemId,
+                                                UUID incidentId,
+                                                String tenantId,
+                                                String errorMessage,
+                                                int maxRetryAttempts) {
+        final Postmortem postmortem = postmortemRepository.getReferenceById(postmortemId);
+        postmortem.markPermanentlyFailed(errorMessage);
+        postmortemRepository.save(postmortem);
+
+        auditEventPublisher.publishSystem(
+                incidentId, tenantId,
+                AuditEventTypes.POSTMORTEM_PERMANENTLY_FAILED, SERVICE_NAME,
+                String.format("Postmortem generation permanently failed after " +
+                        "%d attempts: %s", maxRetryAttempts, errorMessage),
+                Map.of("error", errorMessage,
+                        "status", PostmortemStatus.PERMANENTLY_FAILED.name(),
+                        "attempts", maxRetryAttempts)
         );
     }
 }
