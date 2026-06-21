@@ -3,7 +3,6 @@ package com.incidentplatform.postmortem.service;
 import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
-import com.incidentplatform.postmortem.domain.PostmortemStatus;
 import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
@@ -16,6 +15,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -27,11 +27,13 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PostmortemService")
@@ -46,9 +48,13 @@ class PostmortemServiceTest {
     @Mock
     private AuditEventPublisher auditEventPublisher;
 
+    @Mock
+    private PostmortemPersistenceService persistenceService;
+
     private PostmortemService postmortemService;
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
+    private static final UUID POSTMORTEM_ID = UUID.randomUUID();
     private static final String TENANT_ID = "test-tenant";
     private static final String TITLE = "High CPU Usage on prod-server-1";
     private static final Instant OPENED_AT =
@@ -62,7 +68,7 @@ class PostmortemServiceTest {
 
         postmortemService = new PostmortemService(
                 postmortemRepository, geminiClient, auditEventPublisher,
-                promptBuilder);
+                promptBuilder, persistenceService);
     }
 
     @Nested
@@ -70,13 +76,15 @@ class PostmortemServiceTest {
     class GeneratePostmortem {
 
         @Test
-        @DisplayName("should create DRAFT postmortem when Gemini responds")
+        @DisplayName("should create GENERATING record, then mark DRAFT when Gemini responds")
         void shouldCreateDraftWhenGeminiResponds() {
             // given
             given(postmortemRepository.existsByIncidentId(INCIDENT_ID))
                     .willReturn(false);
-            given(postmortemRepository.save(any()))
-                    .willAnswer(i -> i.getArgument(0));
+            given(persistenceService.createGeneratingRecord(
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(TITLE), eq(Severity.CRITICAL),
+                    eq(OPENED_AT), eq(RESOLVED_AT), eq(DURATION)))
+                    .willReturn(POSTMORTEM_ID);
             given(geminiClient.generate(anyString()))
                     .willReturn("## Summary\nHigh CPU incident postmortem...");
 
@@ -85,17 +93,24 @@ class PostmortemServiceTest {
                     INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
 
-            // then
-            then(postmortemRepository).should(times(2)).save(any());
+            // then — GENERATING record created first
+            then(persistenceService).should().createGeneratingRecord(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
 
-            final ArgumentCaptor<Postmortem> captor =
-                    ArgumentCaptor.forClass(Postmortem.class);
-            then(postmortemRepository).should(times(2)).save(captor.capture());
+            // and — DRAFT recorded with Gemini's content after the call succeeds
+            final ArgumentCaptor<String> contentCaptor =
+                    ArgumentCaptor.forClass(String.class);
+            then(persistenceService).should().markDraftAndPublish(
+                    eq(POSTMORTEM_ID), eq(INCIDENT_ID), eq(TENANT_ID),
+                    contentCaptor.capture(), anyString(), eq(DURATION));
 
-            final Postmortem saved = captor.getAllValues().get(1);
-            assertThat(saved.getStatus()).isEqualTo(PostmortemStatus.DRAFT);
-            assertThat(saved.getContent())
+            assertThat(contentCaptor.getValue())
                     .contains("High CPU incident postmortem");
+
+            // and — FAILED path never invoked
+            then(persistenceService).should(never())
+                    .markFailedAndPublish(any(), any(), any(), any());
         }
 
         @Test
@@ -104,8 +119,9 @@ class PostmortemServiceTest {
             // given
             given(postmortemRepository.existsByIncidentId(INCIDENT_ID))
                     .willReturn(false);
-            given(postmortemRepository.save(any()))
-                    .willAnswer(i -> i.getArgument(0));
+            given(persistenceService.createGeneratingRecord(
+                    any(), any(), any(), any(), any(), any(), anyInt()))
+                    .willReturn(POSTMORTEM_ID);
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("API quota exceeded"));
 
@@ -115,13 +131,11 @@ class PostmortemServiceTest {
                     OPENED_AT, RESOLVED_AT, DURATION);
 
             // then
-            final ArgumentCaptor<Postmortem> captor =
-                    ArgumentCaptor.forClass(Postmortem.class);
-            then(postmortemRepository).should(times(2)).save(captor.capture());
+            then(persistenceService).should().markFailedAndPublish(
+                    POSTMORTEM_ID, INCIDENT_ID, TENANT_ID, "API quota exceeded");
 
-            final Postmortem saved = captor.getAllValues().get(1);
-            assertThat(saved.getStatus()).isEqualTo(PostmortemStatus.FAILED);
-            assertThat(saved.getErrorMessage()).contains("API quota exceeded");
+            then(persistenceService).should(never())
+                    .markDraftAndPublish(any(), any(), any(), any(), any(), anyInt());
         }
 
         @Test
@@ -136,8 +150,9 @@ class PostmortemServiceTest {
                     INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
 
-            // then
-            then(postmortemRepository).should(never()).save(any());
+            // then — no DB writes, no Gemini call
+            then(persistenceService).should(never())
+                    .createGeneratingRecord(any(), any(), any(), any(), any(), any(), anyInt());
             then(geminiClient).should(never()).generate(anyString());
         }
 
@@ -147,8 +162,9 @@ class PostmortemServiceTest {
             // given
             given(postmortemRepository.existsByIncidentId(INCIDENT_ID))
                     .willReturn(false);
-            given(postmortemRepository.save(any()))
-                    .willAnswer(i -> i.getArgument(0));
+            given(persistenceService.createGeneratingRecord(
+                    any(), any(), any(), any(), any(), any(), anyInt()))
+                    .willReturn(POSTMORTEM_ID);
             given(geminiClient.generate(anyString())).willReturn("draft");
 
             // when
@@ -165,6 +181,30 @@ class PostmortemServiceTest {
             assertThat(prompt).contains(TITLE);
             assertThat(prompt).contains(Severity.CRITICAL.toString());
             assertThat(prompt).contains(String.valueOf(DURATION));
+        }
+
+        @Test
+        @DisplayName("should call createGeneratingRecord before calling Gemini — " +
+                "GENERATING state must be persisted before the external call starts")
+        void shouldPersistGeneratingRecordBeforeCallingGemini() {
+            // given
+            given(postmortemRepository.existsByIncidentId(INCIDENT_ID))
+                    .willReturn(false);
+            given(persistenceService.createGeneratingRecord(
+                    any(), any(), any(), any(), any(), any(), anyInt()))
+                    .willReturn(POSTMORTEM_ID);
+            given(geminiClient.generate(anyString())).willReturn("draft");
+
+            // when
+            postmortemService.generatePostmortem(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
+
+            // then
+            final InOrder order = inOrder(persistenceService, geminiClient);
+            order.verify(persistenceService).createGeneratingRecord(
+                    any(), any(), any(), any(), any(), any(), anyInt());
+            order.verify(geminiClient).generate(anyString());
         }
     }
 
