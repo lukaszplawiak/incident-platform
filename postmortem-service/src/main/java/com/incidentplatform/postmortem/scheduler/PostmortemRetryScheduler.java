@@ -5,6 +5,7 @@ import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
+import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,6 +37,20 @@ public class PostmortemRetryScheduler {
         this.promptBuilder = promptBuilder;
     }
 
+    /**
+     * Finds FAILED postmortems across all tenants and retries each one.
+     *
+     * <p>{@code findFailedWithRemainingRetries()} deliberately queries across
+     * all tenants in a single statement — this service runs as one shared
+     * process against one shared database (not a database-per-tenant
+     * deployment), so a single cross-tenant query here is the correct,
+     * efficient pattern, equivalent to {@code EscalationScheduler}'s
+     * {@code findDueForEscalation()}. Running N separate per-tenant queries
+     * instead would be an N+1-style anti-pattern, not an improvement.
+     *
+     * <p>What matters is that {@link TenantContext} is set for the duration
+     * of processing each individual record — see {@link #retryOne}.
+     */
     @Scheduled(
             fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
             initialDelayString = "120000"
@@ -59,11 +74,20 @@ public class PostmortemRetryScheduler {
                 candidates.size(), maxRetryAttempts);
 
         for (final Postmortem postmortem : candidates) {
+            // TenantContext is set for the duration of processing this single
+            // record — every log line emitted by retryOne() (and anything it
+            // calls) automatically carries the correct tenantId in MDC,
+            // matching the pattern already used by every Kafka consumer in
+            // this codebase. Cleared in finally so a failure for one tenant's
+            // record can never leak its context into the next iteration.
+            TenantContext.set(postmortem.getTenantId());
             try {
                 retryOne(postmortem);
             } catch (Exception e) {
                 log.error("Unexpected error during retry for postmortem: incidentId={}, error={}",
                         postmortem.getIncidentId(), e.getMessage());
+            } finally {
+                TenantContext.clear();
             }
         }
     }

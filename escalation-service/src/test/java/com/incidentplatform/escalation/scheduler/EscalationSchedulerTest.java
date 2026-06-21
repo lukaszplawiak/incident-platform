@@ -9,6 +9,8 @@ import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.security.TenantContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -20,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -27,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willAnswer;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.inOrder;
@@ -60,6 +64,11 @@ class EscalationSchedulerTest {
                 kafkaSender,
                 escalationService,
                 auditEventPublisher);
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
     }
 
     @Nested
@@ -249,15 +258,92 @@ class EscalationSchedulerTest {
         }
     }
 
+    @Nested
+    @DisplayName("TenantContext handling")
+    class TenantContextHandling {
+
+        @Test
+        @DisplayName("should clear TenantContext after processing all due tasks")
+        void shouldClearTenantContextAfterProcessing() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(task));
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — no tenant context leaks out of the scheduler run
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("should clear TenantContext even when Kafka send throws")
+        void shouldClearTenantContextOnFailure() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(task));
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            willThrow(new RuntimeException("Kafka unavailable"))
+                    .given(kafkaSender).send(any(), any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("should not leak tenantId between consecutive tasks " +
+                "belonging to different tenants")
+        void shouldNotLeakTenantIdBetweenTasks() {
+            // given — two overdue tasks from two different tenants in the same batch
+            final EscalationTask taskTenantA = buildOverdueTaskForTenant("tenant-a");
+            final EscalationTask taskTenantB = buildOverdueTaskForTenant("tenant-b");
+
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(taskTenantA, taskTenantB));
+            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // Capture TenantContext at the moment each Kafka send happens — the
+            // most direct way to verify the context was correctly scoped to
+            // each task during its own processing window.
+            // send() returns void, so the BDD-style stub is willAnswer(...).given(...)
+            // rather than given(...).willAnswer(...) (which expects a non-void return type).
+            final List<String> observedTenants = new ArrayList<>();
+            willAnswer(invocation -> {
+                observedTenants.add(TenantContext.getOrNull());
+                return null;
+            }).given(kafkaSender).send(any(), any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then
+            assertThat(observedTenants).containsExactly("tenant-a", "tenant-b");
+        }
+    }
+
     private EscalationTask buildOverdueTask(int level) {
+        return buildOverdueTaskForTenantAndLevel(TENANT_ID, level);
+    }
+
+    private EscalationTask buildOverdueTaskForTenant(String tenantId) {
+        return buildOverdueTaskForTenantAndLevel(tenantId, 1);
+    }
+
+    private EscalationTask buildOverdueTaskForTenantAndLevel(String tenantId, int level) {
         final Instant openedAt = Instant.now().minusSeconds(60 * 60L);
         if (level == 1) {
             return EscalationTask.createLevel1(
-                    UUID.randomUUID(), TENANT_ID, openedAt,
+                    UUID.randomUUID(), tenantId, openedAt,
                     Severity.CRITICAL, "High CPU Usage");
         } else {
             return EscalationTask.createLevel2(
-                    UUID.randomUUID(), TENANT_ID, openedAt,
+                    UUID.randomUUID(), tenantId, openedAt,
                     Severity.CRITICAL, "High CPU Usage");
         }
     }
