@@ -8,6 +8,7 @@ import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +47,19 @@ public class EscalationScheduler {
         this.auditEventPublisher = auditEventPublisher;
     }
 
+    /**
+     * Finds escalation tasks due across all tenants and escalates each one.
+     *
+     * <p>{@code findDueForEscalation()} deliberately queries across all
+     * tenants in a single statement — this service runs as one shared
+     * process against one shared database (not a database-per-tenant
+     * deployment), so a single cross-tenant query here is the correct,
+     * efficient pattern. Running N separate per-tenant queries instead
+     * would be an N+1-style anti-pattern, not an improvement.
+     *
+     * <p>What matters is that {@link TenantContext} is set for the duration
+     * of processing each individual task — see {@link #escalate}.
+     */
     @Scheduled(
             fixedDelayString = "${escalation.scheduler-interval-ms:60000}",
             initialDelayString = "30000"
@@ -69,11 +83,22 @@ public class EscalationScheduler {
                 dueTasks.size());
 
         for (final EscalationTask task : dueTasks) {
+            // TenantContext is set for the duration of processing this single
+            // task — every log line emitted by escalate() (and anything it
+            // calls, including kafkaSender.send() and
+            // escalationService.scheduleLevel2Escalation()) automatically
+            // carries the correct tenantId in MDC, matching the pattern
+            // already used by every Kafka consumer in this codebase. Cleared
+            // in finally so a failure for one tenant's task can never leak
+            // its context into the next iteration.
+            TenantContext.set(task.getTenantId());
             try {
                 escalate(task);
             } catch (Exception e) {
                 log.error("Failed to escalate task: incidentId={}, error={}",
                         task.getIncidentId(), e.getMessage(), e);
+            } finally {
+                TenantContext.clear();
             }
         }
     }

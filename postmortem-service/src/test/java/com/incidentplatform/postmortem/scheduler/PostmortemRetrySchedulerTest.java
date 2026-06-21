@@ -6,6 +6,8 @@ import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.domain.PostmortemStatus;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
+import com.incidentplatform.shared.security.TenantContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -16,6 +18,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -46,6 +49,11 @@ class PostmortemRetrySchedulerTest {
 
         scheduler = new PostmortemRetryScheduler(
                 postmortemRepository, geminiClient, promptBuilder);
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
     }
 
     @Nested
@@ -179,8 +187,95 @@ class PostmortemRetrySchedulerTest {
         }
     }
 
+    @Nested
+    @DisplayName("TenantContext handling")
+    class TenantContextHandling {
+
+        @Test
+        @DisplayName("should clear TenantContext after processing all candidates")
+        void shouldClearTenantContextAfterProcessing() {
+            // given
+            final Postmortem postmortem = buildFailedPostmortem();
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+                    .willReturn(List.of(postmortem));
+            given(geminiClient.generate(anyString())).willReturn("draft");
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // when
+            scheduler.retryFailedPostmortems();
+
+            // then — no tenant context leaks out of the scheduler run
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("should clear TenantContext even when Gemini call throws")
+        void shouldClearTenantContextOnFailure() {
+            // given
+            final Postmortem postmortem = buildFailedPostmortem();
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+                    .willReturn(List.of(postmortem));
+            given(geminiClient.generate(anyString()))
+                    .willThrow(new GeminiException("down"));
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // when
+            scheduler.retryFailedPostmortems();
+
+            // then
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("should not leak tenantId between consecutive candidates " +
+                "belonging to different tenants")
+        void shouldNotLeakTenantIdBetweenCandidates() {
+            // given — two postmortems from two different tenants in the same batch
+            final Postmortem postmortemTenantA = buildFailedPostmortemForTenant("tenant-a");
+            final Postmortem postmortemTenantB = buildFailedPostmortemForTenant("tenant-b");
+
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+                    .willReturn(List.of(postmortemTenantA, postmortemTenantB));
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            // Capture TenantContext at the moment each Gemini call happens —
+            // this is the most direct way to verify the context was correctly
+            // scoped to each record during its own processing window.
+            final List<String> observedTenants = new ArrayList<>();
+            given(geminiClient.generate(anyString())).willAnswer(invocation -> {
+                observedTenants.add(TenantContext.getOrNull());
+                return "draft";
+            });
+
+            // when
+            scheduler.retryFailedPostmortems();
+
+            // then
+            assertThat(observedTenants).containsExactly("tenant-a", "tenant-b");
+        }
+    }
+
     private Postmortem buildFailedPostmortem() {
         return buildFailedPostmortemWithRetries(0);
+    }
+
+    private Postmortem buildFailedPostmortemForTenant(String tenantId) {
+        final Instant openedAt = Instant.now().minusSeconds(30 * 60L);
+        final Instant resolvedAt = Instant.now();
+        final Postmortem postmortem = Postmortem.createGenerating(
+                UUID.randomUUID(),
+                tenantId,
+                "High CPU Usage on prod-server-1",
+                "CRITICAL",
+                openedAt,
+                resolvedAt,
+                30
+        );
+        postmortem.markFailed("Gemini API quota exceeded");
+        return postmortem;
     }
 
     private Postmortem buildFailedPostmortemWithRetries(int retryCount) {
