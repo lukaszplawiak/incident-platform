@@ -19,6 +19,29 @@ public final class TenantContext {
 
     public static final String MDC_TENANT_KEY = "tenantId";
 
+    /**
+     * {@link jakarta.servlet.http.HttpServletRequest} attribute key under
+     * which the resolved tenant ID is also stored, in addition to this
+     * ThreadLocal.
+     *
+     * <p>{@code TenantContext} (this ThreadLocal) is cleared before
+     * {@code ServerHttpObservationFilter} finishes recording the
+     * {@code http.server.requests} observation — that filter wraps the
+     * entire Spring Security chain (including {@code JwtAuthFilter}), so its
+     * {@code stop()} runs after {@code JwtAuthFilter}'s {@code finally} block
+     * has already cleared this ThreadLocal and MDC. The request attribute
+     * survives for the full request lifecycle regardless of ThreadLocal
+     * cleanup, so it's the channel
+     * {@code TenantServerRequestObservationConvention} reads from instead.
+     *
+     * <p>Declared here rather than on the observation convention class
+     * itself so neither {@code JwtAuthFilter} nor
+     * {@code TenantServerRequestObservationConvention} depends on the
+     * other directly — both reference this shared constant, the same
+     * pattern used for {@link SharedSecurityAutoConfiguration#PUBLIC_PATHS}.
+     */
+    public static final String REQUEST_ATTRIBUTE_TENANT_ID = "tenantId";
+
     private static final ThreadLocal<String> TENANT_ID = new ThreadLocal<>();
 
     private TenantContext() {

@@ -89,6 +89,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         TenantContext.set(tenantId);
         MDC.put(MDC_USER_ID, userId.toString());
 
+        // Also stored as a request attribute (not just ThreadLocal) — see
+        // TenantContext.REQUEST_ATTRIBUTE_TENANT_ID Javadoc for why this is
+        // needed separately from TenantContext/MDC.
+        request.setAttribute(
+                TenantContext.REQUEST_ATTRIBUTE_TENANT_ID, tenantId);
+
         final UserPrincipal principal =
                 new UserPrincipal(userId, tenantId, email, roles);
         final UsernamePasswordAuthenticationToken authentication =
