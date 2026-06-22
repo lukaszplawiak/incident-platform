@@ -68,7 +68,7 @@ public class PostmortemPersistenceService {
                                        Instant incidentResolvedAt,
                                        int durationMinutes) {
         final Postmortem postmortem = Postmortem.createGenerating(
-                incidentId, tenantId, incidentTitle, incidentSeverity.name(),
+                incidentId, tenantId, incidentTitle, incidentSeverity,
                 incidentOpenedAt, incidentResolvedAt, durationMinutes);
         postmortemRepository.save(postmortem);
         return postmortem.getId();

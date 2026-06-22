@@ -2,6 +2,8 @@ package com.incidentplatform.incident.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
@@ -48,9 +50,10 @@ public class AuditEvent {
     @Column(name = "actor")
     private String actor;
 
-    @NotBlank
-    @Column(name = "actor_type", nullable = false)
-    private String actorType;
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "actor_type", nullable = false, length = 50)
+    private ActorType actorType;
 
     @Column(name = "detail", columnDefinition = "TEXT")
     private String detail;
@@ -101,7 +104,7 @@ public class AuditEvent {
                                      String eventType,
                                      String sourceService,
                                      String actor,
-                                     String actorType,
+                                     ActorType actorType,
                                      String detail,
                                      Map<String, Object> metadata) {
         final AuditEvent event = new AuditEvent();
@@ -119,15 +122,15 @@ public class AuditEvent {
         return event;
     }
 
-    public UUID getId()             { return id; }
-    public UUID getIncidentId()     { return incidentId; }
-    public String getTenantId()     { return tenantId; }
-    public String getEventType()    { return eventType; }
-    public String getActor()        { return actor; }
-    public String getActorType()    { return actorType; }
-    public String getDetail()       { return detail; }
+    public UUID getId()              { return id; }
+    public UUID getIncidentId()      { return incidentId; }
+    public String getTenantId()      { return tenantId; }
+    public String getEventType()     { return eventType; }
+    public String getActor()         { return actor; }
+    public ActorType getActorType()  { return actorType; }
+    public String getDetail()        { return detail; }
     public Map<String, Object> getMetadata() { return metadata; }
-    public String getSourceService(){ return sourceService; }
-    public Instant getOccurredAt()  { return occurredAt; }
-    public Instant getCreatedAt()   { return createdAt; }
+    public String getSourceService() { return sourceService; }
+    public Instant getOccurredAt()   { return occurredAt; }
+    public Instant getCreatedAt()    { return createdAt; }
 }

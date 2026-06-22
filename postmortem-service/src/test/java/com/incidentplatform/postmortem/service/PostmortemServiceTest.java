@@ -318,7 +318,7 @@ class PostmortemServiceTest {
 
     private Postmortem buildDraftPostmortem() {
         final Postmortem postmortem = Postmortem.createGenerating(
-                INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.toString(),
+                INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                 OPENED_AT, RESOLVED_AT, DURATION);
         postmortem.markDraft("## Summary\nTest postmortem content", "test prompt");
         return postmortem;
