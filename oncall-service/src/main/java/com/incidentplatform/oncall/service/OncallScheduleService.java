@@ -117,8 +117,8 @@ public class OncallScheduleService {
 
     @Transactional(readOnly = true)
     public Optional<SlackUserLookupResponse> findBySlackUserId(
-            String slackUserId) {
-        return repository.findBySlackUserId(slackUserId)
+            String tenantId, String slackUserId) {
+        return repository.findByTenantIdAndSlackUserId(tenantId, slackUserId)
                 .stream()
                 .findFirst()
                 .map(schedule -> new SlackUserLookupResponse(

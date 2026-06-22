@@ -2,6 +2,7 @@ package com.incidentplatform.oncall.api;
 
 import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
+import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
@@ -151,6 +152,60 @@ class OncallScheduleControllerTest {
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        }
+    }
+
+    @Nested
+    @DisplayName("findBySlackUserId")
+    class FindBySlackUserId {
+
+        @Test
+        @DisplayName("should return 200 with user info when slackUserId found for tenant")
+        void shouldReturn200WhenFound() {
+            // given
+            final SlackUserLookupResponse response = new SlackUserLookupResponse(
+                    "user-1", "Jan Kowalski", TENANT_ID, "U0123456789");
+            given(service.findBySlackUserId(TENANT_ID, "U0123456789"))
+                    .willReturn(Optional.of(response));
+
+            // when
+            final ResponseEntity<SlackUserLookupResponse> result =
+                    controller.findBySlackUserId("U0123456789");
+
+            // then
+            assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(result.getBody()).isNotNull();
+            assertThat(result.getBody().userId()).isEqualTo("user-1");
+            assertThat(result.getBody().tenantId()).isEqualTo(TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("should return 204 No Content when no schedule found for tenant")
+        void shouldReturn204WhenNotFound() {
+            // given
+            given(service.findBySlackUserId(TENANT_ID, "U_UNKNOWN"))
+                    .willReturn(Optional.empty());
+
+            // when
+            final ResponseEntity<SlackUserLookupResponse> result =
+                    controller.findBySlackUserId("U_UNKNOWN");
+
+            // then — 204 so notification-service can proceed with fallback UUID
+            assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        }
+
+        @Test
+        @DisplayName("should pass tenantId from TenantContext to service")
+        void shouldPassTenantIdFromContext() {
+            // given
+            given(service.findBySlackUserId(TENANT_ID, "U0123456789"))
+                    .willReturn(Optional.empty());
+
+            // when
+            controller.findBySlackUserId("U0123456789");
+
+            // then — TenantContext.get() must feed into service call, not hardcoded
+            then(service).should().findBySlackUserId(TENANT_ID, "U0123456789");
         }
     }
 }

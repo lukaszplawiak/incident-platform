@@ -3,6 +3,7 @@ package com.incidentplatform.oncall.api;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
+import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.security.TenantContext;
 import jakarta.validation.Valid;
@@ -93,5 +94,31 @@ public class OncallScheduleController {
         log.debug("DELETE /api/v1/oncall/schedules/{}, tenant={}", id, tenantId);
         service.delete(id, tenantId);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Looks up the on-call schedule entry for a given Slack user ID within
+     * the calling tenant. Called by {@code notification-service} when
+     * resolving a Slack ACK button click to the internal system user ID.
+     *
+     * <p>The caller's tenant is identified via the {@code X-Tenant-Id} header
+     * set by {@code notification-service} when making the inter-service call —
+     * the same mechanism used by {@link #getCurrentOncall}. This scopes the
+     * lookup to the correct tenant, preventing accidental cross-tenant matches
+     * when two tenants share the same Slack workspace.
+     *
+     * <p>Returns 204 No Content when no matching schedule is found —
+     * {@code notification-service} falls back to a deterministic UUID in
+     * that case, so the ACK still succeeds even if the Slack user is not
+     * registered in the on-call schedule.
+     */
+    @GetMapping("/by-slack/{slackUserId}")
+    public ResponseEntity<SlackUserLookupResponse> findBySlackUserId(
+            @PathVariable String slackUserId) {
+        final String tenantId = TenantContext.get();
+        log.debug("GET /api/v1/oncall/by-slack/{}, tenant={}", slackUserId, tenantId);
+        return service.findBySlackUserId(tenantId, slackUserId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
     }
 }
