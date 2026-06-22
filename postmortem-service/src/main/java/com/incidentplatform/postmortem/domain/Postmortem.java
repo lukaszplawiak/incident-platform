@@ -1,5 +1,6 @@
 package com.incidentplatform.postmortem.domain;
 
+import com.incidentplatform.shared.domain.Severity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -41,9 +42,10 @@ public class Postmortem {
     @Column(name = "incident_title", nullable = false, updatable = false)
     private String incidentTitle;
 
-    @NotBlank
-    @Column(name = "incident_severity", nullable = false, updatable = false)
-    private String incidentSeverity;
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "incident_severity", nullable = false, updatable = false, length = 20)
+    private Severity incidentSeverity;
 
     @NotNull
     @Column(name = "incident_opened_at", nullable = false, updatable = false)
@@ -88,7 +90,7 @@ public class Postmortem {
     public static Postmortem createGenerating(UUID incidentId,
                                               String tenantId,
                                               String incidentTitle,
-                                              String incidentSeverity,
+                                              Severity incidentSeverity,
                                               Instant incidentOpenedAt,
                                               Instant incidentResolvedAt,
                                               int durationMinutes) {
@@ -150,7 +152,7 @@ public class Postmortem {
     public UUID getIncidentId()            { return incidentId; }
     public String getTenantId()            { return tenantId; }
     public String getIncidentTitle()       { return incidentTitle; }
-    public String getIncidentSeverity()    { return incidentSeverity; }
+    public Severity getIncidentSeverity()  { return incidentSeverity; }
     public Instant getIncidentOpenedAt()   { return incidentOpenedAt; }
     public Instant getIncidentResolvedAt() { return incidentResolvedAt; }
     public Integer getDurationMinutes()    { return durationMinutes; }

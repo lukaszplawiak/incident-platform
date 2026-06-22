@@ -85,7 +85,7 @@ public class AuditEventConsumer {
     }
 
     private AuditEvent toEntity(AuditEventMessage message) {
-        if (ActorType.USER.equals(message.actorType())) {
+        if (message.actorType() == ActorType.USER) {
             return AuditEvent.user(
                     message.incidentId(),
                     message.tenantId(),

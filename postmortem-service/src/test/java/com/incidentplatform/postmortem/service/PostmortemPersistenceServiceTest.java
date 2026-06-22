@@ -89,7 +89,7 @@ class PostmortemPersistenceServiceTest {
         void shouldMarkDraftWithContent() {
             // given
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
                     .willReturn(postmortem);
@@ -112,7 +112,7 @@ class PostmortemPersistenceServiceTest {
         void shouldPublishGeneratedAuditEvent() {
             // given
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
                     .willReturn(postmortem);
@@ -141,7 +141,7 @@ class PostmortemPersistenceServiceTest {
         void shouldMarkFailedWithErrorMessage() {
             // given
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
                     .willReturn(postmortem);
@@ -163,7 +163,7 @@ class PostmortemPersistenceServiceTest {
         void shouldPublishFailedAuditEvent() {
             // given
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
                     .willReturn(postmortem);
@@ -192,7 +192,7 @@ class PostmortemPersistenceServiceTest {
         void shouldIncrementAndReturnNewCount() {
             // given
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             postmortem.markFailed("first failure");
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
@@ -216,7 +216,7 @@ class PostmortemPersistenceServiceTest {
             // trail is owned by markFailedAndPublish/markPermanentlyFailedAndPublish
             // which run after the Gemini call completes or fails
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             postmortem.markFailed("first failure");
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
@@ -241,7 +241,7 @@ class PostmortemPersistenceServiceTest {
         void shouldMarkPermanentlyFailedWithErrorMessage() {
             // given
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
                     .willReturn(postmortem);
@@ -270,7 +270,7 @@ class PostmortemPersistenceServiceTest {
             // the terminal one, so operational alerting can filter on
             // "needs a human" without being swamped by transient retries.
             final Postmortem postmortem = Postmortem.createGenerating(
-                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL.name(),
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                     OPENED_AT, RESOLVED_AT, DURATION);
             given(postmortemRepository.getReferenceById(POSTMORTEM_ID))
                     .willReturn(postmortem);

@@ -26,7 +26,7 @@ public record PostmortemDto(
                 postmortem.getIncidentId(),
                 postmortem.getTenantId(),
                 postmortem.getIncidentTitle(),
-                postmortem.getIncidentSeverity(),
+                postmortem.getIncidentSeverity().name(),
                 postmortem.getIncidentOpenedAt(),
                 postmortem.getIncidentResolvedAt(),
                 postmortem.getDurationMinutes(),

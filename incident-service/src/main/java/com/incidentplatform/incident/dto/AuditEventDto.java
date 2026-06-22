@@ -23,7 +23,7 @@ public record AuditEventDto(
                 event.getIncidentId(),
                 event.getEventType(),
                 event.getActor(),
-                event.getActorType(),
+                event.getActorType().name(),
                 event.getSourceService(),
                 event.getDetail(),
                 event.getMetadata(),

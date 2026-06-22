@@ -50,7 +50,7 @@ public class PostmortemPromptBuilder {
     public String build(Postmortem postmortem) {
         return build(
                 postmortem.getIncidentTitle(),
-                postmortem.getIncidentSeverity(),
+                postmortem.getIncidentSeverity().name(),
                 postmortem.getDurationMinutes(),
                 postmortem.getIncidentOpenedAt(),
                 postmortem.getIncidentResolvedAt()

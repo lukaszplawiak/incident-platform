@@ -3,6 +3,7 @@ package com.incidentplatform.postmortem.scheduler;
 import com.incidentplatform.postmortem.client.GeminiClient;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
+import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
@@ -318,7 +319,7 @@ class PostmortemRetrySchedulerTest {
                 UUID.randomUUID(),
                 tenantId,
                 "High CPU Usage on prod-server-1",
-                "CRITICAL",
+                Severity.CRITICAL,
                 openedAt,
                 resolvedAt,
                 30

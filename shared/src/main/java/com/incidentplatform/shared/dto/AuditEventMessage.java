@@ -10,7 +10,7 @@ public record AuditEventMessage(
         String tenantId,
         String eventType,
         String actor,
-        String actorType,
+        ActorType actorType,
         String sourceService,
         String detail,
         Map<String, Object> metadata,
