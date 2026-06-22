@@ -74,8 +74,8 @@ public class OncallClientImpl implements OncallClient {
     }
 
     @Override
-    public Optional<OncallInfo> findBySlackUserId(String slackUserId) {
-        log.debug("Looking up user by slackUserId: {}", slackUserId);
+    public Optional<OncallInfo> findBySlackUserId(String tenantId, String slackUserId) {
+        log.debug("Looking up user by slackUserId: {}, tenant: {}", slackUserId, tenantId);
 
         try {
             final String uri = UriComponentsBuilder
@@ -88,6 +88,7 @@ public class OncallClientImpl implements OncallClient {
                     .uri(uri)
                     .header("Authorization",
                             "Bearer " + serviceTokenProvider.getToken())
+                    .header("X-Tenant-Id", tenantId)
                     .retrieve()
                     .body(String.class);
 

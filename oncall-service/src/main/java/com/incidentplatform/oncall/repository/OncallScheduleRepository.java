@@ -45,10 +45,12 @@ public interface OncallScheduleRepository
 
     @Query("""
             SELECT s FROM OncallSchedule s
-            WHERE s.slackUserId = :slackUserId
+            WHERE s.tenantId = :tenantId
+            AND s.slackUserId = :slackUserId
             ORDER BY s.startsAt DESC
             """)
-    List<OncallSchedule> findBySlackUserId(
+    List<OncallSchedule> findByTenantIdAndSlackUserId(
+            @Param("tenantId") String tenantId,
             @Param("slackUserId") String slackUserId);
 
     @Query("""

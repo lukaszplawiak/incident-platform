@@ -96,7 +96,7 @@ public class SlackActionService {
         log.info("Processing ACK: incidentId={}, tenant={}, slackUser={}",
                 incidentId, tenantId, slackUserName);
 
-        final UUID systemUserId = oncallClient.findBySlackUserId(slackUserId)
+        final UUID systemUserId = oncallClient.findBySlackUserId(tenantId, slackUserId)
                 .map(info -> {
                     log.debug("Mapped slackUserId={} to systemUserId={}",
                             slackUserId, info.userId());

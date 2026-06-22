@@ -5,6 +5,7 @@ import com.incidentplatform.oncall.domain.OncallSchedule;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
+import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -313,5 +314,83 @@ class OncallScheduleServiceTest {
                 ENDS_AT,
                 "Test schedule"
         );
+    }
+
+    @Nested
+    @DisplayName("findBySlackUserId")
+    class FindBySlackUserId {
+
+        @Test
+        @DisplayName("should return user info when slackUserId matches within the tenant")
+        void shouldReturnUserWhenFound() {
+            // given
+            final OncallSchedule schedule = buildSchedule(OncallRole.PRIMARY);
+            given(repository.findByTenantIdAndSlackUserId(TENANT_ID, "U0123456789"))
+                    .willReturn(List.of(schedule));
+
+            // when
+            final Optional<SlackUserLookupResponse> result =
+                    service.findBySlackUserId(TENANT_ID, "U0123456789");
+
+            // then
+            assertThat(result).isPresent();
+            assertThat(result.get().userId()).isEqualTo("user-1");
+            assertThat(result.get().userName()).isEqualTo("Jan Kowalski");
+            assertThat(result.get().tenantId()).isEqualTo(TENANT_ID);
+            assertThat(result.get().slackUserId()).isEqualTo("U0123456789");
+        }
+
+        @Test
+        @DisplayName("should return empty when no schedule found for this tenant and slackUserId")
+        void shouldReturnEmptyWhenNotFound() {
+            // given
+            given(repository.findByTenantIdAndSlackUserId(TENANT_ID, "U_UNKNOWN"))
+                    .willReturn(List.of());
+
+            // when
+            final Optional<SlackUserLookupResponse> result =
+                    service.findBySlackUserId(TENANT_ID, "U_UNKNOWN");
+
+            // then
+            assertThat(result).isEmpty();
+        }
+
+        @Test
+        @DisplayName("should only query within the given tenant — not cross-tenant")
+        void shouldQueryWithTenantId() {
+            // given — repository returns nothing for tenant-b (no matching schedule)
+            // even though an identical slackUserId might exist for another tenant.
+            // The key assertion is that the repository receives "tenant-b" as the
+            // tenantId — proving the query is correctly scoped to the caller's tenant.
+            given(repository.findByTenantIdAndSlackUserId("tenant-b", "U0123456789"))
+                    .willReturn(List.of());
+
+            // when
+            final Optional<SlackUserLookupResponse> result =
+                    service.findBySlackUserId("tenant-b", "U0123456789");
+
+            // then — empty result AND correct tenantId passed to the repository
+            assertThat(result).isEmpty();
+            then(repository).should()
+                    .findByTenantIdAndSlackUserId("tenant-b", "U0123456789");
+        }
+
+        @Test
+        @DisplayName("should return first result when multiple schedules match")
+        void shouldReturnFirstWhenMultipleSchedules() {
+            // given
+            final OncallSchedule primary = buildSchedule(OncallRole.PRIMARY);
+            final OncallSchedule secondary = buildSchedule(OncallRole.SECONDARY);
+            given(repository.findByTenantIdAndSlackUserId(TENANT_ID, "U0123456789"))
+                    .willReturn(List.of(primary, secondary));
+
+            // when
+            final Optional<SlackUserLookupResponse> result =
+                    service.findBySlackUserId(TENANT_ID, "U0123456789");
+
+            // then — always one result (most recent per ORDER BY s.startsAt DESC)
+            assertThat(result).isPresent();
+            assertThat(result.get().userId()).isEqualTo("user-1");
+        }
     }
 }
