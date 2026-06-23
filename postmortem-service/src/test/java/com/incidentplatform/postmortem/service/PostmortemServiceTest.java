@@ -20,6 +20,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -213,22 +217,24 @@ class PostmortemServiceTest {
     class GetPostmortems {
 
         @Test
-        @DisplayName("should return postmortems for tenant")
+        @DisplayName("should return paginated postmortems for tenant")
         void shouldReturnPostmortemsForTenant() {
             // given
             final Postmortem postmortem = buildDraftPostmortem();
+            final Pageable pageable = PageRequest.of(0, 20);
             given(postmortemRepository
-                    .findByTenantIdOrderByCreatedAtDesc(TENANT_ID))
-                    .willReturn(List.of(postmortem));
+                    .findByTenantIdOrderByCreatedAtDesc(TENANT_ID, pageable))
+                    .willReturn(new PageImpl<>(List.of(postmortem), pageable, 1));
 
             // when
-            final List<PostmortemDto> result =
-                    postmortemService.getPostmortems(TENANT_ID);
+            final Page<PostmortemDto> result =
+                    postmortemService.getPostmortems(TENANT_ID, pageable);
 
             // then
-            assertThat(result).hasSize(1);
-            assertThat(result.get(0).incidentId()).isEqualTo(INCIDENT_ID);
-            assertThat(result.get(0).status()).isEqualTo("DRAFT");
+            assertThat(result.getContent()).hasSize(1);
+            assertThat(result.getContent().get(0).incidentId()).isEqualTo(INCIDENT_ID);
+            assertThat(result.getContent().get(0).status()).isEqualTo("DRAFT");
+            assertThat(result.getTotalElements()).isEqualTo(1);
         }
     }
 

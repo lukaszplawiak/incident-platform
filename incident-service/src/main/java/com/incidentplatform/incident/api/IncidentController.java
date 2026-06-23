@@ -4,6 +4,7 @@ import com.incidentplatform.incident.dto.IncidentDto;
 import com.incidentplatform.incident.dto.IncidentFilter;
 import com.incidentplatform.incident.dto.IncidentHistoryDto;
 import com.incidentplatform.incident.dto.UpdateStatusCommand;
+import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.incident.domain.IncidentStatus;
 import com.incidentplatform.incident.service.IncidentCommandService;
 import com.incidentplatform.incident.service.IncidentQueryService;
@@ -20,7 +21,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.MediaType;
@@ -64,11 +64,11 @@ public class IncidentController {
     @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
     @Operation(summary = "List incidents with optional filtering and pagination")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Page of incidents"),
+            @ApiResponse(responseCode = "200", description = "Paginated list of incidents"),
             @ApiResponse(responseCode = "401", description = "Unauthorized"),
             @ApiResponse(responseCode = "403", description = "Forbidden")
     })
-    public ResponseEntity<Page<IncidentDto>> listIncidents(
+    public ResponseEntity<PagedResponse<IncidentDto>> listIncidents(
 
             @Parameter(description = "Filter by status")
             @RequestParam(required = false) IncidentStatus status,
@@ -92,8 +92,11 @@ public class IncidentController {
         log.debug("List incidents request: filter={}, pageable={}, tenant={}",
                 filter, pageable, tenantId);
 
-        return ResponseEntity.ok(
-                queryService.findAll(tenantId, filter, pageable));
+        final var page = queryService.findAll(tenantId, filter, pageable);
+        return ResponseEntity.ok(PagedResponse.of(
+                page.getContent(), page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages(),
+                page.isFirst(), page.isLast()));
     }
 
     @GetMapping(

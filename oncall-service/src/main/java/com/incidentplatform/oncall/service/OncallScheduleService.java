@@ -12,6 +12,8 @@ import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -60,7 +62,6 @@ public class OncallScheduleService {
             );
         }
 
-
         final OncallSchedule schedule = OncallSchedule.create(
                 tenantId,
                 request.userId(),
@@ -99,12 +100,17 @@ public class OncallScheduleService {
                 .toList();
     }
 
+    /**
+     * Returns a paginated list of all schedules for the given tenant.
+     * Previously returned an unbounded {@code List} — replaced with
+     * {@code Page} to avoid loading all rows into memory for tenants
+     * with years of scheduling history.
+     */
     @Transactional(readOnly = true)
-    public List<OncallScheduleDto> getSchedules(String tenantId) {
-        return repository.findByTenantIdOrderByStartsAtDesc(tenantId)
-                .stream()
-                .map(OncallScheduleDto::from)
-                .toList();
+    public Page<OncallScheduleDto> getSchedules(String tenantId,
+                                                Pageable pageable) {
+        return repository.findByTenantIdOrderByStartsAtDesc(tenantId, pageable)
+                .map(OncallScheduleDto::from);
     }
 
     @Transactional(readOnly = true)
@@ -115,6 +121,15 @@ public class OncallScheduleService {
                         "OncallSchedule", id));
     }
 
+    /**
+     * Looks up the on-call schedule entry for a given Slack user within
+     * the specified tenant. Used by {@code notification-service} when
+     * resolving a Slack ACK button click to an internal system user ID.
+     *
+     * <p>The {@code tenantId} parameter is mandatory — without it the query
+     * would search all tenants, and two tenants sharing the same Slack
+     * workspace could have colliding {@code slackUserId} values.
+     */
     @Transactional(readOnly = true)
     public Optional<SlackUserLookupResponse> findBySlackUserId(
             String tenantId, String slackUserId) {

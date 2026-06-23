@@ -5,10 +5,14 @@ import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.service.OncallScheduleService;
+import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.security.TenantContext;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -63,10 +67,17 @@ public class OncallScheduleController {
     }
 
     @GetMapping("/schedules")
-    public ResponseEntity<List<OncallScheduleDto>> getSchedules() {
+    public ResponseEntity<PagedResponse<OncallScheduleDto>> getSchedules(
+            @PageableDefault(size = 20, sort = "startsAt") Pageable pageable) {
         final String tenantId = TenantContext.get();
-        log.debug("GET /api/v1/oncall/schedules, tenant={}", tenantId);
-        return ResponseEntity.ok(service.getSchedules(tenantId));
+        log.debug("GET /api/v1/oncall/schedules, tenant={}, page={}",
+                tenantId, pageable.getPageNumber());
+        final Page<OncallScheduleDto> page =
+                service.getSchedules(tenantId, pageable);
+        return ResponseEntity.ok(PagedResponse.of(
+                page.getContent(), page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages(),
+                page.isFirst(), page.isLast()));
     }
 
     @GetMapping("/schedules/{id}")
@@ -102,21 +113,21 @@ public class OncallScheduleController {
      * resolving a Slack ACK button click to the internal system user ID.
      *
      * <p>The caller's tenant is identified via the {@code X-Tenant-Id} header
-     * set by {@code notification-service} when making the inter-service call —
-     * the same mechanism used by {@link #getCurrentOncall}. This scopes the
-     * lookup to the correct tenant, preventing accidental cross-tenant matches
-     * when two tenants share the same Slack workspace.
+     * set by {@code notification-service} — the same mechanism used by
+     * {@link #getCurrentOncall}. This scopes the lookup to the correct tenant,
+     * preventing accidental cross-tenant matches when two tenants share the
+     * same Slack workspace.
      *
      * <p>Returns 204 No Content when no matching schedule is found —
      * {@code notification-service} falls back to a deterministic UUID in
-     * that case, so the ACK still succeeds even if the Slack user is not
-     * registered in the on-call schedule.
+     * that case, so the ACK still succeeds.
      */
     @GetMapping("/by-slack/{slackUserId}")
     public ResponseEntity<SlackUserLookupResponse> findBySlackUserId(
             @PathVariable String slackUserId) {
         final String tenantId = TenantContext.get();
-        log.debug("GET /api/v1/oncall/by-slack/{}, tenant={}", slackUserId, tenantId);
+        log.debug("GET /api/v1/oncall/by-slack/{}, tenant={}",
+                slackUserId, tenantId);
         return service.findBySlackUserId(tenantId, slackUserId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.noContent().build());
