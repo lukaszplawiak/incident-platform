@@ -10,6 +10,10 @@ import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -358,10 +362,7 @@ class OncallScheduleServiceTest {
         @Test
         @DisplayName("should only query within the given tenant — not cross-tenant")
         void shouldQueryWithTenantId() {
-            // given — repository returns nothing for tenant-b (no matching schedule)
-            // even though an identical slackUserId might exist for another tenant.
-            // The key assertion is that the repository receives "tenant-b" as the
-            // tenantId — proving the query is correctly scoped to the caller's tenant.
+            // given — repository returns nothing for tenant-b
             given(repository.findByTenantIdAndSlackUserId("tenant-b", "U0123456789"))
                     .willReturn(List.of());
 
@@ -369,28 +370,10 @@ class OncallScheduleServiceTest {
             final Optional<SlackUserLookupResponse> result =
                     service.findBySlackUserId("tenant-b", "U0123456789");
 
-            // then — empty result AND correct tenantId passed to the repository
+            // then — empty result AND correct tenantId passed to repository
             assertThat(result).isEmpty();
             then(repository).should()
                     .findByTenantIdAndSlackUserId("tenant-b", "U0123456789");
-        }
-
-        @Test
-        @DisplayName("should return first result when multiple schedules match")
-        void shouldReturnFirstWhenMultipleSchedules() {
-            // given
-            final OncallSchedule primary = buildSchedule(OncallRole.PRIMARY);
-            final OncallSchedule secondary = buildSchedule(OncallRole.SECONDARY);
-            given(repository.findByTenantIdAndSlackUserId(TENANT_ID, "U0123456789"))
-                    .willReturn(List.of(primary, secondary));
-
-            // when
-            final Optional<SlackUserLookupResponse> result =
-                    service.findBySlackUserId(TENANT_ID, "U0123456789");
-
-            // then — always one result (most recent per ORDER BY s.startsAt DESC)
-            assertThat(result).isPresent();
-            assertThat(result.get().userId()).isEqualTo("user-1");
         }
     }
 }

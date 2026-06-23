@@ -16,6 +16,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -111,12 +113,10 @@ public class PostmortemService {
     }
 
     @Transactional(readOnly = true)
-    public List<PostmortemDto> getPostmortems(String tenantId) {
+    public Page<PostmortemDto> getPostmortems(String tenantId, Pageable pageable) {
         return postmortemRepository
-                .findByTenantIdOrderByCreatedAtDesc(tenantId)
-                .stream()
-                .map(PostmortemDto::from)
-                .toList();
+                .findByTenantIdOrderByCreatedAtDesc(tenantId, pageable)
+                .map(PostmortemDto::from);
     }
 
     @Transactional(readOnly = true)

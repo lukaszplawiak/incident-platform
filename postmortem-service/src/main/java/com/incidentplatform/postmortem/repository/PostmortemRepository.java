@@ -1,6 +1,8 @@
 package com.incidentplatform.postmortem.repository;
 
 import com.incidentplatform.postmortem.domain.Postmortem;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -15,7 +17,8 @@ public interface PostmortemRepository extends JpaRepository<Postmortem, UUID> {
 
     Optional<Postmortem> findByIncidentIdAndTenantId(UUID incidentId, String tenantId);
 
-    List<Postmortem> findByTenantIdOrderByCreatedAtDesc(String tenantId);
+    Page<Postmortem> findByTenantIdOrderByCreatedAtDesc(String tenantId,
+                                                        Pageable pageable);
 
     boolean existsByIncidentId(UUID incidentId);
 

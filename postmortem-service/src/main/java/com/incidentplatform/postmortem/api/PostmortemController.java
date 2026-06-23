@@ -15,7 +15,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
+import com.incidentplatform.shared.dto.PagedResponse;
 import java.util.UUID;
 
 @RestController
@@ -32,10 +34,16 @@ public class PostmortemController {
     }
 
     @GetMapping
-    public ResponseEntity<List<PostmortemDto>> getPostmortems() {
+    public ResponseEntity<PagedResponse<PostmortemDto>> getPostmortems(
+            @PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
         final String tenantId = TenantContext.get();
-        log.debug("GET /api/v1/postmortems, tenant={}", tenantId);
-        return ResponseEntity.ok(postmortemService.getPostmortems(tenantId));
+        log.debug("GET /api/v1/postmortems, tenant={}, page={}",
+                tenantId, pageable.getPageNumber());
+        final var page = postmortemService.getPostmortems(tenantId, pageable);
+        return ResponseEntity.ok(PagedResponse.of(
+                page.getContent(), page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages(),
+                page.isFirst(), page.isLast()));
     }
 
     @GetMapping("/incident/{incidentId}")

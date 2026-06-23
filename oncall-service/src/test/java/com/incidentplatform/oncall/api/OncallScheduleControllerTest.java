@@ -190,7 +190,7 @@ class OncallScheduleControllerTest {
             final ResponseEntity<SlackUserLookupResponse> result =
                     controller.findBySlackUserId("U_UNKNOWN");
 
-            // then — 204 so notification-service can proceed with fallback UUID
+            // then
             assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
         }
 
@@ -204,7 +204,7 @@ class OncallScheduleControllerTest {
             // when
             controller.findBySlackUserId("U0123456789");
 
-            // then — TenantContext.get() must feed into service call, not hardcoded
+            // then
             then(service).should().findBySlackUserId(TENANT_ID, "U0123456789");
         }
     }
