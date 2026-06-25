@@ -163,32 +163,25 @@ public class IncidentController {
             produces = MediaType.APPLICATION_JSON_VALUE
     )
     @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
-    @Operation(summary = "Assign incident to a user",
-            description = "Partial update — modifies only the assignee field. " +
-                    "Mirrors PATCH /{id}/status: both operate on a named " +
-                    "sub-resource (noun) with a validated JSON body.")
+    @Operation(summary = "Assign incident to a user")
     @ApiResponses({
-            @ApiResponse(responseCode = "200",
-                    description = "Incident assignee updated"),
-            @ApiResponse(responseCode = "400",
-                    description = "Validation failed — userId is required"),
-            @ApiResponse(responseCode = "404",
-                    description = "Incident not found"),
-            @ApiResponse(responseCode = "401",
-                    description = "Missing or invalid JWT token"),
-            @ApiResponse(responseCode = "403",
-                    description = "Insufficient permissions")
+            @ApiResponse(responseCode = "200", description = "Incident assignee updated"),
+            @ApiResponse(responseCode = "400", description = "Validation failed — userId is required"),
+            @ApiResponse(responseCode = "404", description = "Incident not found"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Forbidden")
     })
     public ResponseEntity<IncidentDto> assignIncident(
             @PathVariable UUID id,
-            @Valid @RequestBody AssignIncidentRequest request) {
+            @Valid @RequestBody AssignIncidentRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
 
         final String tenantId = TenantContext.get();
 
-        log.info("Assign incident request: incidentId={}, assignTo={}, tenant={}",
-                id, request.userId(), tenantId);
+        log.info("Assign incident request: incidentId={}, assignTo={}, assignedBy={}, tenant={}",
+                id, request.userId(), principal.userId(), tenantId);
 
         return ResponseEntity.ok(
-                commandService.assignTo(id, request.userId(), tenantId));
+                commandService.assignTo(id, request.userId(), principal.userId(), tenantId));
     }
 }
