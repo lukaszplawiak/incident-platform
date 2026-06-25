@@ -469,7 +469,7 @@ class IncidentCommandServiceTest {
 
             // when
             final IncidentDto result = commandService.assignTo(
-                    incident.getId(), assignToId, TENANT_ID);
+                    incident.getId(), assignToId, USER_ID, TENANT_ID);
 
             // then
             assertThat(result.assignedTo()).isEqualTo(assignToId);
@@ -486,7 +486,7 @@ class IncidentCommandServiceTest {
 
             // then
             assertThatThrownBy(() ->
-                    commandService.assignTo(unknownId, USER_ID, TENANT_ID))
+                    commandService.assignTo(unknownId, USER_ID, USER_ID, TENANT_ID))
                     .isInstanceOf(ResourceNotFoundException.class);
         }
     }

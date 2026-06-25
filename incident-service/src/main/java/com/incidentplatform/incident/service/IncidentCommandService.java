@@ -181,7 +181,7 @@ public class IncidentCommandService {
 
     @Transactional
     public IncidentDto assignTo(UUID incidentId, UUID assignToId,
-                                String tenantId) {
+                                UUID assignedBy, String tenantId) {
         final Incident incident = incidentRepository
                 .findByIdAndTenantId(incidentId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -190,8 +190,8 @@ public class IncidentCommandService {
         incident.assignTo(assignToId);
         incidentRepository.save(incident);
 
-        log.info("Incident assigned: incidentId={}, assignedTo={}, tenant={}",
-                incidentId, assignToId, tenantId);
+        log.info("Incident assigned: incidentId={}, assignedTo={}, assignedBy={}, tenant={}",
+                incidentId, assignToId, assignedBy, tenantId);
 
         final IncidentDto dto = IncidentDto.from(incident);
         webSocketPublisher.publishUpdate(dto);
@@ -199,9 +199,10 @@ public class IncidentCommandService {
         auditEventPublisher.publishUser(
                 incidentId, tenantId,
                 AuditEventTypes.INCIDENT_ASSIGNED, SERVICE_NAME,
-                assignToId.toString(),
+                assignedBy.toString(),
                 String.format("Incident assigned to userId=%s", assignToId),
-                Map.of("assignedTo", assignToId.toString())
+                Map.of("assignedTo", assignToId.toString(),
+                        "assignedBy", assignedBy.toString())
         );
 
         return dto;
