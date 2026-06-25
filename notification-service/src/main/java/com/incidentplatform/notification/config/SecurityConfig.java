@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
+import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -23,9 +24,10 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
-                                                   JwtAuthFilter jwtAuthFilter)
+                                                   JwtAuthFilter jwtAuthFilter,
+                                                   UnauthorizedEntryPoint unauthorizedEntryPoint)
             throws Exception {
-        return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter)
+        return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
                         // Slack sends signed callbacks without JWT — verified by SlackSignatureVerifier

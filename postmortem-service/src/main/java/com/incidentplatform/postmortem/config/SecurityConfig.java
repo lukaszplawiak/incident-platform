@@ -2,6 +2,7 @@ package com.incidentplatform.postmortem.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
+import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -15,25 +16,18 @@ import org.springframework.security.web.SecurityFilterChain;
  * <p>Extends the platform baseline from
  * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} with
  * method-level security ({@code @EnableMethodSecurity}) required for
- * {@code @PreAuthorize} annotations in {@link com.incidentplatform.postmortem.api.PostmortemController}
- * to take effect.
- *
- * <h2>Why a service-specific SecurityConfig is needed</h2>
- * {@link SharedSecurityAutoConfiguration} provides the shared
- * {@link SecurityFilterChain} baseline (JWT filter, CSRF, headers etc.)
- * but does not and cannot enable {@code @EnableMethodSecurity} — that
- * annotation must live in each application context individually. Without it,
- * {@code @PreAuthorize} on controller methods is silently ignored by Spring,
- * giving a false sense of role-based access control while any authenticated
- * request passes regardless of role.
+ * {@code @PreAuthorize} annotations in
+ * {@link com.incidentplatform.postmortem.api.PostmortemController} to take effect.
  *
  * <h2>Defense in depth</h2>
  * <ul>
  *   <li>Layer 1 — {@link SecurityFilterChain}: every request must carry a
- *       valid JWT ({@code anyRequest().authenticated()}).</li>
+ *       valid JWT ({@code anyRequest().authenticated()}). Unauthenticated
+ *       requests receive {@code 401 Unauthorized} via
+ *       {@link UnauthorizedEntryPoint}.</li>
  *   <li>Layer 2 — {@code @PreAuthorize} on each controller method: only
  *       tokens with {@code ROLE_RESPONDER} or {@code ROLE_ADMIN} may access
- *       postmortem endpoints.</li>
+ *       postmortem endpoints. Wrong-role requests receive {@code 403 Forbidden}.</li>
  * </ul>
  */
 @Configuration
@@ -43,9 +37,11 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
-                                                   JwtAuthFilter jwtAuthFilter)
+                                                   JwtAuthFilter jwtAuthFilter,
+                                                   UnauthorizedEntryPoint unauthorizedEntryPoint)
             throws Exception {
-        return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter)
+        return SharedSecurityAutoConfiguration.buildCommonSecurity(
+                        http, jwtAuthFilter, unauthorizedEntryPoint)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
                         .anyRequest().authenticated()

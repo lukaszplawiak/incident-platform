@@ -8,6 +8,7 @@ import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -38,26 +39,23 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Security tests for {@link PostmortemController}.
  *
- * <h2>Why a nested @SpringBootApplication</h2>
- * {@code PostmortemServiceApplication} carries
- * {@code @ComponentScan(basePackages = {"com.incidentplatform.postmortem",
- * "com.incidentplatform.shared"})}, which causes {@code @WebMvcTest} to
- * discover every {@code @Component} in both packages — including Kafka senders
- * ({@code AuditEventKafkaSender}, {@code IncidentEventKafkaSender}) that
- * require {@code KafkaTemplate}, and {@code ShedLockConfig} that requires
- * {@code DataSource}. Neither is available in the web slice, so the context
- * fails to load regardless of how many {@code @MockitoBean}s or
- * {@code excludeFilters} are added.
+ * <h2>Why @Import includes UnauthorizedEntryPoint</h2>
+ * {@code UnauthorizedEntryPoint} must be imported as a <em>real</em> bean,
+ * not mocked. A {@code @MockitoBean} would replace it with a no-op stub —
+ * its {@code commence()} method would not write anything to the response,
+ * causing Spring to return 200 instead of 401 for unauthenticated requests.
+ * The real implementation writes a proper 401 JSON response via
+ * {@code ObjectMapper}, which is available in the web slice.
  *
- * The fix is to provide a minimal {@code @SpringBootApplication} class
- * <em>inside the test</em>, scoped only to the packages actually needed for
- * the web slice. Spring Boot's {@code @WebMvcTest} bootstrapper prefers the
- * nearest {@code @SpringBootConfiguration} — the inner class wins over
- * {@code PostmortemServiceApplication}, so no problematic beans are
- * auto-scanned.
+ * <h2>Why a nested @SpringBootApplication</h2>
+ * {@code PostmortemServiceApplication} carries a broad {@code @ComponentScan}
+ * that pulls in {@code GeminiClientImpl} (needs {@code RestClient.Builder}),
+ * {@code ShedLockConfig} (needs {@code DataSource}) and Kafka beans — none
+ * available in the web slice. The inner {@code TestApplication} restricts
+ * scanning to only the packages needed for the web and security layers.
  */
 @WebMvcTest(PostmortemController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
         "jwt.expiration-ms=86400000",
@@ -67,12 +65,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("PostmortemController — security")
 class PostmortemControllerSecurityTest {
 
-    /**
-     * Minimal Spring Boot application scoped only to the web + security
-     * packages. Replaces {@code PostmortemServiceApplication} as the
-     * bootstrap configuration for this test slice, preventing the broad
-     * {@code @ComponentScan} from pulling in Kafka and ShedLock beans.
-     */
     @SpringBootApplication(scanBasePackages = {
             "com.incidentplatform.postmortem.api",
             "com.incidentplatform.postmortem.config",
@@ -95,9 +87,8 @@ class PostmortemControllerSecurityTest {
     @MockitoBean
     private ServiceTokenProvider serviceTokenProvider;
 
-    // These shared @Components are discovered even in the narrow scan
-    // because shared.security imports them transitively — mock them
-    // to avoid requiring Kafka infrastructure.
+    // Kafka beans discovered via shared.security scan — mock to avoid
+    // requiring Kafka infrastructure in the web slice.
     @MockitoBean
     private AuditEventPublisher auditEventPublisher;
 
@@ -117,33 +108,33 @@ class PostmortemControllerSecurityTest {
         TenantContext.clear();
     }
 
-    // ── Unauthenticated — 403 (no AuthenticationEntryPoint configured) ─────
+    // ── Unauthenticated — 401 ─────────────────────────────────────────────
 
     @Nested
-    @DisplayName("unauthenticated requests — 403 (no JWT, no entry point)")
+    @DisplayName("unauthenticated requests")
     class Unauthenticated {
 
         @Test
-        @DisplayName("GET /postmortems — 403 without token (no AuthenticationEntryPoint)")
+        @DisplayName("GET /postmortems — 401 without token")
         void listPostmortems_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/postmortems"))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isUnauthorized());
         }
 
         @Test
-        @DisplayName("GET /postmortems/incident/{id} — 403 without token")
+        @DisplayName("GET /postmortems/incident/{id} — 401 without token")
         void getByIncidentId_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/postmortems/incident/{id}", INCIDENT_ID))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isUnauthorized());
         }
 
         @Test
-        @DisplayName("PATCH /postmortems/incident/{id} — 403 without token")
+        @DisplayName("PATCH /postmortems/incident/{id} — 401 without token")
         void updateContent_returns401() throws Exception {
             mockMvc.perform(patch("/api/v1/postmortems/incident/{id}", INCIDENT_ID)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"content\":\"updated\"}"))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isUnauthorized());
         }
     }
 

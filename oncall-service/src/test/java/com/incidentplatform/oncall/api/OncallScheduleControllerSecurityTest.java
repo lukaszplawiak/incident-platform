@@ -8,6 +8,7 @@ import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -40,11 +41,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Security tests for {@link OncallScheduleController}.
  *
- * <p>Uses a minimal inner {@code @SpringBootApplication} to avoid the broad
- * {@code @ComponentScan} in {@code OncallServiceApplication} — see
- * {@link com.incidentplatform.postmortem.api.PostmortemControllerSecurityTest}
- * for the full rationale.
- *
+ * <p>Role matrix under test:
  * <pre>
  * Endpoint                        RESPONDER   ADMIN   INGESTOR   SERVICE
  * GET  /schedules                    ✅         ✅       ❌         ❌
@@ -53,9 +50,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * DELETE /schedules/{id}             ❌         ✅       ❌         ❌
  * GET  /by-slack/{id}    authenticated only (ROLE_SERVICE allowed)
  * </pre>
+ *
+ * <p>Unauthenticated requests return {@code 401 Unauthorized} via
+ * {@link UnauthorizedEntryPoint} registered in
+ * {@link com.incidentplatform.shared.security.SharedSecurityAutoConfiguration#buildCommonSecurity}.
  */
 @WebMvcTest(OncallScheduleController.class)
-@Import(SecurityConfig.class)
+@Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
         "jwt.expiration-ms=86400000",
@@ -120,40 +121,40 @@ class OncallScheduleControllerSecurityTest {
         TenantContext.clear();
     }
 
-    // ── Unauthenticated — 403 (no AuthenticationEntryPoint configured) ─────
+    // ── Unauthenticated — 401 ─────────────────────────────────────────────
 
     @Nested
-    @DisplayName("unauthenticated requests — 403 (no JWT, no entry point)")
+    @DisplayName("unauthenticated requests")
     class Unauthenticated {
 
         @Test
-        @DisplayName("GET /schedules — 403 without token")
+        @DisplayName("GET /schedules — 401 without token")
         void getSchedules_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/oncall/schedules"))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isUnauthorized());
         }
 
         @Test
-        @DisplayName("GET /schedules/{id} — 403 without token")
+        @DisplayName("GET /schedules/{id} — 401 without token")
         void getById_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isUnauthorized());
         }
 
         @Test
-        @DisplayName("POST /schedules — 403 without token")
+        @DisplayName("POST /schedules — 401 without token")
         void create_returns401() throws Exception {
             mockMvc.perform(post("/api/v1/oncall/schedules")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isUnauthorized());
         }
 
         @Test
-        @DisplayName("DELETE /schedules/{id} — 403 without token")
+        @DisplayName("DELETE /schedules/{id} — 401 without token")
         void delete_returns401() throws Exception {
             mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isUnauthorized());
         }
     }
 
@@ -314,18 +315,10 @@ class OncallScheduleControllerSecurityTest {
 
     private OncallScheduleDto buildScheduleDto() {
         return new OncallScheduleDto(
-                SCHEDULE_ID,
-                TENANT_ID,
-                "user-1",
-                "Jan Kowalski",
-                "jan@example.com",
-                "+48100200300",
-                "U0123456789",
-                "PRIMARY",
-                Instant.now(),
-                Instant.now().plusSeconds(86400),
-                "test schedule",
-                Instant.now()
+                SCHEDULE_ID, TENANT_ID, "user-1", "Jan Kowalski",
+                "jan@example.com", "+48100200300", "U0123456789", "PRIMARY",
+                Instant.now(), Instant.now().plusSeconds(86400),
+                "test schedule", Instant.now()
         );
     }
 }

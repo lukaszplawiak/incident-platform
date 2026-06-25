@@ -1,6 +1,7 @@
 package com.incidentplatform.incident.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
+import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -33,9 +34,10 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthFilter jwtAuthFilter,
-                                                   CorsConfigurationSource corsConfigurationSource)
+                                                   CorsConfigurationSource corsConfigurationSource,
+                                                   UnauthorizedEntryPoint unauthorizedEntryPoint)
             throws Exception {
-        return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter)
+        return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
