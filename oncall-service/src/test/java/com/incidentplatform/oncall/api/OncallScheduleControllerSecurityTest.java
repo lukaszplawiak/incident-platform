@@ -3,7 +3,10 @@ package com.incidentplatform.oncall.api;
 import com.incidentplatform.oncall.config.SecurityConfig;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.service.OncallScheduleService;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
@@ -22,6 +26,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -33,8 +38,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Security tests for {@link OncallScheduleController} — verifies that
- * {@code @PreAuthorize} annotations enforce the intended role matrix:
+ * Security tests for {@link OncallScheduleController}.
+ *
+ * <p>Uses a minimal inner {@code @SpringBootApplication} to avoid the broad
+ * {@code @ComponentScan} in {@code OncallServiceApplication} — see
+ * {@link com.incidentplatform.postmortem.api.PostmortemControllerSecurityTest}
+ * for the full rationale.
  *
  * <pre>
  * Endpoint                        RESPONDER   ADMIN   INGESTOR   SERVICE
@@ -42,23 +51,29 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * GET  /schedules/{id}               ✅         ✅       ❌         ❌
  * POST /schedules                    ❌         ✅       ❌         ❌
  * DELETE /schedules/{id}             ❌         ✅       ❌         ❌
- * GET  /by-slack/{id}    authenticated only (called by service tokens)
- * GET  /current          URL-level: SERVICE or ADMIN (not tested here —
- *                        that rule lives in SecurityFilterChain, not @PreAuthorize)
+ * GET  /by-slack/{id}    authenticated only (ROLE_SERVICE allowed)
  * </pre>
- *
- * <p>See {@link PostmortemControllerSecurityTest} for detailed rationale
- * on why {@code @WebMvcTest} is required for security tests.
  */
 @WebMvcTest(OncallScheduleController.class)
 @Import(SecurityConfig.class)
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
         "jwt.expiration-ms=86400000",
-        "jwt.service-expiration=PT1H"
+        "jwt.service-expiration=PT1H",
+        "spring.application.name=oncall-service"
 })
 @DisplayName("OncallScheduleController — security")
 class OncallScheduleControllerSecurityTest {
+
+    @SpringBootApplication(scanBasePackages = {
+            "com.incidentplatform.oncall.api",
+            "com.incidentplatform.oncall.config",
+            "com.incidentplatform.shared.security",
+            "com.incidentplatform.shared.exception",
+            "com.incidentplatform.shared.observability"
+    })
+    static class TestApplication {
+    }
 
     @Autowired
     private MockMvc mockMvc;
@@ -68,6 +83,15 @@ class OncallScheduleControllerSecurityTest {
 
     @MockitoBean
     private JwtUtils jwtUtils;
+
+    @MockitoBean
+    private ServiceTokenProvider serviceTokenProvider;
+
+    @MockitoBean
+    private AuditEventPublisher auditEventPublisher;
+
+    @MockitoBean
+    private IncidentEventKafkaSender incidentEventKafkaSender;
 
     private static final String TENANT_ID = "test-tenant";
     private static final UUID SCHEDULE_ID = UUID.randomUUID();
@@ -96,44 +120,44 @@ class OncallScheduleControllerSecurityTest {
         TenantContext.clear();
     }
 
-    // ── Unauthenticated — 401 ─────────────────────────────────────────────
+    // ── Unauthenticated — 403 (no AuthenticationEntryPoint configured) ─────
 
     @Nested
-    @DisplayName("unauthenticated requests")
+    @DisplayName("unauthenticated requests — 403 (no JWT, no entry point)")
     class Unauthenticated {
 
         @Test
-        @DisplayName("GET /schedules — 401 without token")
+        @DisplayName("GET /schedules — 403 without token")
         void getSchedules_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/oncall/schedules"))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
         }
 
         @Test
-        @DisplayName("GET /schedules/{id} — 401 without token")
+        @DisplayName("GET /schedules/{id} — 403 without token")
         void getById_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
         }
 
         @Test
-        @DisplayName("POST /schedules — 401 without token")
+        @DisplayName("POST /schedules — 403 without token")
         void create_returns401() throws Exception {
             mockMvc.perform(post("/api/v1/oncall/schedules")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
         }
 
         @Test
-        @DisplayName("DELETE /schedules/{id} — 401 without token")
+        @DisplayName("DELETE /schedules/{id} — 403 without token")
         void delete_returns401() throws Exception {
             mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
         }
     }
 
-    // ── ROLE_INGESTOR — 403 on all schedule endpoints ────────────────────
+    // ── ROLE_INGESTOR — 403 ───────────────────────────────────────────────
 
     @Nested
     @DisplayName("ROLE_INGESTOR — forbidden on all schedule endpoints")
@@ -196,10 +220,8 @@ class OncallScheduleControllerSecurityTest {
 
         @Test
         @WithMockUser(roles = "RESPONDER")
-        @DisplayName("POST /schedules — 403 for RESPONDER (admin-only operation)")
+        @DisplayName("POST /schedules — 403 for RESPONDER (admin-only)")
         void create_returns403() throws Exception {
-            // Creating schedules is restricted to ROLE_ADMIN — RESPONDER cannot
-            // manage who is on-call, only view it.
             mockMvc.perform(post("/api/v1/oncall/schedules")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
@@ -208,9 +230,8 @@ class OncallScheduleControllerSecurityTest {
 
         @Test
         @WithMockUser(roles = "RESPONDER")
-        @DisplayName("DELETE /schedules/{id} — 403 for RESPONDER (admin-only operation)")
+        @DisplayName("DELETE /schedules/{id} — 403 for RESPONDER (admin-only)")
         void delete_returns403() throws Exception {
-            // Deleting schedules is restricted to ROLE_ADMIN.
             mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
                     .andExpect(status().isForbidden());
         }
@@ -255,20 +276,18 @@ class OncallScheduleControllerSecurityTest {
         }
     }
 
-    // ── ROLE_SERVICE — authenticated, by-slack accessible ────────────────
+    // ── ROLE_SERVICE — by-slack accessible, schedules forbidden ──────────
 
     @Nested
-    @DisplayName("ROLE_SERVICE — only authenticated endpoints accessible")
+    @DisplayName("ROLE_SERVICE — only authenticated-only endpoints accessible")
     class ServiceRole {
 
         @Test
         @WithMockUser(roles = "SERVICE")
-        @DisplayName("GET /by-slack/{id} — 204 for SERVICE (no schedule found)")
+        @DisplayName("GET /by-slack/{id} — 204 for SERVICE (authenticated-only endpoint)")
         void findBySlackUserId_returns204ForService() throws Exception {
-            // by-slack is protected only by anyRequest().authenticated() —
-            // no @PreAuthorize, so ROLE_SERVICE can reach it.
             given(service.findBySlackUserId(any(), any()))
-                    .willReturn(java.util.Optional.empty());
+                    .willReturn(Optional.empty());
 
             mockMvc.perform(get("/api/v1/oncall/by-slack/{id}", "U0123456789"))
                     .andExpect(status().isNoContent());
@@ -276,7 +295,7 @@ class OncallScheduleControllerSecurityTest {
 
         @Test
         @WithMockUser(roles = "SERVICE")
-        @DisplayName("GET /schedules — 403 for SERVICE (responder endpoint)")
+        @DisplayName("GET /schedules — 403 for SERVICE")
         void getSchedules_returns403ForService() throws Exception {
             mockMvc.perform(get("/api/v1/oncall/schedules"))
                     .andExpect(status().isForbidden());
@@ -284,7 +303,7 @@ class OncallScheduleControllerSecurityTest {
 
         @Test
         @WithMockUser(roles = "SERVICE")
-        @DisplayName("POST /schedules — 403 for SERVICE (admin-only)")
+        @DisplayName("POST /schedules — 403 for SERVICE")
         void create_returns403ForService() throws Exception {
             mockMvc.perform(post("/api/v1/oncall/schedules")
                             .contentType(MediaType.APPLICATION_JSON)

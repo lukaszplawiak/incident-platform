@@ -3,8 +3,10 @@ package com.incidentplatform.postmortem.api;
 import com.incidentplatform.postmortem.config.SecurityConfig;
 import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.service.PostmortemService;
-import com.incidentplatform.shared.security.JwtAuthFilter;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -12,6 +14,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
@@ -33,38 +36,52 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Security tests for {@link PostmortemController} — verifies that
- * {@code @PreAuthorize} annotations are enforced correctly and that
- * the defense-in-depth model (Layer 1: authenticated, Layer 2: role check)
- * works as intended.
+ * Security tests for {@link PostmortemController}.
  *
- * <h2>Why @WebMvcTest, not plain Mockito unit tests</h2>
- * {@code @PreAuthorize} is implemented via Spring AOP proxies. When a test
- * instantiates a controller directly ({@code new PostmortemController(...)})
- * and calls its methods, no proxy is involved — the annotation is silently
- * ignored. Role checks can only be tested through the full Spring MVC
- * dispatch pipeline, which is what {@code @WebMvcTest} provides without
- * loading the entire application context (no database, no Kafka).
+ * <h2>Why a nested @SpringBootApplication</h2>
+ * {@code PostmortemServiceApplication} carries
+ * {@code @ComponentScan(basePackages = {"com.incidentplatform.postmortem",
+ * "com.incidentplatform.shared"})}, which causes {@code @WebMvcTest} to
+ * discover every {@code @Component} in both packages — including Kafka senders
+ * ({@code AuditEventKafkaSender}, {@code IncidentEventKafkaSender}) that
+ * require {@code KafkaTemplate}, and {@code ShedLockConfig} that requires
+ * {@code DataSource}. Neither is available in the web slice, so the context
+ * fails to load regardless of how many {@code @MockitoBean}s or
+ * {@code excludeFilters} are added.
  *
- * <h2>Why @TestPropertySource</h2>
- * {@link JwtUtils} requires {@code jwt.secret} to initialise. In a
- * {@code @WebMvcTest} slice the application.yml is loaded but environment
- * variables are not available, so the property must be supplied via
- * {@code @TestPropertySource}. {@link JwtAuthFilter} is still present in
- * the security filter chain but {@code @WithMockUser} bypasses it entirely
- * by pre-populating the {@link org.springframework.security.core.context.SecurityContext}
- * before the request reaches any filter — the filter runs but finds an
- * already-authenticated context and sets no new authentication.
+ * The fix is to provide a minimal {@code @SpringBootApplication} class
+ * <em>inside the test</em>, scoped only to the packages actually needed for
+ * the web slice. Spring Boot's {@code @WebMvcTest} bootstrapper prefers the
+ * nearest {@code @SpringBootConfiguration} — the inner class wins over
+ * {@code PostmortemServiceApplication}, so no problematic beans are
+ * auto-scanned.
  */
 @WebMvcTest(PostmortemController.class)
 @Import(SecurityConfig.class)
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
         "jwt.expiration-ms=86400000",
-        "jwt.service-expiration=PT1H"
+        "jwt.service-expiration=PT1H",
+        "spring.application.name=postmortem-service"
 })
 @DisplayName("PostmortemController — security")
 class PostmortemControllerSecurityTest {
+
+    /**
+     * Minimal Spring Boot application scoped only to the web + security
+     * packages. Replaces {@code PostmortemServiceApplication} as the
+     * bootstrap configuration for this test slice, preventing the broad
+     * {@code @ComponentScan} from pulling in Kafka and ShedLock beans.
+     */
+    @SpringBootApplication(scanBasePackages = {
+            "com.incidentplatform.postmortem.api",
+            "com.incidentplatform.postmortem.config",
+            "com.incidentplatform.shared.security",
+            "com.incidentplatform.shared.exception",
+            "com.incidentplatform.shared.observability"
+    })
+    static class TestApplication {
+    }
 
     @Autowired
     private MockMvc mockMvc;
@@ -72,12 +89,20 @@ class PostmortemControllerSecurityTest {
     @MockitoBean
     private PostmortemService postmortemService;
 
-    // JwtUtils is a @Component in shared — it is auto-discovered and requires
-    // jwt.secret; we let Spring create the real bean (supplied via
-    // @TestPropertySource above) so that JwtAuthFilter initialises correctly.
-    // JwtAuthFilter itself is a @Component and is registered automatically.
     @MockitoBean
     private JwtUtils jwtUtils;
+
+    @MockitoBean
+    private ServiceTokenProvider serviceTokenProvider;
+
+    // These shared @Components are discovered even in the narrow scan
+    // because shared.security imports them transitively — mock them
+    // to avoid requiring Kafka infrastructure.
+    @MockitoBean
+    private AuditEventPublisher auditEventPublisher;
+
+    @MockitoBean
+    private IncidentEventKafkaSender incidentEventKafkaSender;
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final String TENANT_ID = "test-tenant";
@@ -92,37 +117,37 @@ class PostmortemControllerSecurityTest {
         TenantContext.clear();
     }
 
-    // ── Unauthenticated — 401 ─────────────────────────────────────────────
+    // ── Unauthenticated — 403 (no AuthenticationEntryPoint configured) ─────
 
     @Nested
-    @DisplayName("unauthenticated requests")
+    @DisplayName("unauthenticated requests — 403 (no JWT, no entry point)")
     class Unauthenticated {
 
         @Test
-        @DisplayName("GET /postmortems — 401 without token")
+        @DisplayName("GET /postmortems — 403 without token (no AuthenticationEntryPoint)")
         void listPostmortems_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/postmortems"))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
         }
 
         @Test
-        @DisplayName("GET /postmortems/incident/{id} — 401 without token")
+        @DisplayName("GET /postmortems/incident/{id} — 403 without token")
         void getByIncidentId_returns401() throws Exception {
             mockMvc.perform(get("/api/v1/postmortems/incident/{id}", INCIDENT_ID))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
         }
 
         @Test
-        @DisplayName("PATCH /postmortems/incident/{id} — 401 without token")
+        @DisplayName("PATCH /postmortems/incident/{id} — 403 without token")
         void updateContent_returns401() throws Exception {
             mockMvc.perform(patch("/api/v1/postmortems/incident/{id}", INCIDENT_ID)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"content\":\"updated\"}"))
-                    .andExpect(status().isUnauthorized());
+                    .andExpect(status().isForbidden());
         }
     }
 
-    // ── ROLE_INGESTOR — 403 (authenticated but wrong role) ───────────────
+    // ── ROLE_INGESTOR — 403 ───────────────────────────────────────────────
 
     @Nested
     @DisplayName("ROLE_INGESTOR — forbidden on all endpoints")
