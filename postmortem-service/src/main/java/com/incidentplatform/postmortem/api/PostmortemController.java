@@ -31,8 +31,7 @@ import java.util.UUID;
 @Validated
 @RestController
 @RequestMapping("/api/v1/postmortems")
-@Tag(name = "Postmortems",
-        description = "Postmortem report management")
+@Tag(name = "Postmortems", description = "Postmortem report management")
 @SecurityRequirement(name = "Bearer Authentication")
 public class PostmortemController {
 

@@ -1,6 +1,7 @@
 package com.incidentplatform.shared.security;
 
 import org.springframework.beans.factory.annotation.Value;
+import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -90,9 +91,10 @@ public class SharedSecurityAutoConfiguration {
     @ConditionalOnMissingBean(SecurityFilterChain.class)
     public SecurityFilterChain defaultSecurityFilterChain(
             HttpSecurity http,
-            JwtAuthFilter jwtAuthFilter) throws Exception {
+            JwtAuthFilter jwtAuthFilter,
+            UnauthorizedEntryPoint unauthorizedEntryPoint) throws Exception {
 
-        return buildCommonSecurity(http, jwtAuthFilter)
+        return buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_PATHS).permitAll()
                         .anyRequest().authenticated()
@@ -122,12 +124,16 @@ public class SharedSecurityAutoConfiguration {
      */
     public static HttpSecurity buildCommonSecurity(
             HttpSecurity http,
-            JwtAuthFilter jwtAuthFilter) throws Exception {
+            JwtAuthFilter jwtAuthFilter,
+            UnauthorizedEntryPoint unauthorizedEntryPoint) throws Exception {
 
         return http
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(unauthorizedEntryPoint)
+                )
                 .headers(headers -> headers
                         .frameOptions(frame -> frame.deny())
                         .xssProtection(xss -> xss.disable())
