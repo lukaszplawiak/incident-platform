@@ -3,6 +3,7 @@ package com.incidentplatform.incident.api;
 import com.incidentplatform.incident.dto.IncidentDto;
 import com.incidentplatform.incident.dto.IncidentFilter;
 import com.incidentplatform.incident.dto.IncidentHistoryDto;
+import com.incidentplatform.incident.dto.AssignIncidentRequest;
 import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.incident.domain.IncidentStatus;
@@ -31,7 +32,6 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -157,22 +157,38 @@ public class IncidentController {
                         id, command, principal.userId(), tenantId));
     }
 
-    @PutMapping(
-            value = "/{id}/assign/{userId}",
+    @PatchMapping(
+            value = "/{id}/assignee",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
     @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
-    @Operation(summary = "Assign incident to user")
+    @Operation(summary = "Assign incident to a user",
+            description = "Partial update — modifies only the assignee field. " +
+                    "Mirrors PATCH /{id}/status: both operate on a named " +
+                    "sub-resource (noun) with a validated JSON body.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "Incident assignee updated"),
+            @ApiResponse(responseCode = "400",
+                    description = "Validation failed — userId is required"),
+            @ApiResponse(responseCode = "404",
+                    description = "Incident not found"),
+            @ApiResponse(responseCode = "401",
+                    description = "Missing or invalid JWT token"),
+            @ApiResponse(responseCode = "403",
+                    description = "Insufficient permissions")
+    })
     public ResponseEntity<IncidentDto> assignIncident(
             @PathVariable UUID id,
-            @PathVariable UUID userId) {
+            @Valid @RequestBody AssignIncidentRequest request) {
 
         final String tenantId = TenantContext.get();
 
         log.info("Assign incident request: incidentId={}, assignTo={}, tenant={}",
-                id, userId, tenantId);
+                id, request.userId(), tenantId);
 
         return ResponseEntity.ok(
-                commandService.assignTo(id, userId, tenantId));
+                commandService.assignTo(id, request.userId(), tenantId));
     }
 }
