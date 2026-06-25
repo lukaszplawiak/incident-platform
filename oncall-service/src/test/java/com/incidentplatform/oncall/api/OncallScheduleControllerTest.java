@@ -27,7 +27,7 @@ import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
-@DisplayName("OncallScheduleController — getCurrentOncall")
+@DisplayName("OncallScheduleController")
 class OncallScheduleControllerTest {
 
     @Mock
