@@ -15,6 +15,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -122,7 +123,7 @@ public class AlertIngestionController {
             )
             @RequestBody JsonNode rawPayload,
 
-            jakarta.servlet.http.HttpServletRequest httpRequest) {
+            HttpServletRequest httpRequest) {
 
         final String tenantId = TenantContext.get();
         final String clientIp = resolveClientIp(httpRequest);
@@ -176,7 +177,7 @@ public class AlertIngestionController {
     }
 
     private String resolveClientIp(
-            jakarta.servlet.http.HttpServletRequest request) {
+            HttpServletRequest request) {
         final String xForwardedFor = request.getHeader("X-Forwarded-For");
         if (xForwardedFor != null && !xForwardedFor.isBlank()) {
             return xForwardedFor.split(",")[0].trim();
