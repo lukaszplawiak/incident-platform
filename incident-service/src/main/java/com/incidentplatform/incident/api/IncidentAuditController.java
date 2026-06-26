@@ -39,7 +39,7 @@ public class IncidentAuditController {
     }
 
     @GetMapping("/{incidentId}/audit")
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(
             summary = "Get incident audit log (paginated)",
             description = "Returns chronological history of all events for the " +
