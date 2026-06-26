@@ -6,6 +6,7 @@ import com.incidentplatform.shared.security.ServiceTokenProvider;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -27,10 +28,11 @@ public class OncallClientImpl implements OncallClient {
     @Value("${oncall-service.base-url:http://localhost:8086}")
     private String oncallServiceBaseUrl;
 
-    public OncallClientImpl(RestClient.Builder restClientBuilder,
-                            ObjectMapper objectMapper,
-                            ServiceTokenProvider serviceTokenProvider) {
-        this.restClient = restClientBuilder.build();
+    public OncallClientImpl(
+            @Qualifier("notificationServiceRestClient") RestClient restClient,
+            ObjectMapper objectMapper,
+            ServiceTokenProvider serviceTokenProvider) {
+        this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.serviceTokenProvider = serviceTokenProvider;
     }
