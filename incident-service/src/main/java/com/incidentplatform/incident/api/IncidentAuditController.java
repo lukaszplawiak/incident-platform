@@ -2,13 +2,17 @@ package com.incidentplatform.incident.api;
 
 import com.incidentplatform.incident.dto.AuditEventDto;
 import com.incidentplatform.incident.service.AuditQueryService;
+import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.security.TenantContext;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,7 +20,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -36,30 +39,34 @@ public class IncidentAuditController {
     }
 
     @GetMapping("/{incidentId}/audit")
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(
-            summary = "Get incident audit log",
-            description = "Returns full chronological history of all events " +
-                    "for the incident — creation, notifications, escalations, " +
-                    "acknowledgement, resolution and postmortem generation."
+            summary = "Get incident audit log (paginated)",
+            description = "Returns chronological history of all events for the " +
+                    "incident — creation, notifications, escalations, " +
+                    "acknowledgement, resolution and postmortem generation. " +
+                    "Results are sorted by occurredAt ascending (oldest first). " +
+                    "Default page size is 50; use ?size=N&page=P to paginate."
     )
-    @ApiResponse(responseCode = "200",
-            description = "Audit log retrieved successfully")
-    @ApiResponse(responseCode = "401",
-            description = "Missing or invalid JWT token")
-    @ApiResponse(responseCode = "403",
-            description = "Insufficient permissions")
-    public ResponseEntity<List<AuditEventDto>> getAuditLog(
-            @PathVariable UUID incidentId) {
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "Audit log page retrieved successfully"),
+            @ApiResponse(responseCode = "401",
+                    description = "Missing or invalid JWT token"),
+            @ApiResponse(responseCode = "403",
+                    description = "Insufficient permissions")
+    })
+    public ResponseEntity<PagedResponse<AuditEventDto>> getAuditLog(
+            @PathVariable UUID incidentId,
+            @PageableDefault(size = 50, sort = "occurredAt") Pageable pageable) {
 
         final String tenantId = TenantContext.get();
 
-        log.debug("GET /api/v1/incidents/{}/audit, tenant={}",
-                incidentId, tenantId);
+        log.debug("GET /api/v1/incidents/{}/audit, tenant={}, page={}",
+                incidentId, tenantId, pageable.getPageNumber());
 
-        final List<AuditEventDto> auditLog =
-                auditQueryService.getAuditLog(incidentId, tenantId);
+        final var page = auditQueryService.getAuditLog(incidentId, tenantId, pageable);
 
-        return ResponseEntity.ok(auditLog);
+        return ResponseEntity.ok(PagedResponse.of(page));
     }
 }

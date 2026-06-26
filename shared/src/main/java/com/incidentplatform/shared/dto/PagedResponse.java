@@ -1,5 +1,7 @@
 package com.incidentplatform.shared.dto;
 
+import org.springframework.data.domain.Page;
+
 import java.util.List;
 
 /**
@@ -80,5 +82,27 @@ public record PagedResponse<T>(
                                           boolean last) {
         return new PagedResponse<>(
                 content, page, size, totalElements, totalPages, first, last);
+    }
+
+    /**
+     * Convenience factory that unwraps a Spring Data {@link Page}.
+     *
+     * <p>Eliminates the repetitive 7-argument call at every paginated
+     * controller endpoint:
+     * <pre>{@code
+     * // before
+     * return ResponseEntity.ok(PagedResponse.of(
+     *         page.getContent(), page.getNumber(), page.getSize(),
+     *         page.getTotalElements(), page.getTotalPages(),
+     *         page.isFirst(), page.isLast()));
+     *
+     * // after
+     * return ResponseEntity.ok(PagedResponse.of(page));
+     * }</pre>
+     */
+    public static <T> PagedResponse<T> of(Page<T> page) {
+        return of(page.getContent(), page.getNumber(), page.getSize(),
+                page.getTotalElements(), page.getTotalPages(),
+                page.isFirst(), page.isLast());
     }
 }

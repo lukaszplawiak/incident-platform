@@ -1,10 +1,6 @@
 package com.incidentplatform.incident.api;
 
-import com.incidentplatform.incident.dto.IncidentDto;
-import com.incidentplatform.incident.dto.IncidentFilter;
-import com.incidentplatform.incident.dto.IncidentHistoryDto;
-import com.incidentplatform.incident.dto.AssignIncidentRequest;
-import com.incidentplatform.incident.dto.UpdateStatusCommand;
+import com.incidentplatform.incident.dto.*;
 import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.incident.domain.IncidentStatus;
 import com.incidentplatform.incident.service.IncidentCommandService;
@@ -32,6 +28,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -61,7 +58,7 @@ public class IncidentController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "List incidents with optional filtering and pagination")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Paginated list of incidents"),
@@ -93,17 +90,14 @@ public class IncidentController {
                 filter, pageable, tenantId);
 
         final var page = queryService.findAll(tenantId, filter, pageable);
-        return ResponseEntity.ok(PagedResponse.of(
-                page.getContent(), page.getNumber(), page.getSize(),
-                page.getTotalElements(), page.getTotalPages(),
-                page.isFirst(), page.isLast()));
+        return ResponseEntity.ok(PagedResponse.of(page));
     }
 
     @GetMapping(
             value = "/{id}",
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Get incident details")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Incident details"),
@@ -120,7 +114,7 @@ public class IncidentController {
             value = "/{id}/history",
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Get incident status change history (audit log)")
     public ResponseEntity<List<IncidentHistoryDto>> getHistory(
             @PathVariable UUID id) {
@@ -133,7 +127,7 @@ public class IncidentController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Update incident status (FSM validated transition)")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Status updated"),
@@ -162,7 +156,7 @@ public class IncidentController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Assign incident to a user")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Incident assignee updated"),

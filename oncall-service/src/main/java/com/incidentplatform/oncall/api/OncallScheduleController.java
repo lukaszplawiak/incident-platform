@@ -95,7 +95,7 @@ public class OncallScheduleController {
     }
 
     @GetMapping(value = "/schedules", produces = MediaType.APPLICATION_JSON_VALUE)
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "List on-call schedules (paginated)")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Paginated list of schedules"),
@@ -110,14 +110,11 @@ public class OncallScheduleController {
                 tenantId, pageable.getPageNumber());
         final Page<OncallScheduleDto> page =
                 service.getSchedules(tenantId, pageable);
-        return ResponseEntity.ok(PagedResponse.of(
-                page.getContent(), page.getNumber(), page.getSize(),
-                page.getTotalElements(), page.getTotalPages(),
-                page.isFirst(), page.isLast()));
+        return ResponseEntity.ok(PagedResponse.of(page));
     }
 
     @GetMapping(value = "/schedules/{id}", produces = MediaType.APPLICATION_JSON_VALUE)
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Get on-call schedule by ID")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Schedule details"),
@@ -137,7 +134,7 @@ public class OncallScheduleController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Create a new on-call schedule entry")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Schedule created"),
@@ -159,7 +156,7 @@ public class OncallScheduleController {
     }
 
     @DeleteMapping("/schedules/{id}")
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Delete an on-call schedule entry")
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "Schedule deleted"),

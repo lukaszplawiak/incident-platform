@@ -61,10 +61,7 @@ public class PostmortemController {
         log.debug("GET /api/v1/postmortems, tenant={}, page={}",
                 tenantId, pageable.getPageNumber());
         final var page = postmortemService.getPostmortems(tenantId, pageable);
-        return ResponseEntity.ok(PagedResponse.of(
-                page.getContent(), page.getNumber(), page.getSize(),
-                page.getTotalElements(), page.getTotalPages(),
-                page.isFirst(), page.isLast()));
+        return ResponseEntity.ok(PagedResponse.of(page));
     }
 
     @GetMapping(
