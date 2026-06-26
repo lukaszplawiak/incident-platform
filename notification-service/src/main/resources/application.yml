@@ -99,6 +99,13 @@ oncall-service:
 incident-service:
   base-url: ${INCIDENT_SERVICE_URL:http://localhost:8082}
 
+# Timeout for inter-service HTTP calls (oncall-service, incident-service).
+# connect-timeout: 3s — within-cluster; longer means the service is genuinely down.
+# read-timeout: 5s — enough for normal processing without blocking async threads.
+  client:
+    connect-timeout-seconds: ${NOTIFICATION_CLIENT_CONNECT_TIMEOUT:3}
+    read-timeout-seconds: ${NOTIFICATION_CLIENT_READ_TIMEOUT:5}
+
 server:
   port: ${SERVER_PORT:8083}
   server-header: ""
@@ -135,6 +142,22 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 1
         automatic-transition-from-open-to-half-open-enabled: true
+
+      # Circuit breaker for PATCH /incidents/{id}/status calls.
+      # Protects the slackTaskExecutor thread pool (maxPoolSize=5) from
+      # exhaustion when incident-service is unresponsive.
+      # open-state 30s: same as oncall — within-cluster services recover quickly.
+      incident-ack:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 1
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
 
   retry:
     instances:
