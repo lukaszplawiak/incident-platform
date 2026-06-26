@@ -114,8 +114,14 @@ public class IncidentController {
             value = "/{id}/history",
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
+    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
     @Operation(summary = "Get incident status change history (audit log)")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Status change history"),
+            @ApiResponse(responseCode = "404", description = "Incident not found"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Forbidden")
+    })
     public ResponseEntity<List<IncidentHistoryDto>> getHistory(
             @PathVariable UUID id) {
         final String tenantId = TenantContext.get();
