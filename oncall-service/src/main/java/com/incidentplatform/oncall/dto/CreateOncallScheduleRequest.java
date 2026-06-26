@@ -1,5 +1,6 @@
 package com.incidentplatform.oncall.dto;
 
+import com.incidentplatform.oncall.validation.StartBeforeEnd;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -7,6 +8,7 @@ import jakarta.validation.constraints.Pattern;
 
 import java.time.Instant;
 
+@StartBeforeEnd
 public record CreateOncallScheduleRequest(
 
         @NotBlank(message = "userId is required")
