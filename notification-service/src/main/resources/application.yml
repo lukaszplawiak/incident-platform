@@ -142,6 +142,9 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 1
         automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
 
       # Circuit breaker for PATCH /incidents/{id}/status calls.
       # Protects the slackTaskExecutor thread pool (maxPoolSize=5) from
@@ -169,6 +172,20 @@ resilience4j:
         retry-exceptions:
           - org.springframework.web.client.ResourceAccessException
           - org.springframework.web.client.HttpServerErrorException
+
+      # Retry for oncall-service calls (getCurrentOncall, findBySlackUserId).
+      # 2 attempts with 200ms fixed wait — oncall-service is within the cluster,
+      # transient failures are typically short-lived.
+      # Retry runs inside the circuit breaker: each attempt counts toward
+      # the sliding window, so the CB opens if both attempts fail repeatedly.
+      oncall:
+        max-attempts: ${ONCALL_RETRY_MAX_ATTEMPTS:2}
+        wait-duration: ${ONCALL_RETRY_WAIT_MS:200ms}
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
 
 logging:
   level:

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -37,7 +38,8 @@ public class OncallClientImpl implements OncallClient {
         this.serviceTokenProvider = serviceTokenProvider;
     }
 
-    @CircuitBreaker(name = "oncall", fallbackMethod = "getCurrentOncallFallback")
+    @Retry(name = "oncall")
+    @CircuitBreaker(name = "oncall")
     @Override
     public Optional<OncallInfo> getCurrentOncall(String tenantId, String role) {
         log.debug("Fetching current oncall: tenantId={}, role={}",
@@ -75,6 +77,8 @@ public class OncallClientImpl implements OncallClient {
         }
     }
 
+    @Retry(name = "oncall")
+    @CircuitBreaker(name = "oncall")
     @Override
     public Optional<OncallInfo> findBySlackUserId(String tenantId, String slackUserId) {
         log.debug("Looking up user by slackUserId: {}, tenant: {}", slackUserId, tenantId);
@@ -122,13 +126,6 @@ public class OncallClientImpl implements OncallClient {
                     slackUserId, e.getMessage());
             return Optional.empty();
         }
-    }
-
-    public Optional<OncallInfo> getCurrentOncallFallback(
-            String tenantId, String role, Exception ex) {
-        log.warn("OncallClient circuit breaker OPEN: tenantId={}, role={}, " +
-                "using fallback. Error: {}", tenantId, role, ex.getMessage());
-        return Optional.empty();
     }
 
     private OncallInfo parseOncallInfo(String responseBody) throws Exception {
