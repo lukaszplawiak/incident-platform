@@ -25,17 +25,18 @@ public class OncallClientImpl implements OncallClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final ServiceTokenProvider serviceTokenProvider;
-
-    @Value("${oncall-service.base-url:http://localhost:8086}")
-    private String oncallServiceBaseUrl;
+    private final String oncallServiceBaseUrl;
 
     public OncallClientImpl(
             @Qualifier("notificationServiceRestClient") RestClient restClient,
             ObjectMapper objectMapper,
-            ServiceTokenProvider serviceTokenProvider) {
+            ServiceTokenProvider serviceTokenProvider,
+            @Value("${oncall-service.base-url:http://localhost:8086}")
+            String oncallServiceBaseUrl) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.serviceTokenProvider = serviceTokenProvider;
+        this.oncallServiceBaseUrl = oncallServiceBaseUrl;
     }
 
     @Retry(name = "oncall")
