@@ -25,15 +25,10 @@ import java.util.UUID;
  *
  * <h2>Circuit breaker behaviour</h2>
  * Uses the {@code incident-ack} circuit breaker instance configured in
- * {@code application.yml}. When the breaker is OPEN, {@link #acknowledgeIncidentFallback}
- * is called immediately without making an HTTP call — freeing the thread for
- * other work and giving {@code incident-service} time to recover.
- *
- * <p>Fallback returns {@code false} (acknowledgement failed) and logs a warning.
- * The caller ({@link com.incidentplatform.notification.slack.SlackActionService})
- * already handles {@code false} gracefully — it logs the failure and skips the
- * Slack message update. The Kafka message is not acknowledged, so the event will
- * be redelivered and the user can click the button again after recovery.
+ * {@code application.yml}. When the breaker is OPEN, Resilience4j throws
+ * {@code CallNotPermittedException} which is caught by the broad
+ * {@code catch (Exception e)} block and returns {@code false} — same as a
+ * network failure. The caller already handles {@code false} gracefully.
  */
 @Component
 public class IncidentAckClient {
@@ -91,20 +86,5 @@ public class IncidentAckClient {
                     "tenant={}, error={}", incidentId, tenantId, e.getMessage());
             return false;
         }
-    }
-
-    /**
-     * Called when the {@code incident-ack} circuit breaker is OPEN or when
-     * all retries are exhausted. Returns {@code false} so the caller can log
-     * the failure without crashing the async processing pipeline.
-     */
-    public boolean acknowledgeIncidentFallback(UUID incidentId,
-                                               String tenantId,
-                                               UUID acknowledgedByUserId,
-                                               Exception ex) {
-        log.warn("incident-ack circuit breaker OPEN or call failed: " +
-                        "incidentId={}, tenant={}, error={}",
-                incidentId, tenantId, ex.getMessage());
-        return false;
     }
 }
