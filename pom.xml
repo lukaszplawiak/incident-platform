@@ -30,6 +30,7 @@
         <module>notification-service</module>
         <module>postmortem-service</module>
         <module>oncall-service</module>
+        <module>auth-service</module>
     </modules>
 
     <properties>
