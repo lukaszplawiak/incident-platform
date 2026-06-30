@@ -4,6 +4,8 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.TenantContext;
 import org.slf4j.Logger;
@@ -12,7 +14,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 
@@ -20,6 +21,8 @@ import java.time.Instant;
 public class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
+
+    private static final String INVALID_CREDENTIALS_MESSAGE = "Invalid credentials";
 
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
@@ -44,15 +47,13 @@ public class AuthService {
                 .orElseThrow(() -> {
                     log.warn("Login failed — user not found, inactive, or OAuth2-only: " +
                             "email={}, tenant={}", request.email(), tenantId);
-                    return new ResponseStatusException(
-                            HttpStatus.UNAUTHORIZED, "Invalid credentials");
+                    return invalidCredentials();
                 });
 
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
             log.warn("Login failed — wrong password: email={}, tenant={}",
                     request.email(), tenantId);
-            throw new ResponseStatusException(
-                    HttpStatus.UNAUTHORIZED, "Invalid credentials");
+            throw invalidCredentials();
         }
 
         final String token = jwtUtils.generateToken(
@@ -75,6 +76,25 @@ public class AuthService {
                 user.getEmail(),
                 user.getRoleNames(),
                 expiresAt
+        );
+    }
+
+    /**
+     * Builds the 401 thrown for any login failure.
+     *
+     * <p>Uses {@link BusinessException} (handled by
+     * {@code GlobalExceptionHandler.handleBusinessException}) rather than
+     * {@code ResponseStatusException} — the platform's shared exception
+     * handler only maps a fixed set of exception types to their HTTP status;
+     * {@code ResponseStatusException} is not one of them and would otherwise
+     * fall through to the generic {@code Exception.class} handler, returning
+     * 500 instead of 401.
+     */
+    private BusinessException invalidCredentials() {
+        return new BusinessException(
+                ErrorCodes.UNAUTHORIZED,
+                INVALID_CREDENTIALS_MESSAGE,
+                HttpStatus.UNAUTHORIZED
         );
     }
 }

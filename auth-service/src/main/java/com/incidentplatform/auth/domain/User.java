@@ -53,6 +53,43 @@ public class User {
 
     protected User() {}
 
+    /**
+     * Test fixture factory — builds a fully-formed User without going through
+     * JPA persistence. Mirrors the {@code AuditEvent.system()} /
+     * {@code AuditEvent.user()} factory pattern used elsewhere in the platform
+     * for constructing domain entities in unit tests without reflection.
+     *
+     * <p>Not used by production code — production users are always created
+     * via {@link #register} and persisted through {@code UserRepository}.
+     */
+    public static User forTesting(UUID id, String tenantId, String email,
+                                  String passwordHash, boolean active,
+                                  List<String> roleNames) {
+        final User user = new User();
+        user.id = id;
+        user.tenantId = tenantId;
+        user.email = email;
+        user.passwordHash = passwordHash;
+        user.active = active;
+        for (String roleName : roleNames) {
+            user.roles.add(UserRole.forTesting(user, tenantId, roleName));
+        }
+        return user;
+    }
+
+    /**
+     * Production factory for creating a new user (invite-token flow —
+     * password set later via accept-invite). passwordHash is null until
+     * the user completes registration.
+     */
+    public static User register(String tenantId, String email) {
+        final User user = new User();
+        user.tenantId = tenantId;
+        user.email = email;
+        user.active = true;
+        return user;
+    }
+
     public UUID getId() { return id; }
     public String getTenantId() { return tenantId; }
     public UUID getOrganizationId() { return organizationId; }
