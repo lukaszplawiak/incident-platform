@@ -36,6 +36,21 @@ public class UserRole {
 
     protected UserRole() {}
 
+    /**
+     * Test fixture factory — see {@link User#forTesting} for rationale.
+     */
+    static UserRole forTesting(User user, String tenantId, String role) {
+        final UserRole userRole = new UserRole();
+        userRole.user = user;
+        userRole.tenantId = tenantId;
+        userRole.role = role;
+        return userRole;
+    }
+
+    public static UserRole grant(User user, String tenantId, String role) {
+        return forTesting(user, tenantId, role);
+    }
+
     public UUID getId() { return id; }
     public String getTenantId() { return tenantId; }
     public String getRole() { return role; }
