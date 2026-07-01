@@ -98,6 +98,9 @@ public class User {
     public boolean isActive() { return active; }
     public List<UserRole> getRoles() { return roles; }
 
+    public Instant getCreatedAt() { return createdAt; }
+    public Instant getUpdatedAt() { return updatedAt; }
+
     public List<String> getRoleNames() {
         return roles.stream()
                 .map(UserRole::getRole)
