@@ -10,7 +10,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
@@ -48,15 +47,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 @DisplayName("AuthController")
 class AuthControllerSecurityTest {
-
-    @SpringBootApplication(scanBasePackages = {
-            "com.incidentplatform.auth.api",
-            "com.incidentplatform.auth.config",
-            "com.incidentplatform.shared.security",
-            "com.incidentplatform.shared.exception",
-            "com.incidentplatform.shared.observability"
-    })
-    static class TestApplication {}
 
     @Autowired
     private MockMvc mockMvc;

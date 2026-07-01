@@ -30,6 +30,10 @@ public final class ErrorCodes {
     public static final String ON_CALL_NOT_CONFIGURED = "ON_CALL_NOT_CONFIGURED";
     public static final String SCHEDULE_OVERLAP       = "SCHEDULE_OVERLAP";
 
+    // ── Auth domain ──────────────────────────────────────────────────────────
+    public static final String EMAIL_ALREADY_EXISTS  = "EMAIL_ALREADY_EXISTS";
+    public static final String INVALID_TOKEN         = "INVALID_TOKEN";
+
     // ── Ingestion domain ─────────────────────────────────────────────────────
     public static final String NORMALIZATION_FAILED  = "NORMALIZATION_FAILED";
     public static final String UNKNOWN_ALERT_SOURCE  = "UNKNOWN_ALERT_SOURCE";
