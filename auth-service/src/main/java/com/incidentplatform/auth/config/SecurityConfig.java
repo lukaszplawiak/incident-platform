@@ -35,8 +35,8 @@ public class SecurityConfig {
                 .buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
-                        // Login endpoint — must be public to issue the first token
                         .requestMatchers("/api/v1/auth/login").permitAll()
+                        .requestMatchers("/api/v1/auth/accept-invite").permitAll()
                         .anyRequest().authenticated()
                 )
                 .build();

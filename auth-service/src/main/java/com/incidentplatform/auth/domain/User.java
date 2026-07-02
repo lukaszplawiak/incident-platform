@@ -101,6 +101,16 @@ public class User {
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 
+    /**
+     * Sets the BCrypt-hashed password. Called once during accept-invite flow.
+     * The raw password must be hashed by the caller before passing here —
+     * this method accepts only the hash, never plain text.
+     */
+    public void setPasswordHash(String passwordHash) {
+        this.passwordHash = passwordHash;
+        this.updatedAt = Instant.now();
+    }
+
     public List<String> getRoleNames() {
         return roles.stream()
                 .map(UserRole::getRole)

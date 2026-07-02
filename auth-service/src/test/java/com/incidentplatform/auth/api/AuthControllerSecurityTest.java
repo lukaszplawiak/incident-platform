@@ -3,6 +3,7 @@ package com.incidentplatform.auth.api;
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.service.AuthService;
+import com.incidentplatform.auth.service.InviteService;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
@@ -53,6 +54,9 @@ class AuthControllerSecurityTest {
 
     @MockitoBean
     private AuthService authService;
+
+    @MockitoBean
+    private InviteService inviteService;
 
     @MockitoBean
     private JwtUtils jwtUtils;
@@ -142,6 +146,63 @@ class AuthControllerSecurityTest {
                             .contentType("application/json")
                             .content("""
                                     {"email":"user@example.com","password":"wrong"}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+    }
+    // ── accept-invite ─────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("accept-invite — public access")
+    class AcceptInvite {
+
+        @Test
+        @DisplayName("POST /accept-invite — 204 without Authorization header")
+        void acceptInvite_publicEndpoint_returns204() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/accept-invite")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"raw-token","password":"SuperSecret123!"}
+                                    """))
+                    .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @DisplayName("POST /accept-invite — 400 when password too short")
+        void acceptInvite_shortPassword_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/accept-invite")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"raw-token","password":"short"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("POST /accept-invite — 400 when token blank")
+        void acceptInvite_blankToken_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/accept-invite")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"","password":"SuperSecret123!"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("POST /accept-invite — 401 on invalid token from service")
+        void acceptInvite_invalidToken_returns401() throws Exception {
+            org.mockito.BDDMockito.willThrow(
+                            new com.incidentplatform.shared.exception.BusinessException(
+                                    com.incidentplatform.shared.exception.ErrorCodes.UNAUTHORIZED,
+                                    "Token is invalid, expired, or already used",
+                                    org.springframework.http.HttpStatus.UNAUTHORIZED))
+                    .given(inviteService).acceptInvite(any());
+
+            mockMvc.perform(post("/api/v1/auth/accept-invite")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"expired-token","password":"SuperSecret123!"}
                                     """))
                     .andExpect(status().isUnauthorized());
         }
