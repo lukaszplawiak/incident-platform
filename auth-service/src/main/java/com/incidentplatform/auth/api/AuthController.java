@@ -1,8 +1,10 @@
 package com.incidentplatform.auth.api;
 
+import com.incidentplatform.auth.dto.AcceptInviteRequest;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.service.AuthService;
+import com.incidentplatform.auth.service.InviteService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -23,9 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final InviteService inviteService;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, InviteService inviteService) {
         this.authService = authService;
+        this.inviteService = inviteService;
     }
 
     @PostMapping(
@@ -48,5 +52,33 @@ public class AuthController {
     public ResponseEntity<LoginResponse> login(
             @Valid @RequestBody LoginRequest request) {
         return ResponseEntity.ok(authService.login(request));
+    }
+
+    @PostMapping(
+            value = "/accept-invite",
+            consumes = MediaType.APPLICATION_JSON_VALUE
+    )
+    @Operation(
+            summary = "Accept invite and set password",
+            description = """
+                    Completes user registration by setting a password using the invite token
+                    received from the admin.
+                    
+                    The token is single-use and expires after 72 hours.
+                    After a successful call, the user can log in via POST /api/v1/auth/login.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "204",
+                    description = "Password set — user can now log in"),
+            @ApiResponse(responseCode = "400",
+                    description = "Validation failed — missing token or password too short"),
+            @ApiResponse(responseCode = "401",
+                    description = "Token is invalid, expired, or already used")
+    })
+    public ResponseEntity<Void> acceptInvite(
+            @Valid @RequestBody AcceptInviteRequest request) {
+        inviteService.acceptInvite(request);
+        return ResponseEntity.noContent().build();
     }
 }
