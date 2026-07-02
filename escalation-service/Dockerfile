@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.24
 # ---- Build stage ----
-FROM eclipse-temurin:21.0.11_10-jdk-alpine AS builder
+FROM eclipse-temurin:25.0.3_9-jdk-alpine AS builder
 
 WORKDIR /build
 
@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/root/.m2,id=escalation-service-m2 \
     ./mvnw package -pl shared,escalation-service -am \
     -DskipTests --no-transfer-progress
 
-FROM eclipse-temurin:21.0.11_10-jre-alpine
+FROM eclipse-temurin:25.0.3_9-jre-alpine
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
