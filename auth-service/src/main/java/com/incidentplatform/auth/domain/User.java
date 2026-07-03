@@ -97,7 +97,6 @@ public class User {
     public String getPasswordHash() { return passwordHash; }
     public boolean isActive() { return active; }
     public List<UserRole> getRoles() { return roles; }
-
     public Instant getCreatedAt() { return createdAt; }
     public Instant getUpdatedAt() { return updatedAt; }
 

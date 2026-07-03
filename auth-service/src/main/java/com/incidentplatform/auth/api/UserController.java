@@ -1,10 +1,12 @@
 package com.incidentplatform.auth.api;
 
+import com.incidentplatform.auth.dto.ChangePasswordRequest;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
 import com.incidentplatform.auth.dto.UserSummaryDto;
+import com.incidentplatform.auth.service.PasswordService;
 import com.incidentplatform.auth.service.UserManagementService;
 import com.incidentplatform.auth.service.UserQueryService;
 import com.incidentplatform.auth.service.UserService;
@@ -37,7 +39,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/users")
 @Tag(name = "User Management",
-        description = "User lifecycle: invite, list, profile, roles, status. " +
+        description = "User lifecycle: invite, list, profile, roles, status, password. " +
                 "Admin-only endpoints require ROLE_ADMIN.")
 @SecurityRequirement(name = "Bearer Authentication")
 public class UserController {
@@ -45,13 +47,16 @@ public class UserController {
     private final UserService userService;
     private final UserQueryService userQueryService;
     private final UserManagementService userManagementService;
+    private final PasswordService passwordService;
 
     public UserController(UserService userService,
                           UserQueryService userQueryService,
-                          UserManagementService userManagementService) {
+                          UserManagementService userManagementService,
+                          PasswordService passwordService) {
         this.userService = userService;
         this.userQueryService = userQueryService;
         this.userManagementService = userManagementService;
+        this.passwordService = passwordService;
     }
 
     // ── POST /users ───────────────────────────────────────────────────────
@@ -128,12 +133,12 @@ public class UserController {
     @PreAuthorize("hasRole('ROLE_ADMIN')")
     @Operation(summary = "Replace user roles",
             description = """
-                    Replaces all current roles with the provided set (not additive).
+                    Replaces all current roles with the provided set (atomic - not additive).
                     Sending ["ROLE_ADMIN"] removes any existing ROLE_RESPONDER.
                     """)
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Roles updated — full user returned"),
-            @ApiResponse(responseCode = "400", description = "Validation failed — empty or invalid roles"),
+            @ApiResponse(responseCode = "200", description = "Roles updated"),
+            @ApiResponse(responseCode = "400", description = "Validation failed"),
             @ApiResponse(responseCode = "401", description = "Unauthorized"),
             @ApiResponse(responseCode = "403", description = "Forbidden — ROLE_ADMIN required"),
             @ApiResponse(responseCode = "404", description = "User not found in tenant")
@@ -158,8 +163,8 @@ public class UserController {
                     The user record is preserved — audit trail references remain intact.
                     """)
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Status updated — full user returned"),
-            @ApiResponse(responseCode = "400", description = "Validation failed — active field missing"),
+            @ApiResponse(responseCode = "200", description = "Status updated"),
+            @ApiResponse(responseCode = "400", description = "Validation failed"),
             @ApiResponse(responseCode = "401", description = "Unauthorized"),
             @ApiResponse(responseCode = "403", description = "Forbidden — ROLE_ADMIN required"),
             @ApiResponse(responseCode = "404", description = "User not found in tenant")
@@ -168,5 +173,35 @@ public class UserController {
             @PathVariable UUID id,
             @Valid @RequestBody UpdateUserStatusRequest request) {
         return ResponseEntity.ok(userManagementService.updateStatus(id, request));
+    }
+
+    // ── PATCH /users/me/password ──────────────────────────────────────────
+
+    @PatchMapping(
+            value = "/me/password",
+            consumes = MediaType.APPLICATION_JSON_VALUE
+    )
+    @Operation(
+            summary = "Change own password",
+            description = """
+                    Changes the authenticated user's own password.
+                    Requires the current password to prevent session-hijacking attacks:
+                    an attacker with a stolen JWT cannot change the password without
+                    knowing the current one.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "204",
+                    description = "Password changed successfully"),
+            @ApiResponse(responseCode = "400",
+                    description = "Validation failed — missing fields or password too short"),
+            @ApiResponse(responseCode = "401",
+                    description = "Unauthorized or wrong current password")
+    })
+    public ResponseEntity<Void> changePassword(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody ChangePasswordRequest request) {
+        passwordService.changePassword(principal, request);
+        return ResponseEntity.noContent().build();
     }
 }
