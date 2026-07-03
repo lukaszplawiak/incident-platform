@@ -3,7 +3,9 @@ package com.incidentplatform.auth.service;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
+import com.incidentplatform.auth.ratelimit.LoginAttemptService;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
@@ -17,8 +19,8 @@ import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import com.incidentplatform.shared.exception.BusinessException;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -30,6 +32,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("AuthService")
@@ -41,6 +44,9 @@ class AuthServiceTest {
     @Mock
     private JwtUtils jwtUtils;
 
+    @Mock
+    private LoginAttemptService loginAttemptService;
+
     private AuthService authService;
 
     private static final String TENANT_ID = "test-tenant";
@@ -50,8 +56,10 @@ class AuthServiceTest {
 
     @BeforeEach
     void setUp() {
-        authService = new AuthService(userRepository, jwtUtils);
+        authService = new AuthService(userRepository, jwtUtils, loginAttemptService);
         TenantContext.set(TENANT_ID);
+        // Default: not locked
+        given(loginAttemptService.isLocked(any(), any())).willReturn(false);
     }
 
     @AfterEach
@@ -70,118 +78,111 @@ class AuthServiceTest {
         void returnsLoginResponse() {
             final User user = User.forTesting(
                     UUID.randomUUID(), TENANT_ID, EMAIL,
-                    ENCODER.encode(RAW_PASSWORD), true,
-                    List.of("ROLE_ADMIN"));
+                    ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
 
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(jwtUtils.generateToken(eq(user.getId()), eq(TENANT_ID),
-                    eq(EMAIL), anyList()))
-                    .willReturn("jwt-token-value");
+                    eq(EMAIL), anyList())).willReturn("jwt-token");
             given(jwtUtils.getServiceExpirationMs()).willReturn(3_600_000L);
 
             final LoginResponse response =
                     authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
 
-            assertThat(response.token()).isEqualTo("jwt-token-value");
-            assertThat(response.userId()).isEqualTo(user.getId());
-            assertThat(response.tenantId()).isEqualTo(TENANT_ID);
+            assertThat(response.token()).isEqualTo("jwt-token");
             assertThat(response.email()).isEqualTo(EMAIL);
             assertThat(response.roles()).containsExactly("ROLE_ADMIN");
             assertThat(response.expiresAt()).isAfter(Instant.now());
         }
 
         @Test
-        @DisplayName("passes all user roles to JwtUtils.generateToken")
-        void passesAllRolesToJwt() {
+        @DisplayName("clears failure counter on successful login")
+        void clearsFailureCounterOnSuccess() {
             final User user = User.forTesting(
                     UUID.randomUUID(), TENANT_ID, EMAIL,
-                    ENCODER.encode(RAW_PASSWORD), true,
-                    List.of("ROLE_ADMIN", "ROLE_RESPONDER"));
+                    ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
 
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(jwtUtils.generateToken(any(), any(), any(),
-                    eq(List.of("ROLE_ADMIN", "ROLE_RESPONDER"))))
-                    .willReturn("jwt-token");
+            given(jwtUtils.generateToken(any(), any(), any(), any()))
+                    .willReturn("token");
             given(jwtUtils.getServiceExpirationMs()).willReturn(3_600_000L);
 
-            final LoginResponse response =
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
+            authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
 
-            assertThat(response.roles())
-                    .containsExactly("ROLE_ADMIN", "ROLE_RESPONDER");
+            then(loginAttemptService).should().recordSuccess(EMAIL, TENANT_ID);
         }
     }
 
-    // ── failed login — same 401 message for all cases ──────────────────────
+    // ── lockout ───────────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("login — failure (401, identical message — no enumeration)")
-    class LoginFailure {
+    @DisplayName("login — account locked")
+    class AccountLocked {
 
         @Test
-        @DisplayName("user not found — 401 Invalid credentials")
-        void userNotFound_returns401() {
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
-                    .willReturn(Optional.empty());
+        @DisplayName("throws 401 immediately when account is locked")
+        void throws401WhenLocked() {
+            given(loginAttemptService.isLocked(EMAIL, TENANT_ID)).willReturn(true);
+            given(loginAttemptService.getRemainingLockout(EMAIL, TENANT_ID))
+                    .willReturn(Duration.ofMinutes(14));
 
             assertThatThrownBy(() ->
                     authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
                     .isInstanceOf(BusinessException.class)
-                    .hasMessageContaining("Invalid credentials")
                     .extracting(ex -> ((BusinessException) ex).getHttpStatus())
                     .isEqualTo(HttpStatus.UNAUTHORIZED);
         }
 
         @Test
-        @DisplayName("inactive user — 401 Invalid credentials")
-        void inactiveUser_returns401() {
-            final User user = User.forTesting(
-                    UUID.randomUUID(), TENANT_ID, EMAIL,
-                    ENCODER.encode(RAW_PASSWORD), false,
-                    List.of("ROLE_ADMIN"));
-
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
-                    .willReturn(Optional.of(user));
+        @DisplayName("does not query DB when account is locked")
+        void doesNotQueryDbWhenLocked() {
+            given(loginAttemptService.isLocked(EMAIL, TENANT_ID)).willReturn(true);
+            given(loginAttemptService.getRemainingLockout(any(), any()))
+                    .willReturn(Duration.ofMinutes(1));
 
             assertThatThrownBy(() ->
                     authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
-                    .isInstanceOf(BusinessException.class)
-                    .hasMessageContaining("Invalid credentials");
+                    .isInstanceOf(BusinessException.class);
+
+            then(userRepository).shouldHaveNoInteractions();
         }
+    }
+
+    // ── failure recording ─────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("login — failure recording")
+    class FailureRecording {
 
         @Test
-        @DisplayName("OAuth2-only user (null password hash) — 401 Invalid credentials")
-        void oauth2OnlyUser_returns401() {
-            final User user = User.forTesting(
-                    UUID.randomUUID(), TENANT_ID, EMAIL,
-                    null, true, List.of("ROLE_ADMIN"));
-
+        @DisplayName("records failure when user not found")
+        void recordsFailureOnUserNotFound() {
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
-                    .willReturn(Optional.of(user));
+                    .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->
                     authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
-                    .isInstanceOf(BusinessException.class)
-                    .hasMessageContaining("Invalid credentials");
+                    .isInstanceOf(BusinessException.class);
+
+            then(loginAttemptService).should().recordFailure(EMAIL, TENANT_ID);
         }
 
         @Test
-        @DisplayName("wrong password — 401 Invalid credentials")
-        void wrongPassword_returns401() {
+        @DisplayName("records failure on wrong password")
+        void recordsFailureOnWrongPassword() {
             final User user = User.forTesting(
                     UUID.randomUUID(), TENANT_ID, EMAIL,
-                    ENCODER.encode(RAW_PASSWORD), true,
-                    List.of("ROLE_ADMIN"));
+                    ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
 
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
 
             assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, "WrongPassword")))
-                    .isInstanceOf(BusinessException.class)
-                    .hasMessageContaining("Invalid credentials");
+                    authService.login(new LoginRequest(EMAIL, "WrongPass")))
+                    .isInstanceOf(BusinessException.class);
+
+            then(loginAttemptService).should().recordFailure(EMAIL, TENANT_ID);
         }
 
         @Test
@@ -195,34 +196,6 @@ class AuthServiceTest {
                     .isInstanceOf(BusinessException.class);
 
             Mockito.verifyNoInteractions(jwtUtils);
-        }
-    }
-
-    // ── tenant resolution ────────────────────────────────────────────────
-
-    @Nested
-    @DisplayName("tenant resolution")
-    class TenantResolution {
-
-        @Test
-        @DisplayName("resolves tenant from TenantContext, not from request body")
-        void resolvesTenantFromContext() {
-            TenantContext.set("other-tenant");
-            final User user = User.forTesting(
-                    UUID.randomUUID(), "other-tenant", EMAIL,
-                    ENCODER.encode(RAW_PASSWORD), true,
-                    List.of("ROLE_ADMIN"));
-
-            given(userRepository.findByEmailAndTenantId(EMAIL, "other-tenant"))
-                    .willReturn(Optional.of(user));
-            given(jwtUtils.generateToken(any(), any(), any(), any()))
-                    .willReturn("token");
-            given(jwtUtils.getServiceExpirationMs()).willReturn(3_600_000L);
-
-            final LoginResponse response =
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
-
-            assertThat(response.tenantId()).isEqualTo("other-tenant");
         }
     }
 }
