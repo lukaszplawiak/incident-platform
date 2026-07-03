@@ -3,6 +3,7 @@ package com.incidentplatform.auth.service;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
+import com.incidentplatform.auth.ratelimit.LoginAttemptService;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
@@ -15,6 +16,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 
 @Service
@@ -27,34 +29,67 @@ public class AuthService {
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
     private final BCryptPasswordEncoder passwordEncoder;
+    private final LoginAttemptService loginAttemptService;
 
-    public AuthService(UserRepository userRepository, JwtUtils jwtUtils) {
+    public AuthService(UserRepository userRepository,
+                       JwtUtils jwtUtils,
+                       LoginAttemptService loginAttemptService) {
         this.userRepository = userRepository;
         this.jwtUtils = jwtUtils;
         this.passwordEncoder = new BCryptPasswordEncoder();
+        this.loginAttemptService = loginAttemptService;
     }
 
     @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
         final String tenantId = TenantContext.get();
+        final String email = request.email();
 
-        // Same error message for "not found", "inactive", and "no local password"
-        // (OAuth2-only account) — prevents user enumeration.
+        // ── 1. Check lockout BEFORE any DB query or BCrypt ────────────────
+        // Checking first prevents timing attacks: if we checked the password
+        // first, an attacker could use timing differences to enumerate valid
+        // emails even when locked out.
+        if (loginAttemptService.isLocked(email, tenantId)) {
+            final Duration remaining =
+                    loginAttemptService.getRemainingLockout(email, tenantId);
+            log.warn("Login rejected — account locked: email={}, tenant={}, " +
+                    "remainingSeconds={}", email, tenantId, remaining.toSeconds());
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    String.format("Account locked. Try again in %d minutes.",
+                            remaining.toMinutes() + 1),
+                    HttpStatus.UNAUTHORIZED
+            );
+        }
+
+        // ── 2. Find user ───────────────────────────────────────────────────
+        // Same error message for "not found", "inactive", "OAuth2-only" —
+        // prevents user enumeration. Failure is recorded in all three cases.
         final User user = userRepository
-                .findByEmailAndTenantId(request.email(), tenantId)
+                .findByEmailAndTenantId(email, tenantId)
                 .filter(User::isActive)
                 .filter(u -> u.getPasswordHash() != null)
-                .orElseThrow(() -> {
-                    log.warn("Login failed — user not found, inactive, or OAuth2-only: " +
-                            "email={}, tenant={}", request.email(), tenantId);
-                    return invalidCredentials();
+                .orElseGet(() -> {
+                    loginAttemptService.recordFailure(email, tenantId);
+                    log.warn("Login failed — user not found, inactive, or " +
+                            "OAuth2-only: email={}, tenant={}", email, tenantId);
+                    return null;
                 });
 
-        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            log.warn("Login failed — wrong password: email={}, tenant={}",
-                    request.email(), tenantId);
+        if (user == null) {
             throw invalidCredentials();
         }
+
+        // ── 3. Verify password ─────────────────────────────────────────────
+        if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
+            loginAttemptService.recordFailure(email, tenantId);
+            log.warn("Login failed — wrong password: email={}, tenant={}",
+                    email, tenantId);
+            throw invalidCredentials();
+        }
+
+        // ── 4. Success — clear failure counter ─────────────────────────────
+        loginAttemptService.recordSuccess(email, tenantId);
 
         final String token = jwtUtils.generateToken(
                 user.getId(),
@@ -79,17 +114,6 @@ public class AuthService {
         );
     }
 
-    /**
-     * Builds the 401 thrown for any login failure.
-     *
-     * <p>Uses {@link BusinessException} (handled by
-     * {@code GlobalExceptionHandler.handleBusinessException}) rather than
-     * {@code ResponseStatusException} — the platform's shared exception
-     * handler only maps a fixed set of exception types to their HTTP status;
-     * {@code ResponseStatusException} is not one of them and would otherwise
-     * fall through to the generic {@code Exception.class} handler, returning
-     * 500 instead of 401.
-     */
     private BusinessException invalidCredentials() {
         return new BusinessException(
                 ErrorCodes.UNAUTHORIZED,

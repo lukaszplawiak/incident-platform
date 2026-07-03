@@ -26,10 +26,30 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: false
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      connect-timeout: 2s
+      timeout: 1s
+
 jwt:
   secret: ${JWT_SECRET}
-  expiration-ms: ${JWT_EXPIRATION_MS:86400000}       # 24h default
-  service-expiration: ${JWT_SERVICE_EXPIRATION:PT1H}  # 1h default
+  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+  service-expiration: ${JWT_SERVICE_EXPIRATION:PT1H}
+
+# Login brute-force protection.
+# Counter key: auth:login:attempts:{tenant}:{email} — TTL = window
+# Lockout key: auth:login:locked:{tenant}:{email}   — TTL = lockoutDuration
+#
+# Fail-open: if Redis is unavailable, login is allowed (Redis outage
+# must not lock out all users). Prometheus counter fires on each lockout.
+login-attempt:
+  enabled: ${LOGIN_ATTEMPT_ENABLED:true}
+  max-failures: ${LOGIN_ATTEMPT_MAX_FAILURES:5}
+  lockout-duration: ${LOGIN_ATTEMPT_LOCKOUT_DURATION:PT15M}
+  window: ${LOGIN_ATTEMPT_WINDOW:PT10M}
 
 management:
   endpoints:

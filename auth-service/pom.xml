@@ -61,6 +61,17 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
+
+        <!-- ── Rate limiting — Redis-backed login lockout ─────────────────── -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-core</artifactId>
+        </dependency>
+
         <!-- ── Shared platform library ────────────────────────────────── -->
         <!-- Provides JwtUtils, JwtAuthFilter, TenantContext, UserPrincipal,
              SharedSecurityAutoConfiguration, UnauthorizedEntryPoint -->
