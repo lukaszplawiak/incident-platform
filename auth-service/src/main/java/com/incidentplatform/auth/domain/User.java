@@ -111,6 +111,28 @@ public class User {
         this.updatedAt = Instant.now();
     }
 
+
+    /**
+     * Replaces all current roles with the provided set.
+     * Clears existing UserRole records (orphanRemoval=true handles DB delete)
+     * and adds new ones. Called by PATCH /api/v1/users/{id}/roles.
+     */
+    public void updateRoles(List<String> roleNames, String tenantId) {
+        this.roles.clear();
+        for (final String role : roleNames) {
+            this.roles.add(UserRole.grant(this, tenantId, role));
+        }
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Sets the active flag. Called by PATCH /api/v1/users/{id}/status.
+     */
+    public void setActive(boolean active) {
+        this.active = active;
+        this.updatedAt = Instant.now();
+    }
+
     public List<String> getRoleNames() {
         return roles.stream()
                 .map(UserRole::getRole)
