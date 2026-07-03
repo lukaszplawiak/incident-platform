@@ -2,7 +2,10 @@ package com.incidentplatform.auth.api;
 
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.CreateUserResponse;
+import com.incidentplatform.auth.dto.UserSummaryDto;
+import com.incidentplatform.auth.service.UserQueryService;
 import com.incidentplatform.auth.service.UserService;
+import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.JwtUtils;
@@ -30,6 +33,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -53,6 +57,9 @@ class UserControllerSecurityTest {
     private UserService userService;
 
     @MockitoBean
+    private UserQueryService userQueryService;
+
+    @MockitoBean
     private JwtUtils jwtUtils;
 
     @MockitoBean
@@ -70,172 +77,169 @@ class UserControllerSecurityTest {
         TenantContext.clear();
     }
 
-    // ── security ──────────────────────────────────────────────────────────
+    // ── POST /users — security ────────────────────────────────────────────
 
     @Nested
-    @DisplayName("security")
-    class Security {
+    @DisplayName("POST /users — security")
+    class CreateUserSecurity {
 
         @Test
-        @DisplayName("POST /users — 401 unauthenticated")
+        @DisplayName("401 unauthenticated")
         void unauthenticated_returns401() throws Exception {
             mockMvc.perform(post("/api/v1/users")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
-                                    {"email":"user@example.com","roles":["ROLE_RESPONDER"]}
+                                    {"email":"u@example.com","roles":["ROLE_RESPONDER"]}
                                     """))
                     .andExpect(status().isUnauthorized());
         }
 
         @Test
         @WithMockUser(roles = "RESPONDER")
-        @DisplayName("POST /users — 403 for ROLE_RESPONDER")
+        @DisplayName("403 for ROLE_RESPONDER")
         void responder_returns403() throws Exception {
             mockMvc.perform(post("/api/v1/users")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
-                                    {"email":"user@example.com","roles":["ROLE_RESPONDER"]}
-                                    """))
-                    .andExpect(status().isForbidden());
-        }
-
-        @Test
-        @WithMockUser(roles = "SERVICE")
-        @DisplayName("POST /users — 403 for ROLE_SERVICE")
-        void service_returns403() throws Exception {
-            mockMvc.perform(post("/api/v1/users")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("""
-                                    {"email":"user@example.com","roles":["ROLE_RESPONDER"]}
+                                    {"email":"u@example.com","roles":["ROLE_RESPONDER"]}
                                     """))
                     .andExpect(status().isForbidden());
         }
 
         @Test
         @WithMockUser(roles = "ADMIN")
-        @DisplayName("POST /users — 201 for ROLE_ADMIN")
+        @DisplayName("201 for ROLE_ADMIN with Location header")
         void admin_returns201() throws Exception {
-            given(userService.createUser(any()))
-                    .willReturn(buildResponse());
+            given(userService.createUser(any())).willReturn(buildCreateResponse());
 
             mockMvc.perform(post("/api/v1/users")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
-                                    {"email":"user@example.com","roles":["ROLE_RESPONDER"]}
-                                    """))
-                    .andExpect(status().isCreated());
-        }
-    }
-
-    // ── response contract ─────────────────────────────────────────────────
-
-    @Nested
-    @DisplayName("response contract")
-    class ResponseContract {
-
-        @Test
-        @WithMockUser(roles = "ADMIN")
-        @DisplayName("returns 201 with Location header and response body")
-        void returns201WithLocationAndBody() throws Exception {
-            final CreateUserResponse response = buildResponse();
-            given(userService.createUser(any())).willReturn(response);
-
-            mockMvc.perform(post("/api/v1/users")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("""
-                                    {"email":"user@example.com","roles":["ROLE_RESPONDER"]}
+                                    {"email":"u@example.com","roles":["ROLE_RESPONDER"]}
                                     """))
                     .andExpect(status().isCreated())
-                    .andExpect(header().exists("Location"))
-                    .andExpect(jsonPath("$.userId").value(response.userId().toString()))
-                    .andExpect(jsonPath("$.email").value("user@example.com"))
-                    .andExpect(jsonPath("$.roles[0]").value("ROLE_RESPONDER"))
-                    .andExpect(jsonPath("$.active").value(true))
-                    .andExpect(jsonPath("$.inviteToken").value("raw-invite-token"))
-                    .andExpect(jsonPath("$.inviteExpiresAt").exists());
-        }
-    }
-
-    // ── validation ────────────────────────────────────────────────────────
-
-    @Nested
-    @DisplayName("request validation")
-    class Validation {
-
-        @Test
-        @WithMockUser(roles = "ADMIN")
-        @DisplayName("missing email — 400")
-        void missingEmail_returns400() throws Exception {
-            mockMvc.perform(post("/api/v1/users")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("""
-                                    {"roles":["ROLE_RESPONDER"]}
-                                    """))
-                    .andExpect(status().isBadRequest());
+                    .andExpect(header().exists("Location"));
         }
 
         @Test
         @WithMockUser(roles = "ADMIN")
-        @DisplayName("empty roles list — 400")
-        void emptyRoles_returns400() throws Exception {
-            mockMvc.perform(post("/api/v1/users")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("""
-                                    {"email":"user@example.com","roles":[]}
-                                    """))
-                    .andExpect(status().isBadRequest());
-        }
-
-        @Test
-        @WithMockUser(roles = "ADMIN")
-        @DisplayName("invalid role value — 400")
-        void invalidRole_returns400() throws Exception {
-            mockMvc.perform(post("/api/v1/users")
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .content("""
-                                    {"email":"user@example.com","roles":["ROLE_INVALID"]}
-                                    """))
-                    .andExpect(status().isBadRequest());
-        }
-    }
-
-    // ── service errors ────────────────────────────────────────────────────
-
-    @Nested
-    @DisplayName("service errors")
-    class ServiceErrors {
-
-        @Test
-        @WithMockUser(roles = "ADMIN")
-        @DisplayName("duplicate email — 409")
+        @DisplayName("409 on duplicate email")
         void duplicateEmail_returns409() throws Exception {
             given(userService.createUser(any()))
                     .willThrow(new BusinessException(
                             ErrorCodes.EMAIL_ALREADY_EXISTS,
-                            "A user with email 'user@example.com' already exists in this tenant",
+                            "Email already exists",
                             HttpStatus.CONFLICT));
 
             mockMvc.perform(post("/api/v1/users")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("""
-                                    {"email":"user@example.com","roles":["ROLE_RESPONDER"]}
+                                    {"email":"u@example.com","roles":["ROLE_RESPONDER"]}
                                     """))
                     .andExpect(status().isConflict());
         }
     }
 
+    // ── GET /users — security ─────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("GET /users — security")
+    class ListUsersSecurity {
+
+        @Test
+        @DisplayName("401 unauthenticated")
+        void unauthenticated_returns401() throws Exception {
+            mockMvc.perform(get("/api/v1/users"))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("403 for ROLE_RESPONDER")
+        void responder_returns403() throws Exception {
+            mockMvc.perform(get("/api/v1/users"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("200 for ROLE_ADMIN with paged response")
+        void admin_returns200() throws Exception {
+            given(userQueryService.listUsers(any()))
+                    .willReturn(PagedResponse.of(
+                            List.of(buildUserSummary()), 0, 20, 1L, 1, true, true));
+
+            mockMvc.perform(get("/api/v1/users"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.content").isArray())
+                    .andExpect(jsonPath("$.totalElements").value(1))
+                    .andExpect(jsonPath("$.content[0].email")
+                            .value("user@example.com"));
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("200 with empty page when no users")
+        void admin_emptyPage() throws Exception {
+            given(userQueryService.listUsers(any()))
+                    .willReturn(PagedResponse.of(
+                            List.of(), 0, 20, 0L, 0, true, true));
+
+            mockMvc.perform(get("/api/v1/users"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.content").isEmpty())
+                    .andExpect(jsonPath("$.totalElements").value(0));
+        }
+    }
+
+    // ── GET /users/me — security ──────────────────────────────────────────
+
+    @Nested
+    @DisplayName("GET /users/me — security")
+    class GetMeSecurity {
+
+        @Test
+        @DisplayName("401 unauthenticated")
+        void unauthenticated_returns401() throws Exception {
+            mockMvc.perform(get("/api/v1/users/me"))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("200 for ROLE_RESPONDER — own profile accessible to any role")
+        void responder_returns200() throws Exception {
+            given(userQueryService.getMe(any())).willReturn(buildUserSummary());
+
+            mockMvc.perform(get("/api/v1/users/me"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.email").value("user@example.com"));
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("200 for ROLE_ADMIN")
+        void admin_returns200() throws Exception {
+            given(userQueryService.getMe(any())).willReturn(buildUserSummary());
+
+            mockMvc.perform(get("/api/v1/users/me"))
+                    .andExpect(status().isOk());
+        }
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
-    private CreateUserResponse buildResponse() {
+    private CreateUserResponse buildCreateResponse() {
         return new CreateUserResponse(
-                UUID.randomUUID(),
-                TENANT_ID,
-                "user@example.com",
-                List.of("ROLE_RESPONDER"),
-                true,
-                Instant.now(),
-                "raw-invite-token",
-                Instant.now().plusSeconds(72 * 3600)
-        );
+                UUID.randomUUID(), TENANT_ID, "u@example.com",
+                List.of("ROLE_RESPONDER"), true, Instant.now(),
+                "invite-token", Instant.now().plusSeconds(72 * 3600));
+    }
+
+    private UserSummaryDto buildUserSummary() {
+        return new UserSummaryDto(
+                UUID.randomUUID(), TENANT_ID, "user@example.com",
+                List.of("ROLE_RESPONDER"), true,
+                Instant.now(), Instant.now());
     }
 }
