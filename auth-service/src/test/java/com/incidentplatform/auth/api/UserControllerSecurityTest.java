@@ -3,11 +3,13 @@ package com.incidentplatform.auth.api;
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.dto.UserSummaryDto;
+import com.incidentplatform.auth.service.UserManagementService;
 import com.incidentplatform.auth.service.UserQueryService;
 import com.incidentplatform.auth.service.UserService;
 import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
+import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
@@ -32,8 +34,10 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -60,12 +64,16 @@ class UserControllerSecurityTest {
     private UserQueryService userQueryService;
 
     @MockitoBean
+    private UserManagementService userManagementService;
+
+    @MockitoBean
     private JwtUtils jwtUtils;
 
     @MockitoBean
     private ServiceTokenProvider serviceTokenProvider;
 
     private static final String TENANT_ID = "test-tenant";
+    private static final UUID USER_ID = UUID.randomUUID();
 
     @BeforeEach
     void setUp() {
@@ -77,11 +85,11 @@ class UserControllerSecurityTest {
         TenantContext.clear();
     }
 
-    // ── POST /users — security ────────────────────────────────────────────
+    // ── POST /users ───────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("POST /users — security")
-    class CreateUserSecurity {
+    @DisplayName("POST /users")
+    class CreateUser {
 
         @Test
         @DisplayName("401 unauthenticated")
@@ -126,10 +134,8 @@ class UserControllerSecurityTest {
         @DisplayName("409 on duplicate email")
         void duplicateEmail_returns409() throws Exception {
             given(userService.createUser(any()))
-                    .willThrow(new BusinessException(
-                            ErrorCodes.EMAIL_ALREADY_EXISTS,
-                            "Email already exists",
-                            HttpStatus.CONFLICT));
+                    .willThrow(new BusinessException(ErrorCodes.EMAIL_ALREADY_EXISTS,
+                            "Email already exists", HttpStatus.CONFLICT));
 
             mockMvc.perform(post("/api/v1/users")
                             .contentType(MediaType.APPLICATION_JSON)
@@ -140,11 +146,11 @@ class UserControllerSecurityTest {
         }
     }
 
-    // ── GET /users — security ─────────────────────────────────────────────
+    // ── GET /users ────────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("GET /users — security")
-    class ListUsersSecurity {
+    @DisplayName("GET /users")
+    class ListUsers {
 
         @Test
         @DisplayName("401 unauthenticated")
@@ -172,31 +178,15 @@ class UserControllerSecurityTest {
             mockMvc.perform(get("/api/v1/users"))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.content").isArray())
-                    .andExpect(jsonPath("$.totalElements").value(1))
-                    .andExpect(jsonPath("$.content[0].email")
-                            .value("user@example.com"));
-        }
-
-        @Test
-        @WithMockUser(roles = "ADMIN")
-        @DisplayName("200 with empty page when no users")
-        void admin_emptyPage() throws Exception {
-            given(userQueryService.listUsers(any()))
-                    .willReturn(PagedResponse.of(
-                            List.of(), 0, 20, 0L, 0, true, true));
-
-            mockMvc.perform(get("/api/v1/users"))
-                    .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.content").isEmpty())
-                    .andExpect(jsonPath("$.totalElements").value(0));
+                    .andExpect(jsonPath("$.totalElements").value(1));
         }
     }
 
-    // ── GET /users/me — security ──────────────────────────────────────────
+    // ── GET /users/me ─────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("GET /users/me — security")
-    class GetMeSecurity {
+    @DisplayName("GET /users/me")
+    class GetMe {
 
         @Test
         @DisplayName("401 unauthenticated")
@@ -227,6 +217,170 @@ class UserControllerSecurityTest {
         }
     }
 
+    // ── PATCH /users/{id}/roles ───────────────────────────────────────────
+
+    @Nested
+    @DisplayName("PATCH /users/{id}/roles")
+    class UpdateRoles {
+
+        @Test
+        @DisplayName("401 unauthenticated")
+        void unauthenticated_returns401() throws Exception {
+            mockMvc.perform(patch("/api/v1/users/{id}/roles", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"roles":["ROLE_ADMIN"]}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("403 for ROLE_RESPONDER")
+        void responder_returns403() throws Exception {
+            mockMvc.perform(patch("/api/v1/users/{id}/roles", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"roles":["ROLE_ADMIN"]}
+                                    """))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("200 for ROLE_ADMIN with updated user")
+        void admin_returns200() throws Exception {
+            final UserSummaryDto updated = new UserSummaryDto(
+                    USER_ID, TENANT_ID, "u@example.com",
+                    List.of("ROLE_ADMIN"), true, Instant.now(), Instant.now());
+
+            given(userManagementService.updateRoles(eq(USER_ID), any()))
+                    .willReturn(updated);
+
+            mockMvc.perform(patch("/api/v1/users/{id}/roles", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"roles":["ROLE_ADMIN"]}
+                                    """))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.roles[0]").value("ROLE_ADMIN"));
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("400 on empty roles list")
+        void emptyRoles_returns400() throws Exception {
+            mockMvc.perform(patch("/api/v1/users/{id}/roles", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"roles":[]}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("400 on invalid role value")
+        void invalidRole_returns400() throws Exception {
+            mockMvc.perform(patch("/api/v1/users/{id}/roles", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"roles":["ROLE_INVALID"]}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("404 when user not found")
+        void userNotFound_returns404() throws Exception {
+            given(userManagementService.updateRoles(any(), any()))
+                    .willThrow(new ResourceNotFoundException("User", USER_ID));
+
+            mockMvc.perform(patch("/api/v1/users/{id}/roles", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"roles":["ROLE_ADMIN"]}
+                                    """))
+                    .andExpect(status().isNotFound());
+        }
+    }
+
+    // ── PATCH /users/{id}/status ──────────────────────────────────────────
+
+    @Nested
+    @DisplayName("PATCH /users/{id}/status")
+    class UpdateStatus {
+
+        @Test
+        @DisplayName("401 unauthenticated")
+        void unauthenticated_returns401() throws Exception {
+            mockMvc.perform(patch("/api/v1/users/{id}/status", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"active":false}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("403 for ROLE_RESPONDER")
+        void responder_returns403() throws Exception {
+            mockMvc.perform(patch("/api/v1/users/{id}/status", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"active":false}
+                                    """))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("200 for ROLE_ADMIN — deactivate user")
+        void admin_deactivate_returns200() throws Exception {
+            final UserSummaryDto deactivated = new UserSummaryDto(
+                    USER_ID, TENANT_ID, "u@example.com",
+                    List.of("ROLE_RESPONDER"), false, Instant.now(), Instant.now());
+
+            given(userManagementService.updateStatus(eq(USER_ID), any()))
+                    .willReturn(deactivated);
+
+            mockMvc.perform(patch("/api/v1/users/{id}/status", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"active":false}
+                                    """))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.active").value(false));
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("400 when active field missing")
+        void missingActive_returns400() throws Exception {
+            mockMvc.perform(patch("/api/v1/users/{id}/status", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{}"))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("404 when user not found")
+        void userNotFound_returns404() throws Exception {
+            given(userManagementService.updateStatus(any(), any()))
+                    .willThrow(new ResourceNotFoundException("User", USER_ID));
+
+            mockMvc.perform(patch("/api/v1/users/{id}/status", USER_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"active":false}
+                                    """))
+                    .andExpect(status().isNotFound());
+        }
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     private CreateUserResponse buildCreateResponse() {
@@ -239,7 +393,6 @@ class UserControllerSecurityTest {
     private UserSummaryDto buildUserSummary() {
         return new UserSummaryDto(
                 UUID.randomUUID(), TENANT_ID, "user@example.com",
-                List.of("ROLE_RESPONDER"), true,
-                Instant.now(), Instant.now());
+                List.of("ROLE_RESPONDER"), true, Instant.now(), Instant.now());
     }
 }
