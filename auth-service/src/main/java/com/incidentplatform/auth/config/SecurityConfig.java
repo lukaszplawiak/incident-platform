@@ -1,9 +1,12 @@
 package com.incidentplatform.auth.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
+import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.TokenRevocationChecker;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -25,6 +28,24 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
+
+    /**
+     * Overrides the default JwtAuthFilter from SharedSecurityAutoConfiguration
+     * with one that checks the Redis revocation list on every request.
+     *
+     * <p>Only auth-service does this — it is the only service that issues
+     * and revokes tokens. Other services use the no-op TokenRevocationChecker
+     * (jti -> false) provided by SharedSecurityAutoConfiguration.
+     *
+     * <p>{@code @Primary} ensures this bean wins over the
+     * {@code @ConditionalOnMissingBean} default in SharedSecurityAutoConfiguration.
+     */
+    @Bean
+    @Primary
+    public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils,
+                                       TokenRevocationChecker revocationChecker) {
+        return new JwtAuthFilter(jwtUtils, revocationChecker);
+    }
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,

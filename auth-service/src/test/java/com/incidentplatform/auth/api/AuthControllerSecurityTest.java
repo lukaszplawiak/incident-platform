@@ -3,6 +3,7 @@ package com.incidentplatform.auth.api;
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.service.AuthService;
+import com.incidentplatform.auth.service.LogoutService;
 import com.incidentplatform.auth.service.InviteService;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
@@ -57,6 +58,9 @@ class AuthControllerSecurityTest {
 
     @MockitoBean
     private InviteService inviteService;
+
+    @MockitoBean
+    private LogoutService logoutService;
 
     @MockitoBean
     private JwtUtils jwtUtils;

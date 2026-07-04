@@ -5,6 +5,7 @@ import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.service.PostmortemService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
+import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
@@ -73,6 +74,11 @@ class PostmortemControllerSecurityTest {
             "com.incidentplatform.shared.observability"
     })
     static class TestApplication {
+
+        @org.springframework.context.annotation.Bean
+        public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
+            return new JwtAuthFilter(jwtUtils);
+        }
     }
 
     @Autowired

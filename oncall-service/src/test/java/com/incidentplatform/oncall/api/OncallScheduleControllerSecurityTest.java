@@ -5,6 +5,7 @@ import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
+import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
@@ -74,6 +75,11 @@ class OncallScheduleControllerSecurityTest {
             "com.incidentplatform.shared.observability"
     })
     static class TestApplication {
+
+        @org.springframework.context.annotation.Bean
+        public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
+            return new JwtAuthFilter(jwtUtils);
+        }
     }
 
     @Autowired
