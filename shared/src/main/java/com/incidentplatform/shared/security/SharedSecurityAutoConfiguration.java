@@ -1,6 +1,7 @@
 package com.incidentplatform.shared.security;
 
 import org.springframework.beans.factory.annotation.Value;
+import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -87,6 +88,20 @@ public class SharedSecurityAutoConfiguration {
      * its own {@code SecurityFilterChain} bean — this auto-configuration
      * will then back off.
      */
+    /**
+     * Default JwtAuthFilter bean with no-op revocation checker.
+     * Used by all services except auth-service which overrides this bean
+     * with @Primary and wires in TokenRevocationService::isRevoked.
+     *
+     * <p>@ConditionalOnMissingBean ensures auth-service's @Primary bean wins
+     * without conflict.
+     */
+    @Bean
+    @ConditionalOnMissingBean(JwtAuthFilter.class)
+    public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
+        return new JwtAuthFilter(jwtUtils); // no-op revocation: jti -> false
+    }
+
     @Bean
     @ConditionalOnMissingBean(SecurityFilterChain.class)
     public SecurityFilterChain defaultSecurityFilterChain(

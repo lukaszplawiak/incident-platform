@@ -5,13 +5,20 @@ import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.service.AuthService;
 import com.incidentplatform.auth.service.InviteService;
+import com.incidentplatform.auth.service.LogoutService;
+import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ErrorCodes;
+import com.incidentplatform.shared.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -26,10 +33,14 @@ public class AuthController {
 
     private final AuthService authService;
     private final InviteService inviteService;
+    private final LogoutService logoutService;
 
-    public AuthController(AuthService authService, InviteService inviteService) {
+    public AuthController(AuthService authService,
+                          InviteService inviteService,
+                          LogoutService logoutService) {
         this.authService = authService;
         this.inviteService = inviteService;
+        this.logoutService = logoutService;
     }
 
     @PostMapping(
@@ -47,7 +58,7 @@ public class AuthController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Login successful — JWT returned"),
             @ApiResponse(responseCode = "400", description = "Validation failed — email or password missing"),
-            @ApiResponse(responseCode = "401", description = "Invalid credentials")
+            @ApiResponse(responseCode = "401", description = "Invalid credentials or account lock")
     })
     public ResponseEntity<LoginResponse> login(
             @Valid @RequestBody LoginRequest request) {
@@ -79,6 +90,36 @@ public class AuthController {
     public ResponseEntity<Void> acceptInvite(
             @Valid @RequestBody AcceptInviteRequest request) {
         inviteService.acceptInvite(request);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping(value = "/logout")
+    @Operation(
+            summary = "Logout — revoke current session token",
+            description = """
+                    Revokes the JWT submitted in the Authorization header.
+                    Token is added to Redis revocation list — rejected on all
+                    subsequent requests even before natural expiry.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "Logged out — token revoked"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized or invalid token")
+    })
+    public ResponseEntity<Void> logout(
+            @AuthenticationPrincipal UserPrincipal principal,
+            HttpServletRequest request) {
+
+        final String authHeader = request.getHeader("Authorization");
+        final String rawToken = authHeader != null && authHeader.startsWith("Bearer ")
+                ? authHeader.substring(7) : null;
+
+        if (rawToken == null) {
+            throw new BusinessException(ErrorCodes.UNAUTHORIZED,
+                    "No token provided", HttpStatus.UNAUTHORIZED);
+        }
+
+        logoutService.logout(rawToken, principal);
         return ResponseEntity.noContent().build();
     }
 }

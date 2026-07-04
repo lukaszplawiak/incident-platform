@@ -1,6 +1,7 @@
 package com.incidentplatform.auth.api;
 
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Import;
 
 /**
  * Shared {@code @SpringBootApplication} for all {@code @WebMvcTest} classes
@@ -21,6 +22,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * Includes only the packages needed for the web and security layers —
  * excludes JPA, Flyway, and Kafka to keep the web slice fast.
  */
+@Import(AuthWebMvcTestConfig.class)
 @SpringBootApplication(scanBasePackages = {
         "com.incidentplatform.auth.api",
         "com.incidentplatform.auth.config",

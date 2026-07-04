@@ -92,6 +92,7 @@ public class JwtUtils {
         final Instant expiration = now.plusMillis(expirationMs);
 
         final String token = Jwts.builder()
+                .id(UUID.randomUUID().toString())   // jti — unique token ID for revocation
                 .subject(userId.toString())
                 .claim(CLAIM_TENANT_ID, tenantId)
                 .claim(CLAIM_EMAIL, email)
@@ -172,6 +173,19 @@ public class JwtUtils {
             log.warn("Invalid userId format in JWT subject: {}", claims.getSubject());
             return Optional.empty();
         }
+    }
+
+    /**
+     * Extracts the JWT ID (jti claim) — unique identifier per token.
+     * Used for token revocation: revoked JTIs are stored in Redis until
+     * the token's natural expiry, after which they are cleaned up automatically.
+     */
+    public Optional<String> extractJti(Claims claims) {
+        return Optional.ofNullable(claims.getId());
+    }
+
+    public Optional<java.util.Date> extractExpiration(Claims claims) {
+        return Optional.ofNullable(claims.getExpiration());
     }
 
     public Optional<String> extractEmail(Claims claims) {

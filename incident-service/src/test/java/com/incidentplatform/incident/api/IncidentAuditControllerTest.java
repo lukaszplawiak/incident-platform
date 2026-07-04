@@ -4,6 +4,7 @@ import com.incidentplatform.incident.config.SecurityConfig;
 import com.incidentplatform.incident.dto.AuditEventDto;
 import com.incidentplatform.incident.service.AuditQueryService;
 import com.incidentplatform.shared.dto.PagedResponse;
+import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
@@ -48,6 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("IncidentAuditController")
 class IncidentAuditControllerTest {
 
+    @org.springframework.context.annotation.Import(com.incidentplatform.incident.config.SecurityConfig.class)
     @SpringBootApplication(scanBasePackages = {
             "com.incidentplatform.incident.api",
             "com.incidentplatform.incident.config",
@@ -55,7 +57,21 @@ class IncidentAuditControllerTest {
             "com.incidentplatform.shared.exception",
             "com.incidentplatform.shared.observability"
     })
-    static class TestApplication {}
+    static class TestApplication {
+
+        /**
+         * Provides a real JwtAuthFilter bean wired with the mocked JwtUtils.
+         * Using @MockitoBean for JwtAuthFilter would create a no-op stub that
+         * skips filterChain.doFilter() — breaking Spring Security entirely.
+         * A real JwtAuthFilter with mocked JwtUtils validates tokens correctly
+         * (all return empty Optional → unauthenticated) while letting
+         * @WithMockUser set SecurityContext directly, bypassing the filter.
+         */
+        @org.springframework.context.annotation.Bean
+        public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
+            return new JwtAuthFilter(jwtUtils);
+        }
+    }
 
     @Autowired
     private MockMvc mockMvc;
