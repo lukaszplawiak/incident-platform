@@ -32,8 +32,9 @@ import java.util.HexFormat;
  *
  * <h2>Expiry</h2>
  * <ul>
- *   <li>INVITE: {@value #INVITE_TTL_HOURS} hours — enough time for the
- *       invited user to check their inbox and complete registration.</li>
+ *   <li>INVITE: {@value #INVITE_TTL_HOURS} hours (7 days) — matches industry
+ *       standard (PagerDuty, GitHub) to accommodate users who may not
+ *       check their inbox over a weekend or short holiday.</li>
  *   <li>PASSWORD_RESET: {@value #RESET_TTL_MINUTES} minutes — short window
  *       minimises exposure if the email is intercepted.</li>
  * </ul>
@@ -44,7 +45,7 @@ public class AuthTokenService {
     private static final Logger log =
             LoggerFactory.getLogger(AuthTokenService.class);
 
-    static final int INVITE_TTL_HOURS = 72;
+    static final int INVITE_TTL_HOURS = 168;
     static final int RESET_TTL_MINUTES = 15;
 
     private static final int TOKEN_BYTES = 32;
