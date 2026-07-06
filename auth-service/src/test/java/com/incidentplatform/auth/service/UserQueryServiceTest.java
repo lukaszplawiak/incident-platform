@@ -65,7 +65,7 @@ class UserQueryServiceTest {
             final User u1 = buildUser(UUID.randomUUID(), "alice@example.com");
             final User u2 = buildUser(UUID.randomUUID(), "bob@example.com");
 
-            given(userRepository.findByTenantId(eq(TENANT_ID), any(Pageable.class)))
+            given(userRepository.findByTenantIdAndDeletedAtIsNull(eq(TENANT_ID), any(Pageable.class)))
                     .willReturn(new PageImpl<>(List.of(u1, u2), DEFAULT_PAGE, 2L));
 
             // when
@@ -82,7 +82,7 @@ class UserQueryServiceTest {
         @Test
         @DisplayName("returns empty page when no users exist")
         void returnsEmptyPage() {
-            given(userRepository.findByTenantId(eq(TENANT_ID), any(Pageable.class)))
+            given(userRepository.findByTenantIdAndDeletedAtIsNull(eq(TENANT_ID), any(Pageable.class)))
                     .willReturn(new PageImpl<>(List.of(), DEFAULT_PAGE, 0L));
 
             final PagedResponse<UserSummaryDto> response =
@@ -97,7 +97,7 @@ class UserQueryServiceTest {
         void neverExposesPasswordHash() {
             final User user = buildUser(UUID.randomUUID(), "user@example.com");
 
-            given(userRepository.findByTenantId(any(), any()))
+            given(userRepository.findByTenantIdAndDeletedAtIsNull(any(), any()))
                     .willReturn(new PageImpl<>(List.of(user)));
 
             final UserSummaryDto dto = service.listUsers(DEFAULT_PAGE)
@@ -113,13 +113,13 @@ class UserQueryServiceTest {
         @DisplayName("resolves tenant from TenantContext")
         void resolvesTenantFromContext() {
             TenantContext.set("company-xyz");
-            given(userRepository.findByTenantId(eq("company-xyz"), any()))
+            given(userRepository.findByTenantIdAndDeletedAtIsNull(eq("company-xyz"), any()))
                     .willReturn(new PageImpl<>(List.of()));
 
             service.listUsers(DEFAULT_PAGE);
 
             org.mockito.BDDMockito.then(userRepository).should()
-                    .findByTenantId(eq("company-xyz"), any());
+                    .findByTenantIdAndDeletedAtIsNull(eq("company-xyz"), any());
         }
     }
 
@@ -137,7 +137,7 @@ class UserQueryServiceTest {
             final User user = buildUser(userId, "me@example.com");
             final UserPrincipal principal = buildPrincipal(userId);
 
-            given(userRepository.findByIdAndTenantId(userId, TENANT_ID))
+            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(userId, TENANT_ID))
                     .willReturn(Optional.of(user));
 
             // when
@@ -157,7 +157,7 @@ class UserQueryServiceTest {
             final UUID userId = UUID.randomUUID();
             final UserPrincipal principal = buildPrincipal(userId);
 
-            given(userRepository.findByIdAndTenantId(userId, TENANT_ID))
+            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(userId, TENANT_ID))
                     .willReturn(Optional.empty());
 
             // when / then

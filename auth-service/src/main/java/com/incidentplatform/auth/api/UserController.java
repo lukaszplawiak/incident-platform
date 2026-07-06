@@ -24,6 +24,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -71,7 +72,7 @@ public class UserController {
                     Creates a new user account without a password.
                     The invite token in the response must be shared securely with
                     the new user — they call POST /api/v1/auth/accept-invite to set
-                    their password. Token expires after 72 hours.
+                    their password. Token expires after 7 days.
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "User created"),
@@ -173,6 +174,43 @@ public class UserController {
             @PathVariable UUID id,
             @Valid @RequestBody UpdateUserStatusRequest request) {
         return ResponseEntity.ok(userManagementService.updateStatus(id, request));
+    }
+
+
+    // ── DELETE /users/{id} ────────────────────────────────────────────────
+
+    @DeleteMapping(value = "/{id}")
+    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @Operation(
+            summary = "Soft-delete a user",
+            description = """
+                    Soft-deletes a user — sets deleted_at and immediately revokes
+                    any active JWT via Redis. The user becomes invisible to all
+                    application queries (login, list, profile lookup) but the
+                    record is preserved in the database for audit trail integrity.
+
+                    The same email address can be re-invited after deletion
+                    (partial unique index only enforces uniqueness for non-deleted users).
+
+                    Admins cannot delete their own account.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "204",
+                    description = "User soft-deleted successfully"),
+            @ApiResponse(responseCode = "401",
+                    description = "Unauthorized"),
+            @ApiResponse(responseCode = "403",
+                    description = "Forbidden — ROLE_ADMIN required, " +
+                            "or attempting to delete own account"),
+            @ApiResponse(responseCode = "404",
+                    description = "User not found in tenant")
+    })
+    public ResponseEntity<Void> deleteUser(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        userManagementService.deleteUser(id, principal);
+        return ResponseEntity.noContent().build();
     }
 
     // ── PATCH /users/me/password ──────────────────────────────────────────

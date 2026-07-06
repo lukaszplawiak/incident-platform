@@ -45,6 +45,13 @@ public class User {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 
+    /**
+     * Soft delete timestamp — null means the user is not deleted.
+     * Set by {@link #softDelete()}; never cleared once set.
+     */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     @OneToMany(mappedBy = "user",
             cascade = CascadeType.ALL,
             fetch = FetchType.EAGER,
@@ -131,6 +138,20 @@ public class User {
         this.active = active;
         this.updatedAt = Instant.now();
     }
+
+    /**
+     * Marks this user as soft-deleted.
+     * Called by UserManagementService.deleteUser() — sets deleted_at to now.
+     * All repository queries filter WHERE deleted_at IS NULL so this user
+     * becomes invisible to application code after this call is persisted.
+     */
+    public void softDelete() {
+        this.deletedAt = Instant.now();
+        this.updatedAt = Instant.now();
+    }
+
+    public boolean isDeleted() { return deletedAt != null; }
+    public Instant getDeletedAt() { return deletedAt; }
 
     public List<String> getRoleNames() {
         return roles.stream()

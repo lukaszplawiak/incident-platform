@@ -66,7 +66,7 @@ class PasswordServiceTest {
         void updatesPasswordHash() {
             // given
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -90,7 +90,7 @@ class PasswordServiceTest {
         void newHashDoesNotMatchOldPassword() {
             // given
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -117,7 +117,7 @@ class PasswordServiceTest {
         void throws401OnWrongPassword() {
             // given
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
 
             // when / then
@@ -135,7 +135,7 @@ class PasswordServiceTest {
         void doesNotSaveOnWrongPassword() {
             // given
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
 
             // when
@@ -145,7 +145,7 @@ class PasswordServiceTest {
                     .isInstanceOf(BusinessException.class);
 
             // then
-            then(userRepository).should().findByIdAndTenantId(USER_ID, TENANT_ID);
+            then(userRepository).should().findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID);
             then(userRepository).shouldHaveNoMoreInteractions();
         }
     }
@@ -159,7 +159,7 @@ class PasswordServiceTest {
         @Test
         @DisplayName("throws ResourceNotFoundException when user not in tenant")
         void throwsNotFound() {
-            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->

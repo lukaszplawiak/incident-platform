@@ -64,7 +64,7 @@ class UserServiceTest {
         @DisplayName("returns CreateUserResponse with correct fields")
         void returnsResponse() {
             // given
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));
@@ -89,7 +89,7 @@ class UserServiceTest {
         @DisplayName("persists user with correct email, tenant, no password")
         void persistsUserWithNoPassword() {
             // given
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));
@@ -114,7 +114,7 @@ class UserServiceTest {
         @DisplayName("assigns all requested roles to user")
         void assignsRequestedRoles() {
             // given
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));
@@ -136,7 +136,7 @@ class UserServiceTest {
         @DisplayName("calls generateInviteToken with saved user and tenantId")
         void callsGenerateInviteTokenWithCorrectArgs() {
             // given
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));
@@ -166,7 +166,7 @@ class UserServiceTest {
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     "hash", true, List.of("ROLE_ADMIN"));
 
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(existing));
 
             // when / then
@@ -187,7 +187,7 @@ class UserServiceTest {
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     "hash", true, List.of());
 
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(existing));
 
             // when
@@ -213,7 +213,7 @@ class UserServiceTest {
         void resolvesTenantFromContext() {
             // given
             TenantContext.set("company-abc");
-            given(userRepository.findByEmailAndTenantId(EMAIL, "company-abc"))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, "company-abc"))
                     .willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));
