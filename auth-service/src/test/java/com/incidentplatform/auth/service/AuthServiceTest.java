@@ -80,7 +80,7 @@ class AuthServiceTest {
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
 
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(jwtUtils.generateToken(eq(user.getId()), eq(TENANT_ID),
                     eq(EMAIL), anyList())).willReturn("jwt-token");
@@ -102,7 +102,7 @@ class AuthServiceTest {
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
 
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(jwtUtils.generateToken(any(), any(), any(), any()))
                     .willReturn("token");
@@ -158,7 +158,7 @@ class AuthServiceTest {
         @Test
         @DisplayName("records failure when user not found")
         void recordsFailureOnUserNotFound() {
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->
@@ -175,7 +175,7 @@ class AuthServiceTest {
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
 
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
 
             assertThatThrownBy(() ->
@@ -188,7 +188,7 @@ class AuthServiceTest {
         @Test
         @DisplayName("does not call JwtUtils when credentials are invalid")
         void doesNotGenerateTokenOnFailure() {
-            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->

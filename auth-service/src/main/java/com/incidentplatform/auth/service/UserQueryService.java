@@ -36,7 +36,7 @@ public class UserQueryService {
                 pageable.getPageNumber());
 
         return PagedResponse.of(
-                userRepository.findByTenantId(tenantId, pageable)
+                userRepository.findByTenantIdAndDeletedAtIsNull(tenantId, pageable)
                         .map(UserSummaryDto::from));
     }
 
@@ -51,7 +51,7 @@ public class UserQueryService {
         log.debug("GET /me: userId={}, tenant={}", principal.userId(), tenantId);
 
         return userRepository
-                .findByIdAndTenantId(principal.userId(), tenantId)
+                .findByIdAndTenantIdAndDeletedAtIsNull(principal.userId(), tenantId)
                 .map(UserSummaryDto::from)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "User", principal.userId()));
