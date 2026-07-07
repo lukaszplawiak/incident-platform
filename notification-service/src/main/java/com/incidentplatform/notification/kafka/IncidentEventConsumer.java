@@ -26,6 +26,11 @@ public class IncidentEventConsumer {
     private static final Logger log =
             LoggerFactory.getLogger(IncidentEventConsumer.class);
 
+    /**
+     * Outbox Pattern — this consumer only enqueues, never sends.
+     * All HTTP calls (oncall-service, Slack, Email, SMS) happen in
+     * {@code NotificationScheduler}, not here.
+     */
     private final NotificationService notificationService;
     private final ObjectMapper objectMapper;
 
@@ -78,7 +83,9 @@ public class IncidentEventConsumer {
                             "severity={}, tenant={}",
                     eventType, incidentId, severity, tenantId);
 
-            notificationService.processEvent(
+            // Outbox Pattern: write PENDING entry and acknowledge immediately.
+            // NotificationScheduler sends actual notifications asynchronously.
+            notificationService.enqueue(
                     eventType, incidentId, tenantId, severity, title);
 
         } catch (UnrecognizedSeverityException e) {
@@ -100,9 +107,9 @@ public class IncidentEventConsumer {
             return;
 
         } catch (Exception e) {
-            // Transient error (Slack API down, DB unavailable, network issue).
-            // Do NOT acknowledge — Kafka will redeliver after consumer restart.
-            // Notification may be delayed but will not be lost.
+            // Transient error — most likely DB unavailable during outbox INSERT.
+            // Do NOT acknowledge — Kafka will redeliver after DB recovers.
+            // No notification is lost because the outbox entry was not written.
             log.error("Transient error processing incident event — " +
                             "will be redelivered: topic={}, partition={}, " +
                             "offset={}, error={}",
