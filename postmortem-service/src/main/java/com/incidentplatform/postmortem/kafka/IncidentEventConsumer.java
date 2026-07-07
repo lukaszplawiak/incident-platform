@@ -2,7 +2,7 @@ package com.incidentplatform.postmortem.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.incidentplatform.postmortem.service.PostmortemService;
+import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
@@ -21,18 +21,42 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * Kafka consumer for incident lifecycle events.
+ *
+ * <h2>Outbox Pattern — why this consumer does less than before</h2>
+ * Previously this consumer called {@code PostmortemService.generatePostmortem()}
+ * which synchronously invoked the Gemini AI API (typically 3–15 seconds).
+ * The Kafka consumer thread was blocked for the entire duration of that HTTP
+ * call, reducing throughput and risking {@code max.poll.interval.ms} breaches
+ * under load.
+ *
+ * <p>This consumer now only writes an outbox entry — a single fast DB INSERT
+ * via {@link PostmortemPersistenceService#createGeneratingRecord}. The actual
+ * Gemini call happens in {@code PostmortemRetryScheduler}, which runs in a
+ * separate scheduled thread and has no impact on Kafka consumer throughput.
+ *
+ * <h2>Acknowledgment guarantee</h2>
+ * {@code acknowledge()} is called only after the outbox entry is durably
+ * written to the database. If the DB write fails (transient error), the
+ * consumer does NOT acknowledge — Kafka redelivers the event after restart.
+ * Once the outbox entry is committed, the Gemini call is the scheduler's
+ * responsibility: even a process crash after acknowledge() cannot lose the
+ * work because the GENERATING record survives in the database and the
+ * scheduler will pick it up.
+ */
 @Component
 public class IncidentEventConsumer {
 
     private static final Logger log =
             LoggerFactory.getLogger(IncidentEventConsumer.class);
 
-    private final PostmortemService postmortemService;
+    private final PostmortemPersistenceService persistenceService;
     private final ObjectMapper objectMapper;
 
-    public IncidentEventConsumer(PostmortemService postmortemService,
+    public IncidentEventConsumer(PostmortemPersistenceService persistenceService,
                                  ObjectMapper objectMapper) {
-        this.postmortemService = postmortemService;
+        this.persistenceService = persistenceService;
         this.objectMapper = objectMapper;
     }
 
@@ -46,15 +70,9 @@ public class IncidentEventConsumer {
         log.debug("Received event: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        // TenantContext is pre-initialised so that finally { TenantContext.clear() }
-        // is always safe, even if extractTenantId() throws before setting it.
         TenantContext.set("unknown");
 
         try {
-            // Read eventType from the X-Event-Type header set by
-            // IncidentEventKafkaSender (used by both incident-service and
-            // escalation-service producers). Header-based routing is explicit
-            // and stable — no guessing from payload field presence.
             final String eventType = extractEventType(record);
             if (eventType == null) {
                 log.error("Missing {} header — skipping: topic={}, partition={}, offset={}",
@@ -76,7 +94,6 @@ public class IncidentEventConsumer {
 
         } catch (UnrecognizedSeverityException e) {
             // Poison pill — unrecognized severity cannot be fixed by retrying.
-            // Acknowledge to skip and unblock the partition.
             log.error("Skipping postmortem generation — unrecognized severity: {}",
                     e.getMessage());
             acknowledgment.acknowledge();
@@ -93,11 +110,11 @@ public class IncidentEventConsumer {
             return;
 
         } catch (Exception e) {
-            // Transient error (DB unavailable, Gemini API issue while saving the
-            // postmortem entity). Do NOT acknowledge — Kafka will redeliver after
-            // consumer restart. Postmortem generation may be delayed but will
-            // not be lost.
-            log.error("Transient error processing event — " +
+            // Transient error — most likely the DB INSERT for the outbox entry
+            // failed (DB unavailable). Do NOT acknowledge — Kafka will redeliver
+            // after consumer restart. The outbox entry was not written so there
+            // is no risk of duplicate processing.
+            log.error("Transient error writing outbox entry — " +
                             "will be redelivered: topic={}, partition={}, " +
                             "offset={}, error={}",
                     record.topic(), record.partition(),
@@ -108,10 +125,20 @@ public class IncidentEventConsumer {
             TenantContext.clear();
         }
 
-        // Reached only on success — all error paths return early above.
+        // Reached only on success — outbox entry committed, safe to acknowledge.
         acknowledgment.acknowledge();
     }
 
+    /**
+     * Writes a GENERATING outbox entry to the database.
+     *
+     * <p>This is the only work the consumer thread does for a resolved event.
+     * The Gemini call happens later in {@code PostmortemRetryScheduler} —
+     * in a separate thread, with no impact on Kafka consumer throughput.
+     *
+     * <p>If a postmortem already exists for this incident (idempotency guard
+     * in {@code PostmortemPersistenceService}), this is a no-op.
+     */
     private void handleResolved(JsonNode event, String tenantId) {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
@@ -129,11 +156,11 @@ public class IncidentEventConsumer {
                 ? Instant.parse(event.get("occurredAt").asText())
                 : Instant.now();
 
-        log.info("Generating postmortem for resolved incident: " +
+        log.info("Writing postmortem outbox entry for resolved incident: " +
                         "incidentId={}, tenant={}, severity={}, durationMinutes={}",
                 incidentId, tenantId, severity, durationMinutes);
 
-        postmortemService.generatePostmortem(
+        persistenceService.createGeneratingRecord(
                 incidentId, tenantId, title, severity,
                 openedAt, resolvedAt, durationMinutes);
     }
@@ -147,12 +174,6 @@ public class IncidentEventConsumer {
         }
     }
 
-    /**
-     * Parses the record value as JSON. Wraps {@link IOException} as
-     * {@link IllegalArgumentException} so that an unparseable payload is
-     * treated as a poison pill (acknowledge + skip) rather than a transient
-     * error (which would cause infinite retry on a permanently broken message).
-     */
     private JsonNode parseJson(String value) {
         try {
             return objectMapper.readTree(value);
@@ -162,8 +183,6 @@ public class IncidentEventConsumer {
         }
     }
 
-    // Reads the eventType header set by IncidentEventKafkaSender.
-    // Returns null if the header is absent or blank.
     private String extractEventType(ConsumerRecord<?, ?> record) {
         final Header header = record.headers()
                 .lastHeader(IncidentEventTypes.HEADER_NAME);
@@ -176,19 +195,6 @@ public class IncidentEventConsumer {
         return null;
     }
 
-    /**
-     * Resolves the tenant for a Kafka record using a three-step strategy:
-     *
-     * <ol>
-     *   <li><b>Header</b> — reads {@code X-Tenant-Id} set by
-     *       {@link TenantKafkaProducerInterceptor} (fast path, no deserialization needed).
-     *   <li><b>Payload</b> — falls back to the {@code tenantId} field in the JSON body.
-     *       This covers replay scenarios, manual publishes, or messages produced by a
-     *       non-standard producer that skipped the interceptor.
-     *   <li><b>Poison pill</b> — if absent in both, throws {@link IllegalArgumentException}
-     *       so the caller's catch block routes the record to acknowledge + skip.
-     * </ol>
-     */
     private String extractTenantId(ConsumerRecord<?, ?> record, JsonNode payload) {
         // Step 1 — Kafka header (set by TenantKafkaProducerInterceptor)
         final Header header = record.headers()
