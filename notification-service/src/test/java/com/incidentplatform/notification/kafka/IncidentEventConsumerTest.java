@@ -145,7 +145,7 @@ class IncidentEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
-            then(notificationService).should().processEvent(
+            then(notificationService).should().enqueue(
                     any(), any(), tenantCaptor.capture(), any(), any());
             assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
         }
@@ -171,9 +171,9 @@ class IncidentEventConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(openedEvent(), TENANT_ID, IncidentEventTypes.INCIDENT_OPENED);
 
-            org.mockito.BDDMockito.willThrow(new RuntimeException("service error"))
+            org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
                     .given(notificationService)
-                    .processEvent(any(), any(), any(), any(), any());
+                    .enqueue(any(), any(), any(), any(), any());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -200,7 +200,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should(org.mockito.Mockito.times(2))
-                    .processEvent(any(), any(), tenantCaptor.capture(), any(), any());
+                    .enqueue(any(), any(), tenantCaptor.capture(), any(), any());
 
             assertThat(tenantCaptor.getAllValues())
                     .containsExactly("tenant-a", "tenant-b");
@@ -222,7 +222,7 @@ class IncidentEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
-            then(notificationService).should().processEvent(
+            then(notificationService).should().enqueue(
                     eq("IncidentOpenedEvent"),
                     eq(INCIDENT_ID),
                     eq(TENANT_ID),
@@ -242,7 +242,7 @@ class IncidentEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
-            then(notificationService).should().processEvent(
+            then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_ACKNOWLEDGED), any(), any(), any(), any());
         }
 
@@ -257,7 +257,7 @@ class IncidentEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
-            then(notificationService).should().processEvent(
+            then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_RESOLVED), any(), any(), any(), any());
         }
 
@@ -287,7 +287,7 @@ class IncidentEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
-            then(notificationService).should().processEvent(
+            then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(), any(), any());
         }
     }
@@ -311,7 +311,7 @@ class IncidentEventConsumerTest {
         }
 
         @Test
-        @DisplayName("should NOT acknowledge when notificationService throws transient error")
+        @DisplayName("should NOT acknowledge when outbox enqueue fails — DB unavailable")
         void shouldNotAcknowledgeOnTransientException() {
             // given — RuntimeException is transient (Slack down, DB unavailable)
             // consumer should return without acknowledging so Kafka redelivers
@@ -321,12 +321,12 @@ class IncidentEventConsumerTest {
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("Slack API down"))
                     .given(notificationService)
-                    .processEvent(any(), any(), any(), any(), any());
+                    .enqueue(any(), any(), any(), any(), any());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — NOT acknowledged, Kafka will redeliver
+            // then — NOT acknowledged (DB write failed), Kafka will redeliver
             then(acknowledgment).should(org.mockito.Mockito.never()).acknowledge();
         }
 

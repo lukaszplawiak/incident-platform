@@ -4,8 +4,11 @@ import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.channel.NotificationException;
 import com.incidentplatform.notification.domain.NotificationLog;
 import com.incidentplatform.notification.domain.NotificationLogStatus;
+import com.incidentplatform.notification.domain.NotificationQueueEntry;
+import com.incidentplatform.notification.domain.NotificationQueueStatus;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
+import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.domain.Severity;
@@ -33,20 +36,12 @@ import static org.mockito.Mockito.times;
 @DisplayName("NotificationService")
 class NotificationServiceTest {
 
-    @Mock
-    private NotificationRouter router;
-
-    @Mock
-    private NotificationLogRepository logRepository;
-
-    @Mock
-    private NotificationChannel emailChannel;
-
-    @Mock
-    private NotificationChannel slackChannel;
-
-    @Mock
-    private AuditEventPublisher auditEventPublisher;
+    @Mock private NotificationRouter router;
+    @Mock private NotificationLogRepository logRepository;
+    @Mock private NotificationQueueRepository queueRepository;
+    @Mock private NotificationChannel emailChannel;
+    @Mock private NotificationChannel slackChannel;
+    @Mock private AuditEventPublisher auditEventPublisher;
 
     private NotificationService notificationService;
 
@@ -56,17 +51,79 @@ class NotificationServiceTest {
 
     @BeforeEach
     void setUp() {
-        notificationService = new NotificationService(router, logRepository, auditEventPublisher);
+        notificationService = new NotificationService(
+                router, logRepository, queueRepository, auditEventPublisher);
     }
 
+    // ── enqueue ───────────────────────────────────────────────────────────
+
     @Nested
-    @DisplayName("successful notification sending")
-    class SuccessfulSending {
+    @DisplayName("enqueue")
+    class Enqueue {
 
         @Test
-        @DisplayName("should send notification through each channel from router")
+        @DisplayName("should write PENDING queue entry")
+        void shouldWritePendingEntry() {
+            given(queueRepository.existsByIncidentIdAndEventType(
+                    INCIDENT_ID, EVENT_TYPE)).willReturn(false);
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            notificationService.enqueue(
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU");
+
+            final ArgumentCaptor<NotificationQueueEntry> captor =
+                    ArgumentCaptor.forClass(NotificationQueueEntry.class);
+            then(queueRepository).should().save(captor.capture());
+
+            final NotificationQueueEntry saved = captor.getValue();
+            assertThat(saved.getIncidentId()).isEqualTo(INCIDENT_ID);
+            assertThat(saved.getTenantId()).isEqualTo(TENANT_ID);
+            assertThat(saved.getEventType()).isEqualTo(EVENT_TYPE);
+            assertThat(saved.getSeverity()).isEqualTo(Severity.CRITICAL);
+            assertThat(saved.getStatus()).isEqualTo(NotificationQueueStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("should be idempotent — skip if already queued")
+        void shouldSkipIfAlreadyQueued() {
+            given(queueRepository.existsByIncidentIdAndEventType(
+                    INCIDENT_ID, EVENT_TYPE)).willReturn(true);
+
+            notificationService.enqueue(
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU");
+
+            then(queueRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should not call router or channels — fast path only")
+        void shouldNotCallRouterOrChannels() {
+            given(queueRepository.existsByIncidentIdAndEventType(
+                    INCIDENT_ID, EVENT_TYPE)).willReturn(false);
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            notificationService.enqueue(
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU");
+
+            then(router).shouldHaveNoInteractions();
+            then(emailChannel).shouldHaveNoInteractions();
+            then(slackChannel).shouldHaveNoInteractions();
+        }
+    }
+
+    // ── processEntry ──────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("processEntry")
+    class ProcessEntry {
+
+        @Test
+        @DisplayName("should send through each routed channel")
         void shouldSendThroughEachChannel() {
-            // given
+            final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest emailRequest = buildRequest("EMAIL");
             final NotificationRequest slackRequest = buildRequest("SLACK");
 
@@ -75,113 +132,57 @@ class NotificationServiceTest {
             given(router.route(EVENT_TYPE, INCIDENT_ID, TENANT_ID,
                     Severity.CRITICAL, "High CPU"))
                     .willReturn(List.of(
-                            new NotificationRouter.ChannelRequest(
-                                    emailChannel, emailRequest),
-                            new NotificationRouter.ChannelRequest(
-                                    slackChannel, slackRequest)
+                            new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
+                            new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
                     ));
-            given(logRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
+            given(logRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            // when
-            notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "High CPU");
+            notificationService.processEntry(entry);
 
-            // then — call both
             then(emailChannel).should(times(1)).send(emailRequest);
             then(slackChannel).should(times(1)).send(slackRequest);
         }
 
         @Test
-        @DisplayName("should save SENT log entry after successful send")
-        void shouldSaveSentLogEntry() {
-            // given
+        @DisplayName("should save SENT log after successful send")
+        void shouldSaveSentLog() {
+            final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
             given(router.route(any(), any(), any(), any(), any()))
                     .willReturn(List.of(
-                            new NotificationRouter.ChannelRequest(
-                                    emailChannel, request)));
-            given(logRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
+                            new NotificationRouter.ChannelRequest(emailChannel, request)));
+            given(logRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            // when
-            notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.HIGH, "Test");
+            notificationService.processEntry(entry);
 
-            // then — log with SENT status
             final ArgumentCaptor<NotificationLog> logCaptor =
                     ArgumentCaptor.forClass(NotificationLog.class);
             then(logRepository).should().save(logCaptor.capture());
-
-            final NotificationLog savedLog = logCaptor.getValue();
-            assertThat(savedLog.getStatus()).isEqualTo(NotificationLogStatus.SENT);
-            assertThat(savedLog.getIncidentId()).isEqualTo(INCIDENT_ID);
-            assertThat(savedLog.getTenantId()).isEqualTo(TENANT_ID);
-            assertThat(savedLog.getChannel()).isEqualTo("EMAIL");
+            assertThat(logCaptor.getValue().getStatus())
+                    .isEqualTo(NotificationLogStatus.SENT);
         }
 
         @Test
-        @DisplayName("should save two log entries for two channels")
-        void shouldSaveTwoLogEntries() {
-            // given
-            given(emailChannel.channelName()).willReturn("EMAIL");
-            given(slackChannel.channelName()).willReturn("SLACK");
+        @DisplayName("should mark queue entry SENT after processing")
+        void shouldMarkQueueEntrySent() {
+            final NotificationQueueEntry entry = buildPendingEntry();
             given(router.route(any(), any(), any(), any(), any()))
-                    .willReturn(List.of(
-                            new NotificationRouter.ChannelRequest(
-                                    emailChannel, buildRequest("EMAIL")),
-                            new NotificationRouter.ChannelRequest(
-                                    slackChannel, buildRequest("SLACK"))
-                    ));
-            given(logRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
+                    .willReturn(List.of());
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            // when
-            notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "Test");
+            notificationService.processEntry(entry);
 
-            // then — two records in log
-            then(logRepository).should(times(2)).save(any(NotificationLog.class));
-        }
-    }
-
-    @Nested
-    @DisplayName("error handling")
-    class ErrorHandling {
-
-        @Test
-        @DisplayName("should save FAILED log when channel throws NotificationException")
-        void shouldSaveFailedLogOnException() {
-            // given
-            final NotificationRequest request = buildRequest("EMAIL");
-            given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any()))
-                    .willReturn(List.of(
-                            new NotificationRouter.ChannelRequest(
-                                    emailChannel, request)));
-
-            willThrow(new NotificationException("EMAIL", "test@test.com",
-                    "SMTP connection failed"))
-                    .given(emailChannel).send(request);
-
-            given(logRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
-
-            // when
-            notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.HIGH, "Test");
-
-            // then
-            final ArgumentCaptor<NotificationLog> logCaptor =
-                    ArgumentCaptor.forClass(NotificationLog.class);
-            then(logRepository).should().save(logCaptor.capture());
-
-            assertThat(logCaptor.getValue().getStatus()).isEqualTo(NotificationLogStatus.FAILED);
-            assertThat(logCaptor.getValue().getErrorMessage())
-                    .contains("SMTP connection failed");
+            assertThat(entry.getStatus()).isEqualTo(NotificationQueueStatus.SENT);
+            assertThat(entry.getProcessedAt()).isNotNull();
         }
 
         @Test
-        @DisplayName("should continue with next channel after one fails")
-        void shouldContinueAfterChannelFailure() {
-            // given — email throw, slack should run
+        @DisplayName("should save FAILED log and continue when channel throws")
+        void shouldSaveFailedLogOnChannelException() {
+            final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest emailRequest = buildRequest("EMAIL");
             final NotificationRequest slackRequest = buildRequest("SLACK");
 
@@ -189,59 +190,84 @@ class NotificationServiceTest {
             given(slackChannel.channelName()).willReturn("SLACK");
             given(router.route(any(), any(), any(), any(), any()))
                     .willReturn(List.of(
-                            new NotificationRouter.ChannelRequest(
-                                    emailChannel, emailRequest),
-                            new NotificationRouter.ChannelRequest(
-                                    slackChannel, slackRequest)
+                            new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
+                            new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
                     ));
 
             willThrow(new NotificationException("EMAIL", "test@test.com",
-                    "SMTP failed"))
+                    "SMTP connection failed"))
                     .given(emailChannel).send(emailRequest);
 
-            given(logRepository.save(any())).willAnswer(inv -> inv.getArgument(0));
+            given(logRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            // when
-            notificationService.processEvent(
-                    EVENT_TYPE, INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "Test");
+            notificationService.processEntry(entry);
 
-            // then
+            // Slack still called despite email failure
             then(slackChannel).should(times(1)).send(slackRequest);
-            then(logRepository).should(times(2)).save(any(NotificationLog.class));
+
+            final ArgumentCaptor<NotificationLog> logCaptor =
+                    ArgumentCaptor.forClass(NotificationLog.class);
+            then(logRepository).should(times(2)).save(logCaptor.capture());
+
+            assertThat(logCaptor.getAllValues())
+                    .anySatisfy(l ->
+                            assertThat(l.getStatus()).isEqualTo(NotificationLogStatus.FAILED))
+                    .anySatisfy(l ->
+                            assertThat(l.getStatus()).isEqualTo(NotificationLogStatus.SENT));
+
+            // Queue entry still marked SENT — individual failures recorded in log
+            assertThat(entry.getStatus()).isEqualTo(NotificationQueueStatus.SENT);
+        }
+
+        @Test
+        @DisplayName("should skip channel if already logged — idempotency")
+        void shouldSkipIfAlreadySent() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            final NotificationRequest request = buildRequest("EMAIL");
+            given(emailChannel.channelName()).willReturn("EMAIL");
+            given(router.route(any(), any(), any(), any(), any()))
+                    .willReturn(List.of(
+                            new NotificationRouter.ChannelRequest(emailChannel, request)));
+            given(logRepository.existsByIncidentIdAndEventTypeAndChannel(
+                    INCIDENT_ID, EVENT_TYPE, "EMAIL")).willReturn(true);
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            notificationService.processEntry(entry);
+
+            then(emailChannel).should(never()).send(any());
+            then(logRepository).should(never()).save(any(NotificationLog.class));
+        }
+
+        @Test
+        @DisplayName("should mark SENT and not call channels when router returns empty")
+        void shouldMarkSentWhenNoChannels() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            given(router.route(any(), any(), any(), any(), any()))
+                    .willReturn(List.of());
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            notificationService.processEntry(entry);
+
+            then(emailChannel).shouldHaveNoInteractions();
+            assertThat(entry.getStatus()).isEqualTo(NotificationQueueStatus.SENT);
         }
     }
 
-    @Nested
-    @DisplayName("no notifications")
-    class NoNotifications {
+    // ── helpers ───────────────────────────────────────────────────────────
 
-        @Test
-        @DisplayName("should do nothing when router returns empty list")
-        void shouldDoNothingWhenNoChannels() {
-            // given
-            given(router.route(any(), any(), any(), any(), any()))
-                    .willReturn(List.of());
-
-            // when
-            notificationService.processEvent(
-                    "UnknownEvent", INCIDENT_ID, TENANT_ID, Severity.LOW, "Test");
-
-            // then
-            then(emailChannel).should(never()).send(any());
-            then(logRepository).should(never()).save(any());
-        }
+    private NotificationQueueEntry buildPendingEntry() {
+        return NotificationQueueEntry.pending(
+                INCIDENT_ID, TENANT_ID, EVENT_TYPE,
+                Severity.CRITICAL, "High CPU");
     }
 
     private NotificationRequest buildRequest(String channel) {
         return new NotificationRequest(
-                INCIDENT_ID,
-                TENANT_ID,
-                EVENT_TYPE,
+                INCIDENT_ID, TENANT_ID, EVENT_TYPE,
                 "oncall@test-tenant.example.com",
                 "[CRITICAL] High CPU Usage",
                 "New CRITICAL incident detected",
-                Severity.CRITICAL,
-                "High CPU Usage"
-        );
+                Severity.CRITICAL, "High CPU Usage");
     }
 }
