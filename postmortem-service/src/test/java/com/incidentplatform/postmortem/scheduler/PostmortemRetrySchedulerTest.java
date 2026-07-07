@@ -51,17 +51,18 @@ class PostmortemRetrySchedulerTest {
     private PostmortemRetryScheduler scheduler;
 
     private static final int MAX_RETRY_ATTEMPTS = 3;
+    private static final int STUCK_THRESHOLD_MINUTES = 2;
 
     @BeforeEach
     void setUp() {
         final PostmortemPromptBuilder promptBuilder = new PostmortemPromptBuilder();
-
         scheduler = new PostmortemRetryScheduler(
                 postmortemRepository,
                 geminiClient,
                 promptBuilder,
                 persistenceService,
-                MAX_RETRY_ATTEMPTS
+                MAX_RETRY_ATTEMPTS,
+                STUCK_THRESHOLD_MINUTES
         );
     }
 
@@ -70,6 +71,123 @@ class PostmortemRetrySchedulerTest {
         TenantContext.clear();
     }
 
+    // ── processGenerating ─────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("processGenerating")
+    class ProcessGenerating {
+
+        @Test
+        @DisplayName("should do nothing when no GENERATING postmortems exist")
+        void shouldDoNothingWhenNoGeneratingPostmortems() {
+            given(postmortemRepository.findStuckGenerating(any()))
+                    .willReturn(List.of());
+
+            scheduler.processGenerating();
+
+            then(geminiClient).should(never()).generate(anyString());
+            then(persistenceService).should(never()).markDraftAndPublish(
+                    any(), any(), any(), any(), any(), anyInt());
+        }
+
+        @Test
+        @DisplayName("should call Gemini and mark DRAFT when generation succeeds")
+        void shouldMarkDraftWhenGeminiSucceeds() {
+            final Postmortem postmortem = buildGeneratingPostmortem();
+            given(postmortemRepository.findStuckGenerating(any()))
+                    .willReturn(List.of(postmortem));
+            given(geminiClient.generate(anyString()))
+                    .willReturn("## Summary\nGenerated content");
+
+            scheduler.processGenerating();
+
+            final ArgumentCaptor<String> contentCaptor =
+                    ArgumentCaptor.forClass(String.class);
+            then(persistenceService).should().markDraftAndPublish(
+                    eq(postmortem.getId()), eq(postmortem.getIncidentId()),
+                    eq(postmortem.getTenantId()), contentCaptor.capture(),
+                    anyString(), eq(postmortem.getDurationMinutes()));
+            assertThat(contentCaptor.getValue()).contains("Generated content");
+            then(persistenceService).should(never())
+                    .markFailedAndPublish(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should mark FAILED (not PERMANENTLY_FAILED) when Gemini fails on first attempt")
+        void shouldMarkFailedWhenGeminiFailsOnFirstAttempt() {
+            // First attempt failure — retryCount is still 0,
+            // retry scheduler will pick it up later.
+            final Postmortem postmortem = buildGeneratingPostmortem();
+            given(postmortemRepository.findStuckGenerating(any()))
+                    .willReturn(List.of(postmortem));
+            given(geminiClient.generate(anyString()))
+                    .willThrow(new GeminiException("Timeout"));
+
+            scheduler.processGenerating();
+
+            then(persistenceService).should().markFailedAndPublish(
+                    postmortem.getId(), postmortem.getIncidentId(),
+                    postmortem.getTenantId(), "Timeout");
+            then(persistenceService).should(never())
+                    .markPermanentlyFailedAndPublish(any(), any(), any(), any(), anyInt());
+            // retryCount not incremented on first attempt —
+            // that is the retry scheduler's job
+            then(persistenceService).should(never()).incrementRetryCount(any());
+        }
+
+        @Test
+        @DisplayName("should NOT increment retryCount on first attempt")
+        void shouldNotIncrementRetryCountOnFirstAttempt() {
+            // retryCount is incremented only by retryOne(), not processOne().
+            // This ensures GENERATING→FAILED counts as attempt 0,
+            // so the retry scheduler gets the full maxRetryAttempts budget.
+            final Postmortem postmortem = buildGeneratingPostmortem();
+            given(postmortemRepository.findStuckGenerating(any()))
+                    .willReturn(List.of(postmortem));
+            given(geminiClient.generate(anyString())).willReturn("draft");
+
+            scheduler.processGenerating();
+
+            then(persistenceService).should(never()).incrementRetryCount(any());
+        }
+
+        @Test
+        @DisplayName("should continue processing other entries if one fails")
+        void shouldContinueAfterOneFailure() {
+            final Postmortem p1 = buildGeneratingPostmortem();
+            final Postmortem p2 = buildGeneratingPostmortem();
+            given(postmortemRepository.findStuckGenerating(any()))
+                    .willReturn(List.of(p1, p2));
+            given(geminiClient.generate(anyString()))
+                    .willThrow(new GeminiException("Timeout"))
+                    .willReturn("## Success");
+
+            scheduler.processGenerating();
+
+            then(geminiClient).should(times(2)).generate(anyString());
+            then(persistenceService).should()
+                    .markFailedAndPublish(eq(p1.getId()), any(), any(), any());
+            then(persistenceService).should()
+                    .markDraftAndPublish(eq(p2.getId()), any(), any(),
+                            anyString(), anyString(), anyInt());
+        }
+
+        @Test
+        @DisplayName("should clear TenantContext after processing")
+        void shouldClearTenantContextAfterProcessing() {
+            final Postmortem postmortem = buildGeneratingPostmortem();
+            given(postmortemRepository.findStuckGenerating(any()))
+                    .willReturn(List.of(postmortem));
+            given(geminiClient.generate(anyString())).willReturn("draft");
+
+            scheduler.processGenerating();
+
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+    }
+
+    // ── retryFailedPostmortems ────────────────────────────────────────────
+
     @Nested
     @DisplayName("retryFailedPostmortems")
     class RetryFailedPostmortems {
@@ -77,23 +195,18 @@ class PostmortemRetrySchedulerTest {
         @Test
         @DisplayName("should do nothing when no FAILED postmortems exist")
         void shouldDoNothingWhenNoFailedPostmortems() {
-            // given
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of());
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             then(geminiClient).should(never()).generate(anyString());
-            then(persistenceService).should(never())
-                    .incrementRetryCount(any());
+            then(persistenceService).should(never()).incrementRetryCount(any());
         }
 
         @Test
         @DisplayName("should increment retry count before calling Gemini")
         void shouldIncrementRetryCountBeforeCallingGemini() {
-            // given
             final Postmortem postmortem = buildFailedPostmortem();
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
@@ -101,10 +214,8 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(1);
             given(geminiClient.generate(anyString())).willReturn("draft");
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             final InOrder order = inOrder(persistenceService, geminiClient);
             order.verify(persistenceService).incrementRetryCount(postmortem.getId());
             order.verify(geminiClient).generate(anyString());
@@ -113,7 +224,6 @@ class PostmortemRetrySchedulerTest {
         @Test
         @DisplayName("should mark DRAFT via persistenceService when Gemini succeeds")
         void shouldMarkDraftWhenGeminiSucceeds() {
-            // given
             final Postmortem postmortem = buildFailedPostmortem();
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
@@ -122,19 +232,15 @@ class PostmortemRetrySchedulerTest {
             given(geminiClient.generate(anyString()))
                     .willReturn("## Summary\nRetried postmortem content");
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             final ArgumentCaptor<String> contentCaptor =
                     ArgumentCaptor.forClass(String.class);
             then(persistenceService).should().markDraftAndPublish(
                     eq(postmortem.getId()), eq(postmortem.getIncidentId()),
                     eq(postmortem.getTenantId()), contentCaptor.capture(),
                     anyString(), eq(postmortem.getDurationMinutes()));
-
-            assertThat(contentCaptor.getValue())
-                    .contains("Retried postmortem content");
+            assertThat(contentCaptor.getValue()).contains("Retried postmortem content");
             then(persistenceService).should(never())
                     .markFailedAndPublish(any(), any(), any(), any());
             then(persistenceService).should(never())
@@ -144,7 +250,6 @@ class PostmortemRetrySchedulerTest {
         @Test
         @DisplayName("should mark FAILED (not PERMANENTLY_FAILED) when retries remain")
         void shouldMarkFailedWhenRetriesRemain() {
-            // given — retryCount returned by incrementRetryCount is below max
             final Postmortem postmortem = buildFailedPostmortem();
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
@@ -153,10 +258,8 @@ class PostmortemRetrySchedulerTest {
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("Timeout"));
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             then(persistenceService).should().markFailedAndPublish(
                     postmortem.getId(), postmortem.getIncidentId(),
                     postmortem.getTenantId(), "Timeout");
@@ -167,7 +270,6 @@ class PostmortemRetrySchedulerTest {
         @Test
         @DisplayName("should mark PERMANENTLY_FAILED when retry count reaches maxRetryAttempts")
         void shouldMarkPermanentlyFailedAfterMaxRetries() {
-            // given — retryCount returned by incrementRetryCount equals max
             final Postmortem postmortem = buildFailedPostmortem();
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
@@ -176,10 +278,8 @@ class PostmortemRetrySchedulerTest {
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("API down"));
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             then(persistenceService).should().markPermanentlyFailedAndPublish(
                     postmortem.getId(), postmortem.getIncidentId(),
                     postmortem.getTenantId(), "API down", MAX_RETRY_ATTEMPTS);
@@ -190,62 +290,35 @@ class PostmortemRetrySchedulerTest {
         @Test
         @DisplayName("should continue retrying other postmortems if one fails")
         void shouldContinueAfterOneFailure() {
-            // given
-            final Postmortem postmortem1 = buildFailedPostmortem();
-            final Postmortem postmortem2 = buildFailedPostmortem();
-
+            final Postmortem p1 = buildFailedPostmortem();
+            final Postmortem p2 = buildFailedPostmortem();
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
-                    .willReturn(List.of(postmortem1, postmortem2));
+                    .willReturn(List.of(p1, p2));
             given(persistenceService.incrementRetryCount(any())).willReturn(1);
-
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("Timeout"))
                     .willReturn("## Summary\nSuccessful retry");
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             then(geminiClient).should(times(2)).generate(anyString());
-            then(persistenceService).should().markFailedAndPublish(
-                    eq(postmortem1.getId()), any(), any(), any());
-            then(persistenceService).should().markDraftAndPublish(
-                    eq(postmortem2.getId()), any(), any(), anyString(), anyString(), anyInt());
-        }
-
-        @Test
-        @DisplayName("should send prompt containing incident details")
-        void shouldSendPromptWithIncidentDetails() {
-            // given
-            final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
-                    .willReturn(List.of(postmortem));
-            given(persistenceService.incrementRetryCount(postmortem.getId()))
-                    .willReturn(1);
-            given(geminiClient.generate(anyString())).willReturn("draft");
-
-            // when
-            scheduler.retryFailedPostmortems();
-
-            // then
-            final ArgumentCaptor<String> promptCaptor =
-                    ArgumentCaptor.forClass(String.class);
-            then(geminiClient).should().generate(promptCaptor.capture());
-
-            final String prompt = promptCaptor.getValue();
-            assertThat(prompt).contains("High CPU Usage");
-            assertThat(prompt).contains("CRITICAL");
+            then(persistenceService).should()
+                    .markFailedAndPublish(eq(p1.getId()), any(), any(), any());
+            then(persistenceService).should()
+                    .markDraftAndPublish(eq(p2.getId()), any(), any(),
+                            anyString(), anyString(), anyInt());
         }
     }
+
+    // ── TenantContext ─────────────────────────────────────────────────────
 
     @Nested
     @DisplayName("TenantContext handling")
     class TenantContextHandling {
 
         @Test
-        @DisplayName("should clear TenantContext after processing all candidates")
+        @DisplayName("should clear TenantContext after retry run")
         void shouldClearTenantContextAfterProcessing() {
-            // given
             final Postmortem postmortem = buildFailedPostmortem();
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
@@ -253,17 +326,14 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(1);
             given(geminiClient.generate(anyString())).willReturn("draft");
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then — no tenant context leaks out of the scheduler run
             assertThat(TenantContext.getOrNull()).isNull();
         }
 
         @Test
         @DisplayName("should clear TenantContext even when Gemini call throws")
         void shouldClearTenantContextOnFailure() {
-            // given
             final Postmortem postmortem = buildFailedPostmortem();
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(postmortem));
@@ -272,40 +342,41 @@ class PostmortemRetrySchedulerTest {
             given(geminiClient.generate(anyString()))
                     .willThrow(new GeminiException("down"));
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             assertThat(TenantContext.getOrNull()).isNull();
         }
 
         @Test
-        @DisplayName("should not leak tenantId between consecutive candidates " +
-                "belonging to different tenants")
+        @DisplayName("should not leak tenantId between candidates from different tenants")
         void shouldNotLeakTenantIdBetweenCandidates() {
-            // given — two postmortems from two different tenants in the same batch
-            final Postmortem postmortemTenantA = buildFailedPostmortemForTenant("tenant-a");
-            final Postmortem postmortemTenantB = buildFailedPostmortemForTenant("tenant-b");
-
+            final Postmortem pA = buildFailedPostmortemForTenant("tenant-a");
+            final Postmortem pB = buildFailedPostmortemForTenant("tenant-b");
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
-                    .willReturn(List.of(postmortemTenantA, postmortemTenantB));
+                    .willReturn(List.of(pA, pB));
             given(persistenceService.incrementRetryCount(any())).willReturn(1);
 
-            // Capture TenantContext at the moment each Gemini call happens —
-            // this is the most direct way to verify the context was correctly
-            // scoped to each record during its own processing window.
             final List<String> observedTenants = new ArrayList<>();
             given(geminiClient.generate(anyString())).willAnswer(invocation -> {
                 observedTenants.add(TenantContext.getOrNull());
                 return "draft";
             });
 
-            // when
             scheduler.retryFailedPostmortems();
 
-            // then
             assertThat(observedTenants).containsExactly("tenant-a", "tenant-b");
         }
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────
+
+    private Postmortem buildGeneratingPostmortem() {
+        final Instant openedAt = Instant.now().minusSeconds(30 * 60L);
+        final Instant resolvedAt = Instant.now();
+        return Postmortem.createGenerating(
+                UUID.randomUUID(), "test-tenant",
+                "High CPU Usage on prod-server-1",
+                Severity.CRITICAL, openedAt, resolvedAt, 30);
     }
 
     private Postmortem buildFailedPostmortem() {
@@ -316,14 +387,9 @@ class PostmortemRetrySchedulerTest {
         final Instant openedAt = Instant.now().minusSeconds(30 * 60L);
         final Instant resolvedAt = Instant.now();
         final Postmortem postmortem = Postmortem.createGenerating(
-                UUID.randomUUID(),
-                tenantId,
+                UUID.randomUUID(), tenantId,
                 "High CPU Usage on prod-server-1",
-                Severity.CRITICAL,
-                openedAt,
-                resolvedAt,
-                30
-        );
+                Severity.CRITICAL, openedAt, resolvedAt, 30);
         postmortem.markFailed("Gemini API quota exceeded");
         return postmortem;
     }

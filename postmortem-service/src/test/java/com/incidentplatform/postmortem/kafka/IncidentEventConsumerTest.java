@@ -2,7 +2,7 @@ package com.incidentplatform.postmortem.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.incidentplatform.postmortem.service.PostmortemService;
+import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
@@ -29,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,13 +37,12 @@ import static org.mockito.Mockito.never;
 class IncidentEventConsumerTest {
 
     @Mock
-    private PostmortemService postmortemService;
+    private PostmortemPersistenceService persistenceService;
 
     @Mock
     private Acknowledgment acknowledgment;
 
     private IncidentEventConsumer consumer;
-    private ObjectMapper objectMapper;
 
     private static final String TENANT_ID = "acme-corp";
     private static final String TOPIC = "incidents.lifecycle";
@@ -50,9 +50,9 @@ class IncidentEventConsumerTest {
 
     @BeforeEach
     void setUp() {
-        objectMapper = new ObjectMapper()
+        final ObjectMapper objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
-        consumer = new IncidentEventConsumer(postmortemService, objectMapper);
+        consumer = new IncidentEventConsumer(persistenceService, objectMapper);
     }
 
     @AfterEach
@@ -71,9 +71,6 @@ class IncidentEventConsumerTest {
                     tenantId.getBytes(StandardCharsets.UTF_8)));
         }
         if (eventType != null) {
-            // X-Event-Type header is set by IncidentEventKafkaSender on every
-            // message. Tests add it explicitly since we're bypassing the
-            // real producer.
             record.headers().add(new RecordHeader(
                     IncidentEventTypes.HEADER_NAME,
                     eventType.getBytes(StandardCharsets.UTF_8)));
@@ -122,8 +119,8 @@ class IncidentEventConsumerTest {
     class OnIncidentResolved {
 
         @Test
-        @DisplayName("should trigger postmortem generation with tenantId from header")
-        void shouldTriggerPostmortemGenerationWithTenantIdFromHeader() {
+        @DisplayName("should write outbox entry with tenantId from header")
+        void shouldWriteOutboxEntryWithTenantIdFromHeader() {
             // given
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
@@ -132,80 +129,68 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
+            // then — consumer writes outbox entry, not calls Gemini
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);
-            then(postmortemService).should().generatePostmortem(
+            then(persistenceService).should().createGeneratingRecord(
                     eq(INCIDENT_ID), tenantCaptor.capture(),
                     any(), any(), any(), any(), anyInt());
             assertThat(tenantCaptor.getValue()).isEqualTo(TENANT_ID);
         }
 
         @Test
-        @DisplayName("should pass correct incidentId to postmortemService")
+        @DisplayName("should pass correct incidentId to outbox write")
         void shouldPassCorrectIncidentId() {
-            // given
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
-            then(postmortemService).should().generatePostmortem(
+            then(persistenceService).should().createGeneratingRecord(
                     eq(INCIDENT_ID), any(), any(), any(), any(), any(), anyInt());
         }
 
         @Test
-        @DisplayName("should pass correct severity to postmortemService")
+        @DisplayName("should pass correct severity to outbox write")
         void shouldPassCorrectSeverity() {
-            // given
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
-            then(postmortemService).should().generatePostmortem(
+            then(persistenceService).should().createGeneratingRecord(
                     any(), any(), any(), eq(Severity.CRITICAL),
                     any(), any(), anyInt());
         }
 
         @Test
-        @DisplayName("should pass correct durationMinutes to postmortemService")
+        @DisplayName("should pass correct durationMinutes to outbox write")
         void shouldPassCorrectDurationMinutes() {
-            // given
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
             final ArgumentCaptor<Integer> durationCaptor =
                     ArgumentCaptor.forClass(Integer.class);
-            then(postmortemService).should().generatePostmortem(
+            then(persistenceService).should().createGeneratingRecord(
                     any(), any(), any(), any(), any(), any(),
                     durationCaptor.capture());
             assertThat(durationCaptor.getValue()).isEqualTo(45);
         }
 
         @Test
-        @DisplayName("should acknowledge after triggering postmortem")
-        void shouldAcknowledgeAfterTriggeringPostmortem() {
-            // given
+        @DisplayName("should acknowledge after writing outbox entry")
+        void shouldAcknowledgeAfterWritingOutboxEntry() {
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
             then(acknowledgment).should().acknowledge();
         }
     }
@@ -217,17 +202,14 @@ class IncidentEventConsumerTest {
         @Test
         @DisplayName("should ignore IncidentOpenedEvent")
         void shouldIgnoreOpenedEvent() {
-            // given
             final ConsumerRecord<String, String> record =
                     buildRecord(openedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_OPENED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
-            then(postmortemService).should(never())
-                    .generatePostmortem(any(), any(), any(),
+            then(persistenceService).should(never())
+                    .createGeneratingRecord(any(), any(), any(),
                             any(), any(), any(), anyInt());
             then(acknowledgment).should().acknowledge();
         }
@@ -235,17 +217,14 @@ class IncidentEventConsumerTest {
         @Test
         @DisplayName("should ignore IncidentAcknowledgedEvent")
         void shouldIgnoreAcknowledgedEvent() {
-            // given
             final ConsumerRecord<String, String> record =
                     buildRecord(acknowledgedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
-            then(postmortemService).should(never())
-                    .generatePostmortem(any(), any(), any(),
+            then(persistenceService).should(never())
+                    .createGeneratingRecord(any(), any(), any(),
                             any(), any(), any(), anyInt());
             then(acknowledgment).should().acknowledge();
         }
@@ -258,16 +237,13 @@ class IncidentEventConsumerTest {
         @Test
         @DisplayName("should acknowledge and skip when X-Event-Type header is missing")
         void shouldAcknowledgeAndSkipWhenEventTypeHeaderMissing() {
-            // given — no eventType header (e.g. a producer that forgot to set it)
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID, null);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — acknowledged to skip, no routing
             then(acknowledgment).should().acknowledge();
-            then(postmortemService).shouldHaveNoInteractions();
+            then(persistenceService).shouldHaveNoInteractions();
         }
     }
 
@@ -278,22 +254,18 @@ class IncidentEventConsumerTest {
         @Test
         @DisplayName("should clear TenantContext after processing")
         void shouldClearTenantContextAfterProcessing() {
-            // given
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
             assertThat(TenantContext.getOrNull()).isNull();
         }
 
         @Test
         @DisplayName("header tenant wins over payload tenant")
         void headerTenantWinsOverPayloadTenant() {
-            // given
             final String payloadWithDifferentTenant = String.format("""
                     {
                       "incidentId": "%s",
@@ -309,14 +281,11 @@ class IncidentEventConsumerTest {
                     buildRecord(payloadWithDifferentTenant, "header-tenant",
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            final ArgumentCaptor<String> tenantCaptor =
-                    ArgumentCaptor.forClass(String.class);
-
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
-            then(postmortemService).should().generatePostmortem(
+            final ArgumentCaptor<String> tenantCaptor =
+                    ArgumentCaptor.forClass(String.class);
+            then(persistenceService).should().createGeneratingRecord(
                     any(), tenantCaptor.capture(), any(), any(), any(), any(), anyInt());
             assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
         }
@@ -327,23 +296,24 @@ class IncidentEventConsumerTest {
     class AcknowledgmentBehavior {
 
         @Test
-        @DisplayName("should NOT acknowledge when postmortemService throws transient error")
-        void shouldNotAcknowledgeOnTransientException() {
-            // given — RuntimeException is transient (DB down, Gemini API issue)
-            // consumer should return without acknowledging so Kafka redelivers
+        @DisplayName("should NOT acknowledge when outbox write fails — DB unavailable")
+        void shouldNotAcknowledgeWhenOutboxWriteFails() {
+            // given — DB down during outbox INSERT; consumer must not acknowledge
+            // so Kafka redelivers the event after the DB recovers.
+            // (Previously this tested PostmortemService throwing — after the
+            // Outbox Pattern refactor the only operation that can fail here is
+            // the createGeneratingRecord DB write.)
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
-                    .given(postmortemService)
-                    .generatePostmortem(any(), any(), any(),
+            willThrow(new RuntimeException("db error"))
+                    .given(persistenceService)
+                    .createGeneratingRecord(any(), any(), any(),
                             any(), any(), any(), anyInt());
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — NOT acknowledged, Kafka will redeliver
             then(acknowledgment).should(never()).acknowledge();
             assertThat(TenantContext.getOrNull()).isNull();
         }
@@ -351,7 +321,6 @@ class IncidentEventConsumerTest {
         @Test
         @DisplayName("should acknowledge when severity is unrecognized — poison pill")
         void shouldAcknowledgeOnUnrecognizedSeverity() {
-            // given — bad severity cannot be fixed by retrying
             final String badSeverityPayload = String.format("""
                     {
                       "incidentId": "%s",
@@ -367,10 +336,8 @@ class IncidentEventConsumerTest {
                     buildRecord(badSeverityPayload, TENANT_ID,
                             IncidentEventTypes.INCIDENT_RESOLVED);
 
-            // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — acknowledged to skip the poison pill
             then(acknowledgment).should().acknowledge();
         }
     }

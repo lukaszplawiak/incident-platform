@@ -14,9 +14,42 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Processes the postmortem outbox — picks up GENERATING and FAILED
+ * postmortems and calls the Gemini AI API to produce draft content.
+ *
+ * <h2>Outbox Pattern — this scheduler is the processor</h2>
+ * The Kafka consumer ({@code IncidentEventConsumer}) writes a GENERATING
+ * record to the database and acknowledges immediately. This scheduler is
+ * the only component that calls Gemini — in a dedicated scheduled thread,
+ * completely decoupled from Kafka consumer throughput.
+ *
+ * <h2>Two processing paths</h2>
+ * <ol>
+ *   <li><b>GENERATING</b> — freshly written outbox entries that have not
+ *       been processed yet, and stuck records left by a process crash.
+ *       Picked up by {@link #processGenerating()}</li>
+ *   <li><b>FAILED</b> — records that failed on a previous Gemini attempt
+ *       and still have remaining retry budget. Picked up by
+ *       {@link #retryFailedPostmortems()}</li>
+ * </ol>
+ *
+ * <h2>Why two separate scheduled methods</h2>
+ * GENERATING and FAILED records have different semantics and urgency.
+ * GENERATING records should be processed quickly (every 30s by default) —
+ * they represent fresh work that just arrived from Kafka. FAILED records
+ * are retried on a slower cadence (every 5 minutes by default) to give
+ * transient Gemini issues time to clear before the next attempt.
+ *
+ * <h2>ShedLock</h2>
+ * Both methods are protected by ShedLock to prevent duplicate processing
+ * when multiple instances of postmortem-service are running.
+ */
 @Component
 public class PostmortemRetryScheduler {
 
@@ -28,40 +61,77 @@ public class PostmortemRetryScheduler {
     private final PostmortemPromptBuilder promptBuilder;
     private final PostmortemPersistenceService persistenceService;
     private final int maxRetryAttempts;
+    private final Duration stuckThreshold;
 
     public PostmortemRetryScheduler(PostmortemRepository postmortemRepository,
                                     GeminiClient geminiClient,
                                     PostmortemPromptBuilder promptBuilder,
                                     PostmortemPersistenceService persistenceService,
                                     @Value("${postmortem.max-retry-attempts:3}")
-                                    int maxRetryAttempts) {
+                                    int maxRetryAttempts,
+                                    @Value("${postmortem.stuck-threshold-minutes:2}")
+                                    int stuckThresholdMinutes) {
         this.postmortemRepository = postmortemRepository;
         this.geminiClient = geminiClient;
         this.promptBuilder = promptBuilder;
         this.persistenceService = persistenceService;
         this.maxRetryAttempts = maxRetryAttempts;
+        this.stuckThreshold = Duration.ofMinutes(stuckThresholdMinutes);
+    }
+
+    /**
+     * Picks up GENERATING outbox entries and calls Gemini for each.
+     *
+     * <p>Only processes records older than {@code stuckThreshold} (default
+     * 2 minutes). This gives the first scheduler run after a consumer write
+     * time to complete without racing — a fresh GENERATING record written
+     * 10 seconds ago will be picked up on the next run, not immediately.
+     *
+     * <p>If Gemini succeeds → marks DRAFT.
+     * If Gemini fails → marks FAILED (retry scheduler will pick up later).
+     */
+    @Scheduled(
+            fixedDelayString = "${postmortem.generating-scheduler-interval-ms:30000}",
+            initialDelayString = "30000"
+    )
+    @SchedulerLock(
+            name = "postmortem-service:processGenerating",
+            lockAtMostFor = "4m",
+            lockAtLeastFor = "10s"
+    )
+    public void processGenerating() {
+        final Instant threshold = Instant.now().minus(stuckThreshold);
+        final List<Postmortem> candidates =
+                postmortemRepository.findStuckGenerating(threshold);
+
+        if (candidates.isEmpty()) {
+            log.debug("Outbox check: no GENERATING postmortems to process");
+            return;
+        }
+
+        log.info("Outbox check: found {} GENERATING postmortems to process",
+                candidates.size());
+
+        for (final Postmortem postmortem : candidates) {
+            TenantContext.set(postmortem.getTenantId());
+            try {
+                processOne(postmortem);
+            } catch (Exception e) {
+                log.error("Unexpected error processing GENERATING postmortem: " +
+                                "incidentId={}, error={}",
+                        postmortem.getIncidentId(), e.getMessage());
+            } finally {
+                TenantContext.clear();
+            }
+        }
     }
 
     /**
      * Finds FAILED postmortems across all tenants and retries each one.
      *
-     * <p>Deliberately NOT {@code @Transactional} at this level — this method
-     * loops over potentially many candidates, calling
-     * {@code geminiClient.generate(prompt)} (an external HTTP call typically
-     * taking seconds) for each. Wrapping the whole loop in one transaction
-     * would hold a database connection for the combined duration of every
-     * Gemini call in the batch — tens of seconds under a large backlog. Each
-     * database write (increment retry count, then mark DRAFT or FAILED/
-     * PERMANENTLY_FAILED) is its own short transaction via
-     * {@link PostmortemPersistenceService}, called before and after each
-     * Gemini call rather than wrapping it.
-     *
-     * <p>{@code findFailedWithRemainingRetries()} deliberately queries across
-     * all tenants in a single statement — this service runs as one shared
-     * process against one shared database, so a single cross-tenant query
-     * here is the correct, efficient pattern. What matters is that
-     * {@link TenantContext} is set for the duration of processing each
-     * individual record — see {@link #retryOne}.
+     * <p>Deliberately NOT {@code @Transactional} at this level — see class
+     * Javadoc. Each database write is its own short transaction via
+     * {@link PostmortemPersistenceService}.
      */
     @Scheduled(
             fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
@@ -85,17 +155,12 @@ public class PostmortemRetryScheduler {
                 candidates.size(), maxRetryAttempts);
 
         for (final Postmortem postmortem : candidates) {
-            // TenantContext is set for the duration of processing this single
-            // record — every log line emitted by retryOne() (and anything it
-            // calls) automatically carries the correct tenantId in MDC,
-            // matching the pattern already used by every Kafka consumer in
-            // this codebase. Cleared in finally so a failure for one tenant's
-            // record can never leak its context into the next iteration.
             TenantContext.set(postmortem.getTenantId());
             try {
                 retryOne(postmortem);
             } catch (Exception e) {
-                log.error("Unexpected error during retry for postmortem: incidentId={}, error={}",
+                log.error("Unexpected error during retry for postmortem: " +
+                                "incidentId={}, error={}",
                         postmortem.getIncidentId(), e.getMessage());
             } finally {
                 TenantContext.clear();
@@ -103,6 +168,48 @@ public class PostmortemRetryScheduler {
         }
     }
 
+    /**
+     * Processes a GENERATING outbox entry — first attempt at calling Gemini.
+     * If Gemini fails → marks FAILED so the retry scheduler picks it up.
+     */
+    private void processOne(Postmortem postmortem) {
+        final UUID postmortemId = postmortem.getId();
+        final UUID incidentId = postmortem.getIncidentId();
+        final String tenantId = postmortem.getTenantId();
+
+        log.info("Processing GENERATING postmortem: incidentId={}, tenant={}",
+                incidentId, tenantId);
+
+        final String prompt = promptBuilder.build(postmortem);
+
+        try {
+            final String content = geminiClient.generate(prompt);
+
+            persistenceService.markDraftAndPublish(
+                    postmortemId, incidentId, tenantId,
+                    content, prompt, postmortem.getDurationMinutes());
+
+            log.info("Postmortem generated successfully: incidentId={}, tenant={}, " +
+                            "contentLength={}",
+                    incidentId, tenantId, content.length());
+
+        } catch (GeminiException e) {
+            // First attempt failed — mark FAILED so the retry scheduler
+            // picks it up. retryCount stays at 0 (not incremented here —
+            // retry scheduler increments before each retry attempt).
+            persistenceService.markFailedAndPublish(
+                    postmortemId, incidentId, tenantId, e.getMessage());
+
+            log.warn("Postmortem generation failed on first attempt, " +
+                            "will be retried: incidentId={}, tenant={}, error={}",
+                    incidentId, tenantId, e.getMessage());
+        }
+    }
+
+    /**
+     * Retries a FAILED postmortem — increments retry count, calls Gemini,
+     * marks DRAFT or FAILED/PERMANENTLY_FAILED based on the outcome.
+     */
     private void retryOne(Postmortem postmortem) {
         final UUID postmortemId = postmortem.getId();
         final UUID incidentId = postmortem.getIncidentId();
@@ -110,8 +217,7 @@ public class PostmortemRetryScheduler {
 
         // Committed in its own short transaction BEFORE the Gemini call —
         // if the process crashes mid-retry, the attempt is still durably
-        // counted, preventing the scheduler from retrying past
-        // maxRetryAttempts indefinitely.
+        // counted, preventing the scheduler from retrying past maxRetryAttempts.
         final int retryCount = persistenceService.incrementRetryCount(postmortemId);
 
         log.info("Retrying postmortem generation: incidentId={}, tenant={}, attempt={}/{}",
@@ -120,7 +226,6 @@ public class PostmortemRetryScheduler {
         final String prompt = promptBuilder.build(postmortem);
 
         try {
-            // No transaction open during this call — see class Javadoc.
             final String content = geminiClient.generate(prompt);
 
             persistenceService.markDraftAndPublish(
