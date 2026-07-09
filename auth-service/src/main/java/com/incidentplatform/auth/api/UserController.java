@@ -7,6 +7,7 @@ import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
 import com.incidentplatform.auth.dto.UserSummaryDto;
 import com.incidentplatform.auth.service.PasswordService;
+import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.auth.service.UserManagementService;
 import com.incidentplatform.auth.service.UserQueryService;
 import com.incidentplatform.auth.service.UserService;
@@ -49,15 +50,18 @@ public class UserController {
     private final UserQueryService userQueryService;
     private final UserManagementService userManagementService;
     private final PasswordService passwordService;
+    private final ResendInviteService resendInviteService;
 
     public UserController(UserService userService,
                           UserQueryService userQueryService,
                           UserManagementService userManagementService,
-                          PasswordService passwordService) {
+                          PasswordService passwordService,
+                          ResendInviteService resendInviteService) {
         this.userService = userService;
         this.userQueryService = userQueryService;
         this.userManagementService = userManagementService;
         this.passwordService = passwordService;
+        this.resendInviteService = resendInviteService;
     }
 
     // ── POST /users ───────────────────────────────────────────────────────
@@ -177,6 +181,35 @@ public class UserController {
     }
 
 
+    // ── POST /users/{id}/resend-invite ───────────────────────────────────
+
+    @PostMapping(value = "/{id}/resend-invite")
+    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @Operation(
+            summary = "Resend invite email",
+            description = """
+                    Resends the invite email to a user who has not yet accepted
+                    their invitation. Generates a fresh token (new 7-day TTL),
+                    invalidates all previously issued invite tokens, and queues
+                    a new email for dispatch within 30 seconds.
+
+                    Returns 409 if:
+                    - The user has already accepted the invite (has a password)
+                    - An invite email is already queued (PENDING — wait 30s)
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "202", description = "Invite email queued for dispatch"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Forbidden — ROLE_ADMIN required"),
+            @ApiResponse(responseCode = "404", description = "User not found in tenant"),
+            @ApiResponse(responseCode = "409", description = "Invite already accepted, or dispatch already pending")
+    })
+    public ResponseEntity<Void> resendInvite(@PathVariable UUID id) {
+        resendInviteService.resendInvite(id);
+        return ResponseEntity.accepted().build();
+    }
+
     // ── DELETE /users/{id} ────────────────────────────────────────────────
 
     @DeleteMapping(value = "/{id}")
@@ -196,15 +229,11 @@ public class UserController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "204",
-                    description = "User soft-deleted successfully"),
-            @ApiResponse(responseCode = "401",
-                    description = "Unauthorized"),
-            @ApiResponse(responseCode = "403",
-                    description = "Forbidden — ROLE_ADMIN required, " +
+            @ApiResponse(responseCode = "204", description = "User soft-deleted successfully"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Forbidden — ROLE_ADMIN required, " +
                             "or attempting to delete own account"),
-            @ApiResponse(responseCode = "404",
-                    description = "User not found in tenant")
+            @ApiResponse(responseCode = "404", description = "User not found in tenant")
     })
     public ResponseEntity<Void> deleteUser(
             @PathVariable UUID id,
@@ -229,12 +258,9 @@ public class UserController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "204",
-                    description = "Password changed successfully"),
-            @ApiResponse(responseCode = "400",
-                    description = "Validation failed — missing fields or password too short"),
-            @ApiResponse(responseCode = "401",
-                    description = "Unauthorized or wrong current password")
+            @ApiResponse(responseCode = "204", description = "Password changed successfully"),
+            @ApiResponse(responseCode = "400", description = "Validation failed — missing fields or password too short"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized or wrong current password")
     })
     public ResponseEntity<Void> changePassword(
             @AuthenticationPrincipal UserPrincipal principal,
