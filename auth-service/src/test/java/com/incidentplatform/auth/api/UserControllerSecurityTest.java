@@ -415,8 +415,7 @@ class UserControllerSecurityTest {
     private CreateUserResponse buildCreateResponse() {
         return new CreateUserResponse(
                 UUID.randomUUID(), TENANT_ID, "u@example.com",
-                List.of("ROLE_RESPONDER"), true, Instant.now(),
-                "invite-token", Instant.now().plusSeconds(72 * 3600));
+                List.of("ROLE_RESPONDER"), true, Instant.now());
     }
 
     private UserSummaryDto buildUserSummary() {

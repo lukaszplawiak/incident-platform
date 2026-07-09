@@ -80,6 +80,23 @@
             <artifactId>shared</artifactId>
         </dependency>
 
+
+        <!-- ── Email sending — invite and password reset flows ────────── -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
+        <!-- ── Distributed scheduler lock ────────────────────────────── -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+        </dependency>
+
         <!-- ── API docs ───────────────────────────────────────────────── -->
         <dependency>
             <groupId>org.springdoc</groupId>

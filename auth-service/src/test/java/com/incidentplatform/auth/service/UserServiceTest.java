@@ -1,9 +1,14 @@
 package com.incidentplatform.auth.service;
 
+import com.incidentplatform.auth.domain.AuthToken;
+import com.incidentplatform.auth.domain.InviteEmailOutbox;
+import com.incidentplatform.auth.domain.InviteEmailStatus;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
+import com.incidentplatform.auth.repository.InviteEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,11 +38,9 @@ import static org.mockito.BDDMockito.then;
 @DisplayName("UserService")
 class UserServiceTest {
 
-    @Mock
-    private UserRepository userRepository;
-
-    @Mock
-    private AuthTokenService authTokenService;
+    @Mock private UserRepository userRepository;
+    @Mock private AuthTokenService authTokenService;
+    @Mock private InviteEmailOutboxRepository outboxRepository;
 
     private UserService service;
 
@@ -45,7 +49,7 @@ class UserServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new UserService(userRepository, authTokenService);
+        service = new UserService(userRepository, authTokenService, outboxRepository);
         TenantContext.set(TENANT_ID);
     }
 
@@ -61,45 +65,27 @@ class UserServiceTest {
     class CreateUserSuccess {
 
         @Test
-        @DisplayName("returns CreateUserResponse with correct fields")
-        void returnsResponse() {
-            // given
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
-                    .willReturn(Optional.empty());
-            given(userRepository.save(any(User.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
-            given(authTokenService.generateInviteToken(any(), anyString()))
-                    .willReturn("raw-invite-token");
+        @DisplayName("returns CreateUserResponse without inviteToken")
+        void returnsResponseWithoutInviteToken() {
+            givenUserCreationSucceeds();
 
-            // when
             final CreateUserResponse response = service.createUser(
                     new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
 
-            // then
             assertThat(response.email()).isEqualTo(EMAIL);
             assertThat(response.tenantId()).isEqualTo(TENANT_ID);
             assertThat(response.roles()).containsExactly("ROLE_ADMIN");
             assertThat(response.active()).isTrue();
-            assertThat(response.inviteToken()).isEqualTo("raw-invite-token");
-            assertThat(response.inviteExpiresAt()).isAfter(
-                    java.time.Instant.now());
+            // inviteToken no longer in response — goes directly to user's inbox
         }
 
         @Test
         @DisplayName("persists user with correct email, tenant, no password")
         void persistsUserWithNoPassword() {
-            // given
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
-                    .willReturn(Optional.empty());
-            given(userRepository.save(any(User.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
-            given(authTokenService.generateInviteToken(any(), anyString()))
-                    .willReturn("token");
+            givenUserCreationSucceeds();
 
-            // when
             service.createUser(new CreateUserRequest(EMAIL, List.of("ROLE_RESPONDER")));
 
-            // then
             final ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
             then(userRepository).should().save(captor.capture());
             final User saved = captor.getValue();
@@ -113,19 +99,11 @@ class UserServiceTest {
         @Test
         @DisplayName("assigns all requested roles to user")
         void assignsRequestedRoles() {
-            // given
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
-                    .willReturn(Optional.empty());
-            given(userRepository.save(any(User.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
-            given(authTokenService.generateInviteToken(any(), anyString()))
-                    .willReturn("token");
+            givenUserCreationSucceeds();
 
-            // when
             service.createUser(new CreateUserRequest(
                     EMAIL, List.of("ROLE_ADMIN", "ROLE_RESPONDER")));
 
-            // then
             final ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
             then(userRepository).should().save(captor.capture());
             assertThat(captor.getValue().getRoleNames())
@@ -133,22 +111,67 @@ class UserServiceTest {
         }
 
         @Test
-        @DisplayName("calls generateInviteToken with saved user and tenantId")
-        void callsGenerateInviteTokenWithCorrectArgs() {
-            // given
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
-                    .willReturn(Optional.empty());
-            given(userRepository.save(any(User.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
-            given(authTokenService.generateInviteToken(any(), anyString()))
-                    .willReturn("token");
+        @DisplayName("calls generateInviteTokenWithEntity with saved user and tenantId")
+        void callsGenerateInviteTokenWithEntity() {
+            givenUserCreationSucceeds();
 
-            // when
             service.createUser(new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
 
-            // then
             then(authTokenService).should()
-                    .generateInviteToken(any(User.class), anyString());
+                    .generateInviteTokenWithEntity(any(User.class), anyString());
+        }
+
+        @Test
+        @DisplayName("writes PENDING outbox entry with raw token and token entity")
+        void writesPendingOutboxEntry() {
+            givenUserCreationSucceeds();
+
+            service.createUser(new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
+
+            final ArgumentCaptor<InviteEmailOutbox> captor =
+                    ArgumentCaptor.forClass(InviteEmailOutbox.class);
+            then(outboxRepository).should().save(captor.capture());
+
+            final InviteEmailOutbox saved = captor.getValue();
+            assertThat(saved.getEmail()).isEqualTo(EMAIL);
+            assertThat(saved.getStatus()).isEqualTo(InviteEmailStatus.PENDING);
+            assertThat(saved.getRawToken()).isEqualTo("raw-invite-token");
+            assertThat(saved.getRawToken()).isNotNull();
+        }
+
+        @Test
+        @DisplayName("does NOT return inviteToken in response — it goes to inbox")
+        void doesNotReturnTokenInResponse() {
+            givenUserCreationSucceeds();
+
+            final CreateUserResponse response = service.createUser(
+                    new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
+
+            // Verify the DTO has no token field at all (compile-time safety)
+            // This test documents the intentional API contract change
+            assertThat(response).isNotNull();
+            assertThat(response.email()).isEqualTo(EMAIL);
+            // CreateUserResponse record has no inviteToken field
+        }
+
+        private void givenUserCreationSucceeds() {
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+                    EMAIL, TENANT_ID)).willReturn(Optional.empty());
+            given(userRepository.save(any(User.class)))
+                    .willAnswer(inv -> inv.getArgument(0));
+
+            final AuthToken mockToken = AuthToken.create(
+                    User.forTesting(UUID.randomUUID(), TENANT_ID, EMAIL,
+                            null, true, List.of()),
+                    TENANT_ID, "hash", AuthToken.Type.INVITE,
+                    Instant.now().plusSeconds(3600));
+
+            given(authTokenService.generateInviteTokenWithEntity(
+                    any(User.class), anyString()))
+                    .willReturn(new InviteTokenResult("raw-invite-token", mockToken));
+
+            given(outboxRepository.save(any(InviteEmailOutbox.class)))
+                    .willAnswer(inv -> inv.getArgument(0));
         }
     }
 
@@ -161,15 +184,13 @@ class UserServiceTest {
         @Test
         @DisplayName("throws 409 when email already exists in tenant")
         void throws409OnDuplicateEmail() {
-            // given
             final User existing = User.forTesting(
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     "hash", true, List.of("ROLE_ADMIN"));
 
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
-                    .willReturn(Optional.of(existing));
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+                    EMAIL, TENANT_ID)).willReturn(Optional.of(existing));
 
-            // when / then
             assertThatThrownBy(() ->
                     service.createUser(
                             new CreateUserRequest(EMAIL, List.of("ROLE_RESPONDER"))))
@@ -180,25 +201,23 @@ class UserServiceTest {
         }
 
         @Test
-        @DisplayName("does not persist user or generate token on duplicate email")
+        @DisplayName("does not persist user, generate token, or write outbox on duplicate")
         void doesNotPersistOnDuplicate() {
-            // given
             final User existing = User.forTesting(
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     "hash", true, List.of());
 
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, TENANT_ID))
-                    .willReturn(Optional.of(existing));
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+                    EMAIL, TENANT_ID)).willReturn(Optional.of(existing));
 
-            // when
             assertThatThrownBy(() ->
                     service.createUser(
                             new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN"))))
                     .isInstanceOf(BusinessException.class);
 
-            // then
             then(userRepository).shouldHaveNoMoreInteractions();
             then(authTokenService).shouldHaveNoInteractions();
+            then(outboxRepository).shouldHaveNoInteractions();
         }
     }
 
@@ -211,20 +230,27 @@ class UserServiceTest {
         @Test
         @DisplayName("resolves tenant from TenantContext")
         void resolvesTenantFromContext() {
-            // given
             TenantContext.set("company-abc");
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(EMAIL, "company-abc"))
-                    .willReturn(Optional.empty());
+            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+                    EMAIL, "company-abc")).willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));
-            given(authTokenService.generateInviteToken(any(), anyString()))
-                    .willReturn("token");
 
-            // when
+            final AuthToken mockToken = AuthToken.create(
+                    User.forTesting(UUID.randomUUID(), "company-abc", EMAIL,
+                            null, true, List.of()),
+                    "company-abc", "hash", AuthToken.Type.INVITE,
+                    Instant.now().plusSeconds(3600));
+
+            given(authTokenService.generateInviteTokenWithEntity(
+                    any(User.class), anyString()))
+                    .willReturn(new InviteTokenResult("token", mockToken));
+            given(outboxRepository.save(any()))
+                    .willAnswer(inv -> inv.getArgument(0));
+
             final CreateUserResponse response = service.createUser(
                     new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
 
-            // then
             assertThat(response.tenantId()).isEqualTo("company-abc");
         }
     }
