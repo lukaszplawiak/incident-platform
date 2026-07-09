@@ -1,5 +1,6 @@
 package com.incidentplatform.auth.scheduler;
 
+import com.incidentplatform.auth.config.InviteEmailProperties;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.InviteEmailOutbox;
 import com.incidentplatform.auth.domain.InviteEmailStatus;
@@ -46,9 +47,15 @@ class InviteEmailSchedulerTest {
 
     @BeforeEach
     void setUp() {
+        final InviteEmailProperties properties = new InviteEmailProperties(
+                "noreply@test.com",
+                "http://localhost:3000",
+                MAX_RETRY_ATTEMPTS,
+                java.time.Duration.ofSeconds(PENDING_THRESHOLD_SECONDS),
+                30_000L,
+                300_000L);
         scheduler = new InviteEmailScheduler(
-                outboxRepository, emailService,
-                MAX_RETRY_ATTEMPTS, PENDING_THRESHOLD_SECONDS);
+                outboxRepository, emailService, properties);
     }
 
     // ── processPending ────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import com.incidentplatform.auth.exception.InviteEmailException;
 import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import com.incidentplatform.auth.config.InviteEmailProperties;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
@@ -40,15 +40,11 @@ public class InviteEmailService {
     private final String fromAddress;
     private final String appBaseUrl;
 
-    public InviteEmailService(
-            JavaMailSender mailSender,
-            @Value("${invite.email.from:noreply@incidentplatform.com}")
-            String fromAddress,
-            @Value("${invite.email.app-base-url:http://localhost:3000}")
-            String appBaseUrl) {
-        this.mailSender = mailSender;
-        this.fromAddress = fromAddress;
-        this.appBaseUrl = appBaseUrl;
+    public InviteEmailService(JavaMailSender mailSender,
+                              InviteEmailProperties properties) {
+        this.mailSender   = mailSender;
+        this.fromAddress  = properties.from();
+        this.appBaseUrl   = properties.appBaseUrl();
     }
 
     /**

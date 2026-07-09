@@ -1,13 +1,14 @@
 package com.incidentplatform.auth.scheduler;
 
+import com.incidentplatform.auth.config.InviteEmailProperties;
 import com.incidentplatform.auth.domain.InviteEmailOutbox;
 import com.incidentplatform.auth.repository.InviteEmailOutboxRepository;
 import com.incidentplatform.auth.exception.InviteEmailException;
 import com.incidentplatform.auth.service.InviteEmailService;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +47,7 @@ import java.util.List;
  * multiple auth-service instances are running.
  */
 @Component
+@EnableConfigurationProperties(InviteEmailProperties.class)
 public class InviteEmailScheduler {
 
     private static final Logger log =
@@ -56,17 +58,13 @@ public class InviteEmailScheduler {
     private final int maxRetryAttempts;
     private final Duration pendingThreshold;
 
-    public InviteEmailScheduler(
-            InviteEmailOutboxRepository outboxRepository,
-            InviteEmailService emailService,
-            @Value("${invite.email.max-retry-attempts:3}")
-            int maxRetryAttempts,
-            @Value("${invite.email.pending-threshold-seconds:30}")
-            int pendingThresholdSeconds) {
+    public InviteEmailScheduler(InviteEmailOutboxRepository outboxRepository,
+                                InviteEmailService emailService,
+                                InviteEmailProperties properties) {
         this.outboxRepository = outboxRepository;
-        this.emailService = emailService;
-        this.maxRetryAttempts = maxRetryAttempts;
-        this.pendingThreshold = Duration.ofSeconds(pendingThresholdSeconds);
+        this.emailService     = emailService;
+        this.maxRetryAttempts = properties.maxRetryAttempts();
+        this.pendingThreshold = properties.pendingThreshold();
     }
 
     /**

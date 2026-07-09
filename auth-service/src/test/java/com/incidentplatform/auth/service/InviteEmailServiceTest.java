@@ -1,5 +1,6 @@
 package com.incidentplatform.auth.service;
 
+import com.incidentplatform.auth.config.InviteEmailProperties;
 import com.incidentplatform.auth.exception.InviteEmailException;
 import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +36,10 @@ class InviteEmailServiceTest {
 
     @BeforeEach
     void setUp() {
-        emailService = new InviteEmailService(mailSender, FROM_ADDRESS, APP_BASE_URL);
+        final InviteEmailProperties properties = new InviteEmailProperties(
+                FROM_ADDRESS, APP_BASE_URL, 3,
+                java.time.Duration.ofSeconds(30), 30_000L, 300_000L);
+        emailService = new InviteEmailService(mailSender, properties);
     }
 
     // ── sendInviteEmail — success ─────────────────────────────────────────
@@ -78,9 +82,11 @@ class InviteEmailServiceTest {
         void inviteLinkBuiltFromBaseUrl() {
             // Test the link format by verifying the service uses the configured
             // base URL — different base URLs produce different links
+            final InviteEmailProperties stagingProperties = new InviteEmailProperties(
+                    FROM_ADDRESS, "https://staging.example.com",
+                    3, java.time.Duration.ofSeconds(30), 30_000L, 300_000L);
             final InviteEmailService serviceWithDifferentUrl =
-                    new InviteEmailService(mailSender,
-                            FROM_ADDRESS, "https://staging.example.com");
+                    new InviteEmailService(mailSender, stagingProperties);
 
             final MimeMessage mimeMessage = mock(MimeMessage.class);
             given(mailSender.createMimeMessage()).willReturn(mimeMessage);
