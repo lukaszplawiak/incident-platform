@@ -34,6 +34,22 @@ spring:
       connect-timeout: 2s
       timeout: 1s
 
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+        connectiontimeout: 5000
+        timeout: 5000
+        writetimeout: 5000
+
 jwt:
   secret: ${JWT_SECRET}
   expiration-ms: ${JWT_EXPIRATION_MS:86400000}
@@ -50,6 +66,15 @@ login-attempt:
   max-failures: ${LOGIN_ATTEMPT_MAX_FAILURES:5}
   lockout-duration: ${LOGIN_ATTEMPT_LOCKOUT_DURATION:PT15M}
   window: ${LOGIN_ATTEMPT_WINDOW:PT10M}
+
+invite:
+  email:
+    from: ${INVITE_EMAIL_FROM:noreply@incidentplatform.com}
+    app-base-url: ${APP_BASE_URL:http://localhost:3000}
+    max-retry-attempts: ${INVITE_EMAIL_MAX_RETRIES:3}
+    pending-threshold-seconds: ${INVITE_EMAIL_PENDING_THRESHOLD_SECONDS:30}
+    scheduler-interval-ms: ${INVITE_EMAIL_SCHEDULER_INTERVAL_MS:30000}
+    retry-interval-ms: ${INVITE_EMAIL_RETRY_INTERVAL_MS:300000}
 
 management:
   endpoints:

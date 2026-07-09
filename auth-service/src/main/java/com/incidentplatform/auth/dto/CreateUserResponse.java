@@ -7,15 +7,18 @@ import java.util.UUID;
 /**
  * Response from {@code POST /api/v1/users}.
  *
- * <h2>inviteToken field — temporary</h2>
- * The invite token is returned in the response body until email infrastructure
- * is implemented (see backlog: self-service password recovery / invite email).
- * Once email sending is available, this field will be removed and the token
- * will be sent directly to the user's email address instead.
+ * <h2>invite token removed</h2>
+ * Previously this response contained {@code inviteToken} and
+ * {@code inviteExpiresAt} — the admin had to manually forward the token to
+ * the invited user via a separate channel (Slack, email, etc.).
  *
- * <p>The admin is responsible for securely forwarding this token to the new
- * user (e.g. via Slack DM or a secure channel). The token is single-use and
- * expires after {@code 72 hours}.
+ * <p>With the Outbox Pattern, the invite token is sent directly to the
+ * user's email address by {@code InviteEmailScheduler}. The token never
+ * passes through the admin's HTTP client, browser devtools, or HTTP logs.
+ *
+ * <p>The admin can confirm the invite was sent by checking the
+ * {@code status} field — {@code "INVITED"} means the outbox entry has been
+ * written and the email will be dispatched within 30 seconds.
  */
 public record CreateUserResponse(
         UUID userId,
@@ -23,14 +26,5 @@ public record CreateUserResponse(
         String email,
         List<String> roles,
         boolean active,
-        Instant createdAt,
-
-        /**
-         * Raw invite token — share securely with the new user.
-         * They will use it at {@code POST /api/v1/auth/accept-invite}
-         * to set their password.
-         * <p>This field will be removed once email sending is implemented.
-         */
-        String inviteToken,
-        Instant inviteExpiresAt
+        Instant createdAt
 ) {}

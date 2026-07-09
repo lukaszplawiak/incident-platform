@@ -108,6 +108,45 @@ public class AuthTokenService {
         return token;
     }
 
+
+    /**
+     * Generates an invite token and returns both the raw token and the
+     * persisted {@link AuthToken} entity.
+     *
+     * <p>Used by {@code UserService} to write the outbox entry — the outbox
+     * needs the {@link AuthToken} entity (for the FK) AND the raw token
+     * (to include in the email link). The raw token is stored temporarily
+     * in {@code invite_email_outbox.raw_token} and NULLed after dispatch.
+     *
+     * @return a record containing the raw token and the saved AuthToken entity
+     */
+    @Transactional
+    public InviteTokenResult generateInviteTokenWithEntity(User user,
+                                                           String tenantId) {
+        final byte[] bytes = new byte[TOKEN_BYTES];
+        secureRandom.nextBytes(bytes);
+        final String rawToken = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(bytes);
+
+        final AuthToken token = AuthToken.create(
+                user, tenantId, hash(rawToken), AuthToken.Type.INVITE,
+                Instant.now().plus(Duration.ofHours(INVITE_TTL_HOURS)));
+
+        tokenRepository.save(token);
+
+        log.info("Auth token generated: type=INVITE, userId={}, tenant={}, " +
+                "expiresAt={}", user.getId(), tenantId, token.getExpiresAt());
+
+        return new InviteTokenResult(rawToken, token);
+    }
+
+    /**
+     * Result of {@link #generateInviteTokenWithEntity} — carries both the
+     * raw token (for the email link) and the saved entity (for the outbox FK).
+     */
+    public record InviteTokenResult(String rawToken, AuthToken token) {}
+
     // ── private ───────────────────────────────────────────────────────────
 
     private String generate(User user, String tenantId,
