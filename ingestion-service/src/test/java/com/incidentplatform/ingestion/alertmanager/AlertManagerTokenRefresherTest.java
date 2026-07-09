@@ -11,6 +11,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,7 +35,7 @@ class AlertManagerTokenRefresherTest {
 
     private Path tokenFile;
     private static final String FAKE_TOKEN = "eyJhbGciOiJIUzUxMiJ9.fake.token";
-    private static final long SERVICE_EXPIRATION_MS = 3_600_000L; // 1h — matches PT1H default
+    private static final Duration SERVICE_TOKEN_TTL = Duration.ofHours(1); // 1h — matches PT1H default
 
     @BeforeEach
     void setUp() {
@@ -42,9 +43,9 @@ class AlertManagerTokenRefresherTest {
     }
 
     private AlertManagerTokenRefresher createRefresher(boolean enabled) {
-        // getServiceExpirationMs() is called inside refreshToken() — stub it
+        // getServiceTokenTtl() is called inside refreshToken() — stub it
         org.mockito.BDDMockito.lenient()
-                .when(jwtUtils.getServiceExpirationMs()).thenReturn(SERVICE_EXPIRATION_MS);
+                .when(jwtUtils.getServiceTokenTtl()).thenReturn(SERVICE_TOKEN_TTL);
         return new AlertManagerTokenRefresher(
                 jwtUtils,
                 tokenFile.toString(),
@@ -54,7 +55,7 @@ class AlertManagerTokenRefresherTest {
 
     private AlertManagerTokenRefresher createRefresherWithPath(String path) {
         org.mockito.BDDMockito.lenient()
-                .when(jwtUtils.getServiceExpirationMs()).thenReturn(SERVICE_EXPIRATION_MS);
+                .when(jwtUtils.getServiceTokenTtl()).thenReturn(SERVICE_TOKEN_TTL);
         return new AlertManagerTokenRefresher(
                 jwtUtils,
                 path,

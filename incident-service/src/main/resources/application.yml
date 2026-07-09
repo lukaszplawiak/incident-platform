@@ -72,8 +72,13 @@ spring:
 
 jwt:
   secret: ${JWT_SECRET}
-  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
-  service-expiration: ${JWT_SERVICE_EXPIRATION:PT1H}
+  # Access token TTL — how long a user JWT is valid after login.
+  # Short TTL (PT15M) limits exposure of stolen tokens; session continuity
+  # is handled by the refresh token flow (POST /api/v1/auth/refresh).
+  access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:PT15M}
+  # Service token TTL — for inter-service calls via ServiceTokenProvider.
+  # Longer than access-token-ttl; rotated automatically before expiry.
+  service-token-ttl: ${JWT_SERVICE_TOKEN_TTL:PT1H}
 
 kafka:
   topics:
@@ -125,3 +130,10 @@ logging:
     org.hibernate.SQL: WARN
   pattern:
     console: "%d{HH:mm:ss.SSS} [%X{tenantId:-no-tenant}] [%X{requestId:-no-req}] [%X{userId:-no-user}] %-5level %logger{36} - %msg%n"
+
+security:
+  cors:
+    # Allowed origins for CORS. Comma-separated list.
+    # Override per environment: dev=localhost, prod=https://app.incidentplatform.com
+    # This property has no inline default — it must be set here or via env var.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}

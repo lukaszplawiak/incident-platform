@@ -42,8 +42,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
-        "jwt.expiration-ms=86400000",
-        "jwt.service-expiration=PT1H",
+        "jwt.access-token-ttl=PT15M",
+        "jwt.service-token-ttl=PT1H",
         "spring.application.name=incident-service"
 })
 @DisplayName("IncidentAuditController")

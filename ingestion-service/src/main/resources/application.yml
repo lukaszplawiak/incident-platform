@@ -63,8 +63,13 @@ spring:
 
 jwt:
   secret: ${JWT_SECRET}
-  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
-  service-expiration: ${JWT_SERVICE_EXPIRATION:PT1H}
+  # Access token TTL — how long a user JWT is valid after login.
+  # Short TTL (PT15M) limits exposure of stolen tokens; session continuity
+  # is handled by the refresh token flow (POST /api/v1/auth/refresh).
+  access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:PT15M}
+  # Service token TTL — for inter-service calls via ServiceTokenProvider.
+  # Longer than access-token-ttl; rotated automatically before expiry.
+  service-token-ttl: ${JWT_SERVICE_TOKEN_TTL:PT1H}
 
 kafka:
   topics:
@@ -183,6 +188,12 @@ alertmanager:
   # Enable/disable automatic token refresh.
   token-refresh-enabled: ${ALERTMANAGER_TOKEN_REFRESH_ENABLED:true}
 
-  # Token refresh delay in ms — defaults to 80% of jwt.expiration-ms (24h * 0.8 = ~19h).
-  # Override explicitly if needed, e.g. after changing jwt.expiration-ms.
+  # Token refresh delay in ms — defaults to 80% of jwt.access-token-ttl (PT15M * 0.8).
+  # Override explicitly if needed, e.g. after changing jwt.access-token-ttl.
   # token-refresh-delay-ms: 69120000
+
+security:
+  cors:
+    # Allowed origins for CORS. Comma-separated list.
+    # Override per environment: dev=localhost, prod=https://app.incidentplatform.com
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}
