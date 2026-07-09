@@ -38,6 +38,7 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -411,6 +412,136 @@ class UserControllerSecurityTest {
                                     {"currentPassword":"WrongPass!1","newPassword":"NewPass456!1"}
                                     """))
                     .andExpect(status().isUnauthorized());
+        }
+    }
+
+
+    // ── DELETE /users/{id} ────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("DELETE /users/{id}")
+    class DeleteUser {
+
+        @Test
+        @DisplayName("401 unauthenticated")
+        void unauthenticated_returns401() throws Exception {
+            mockMvc.perform(delete("/api/v1/users/{id}", USER_ID))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("403 for ROLE_RESPONDER")
+        void responder_returns403() throws Exception {
+            mockMvc.perform(delete("/api/v1/users/{id}", USER_ID))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("204 for ROLE_ADMIN")
+        void admin_returns204() throws Exception {
+            mockMvc.perform(delete("/api/v1/users/{id}", USER_ID))
+                    .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("404 when user not found")
+        void userNotFound_returns404() throws Exception {
+            org.mockito.BDDMockito.willThrow(
+                            new ResourceNotFoundException("User", USER_ID))
+                    .given(userManagementService).deleteUser(eq(USER_ID), any());
+
+            mockMvc.perform(delete("/api/v1/users/{id}", USER_ID))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("403 when admin tries to delete own account")
+        void selfDelete_returns403() throws Exception {
+            org.mockito.BDDMockito.willThrow(
+                            new BusinessException(
+                                    ErrorCodes.FORBIDDEN,
+                                    "You cannot delete your own account",
+                                    HttpStatus.FORBIDDEN))
+                    .given(userManagementService).deleteUser(eq(USER_ID), any());
+
+            mockMvc.perform(delete("/api/v1/users/{id}", USER_ID))
+                    .andExpect(status().isForbidden());
+        }
+    }
+
+    // ── POST /users/{id}/resend-invite ────────────────────────────────────
+
+    @Nested
+    @DisplayName("POST /users/{id}/resend-invite")
+    class ResendInvite {
+
+        @Test
+        @DisplayName("401 unauthenticated")
+        void unauthenticated_returns401() throws Exception {
+            mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("403 for ROLE_RESPONDER")
+        void responder_returns403() throws Exception {
+            mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("202 Accepted for ROLE_ADMIN")
+        void admin_returns202() throws Exception {
+            mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID))
+                    .andExpect(status().isAccepted());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("404 when user not found")
+        void userNotFound_returns404() throws Exception {
+            org.mockito.BDDMockito.willThrow(
+                            new ResourceNotFoundException("User", USER_ID))
+                    .given(resendInviteService).resendInvite(USER_ID);
+
+            mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("409 when invite already accepted")
+        void inviteAlreadyAccepted_returns409() throws Exception {
+            org.mockito.BDDMockito.willThrow(
+                            new BusinessException(
+                                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                                    "User has already accepted the invitation",
+                                    HttpStatus.CONFLICT))
+                    .given(resendInviteService).resendInvite(USER_ID);
+
+            mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID))
+                    .andExpect(status().isConflict());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("409 when email already PENDING dispatch")
+        void emailAlreadyPending_returns409() throws Exception {
+            org.mockito.BDDMockito.willThrow(
+                            new BusinessException(
+                                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                                    "An invite email is already queued",
+                                    HttpStatus.CONFLICT))
+                    .given(resendInviteService).resendInvite(USER_ID);
+
+            mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID))
+                    .andExpect(status().isConflict());
         }
     }
 
