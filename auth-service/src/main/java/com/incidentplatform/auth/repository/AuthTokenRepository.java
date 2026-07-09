@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,6 +28,25 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
             """)
     Optional<AuthToken> findValidByHashAndType(
             @Param("hash") String hash,
+            @Param("type") AuthToken.Type type,
+            @Param("now") Instant now);
+
+
+    /**
+     * Finds all valid (non-expired, non-used) INVITE tokens for a user.
+     * Used by the resend-invite flow to invalidate existing tokens before
+     * generating a new one — prevents multiple valid invite links being
+     * active simultaneously.
+     */
+    @Query("""
+            SELECT t FROM AuthToken t
+            WHERE t.user.id = :userId
+              AND t.type = :type
+              AND t.usedAt IS NULL
+              AND t.expiresAt > :now
+            """)
+    List<AuthToken> findValidByUserIdAndType(
+            @Param("userId") UUID userId,
             @Param("type") AuthToken.Type type,
             @Param("now") Instant now);
 

@@ -4,6 +4,7 @@ import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.dto.UserSummaryDto;
 import com.incidentplatform.auth.service.PasswordService;
+import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.auth.service.UserManagementService;
 import com.incidentplatform.auth.service.UserQueryService;
 import com.incidentplatform.auth.service.UserService;
@@ -69,6 +70,9 @@ class UserControllerSecurityTest {
 
     @MockitoBean
     private PasswordService passwordService;
+
+    @MockitoBean
+    private ResendInviteService resendInviteService;
 
     @MockitoBean
     private JwtUtils jwtUtils;
