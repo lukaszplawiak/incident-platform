@@ -84,7 +84,7 @@ class AuthServiceTest {
                     .willReturn(Optional.of(user));
             given(jwtUtils.generateToken(eq(user.getId()), eq(TENANT_ID),
                     eq(EMAIL), anyList())).willReturn("jwt-token");
-            given(jwtUtils.getServiceExpirationMs()).willReturn(3_600_000L);
+            given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
 
             final LoginResponse response =
                     authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
@@ -106,7 +106,7 @@ class AuthServiceTest {
                     .willReturn(Optional.of(user));
             given(jwtUtils.generateToken(any(), any(), any(), any()))
                     .willReturn("token");
-            given(jwtUtils.getServiceExpirationMs()).willReturn(3_600_000L);
+            given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
 
             authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
 

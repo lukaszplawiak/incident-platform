@@ -95,7 +95,7 @@ public class ServiceTokenProvider {
 
         final String token = jwtUtils.generateServiceToken(serviceName);
         final Instant expiresAt = Instant.now()
-                .plusMillis(jwtUtils.getServiceExpirationMs());
+                .plus(jwtUtils.getServiceTokenTtl());
         final TokenHolder fresh = new TokenHolder(token, expiresAt);
 
         tokenRef.set(fresh);

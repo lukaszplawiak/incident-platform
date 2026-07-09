@@ -58,7 +58,7 @@ public class AlertManagerTokenRefresher {
     // this method only refreshes it to prevent expiry during long-running deployments.
     @Scheduled(fixedDelayString =
             "${alertmanager.token-refresh-delay-ms:"
-                    + "#{@jwtUtils.getServiceExpirationMs() * 8 / 10}}")
+                    + "#{@jwtUtils.getServiceTokenTtl().toMillis() * 8 / 10}}")
     public void refreshToken() {
         if (!isConfigured()) return;
 
@@ -66,7 +66,7 @@ public class AlertManagerTokenRefresher {
             final String token = jwtUtils.generateServiceToken(SERVICE_NAME);
             writeTokenToFile(token);
 
-            final long expirationMs = jwtUtils.getServiceExpirationMs();
+            final long expirationMs = jwtUtils.getServiceTokenTtl().toMillis();
             log.info("Alertmanager ingestor token rotated: file={}, " +
                             "expiresInMs={}, nextRotationInMs={}",
                     tokenFilePath,

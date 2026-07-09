@@ -1,6 +1,7 @@
 package com.incidentplatform.shared.security;
 
 import org.junit.jupiter.api.BeforeEach;
+import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -30,15 +31,14 @@ class ServiceTokenProviderTest {
     private JwtUtils jwtUtils;
 
     private static final String SERVICE_NAME  = "notification-service";
-    // 1 hour in millis — matches PT1H default in JwtUtils
-    private static final long   SERVICE_EXPIRATION_MS = 3_600_000L;
+    private static final Duration SERVICE_TOKEN_TTL = Duration.ofHours(1);
     private static final String FAKE_TOKEN    = "eyJhbGciOiJIUzUxMiJ9.fake.token";
 
     private ServiceTokenProvider provider;
 
     @BeforeEach
     void setUp() {
-        given(jwtUtils.getServiceExpirationMs()).willReturn(SERVICE_EXPIRATION_MS);
+        given(jwtUtils.getServiceTokenTtl()).willReturn(SERVICE_TOKEN_TTL);
         provider = new ServiceTokenProvider(jwtUtils, SERVICE_NAME);
     }
 
@@ -94,9 +94,9 @@ class ServiceTokenProviderTest {
         @Test
         @DisplayName("caches token — expiration configured in JwtUtils")
         void usesServiceExpirationMs() {
-            // given — provider with 24h expiration (would be user-level, not service)
-            // Duration is configured in JwtUtils, not ServiceTokenProvider
-            // This test verifies single-call caching still holds
+            // TTL is managed by JwtUtils (via JwtProperties.serviceTokenTtl).
+            // ServiceTokenProvider reads it via getServiceTokenTtl().
+            // This test verifies that caching still holds regardless of TTL value.
             final ServiceTokenProvider shortProvider =
                     new ServiceTokenProvider(jwtUtils, SERVICE_NAME);
 

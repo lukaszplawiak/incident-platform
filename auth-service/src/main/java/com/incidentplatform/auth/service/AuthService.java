@@ -98,8 +98,9 @@ public class AuthService {
                 user.getRoleNames()
         );
 
+        // jwt.access-token-ttl (e.g. PT15M). getAccessTokenTtl() is the correct method.
         final Instant expiresAt = Instant.now()
-                .plusMillis(jwtUtils.getServiceExpirationMs());
+                .plus(jwtUtils.getAccessTokenTtl());
 
         log.info("Login successful: email={}, tenant={}, roles={}",
                 user.getEmail(), tenantId, user.getRoleNames());

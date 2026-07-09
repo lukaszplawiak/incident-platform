@@ -1,9 +1,7 @@
 package com.incidentplatform.shared.security;
 
-import org.springframework.beans.factory.annotation.Value;
-import com.incidentplatform.shared.security.JwtUtils;
-import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -60,7 +58,32 @@ import java.util.List;
  * </ul>
  */
 @AutoConfiguration
+@EnableConfigurationProperties(JwtProperties.class)
 public class SharedSecurityAutoConfiguration {
+
+    private final List<String> allowedOrigins;
+
+    /**
+     * Constructor injection replaces field-level {@code @Value} injection.
+     *
+     * <p>Benefits:
+     * <ul>
+     *   <li><b>Testability</b> — {@code new SharedSecurityAutoConfiguration(List.of(...))}
+     *       works without Spring context or {@code ReflectionTestUtils}.</li>
+     *   <li><b>Immutability</b> — {@code final} field cannot be reassigned
+     *       after construction.</li>
+     *   <li><b>No inline default</b> — the default ({@code http://localhost:4200})
+     *       lives in each service's {@code application.yml} under
+     *       {@code security.cors.allowed-origins}, making all defaults visible
+     *       to operators in YAML rather than hidden in Java source.</li>
+     * </ul>
+     */
+    public SharedSecurityAutoConfiguration(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${security.cors.allowed-origins}")
+            List<String> allowedOrigins) {
+        this.allowedOrigins = allowedOrigins;
+    }
 
     /**
      * Public paths that require no authentication across all services.
@@ -78,9 +101,6 @@ public class SharedSecurityAutoConfiguration {
             "/swagger-ui.html",
             "/error"
     };
-
-    @Value("${security.cors.allowed-origins:http://localhost:4200}")
-    private List<String> allowedOrigins;
 
     /**
      * Default {@link SecurityFilterChain} applied to every service that does
