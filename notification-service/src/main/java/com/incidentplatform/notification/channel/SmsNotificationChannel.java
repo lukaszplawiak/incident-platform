@@ -1,9 +1,9 @@
 package com.incidentplatform.notification.channel;
 
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -16,10 +16,9 @@ public class SmsNotificationChannel implements NotificationChannel {
     private final String fromNumber;
 
     public SmsNotificationChannel(
-            @Value("${notification.channels.sms.enabled:true}") boolean enabled,
-            @Value("${notification.channels.sms.from-number:+1234567890}") String fromNumber) {
-        this.enabled = enabled;
-        this.fromNumber = fromNumber;
+            NotificationChannelProperties properties) {
+        this.enabled    = properties.channels().sms().enabled();
+        this.fromNumber = properties.channels().sms().fromNumber();
     }
 
     @Override

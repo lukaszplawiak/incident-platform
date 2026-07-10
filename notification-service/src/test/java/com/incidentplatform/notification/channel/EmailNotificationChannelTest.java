@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import org.springframework.mail.javamail.JavaMailSender;
 
 import jakarta.mail.Session;
@@ -36,7 +37,13 @@ class EmailNotificationChannelTest {
 
     @BeforeEach
     void setUp() {
-        channel = new EmailNotificationChannel(mailSender, true, FROM_ADDRESS);
+        final NotificationChannelProperties properties = new NotificationChannelProperties(
+                new NotificationChannelProperties.Channels(
+                        new NotificationChannelProperties.Email(true, FROM_ADDRESS),
+                        new NotificationChannelProperties.Slack(true, "token", "#ch", "secret"),
+                        new NotificationChannelProperties.Sms(true, "+1234567890")),
+                new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", ""));
+        channel = new EmailNotificationChannel(mailSender, properties);
     }
 
     @Nested
@@ -59,7 +66,13 @@ class EmailNotificationChannelTest {
         @DisplayName("isEnabled should return false when enabled=false")
         void shouldBeDisabledWhenConfigured() {
             final EmailNotificationChannel disabled =
-                    new EmailNotificationChannel(mailSender, false, FROM_ADDRESS);
+                    new EmailNotificationChannel(mailSender,
+                            new NotificationChannelProperties(
+                                    new NotificationChannelProperties.Channels(
+                                            new NotificationChannelProperties.Email(false, FROM_ADDRESS),
+                                            new NotificationChannelProperties.Slack(true, "token", "#ch", "secret"),
+                                            new NotificationChannelProperties.Sms(true, "+1234")),
+                                    new NotificationChannelProperties.Fallback("o@t.com", "#i", "")));
             assertThat(disabled.isEnabled()).isFalse();
         }
     }

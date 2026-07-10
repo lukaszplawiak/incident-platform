@@ -1,11 +1,11 @@
 package com.incidentplatform.notification.channel;
 
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
@@ -22,11 +22,10 @@ public class EmailNotificationChannel implements NotificationChannel {
 
     public EmailNotificationChannel(
             JavaMailSender mailSender,
-            @Value("${notification.channels.email.enabled:true}") boolean enabled,
-            @Value("${notification.channels.email.from:alerts@incidentplatform.com}") String fromAddress) {
-        this.mailSender = mailSender;
-        this.enabled = enabled;
-        this.fromAddress = fromAddress;
+            NotificationChannelProperties properties) {
+        this.mailSender  = mailSender;
+        this.enabled     = properties.channels().email().enabled();
+        this.fromAddress = properties.channels().email().from();
     }
 
     @Override

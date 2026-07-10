@@ -1,5 +1,6 @@
 package com.incidentplatform.notification.channel;
 
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,12 @@ class SmsNotificationChannelTest {
 
     @BeforeEach
     void setUp() {
-        channel = new SmsNotificationChannel(true, FROM_NUMBER);
+        channel = new SmsNotificationChannel(new NotificationChannelProperties(
+                new NotificationChannelProperties.Channels(
+                        new NotificationChannelProperties.Email(true, "alerts@test.com"),
+                        new NotificationChannelProperties.Slack(true, "token", "#ch", "secret"),
+                        new NotificationChannelProperties.Sms(true, FROM_NUMBER)),
+                new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", "")));
     }
 
     @Nested
@@ -47,7 +53,12 @@ class SmsNotificationChannelTest {
         @DisplayName("isEnabled should return false when enabled=false")
         void shouldBeDisabledWhenConfigured() {
             final SmsNotificationChannel disabled =
-                    new SmsNotificationChannel(false, FROM_NUMBER);
+                    new SmsNotificationChannel(new NotificationChannelProperties(
+                            new NotificationChannelProperties.Channels(
+                                    new NotificationChannelProperties.Email(true, "alerts@test.com"),
+                                    new NotificationChannelProperties.Slack(true, "token", "#ch", "secret"),
+                                    new NotificationChannelProperties.Sms(false, FROM_NUMBER)),
+                            new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", "")));
             assertThat(disabled.isEnabled()).isFalse();
         }
     }

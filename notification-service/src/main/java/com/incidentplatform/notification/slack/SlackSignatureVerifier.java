@@ -2,7 +2,7 @@ package com.incidentplatform.notification.slack;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Mac;
@@ -24,8 +24,8 @@ public class SlackSignatureVerifier {
     private final String signingSecret;
 
     public SlackSignatureVerifier(
-            @Value("${notification.channels.slack.signing-secret}") String signingSecret) {
-        this.signingSecret = signingSecret;
+            NotificationChannelProperties properties) {
+        this.signingSecret = properties.channels().slack().signingSecret();
     }
 
     public boolean verify(String slackSignature,

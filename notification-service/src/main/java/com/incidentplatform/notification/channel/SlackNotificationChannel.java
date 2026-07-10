@@ -1,12 +1,12 @@
 package com.incidentplatform.notification.channel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -33,14 +33,12 @@ public class SlackNotificationChannel implements NotificationChannel {
     public SlackNotificationChannel(
             RestClient.Builder restClientBuilder,
             ObjectMapper objectMapper,
-            @Value("${notification.channels.slack.enabled:true}") boolean enabled,
-            @Value("${notification.channels.slack.bot-token}") String botToken,
-            @Value("${notification.channels.slack.channel:#incidents}") String defaultChannel) {
+            NotificationChannelProperties properties) {
         this.restClient = restClientBuilder.build();
         this.objectMapper = objectMapper;
-        this.enabled = enabled;
-        this.botToken = botToken;
-        this.defaultChannel = defaultChannel;
+        this.enabled        = properties.channels().slack().enabled();
+        this.botToken       = properties.channels().slack().botToken();
+        this.defaultChannel = properties.channels().slack().channel();
     }
 
     @Override

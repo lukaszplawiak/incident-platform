@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.channel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import io.github.resilience4j.retry.Retry;
@@ -27,13 +28,17 @@ class SlackNotificationChannelRetryTest {
 
     @BeforeEach
     void setUp() {
+        final NotificationChannelProperties properties = new NotificationChannelProperties(
+                new NotificationChannelProperties.Channels(
+                        new NotificationChannelProperties.Email(true, "alerts@test.com"),
+                        new NotificationChannelProperties.Slack(
+                                true, "xoxb-test-token", "#incidents", "signing-secret"),
+                        new NotificationChannelProperties.Sms(true, "+1234567890")),
+                new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", ""));
         channel = new SlackNotificationChannel(
                 RestClient.builder(),
                 new ObjectMapper(),
-                true,
-                "xoxb-test-token",
-                "#incidents"
-        );
+                properties);
     }
 
     @Nested
