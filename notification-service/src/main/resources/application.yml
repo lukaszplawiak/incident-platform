@@ -97,6 +97,14 @@ notification:
     email: ${NOTIFICATION_FALLBACK_EMAIL:oncall@example.com}
     slack-channel: ${NOTIFICATION_FALLBACK_SLACK:#incidents}
     phone: ${NOTIFICATION_FALLBACK_PHONE:}
+  client:
+    # Timeout for inter-service HTTP calls.
+    connect-timeout-seconds: ${NOTIFICATION_CLIENT_CONNECT_TIMEOUT:3}
+    read-timeout-seconds: ${NOTIFICATION_CLIENT_READ_TIMEOUT:5}
+  scheduler:
+    # How long PENDING entries must exist before scheduler picks them up.
+    pending-threshold: ${NOTIFICATION_SCHEDULER_PENDING_THRESHOLD:PT30S}
+    interval-ms: ${NOTIFICATION_SCHEDULER_INTERVAL_MS:30000}
 
 oncall-service:
   base-url: ${ONCALL_SERVICE_URL:http://localhost:8086}
@@ -104,12 +112,6 @@ oncall-service:
 incident-service:
   base-url: ${INCIDENT_SERVICE_URL:http://localhost:8082}
 
-  # Timeout for inter-service HTTP calls (oncall-service, incident-service).
-  # connect-timeout: 3s — within-cluster; longer means the service is genuinely down.
-  # read-timeout: 5s — enough for normal processing without blocking async threads.
-  client:
-    connect-timeout-seconds: ${NOTIFICATION_CLIENT_CONNECT_TIMEOUT:3}
-    read-timeout-seconds: ${NOTIFICATION_CLIENT_READ_TIMEOUT:5}
 
 server:
   port: ${SERVER_PORT:8083}

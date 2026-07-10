@@ -1,5 +1,6 @@
 package com.incidentplatform.notification.slack;
 
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -21,7 +22,15 @@ class SlackSignatureVerifierTest {
 
     @BeforeEach
     void setUp() {
-        verifier = new SlackSignatureVerifier(TEST_SIGNING_SECRET);
+        final NotificationChannelProperties properties = new NotificationChannelProperties(
+                new NotificationChannelProperties.Channels(
+                        new NotificationChannelProperties.Email(true, "alerts@test.com"),
+                        new NotificationChannelProperties.Slack(
+                                true, "test-token", "#test", TEST_SIGNING_SECRET),
+                        new NotificationChannelProperties.Sms(true, "+1234567890")),
+                new NotificationChannelProperties.Fallback(
+                        "oncall@test.com", "#incidents", ""));
+        verifier = new SlackSignatureVerifier(properties);
     }
 
     @Nested

@@ -1,13 +1,14 @@
 package com.incidentplatform.notification.scheduler;
 
+import com.incidentplatform.notification.config.NotificationSchedulerProperties;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -38,6 +39,7 @@ import java.util.List;
  * notifications.
  */
 @Component
+@EnableConfigurationProperties(NotificationSchedulerProperties.class)
 public class NotificationScheduler {
 
     private static final Logger log =
@@ -50,11 +52,10 @@ public class NotificationScheduler {
     public NotificationScheduler(
             NotificationQueueRepository queueRepository,
             NotificationService notificationService,
-            @Value("${notification.scheduler.pending-threshold-seconds:30}")
-            int pendingThresholdSeconds) {
+            NotificationSchedulerProperties properties) {
         this.queueRepository = queueRepository;
         this.notificationService = notificationService;
-        this.pendingThreshold = Duration.ofSeconds(pendingThresholdSeconds);
+        this.pendingThreshold = properties.pendingThreshold();
     }
 
     /**

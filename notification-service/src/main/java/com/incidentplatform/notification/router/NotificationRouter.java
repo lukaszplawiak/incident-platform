@@ -1,12 +1,13 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -26,6 +27,7 @@ import static com.incidentplatform.notification.router.NotificationEventTypes.IN
 import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_RESOLVED;
 
 @Component
+@EnableConfigurationProperties(NotificationChannelProperties.class)
 public class NotificationRouter {
 
     private static final Logger log =
@@ -51,18 +53,16 @@ public class NotificationRouter {
     public NotificationRouter(
             List<NotificationChannel> channels,
             OncallClient oncallClient,
-            @Value("${notification.fallback.email:oncall@example.com}") String fallbackEmail,
-            @Value("${notification.fallback.slack-channel:#incidents}") String fallbackSlackChannel,
-            @Value("${notification.fallback.phone:}") String fallbackPhone) {
+            NotificationChannelProperties properties) {
         this.channelsByName = channels.stream()
                 .collect(Collectors.toMap(
                         NotificationChannel::channelName,
                         ch -> ch
                 ));
         this.oncallClient = oncallClient;
-        this.fallbackEmail = fallbackEmail;
-        this.fallbackSlackChannel = fallbackSlackChannel;
-        this.fallbackPhone = fallbackPhone;
+        this.fallbackEmail = properties.fallback().email();
+        this.fallbackSlackChannel = properties.fallback().slackChannel();
+        this.fallbackPhone = properties.fallback().phone();
         log.info("NotificationRouter initialized with channels: {}",
                 channelsByName.keySet());
     }

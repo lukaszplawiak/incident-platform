@@ -15,7 +15,7 @@ class NotificationClientConfigTest {
     void createsRestClientWithJdkFactory() {
         // given
         final NotificationClientConfig config =
-                new NotificationClientConfig(3, 5);
+                new NotificationClientConfig(new NotificationClientProperties(3, 5));
 
         // when
         final RestClient restClient =
@@ -30,7 +30,7 @@ class NotificationClientConfigTest {
     void acceptsCustomTimeoutValues() {
         // given — custom timeouts (e.g. from environment override)
         final NotificationClientConfig config =
-                new NotificationClientConfig(10, 30);
+                new NotificationClientConfig(new NotificationClientProperties(10, 30));
 
         // when — should not throw
         final RestClient restClient =
@@ -45,7 +45,7 @@ class NotificationClientConfigTest {
     void createsDistinctInstances() {
         // given
         final NotificationClientConfig config =
-                new NotificationClientConfig(3, 5);
+                new NotificationClientConfig(new NotificationClientProperties(3, 5));
 
         // when
         final RestClient first =

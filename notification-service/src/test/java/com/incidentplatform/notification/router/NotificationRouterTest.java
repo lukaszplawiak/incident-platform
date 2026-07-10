@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
+import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
@@ -51,9 +52,7 @@ class NotificationRouterTest {
         router = new NotificationRouter(
                 List.of(emailChannel, slackChannel, smsChannel),
                 oncallClient,
-                "oncall@example.com",
-                "#incidents",
-                "");
+                buildProperties("oncall@example.com", "#incidents", ""));
     }
 
     @Nested
@@ -246,9 +245,7 @@ class NotificationRouterTest {
                     new NotificationRouter(
                             List.of(emailChannel, slackChannel, disabledSms),
                             oncallClient,
-                            "oncall@example.com",
-                            "#incidents",
-                            "");
+                            buildProperties("oncall@example.com", "#incidents", ""));
 
             // when
             final var result = routerWithDisabledSms.route(
@@ -263,6 +260,18 @@ class NotificationRouterTest {
             assertThat(channelNames).doesNotContain(SMS);
             assertThat(channelNames).containsExactlyInAnyOrder(EMAIL, SLACK);
         }
+    }
+
+
+    private static NotificationChannelProperties buildProperties(
+            String fallbackEmail, String fallbackSlack, String fallbackPhone) {
+        return new NotificationChannelProperties(
+                new NotificationChannelProperties.Channels(
+                        new NotificationChannelProperties.Email(true, "alerts@test.com"),
+                        new NotificationChannelProperties.Slack(true, "test-token", "#test", "test-secret"),
+                        new NotificationChannelProperties.Sms(true, "+1234567890")),
+                new NotificationChannelProperties.Fallback(
+                        fallbackEmail, fallbackSlack, fallbackPhone));
     }
 
     private static class FakeChannel implements NotificationChannel {
