@@ -4,12 +4,12 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.incidentplatform.postmortem.config.GeminiProperties;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -29,12 +29,11 @@ public class GeminiClientImpl implements GeminiClient {
     public GeminiClientImpl(
             @Qualifier("geminiRestClient") RestClient restClient,
             ObjectMapper objectMapper,
-            @Value("${gemini.api-key}") String apiKey,
-            @Value("${gemini.model:gemini-2.0-flash}") String model) {
-        this.restClient = restClient;
+            GeminiProperties properties) {
+        this.restClient   = restClient;
         this.objectMapper = objectMapper;
-        this.apiKey = apiKey;
-        this.model = model;
+        this.apiKey       = properties.apiKey();
+        this.model        = properties.model();
     }
 
     @Retry(name = "gemini", fallbackMethod = "generateFallback")

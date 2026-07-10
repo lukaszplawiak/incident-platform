@@ -1,6 +1,7 @@
 package com.incidentplatform.postmortem.scheduler;
 
 import com.incidentplatform.postmortem.client.GeminiClient;
+import com.incidentplatform.postmortem.config.PostmortemProperties;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.shared.domain.Severity;
@@ -56,14 +57,15 @@ class PostmortemRetrySchedulerTest {
     @BeforeEach
     void setUp() {
         final PostmortemPromptBuilder promptBuilder = new PostmortemPromptBuilder();
+        final PostmortemProperties properties = new PostmortemProperties(
+                MAX_RETRY_ATTEMPTS,
+                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES));
         scheduler = new PostmortemRetryScheduler(
                 postmortemRepository,
                 geminiClient,
                 promptBuilder,
                 persistenceService,
-                MAX_RETRY_ATTEMPTS,
-                STUCK_THRESHOLD_MINUTES
-        );
+                properties);
     }
 
     @AfterEach

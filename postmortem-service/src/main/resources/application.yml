@@ -141,6 +141,10 @@ resilience4j:
           - org.springframework.web.client.RestClientException
 
 postmortem:
+  max-retry-attempts: ${POSTMORTEM_MAX_RETRY_ATTEMPTS:3}
+  stuck-threshold: ${POSTMORTEM_STUCK_THRESHOLD:PT2M}
+  # Kept as plain properties for @Scheduled(fixedDelayString):
+  generating-scheduler-interval-ms: ${POSTMORTEM_GENERATING_INTERVAL_MS:30000}
   retry-scheduler-interval-ms: ${POSTMORTEM_RETRY_INTERVAL_MS:300000}
 
 security:

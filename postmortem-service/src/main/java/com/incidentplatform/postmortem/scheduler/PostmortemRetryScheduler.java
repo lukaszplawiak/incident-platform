@@ -1,6 +1,7 @@
 package com.incidentplatform.postmortem.scheduler;
 
 import com.incidentplatform.postmortem.client.GeminiClient;
+import com.incidentplatform.postmortem.config.PostmortemProperties;
 import com.incidentplatform.postmortem.client.GeminiException;
 import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
@@ -8,9 +9,9 @@ import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -51,6 +52,7 @@ import java.util.UUID;
  * when multiple instances of postmortem-service are running.
  */
 @Component
+@EnableConfigurationProperties(PostmortemProperties.class)
 public class PostmortemRetryScheduler {
 
     private static final Logger log =
@@ -67,16 +69,13 @@ public class PostmortemRetryScheduler {
                                     GeminiClient geminiClient,
                                     PostmortemPromptBuilder promptBuilder,
                                     PostmortemPersistenceService persistenceService,
-                                    @Value("${postmortem.max-retry-attempts:3}")
-                                    int maxRetryAttempts,
-                                    @Value("${postmortem.stuck-threshold-minutes:2}")
-                                    int stuckThresholdMinutes) {
+                                    PostmortemProperties properties) {
         this.postmortemRepository = postmortemRepository;
-        this.geminiClient = geminiClient;
-        this.promptBuilder = promptBuilder;
-        this.persistenceService = persistenceService;
-        this.maxRetryAttempts = maxRetryAttempts;
-        this.stuckThreshold = Duration.ofMinutes(stuckThresholdMinutes);
+        this.geminiClient         = geminiClient;
+        this.promptBuilder        = promptBuilder;
+        this.persistenceService   = persistenceService;
+        this.maxRetryAttempts     = properties.maxRetryAttempts();
+        this.stuckThreshold       = properties.stuckThreshold();
     }
 
     /**
