@@ -5,6 +5,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
+import com.incidentplatform.shared.security.JwtUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -17,6 +18,8 @@ import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
+import java.util.UUID;
 import java.util.HexFormat;
 
 /**
@@ -51,10 +54,13 @@ public class AuthTokenService {
     private static final int TOKEN_BYTES = 32;
 
     private final AuthTokenRepository tokenRepository;
+    private final JwtUtils jwtUtils;
     private final SecureRandom secureRandom = new SecureRandom();
 
-    public AuthTokenService(AuthTokenRepository tokenRepository) {
+    public AuthTokenService(AuthTokenRepository tokenRepository,
+                            JwtUtils jwtUtils) {
         this.tokenRepository = tokenRepository;
+        this.jwtUtils        = jwtUtils;
     }
 
     /**
@@ -146,6 +152,108 @@ public class AuthTokenService {
      * raw token (for the email link) and the saved entity (for the outbox FK).
      */
     public record InviteTokenResult(String rawToken, AuthToken token) {}
+
+
+    /**
+     * Generates a refresh token for a newly authenticated user.
+     *
+     * <p>Called by {@code AuthService.login()} alongside
+     * {@link com.incidentplatform.shared.security.JwtUtils#generateToken}.
+     * The raw token is returned once and must be stored securely by the client
+     * (httpOnly cookie or SecureStorage on mobile). Only the SHA-256 hash is
+     * persisted in the database.
+     *
+     * @return the raw (unhashed) refresh token
+     */
+    @Transactional
+    public String generateRefreshToken(User user, String tenantId) {
+        return generate(user, tenantId, AuthToken.Type.REFRESH,
+                jwtUtils.getRefreshTokenTtl());
+    }
+
+    /**
+     * Validates a refresh token, invalidates it, and issues a new pair
+     * (access token + refresh token).
+     *
+     * <h2>Rotation</h2>
+     * Each call consumes the provided refresh token (sets {@code used_at})
+     * and generates a new refresh token with a fresh TTL. This limits the
+     * blast radius of a stolen refresh token — using it once alerts the
+     * legitimate user on their next refresh attempt (their token is now
+     * invalid).
+     *
+     * @param rawRefreshToken the raw refresh token received from the client
+     * @return a {@link RotationResult} containing the new access token,
+     *         new raw refresh token, and their expiry times
+     * @throws com.incidentplatform.shared.exception.BusinessException
+     *         401 if the token is invalid, expired, or already used
+     */
+    @Transactional
+    public RotationResult rotateRefreshToken(String rawRefreshToken) {
+        // Consume old token — throws 401 if invalid/expired/used
+        final AuthToken oldToken = consumeToken(
+                rawRefreshToken, AuthToken.Type.REFRESH);
+
+        final User user        = oldToken.getUser();
+        final String tenantId  = oldToken.getTenantId();
+
+        // Generate new access token
+        final String newAccessToken = jwtUtils.generateToken(
+                user.getId(), tenantId,
+                user.getEmail(), user.getRoleNames());
+
+        final Instant accessExpiresAt = Instant.now()
+                .plus(jwtUtils.getAccessTokenTtl());
+
+        // Generate new refresh token (rotation)
+        final String newRawRefreshToken = generate(
+                user, tenantId, AuthToken.Type.REFRESH,
+                jwtUtils.getRefreshTokenTtl());
+
+        final Instant refreshExpiresAt = Instant.now()
+                .plus(jwtUtils.getRefreshTokenTtl());
+
+        log.info("Refresh token rotated: userId={}, tenant={}",
+                user.getId(), tenantId);
+
+        return new RotationResult(
+                newAccessToken, accessExpiresAt,
+                newRawRefreshToken, refreshExpiresAt,
+                user);
+    }
+
+    /**
+     * Invalidates all active refresh tokens for a user.
+     * Called by {@code LogoutService} to terminate all sessions.
+     */
+    @Transactional
+    public void invalidateAllRefreshTokens(UUID userId) {
+        final List<AuthToken> activeTokens =
+                tokenRepository.findValidByUserIdAndType(
+                        userId, AuthToken.Type.REFRESH, Instant.now());
+
+        for (final AuthToken token : activeTokens) {
+            token.markUsed();
+            tokenRepository.save(token);
+        }
+
+        if (!activeTokens.isEmpty()) {
+            log.info("Invalidated {} refresh token(s) for userId={}",
+                    activeTokens.size(), userId);
+        }
+    }
+
+    /**
+     * Result of {@link #rotateRefreshToken} — new access token, new refresh
+     * token, and their expiry times, plus the authenticated user context.
+     */
+    public record RotationResult(
+            String accessToken,
+            Instant accessExpiresAt,
+            String rawRefreshToken,
+            Instant refreshExpiresAt,
+            User user
+    ) {}
 
     // ── private ───────────────────────────────────────────────────────────
 

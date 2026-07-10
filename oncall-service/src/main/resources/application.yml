@@ -43,6 +43,10 @@ jwt:
   # Service token TTL — for inter-service calls via ServiceTokenProvider.
   # Longer than access-token-ttl; rotated automatically before expiry.
   service-token-ttl: ${JWT_SERVICE_TOKEN_TTL:PT1H}
+  # Refresh token TTL — how long a refresh token is valid.
+  # Refresh tokens are rotated on every use — stolen tokens are
+  # detected when the legitimate user next calls /auth/refresh.
+  refresh-token-ttl: ${JWT_REFRESH_TOKEN_TTL:P30D}
 
 server:
   port: ${SERVER_PORT:8086}

@@ -80,6 +80,17 @@ public record JwtProperties(
          * <p>Range [PT10M .. PT24H] validated in {@link JwtUtils#validateConfiguration()}.
          */
         @NotNull(message = "jwt.service-token-ttl must not be null")
-        Duration serviceTokenTtl
+        Duration serviceTokenTtl,
+
+        /**
+         * Refresh token lifetime. Long TTL enables persistent sessions
+         * without requiring the user to re-enter their password.
+         * Refresh tokens are rotated on every use — if stolen and used,
+         * the legitimate user is alerted on their next refresh attempt.
+         * Default: P30D (30 days).
+         * <p>Range [P1D .. P365D] validated in JwtUtils@PostConstruct.
+         */
+        @NotNull(message = "jwt.refresh-token-ttl must not be null")
+        Duration refreshTokenTtl
 
 ) {}

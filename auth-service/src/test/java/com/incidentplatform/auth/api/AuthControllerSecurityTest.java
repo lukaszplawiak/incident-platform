@@ -2,9 +2,13 @@ package com.incidentplatform.auth.api;
 
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.LoginResponse;
+import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.service.AuthService;
-import com.incidentplatform.auth.service.LogoutService;
+import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.InviteService;
+import com.incidentplatform.auth.service.LogoutService;
+import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
@@ -17,8 +21,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import com.incidentplatform.shared.exception.BusinessException;
-import com.incidentplatform.shared.exception.ErrorCodes;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
@@ -26,26 +28,22 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.willThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * Security and contract tests for {@link AuthController}.
- *
- * <p>Verifies that {@code /api/v1/auth/login} is reachable without
- * authentication (it is the endpoint that issues the first token — see
- * {@link SecurityConfig} Javadoc) and that request validation / service
- * errors map to the correct HTTP status codes.
- */
 @WebMvcTest(AuthController.class)
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
         "jwt.access-token-ttl=PT15M",
         "jwt.service-token-ttl=PT1H",
-        "spring.application.name=auth-service"
+        "jwt.refresh-token-ttl=P30D",
+        "spring.application.name=auth-service",
+        "security.cors.allowed-origins=http://localhost:4200"
 })
 @DisplayName("AuthController")
 class AuthControllerSecurityTest {
@@ -53,34 +51,37 @@ class AuthControllerSecurityTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockitoBean
-    private AuthService authService;
+    @MockitoBean private AuthService authService;
+    @MockitoBean private AuthTokenService authTokenService;
+    @MockitoBean private InviteService inviteService;
+    @MockitoBean private LogoutService logoutService;
+    @MockitoBean private JwtUtils jwtUtils;
+    @MockitoBean private ServiceTokenProvider serviceTokenProvider;
 
-    @MockitoBean
-    private InviteService inviteService;
+    private static final String TENANT_ID = "test-tenant";
 
-    @MockitoBean
-    private LogoutService logoutService;
-
-    @MockitoBean
-    private JwtUtils jwtUtils;
-
-    @MockitoBean
-    private ServiceTokenProvider serviceTokenProvider;
+    private static LoginResponse buildLoginResponse() {
+        return new LoginResponse(
+                "access-token",
+                "refresh-token",
+                UUID.randomUUID(),
+                TENANT_ID,
+                "user@example.com",
+                List.of("ROLE_ADMIN"),
+                Instant.now().plusSeconds(900),
+                Instant.now().plusSeconds(86400 * 30));
+    }
 
     // ── public access ─────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("public access — no token required")
-    class PublicAccess {
+    @DisplayName("POST /login")
+    class Login {
 
         @Test
-        @DisplayName("POST /login — 200 without Authorization header")
+        @DisplayName("200 without Authorization header — login is public")
         void login_noTokenRequired_returns200() throws Exception {
-            given(authService.login(any())).willReturn(new LoginResponse(
-                    "jwt-token", UUID.randomUUID(), "test-tenant",
-                    "user@example.com", List.of("ROLE_ADMIN"),
-                    Instant.now().plusSeconds(3600)));
+            given(authService.login(any())).willReturn(buildLoginResponse());
 
             mockMvc.perform(post("/api/v1/auth/login")
                             .contentType("application/json")
@@ -88,18 +89,12 @@ class AuthControllerSecurityTest {
                                     {"email":"user@example.com","password":"secret123"}
                                     """))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.token").value("jwt-token"));
+                    .andExpect(jsonPath("$.accessToken").value("access-token"))
+                    .andExpect(jsonPath("$.refreshToken").value("refresh-token"));
         }
-    }
-
-    // ── validation ────────────────────────────────────────────────────────
-
-    @Nested
-    @DisplayName("request validation")
-    class Validation {
 
         @Test
-        @DisplayName("missing email — 400")
+        @DisplayName("400 when email missing")
         void missingEmail_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/login")
                             .contentType("application/json")
@@ -110,7 +105,7 @@ class AuthControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("malformed email — 400")
+        @DisplayName("400 when email malformed")
         void malformedEmail_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/login")
                             .contentType("application/json")
@@ -121,7 +116,7 @@ class AuthControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("missing password — 400")
+        @DisplayName("400 when password missing")
         void missingPassword_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/login")
                             .contentType("application/json")
@@ -130,16 +125,9 @@ class AuthControllerSecurityTest {
                                     """))
                     .andExpect(status().isBadRequest());
         }
-    }
-
-    // ── service errors ───────────────────────────────────────────────────
-
-    @Nested
-    @DisplayName("service errors")
-    class ServiceErrors {
 
         @Test
-        @DisplayName("AuthService throws 401 — propagated as 401")
+        @DisplayName("401 when credentials invalid")
         void invalidCredentials_returns401() throws Exception {
             given(authService.login(any()))
                     .willThrow(new BusinessException(
@@ -154,14 +142,98 @@ class AuthControllerSecurityTest {
                     .andExpect(status().isUnauthorized());
         }
     }
+
+    // ── refresh ───────────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("POST /refresh")
+    class Refresh {
+
+        @Test
+        @DisplayName("200 with valid refresh token — returns new token pair")
+        void validRefreshToken_returns200() throws Exception {
+            final User user = User.forTesting(
+                    UUID.randomUUID(), TENANT_ID, "user@example.com",
+                    "hash", true, List.of("ROLE_ADMIN"));
+
+            final AuthTokenService.RotationResult result =
+                    new AuthTokenService.RotationResult(
+                            "new-access-token",
+                            Instant.now().plusSeconds(900),
+                            "new-refresh-token",
+                            Instant.now().plusSeconds(86400 * 30),
+                            user);
+
+            given(authTokenService.rotateRefreshToken("valid-refresh-token"))
+                    .willReturn(result);
+
+            mockMvc.perform(post("/api/v1/auth/refresh")
+                            .contentType("application/json")
+                            .content("""
+                                    {"refreshToken":"valid-refresh-token"}
+                                    """))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.accessToken").value("new-access-token"))
+                    .andExpect(jsonPath("$.refreshToken").value("new-refresh-token"));
+        }
+
+        @Test
+        @DisplayName("401 when refresh token invalid or already used")
+        void invalidRefreshToken_returns401() throws Exception {
+            given(authTokenService.rotateRefreshToken(anyString()))
+                    .willThrow(new BusinessException(
+                            ErrorCodes.UNAUTHORIZED, "Token invalid",
+                            HttpStatus.UNAUTHORIZED));
+
+            mockMvc.perform(post("/api/v1/auth/refresh")
+                            .contentType("application/json")
+                            .content("""
+                                    {"refreshToken":"bad-token"}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @DisplayName("400 when refreshToken is blank")
+        void blankRefreshToken_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/refresh")
+                            .contentType("application/json")
+                            .content("""
+                                    {"refreshToken":""}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("200 without Authorization header — refresh is public")
+        void refresh_noTokenRequired_returns200() throws Exception {
+            final User user = User.forTesting(
+                    UUID.randomUUID(), TENANT_ID, "user@example.com",
+                    "hash", true, List.of("ROLE_ADMIN"));
+
+            given(authTokenService.rotateRefreshToken("valid-token"))
+                    .willReturn(new AuthTokenService.RotationResult(
+                            "access", Instant.now().plusSeconds(900),
+                            "refresh", Instant.now().plusSeconds(86400 * 30),
+                            user));
+
+            mockMvc.perform(post("/api/v1/auth/refresh")
+                            .contentType("application/json")
+                            .content("""
+                                    {"refreshToken":"valid-token"}
+                                    """))
+                    .andExpect(status().isOk());
+        }
+    }
+
     // ── accept-invite ─────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("accept-invite — public access")
+    @DisplayName("POST /accept-invite")
     class AcceptInvite {
 
         @Test
-        @DisplayName("POST /accept-invite — 204 without Authorization header")
+        @DisplayName("204 without Authorization header — accept-invite is public")
         void acceptInvite_publicEndpoint_returns204() throws Exception {
             mockMvc.perform(post("/api/v1/auth/accept-invite")
                             .contentType("application/json")
@@ -172,7 +244,7 @@ class AuthControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("POST /accept-invite — 400 when password too short")
+        @DisplayName("400 when password too short")
         void acceptInvite_shortPassword_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/accept-invite")
                             .contentType("application/json")
@@ -183,7 +255,7 @@ class AuthControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("POST /accept-invite — 400 when token blank")
+        @DisplayName("400 when token blank")
         void acceptInvite_blankToken_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/accept-invite")
                             .contentType("application/json")
@@ -194,13 +266,12 @@ class AuthControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("POST /accept-invite — 401 on invalid token from service")
+        @DisplayName("401 when token invalid or expired")
         void acceptInvite_invalidToken_returns401() throws Exception {
-            org.mockito.BDDMockito.willThrow(
-                            new com.incidentplatform.shared.exception.BusinessException(
-                                    com.incidentplatform.shared.exception.ErrorCodes.UNAUTHORIZED,
-                                    "Token is invalid, expired, or already used",
-                                    org.springframework.http.HttpStatus.UNAUTHORIZED))
+            willThrow(new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    "Token is invalid, expired, or already used",
+                    HttpStatus.UNAUTHORIZED))
                     .given(inviteService).acceptInvite(any());
 
             mockMvc.perform(post("/api/v1/auth/accept-invite")

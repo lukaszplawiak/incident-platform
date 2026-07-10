@@ -60,8 +60,10 @@ public class JwtUtils {
 
     private static final Duration MIN_ACCESS_TOKEN_TTL  = Duration.ofMinutes(1);
     private static final Duration MAX_ACCESS_TOKEN_TTL  = Duration.ofHours(24);
-    private static final Duration MIN_SERVICE_TOKEN_TTL = Duration.ofMinutes(10);
-    private static final Duration MAX_SERVICE_TOKEN_TTL = Duration.ofHours(24);
+    private static final Duration MIN_SERVICE_TOKEN_TTL  = Duration.ofMinutes(10);
+    private static final Duration MAX_SERVICE_TOKEN_TTL  = Duration.ofHours(24);
+    private static final Duration MIN_REFRESH_TOKEN_TTL  = Duration.ofDays(1);
+    private static final Duration MAX_REFRESH_TOKEN_TTL  = Duration.ofDays(365);
 
     private final SecretKey secretKey;
     private final JwtProperties properties;
@@ -111,9 +113,13 @@ public class JwtUtils {
                 MIN_ACCESS_TOKEN_TTL, MAX_ACCESS_TOKEN_TTL);
         validateTtl("jwt.service-token-ttl", properties.serviceTokenTtl(),
                 MIN_SERVICE_TOKEN_TTL, MAX_SERVICE_TOKEN_TTL);
+        validateTtl("jwt.refresh-token-ttl", properties.refreshTokenTtl(),
+                MIN_REFRESH_TOKEN_TTL, MAX_REFRESH_TOKEN_TTL);
 
-        log.info("JwtUtils initialised — accessTokenTtl={}, serviceTokenTtl={}",
-                properties.accessTokenTtl(), properties.serviceTokenTtl());
+        log.info("JwtUtils initialised — accessTokenTtl={}, serviceTokenTtl={}, "
+                        + "refreshTokenTtl={}",
+                properties.accessTokenTtl(), properties.serviceTokenTtl(),
+                properties.refreshTokenTtl());
     }
 
     // ── token generation ──────────────────────────────────────────────────
@@ -193,6 +199,15 @@ public class JwtUtils {
      */
     public Duration getServiceTokenTtl() {
         return properties.serviceTokenTtl();
+    }
+
+    /**
+     * Returns the refresh token TTL.
+     * Used by {@link com.incidentplatform.auth.service.AuthTokenService}
+     * to set the expiry on newly generated refresh tokens.
+     */
+    public Duration getRefreshTokenTtl() {
+        return properties.refreshTokenTtl();
     }
 
 

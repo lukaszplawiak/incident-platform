@@ -1,9 +1,12 @@
 package com.incidentplatform.auth.api;
 
 import com.incidentplatform.auth.dto.AcceptInviteRequest;
+import com.incidentplatform.auth.dto.RefreshRequest;
+import com.incidentplatform.auth.dto.RefreshResponse;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.service.AuthService;
+import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.InviteService;
 import com.incidentplatform.auth.service.LogoutService;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -32,15 +35,18 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
+    private final AuthTokenService authTokenService;
     private final InviteService inviteService;
     private final LogoutService logoutService;
 
     public AuthController(AuthService authService,
+                          AuthTokenService authTokenService,
                           InviteService inviteService,
                           LogoutService logoutService) {
-        this.authService = authService;
-        this.inviteService = inviteService;
-        this.logoutService = logoutService;
+        this.authService      = authService;
+        this.authTokenService = authTokenService;
+        this.inviteService    = inviteService;
+        this.logoutService    = logoutService;
     }
 
     @PostMapping(
@@ -91,6 +97,50 @@ public class AuthController {
             @Valid @RequestBody AcceptInviteRequest request) {
         inviteService.acceptInvite(request);
         return ResponseEntity.noContent().build();
+    }
+
+
+    @PostMapping(
+            value = "/refresh",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @Operation(
+            summary = "Refresh access token",
+            description = """
+                    Exchanges a valid refresh token for a new access token and
+                    a new refresh token (rotation).
+
+                    The old refresh token is immediately invalidated — the client
+                    must replace it with the new one before the next refresh call.
+
+                    If the refresh token has been used already (possible replay attack),
+                    returns 401. The client must re-authenticate via POST /auth/login.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "New access token and refresh token issued"),
+            @ApiResponse(responseCode = "400",
+                    description = "Validation failed — refreshToken missing"),
+            @ApiResponse(responseCode = "401",
+                    description = "Refresh token invalid, expired, or already used")
+    })
+    public ResponseEntity<RefreshResponse> refresh(
+            @Valid @RequestBody RefreshRequest request) {
+        final AuthTokenService.RotationResult result =
+                authTokenService.rotateRefreshToken(request.refreshToken());
+
+        return ResponseEntity.ok(new RefreshResponse(
+                result.accessToken(),
+                result.rawRefreshToken(),
+                result.user().getId(),
+                result.user().getTenantId(),
+                result.user().getEmail(),
+                result.user().getRoleNames(),
+                result.accessExpiresAt(),
+                result.refreshExpiresAt()
+        ));
     }
 
     @PostMapping(value = "/logout")
