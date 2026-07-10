@@ -1,11 +1,11 @@
 package com.incidentplatform.ingestion.service;
 
+import com.incidentplatform.ingestion.config.DeduplicationProperties;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.springframework.stereotype.Component;
@@ -30,10 +30,10 @@ public class DeduplicationService {
     public DeduplicationService(
             StringRedisTemplate redisTemplate,
             MeterRegistry meterRegistry,
-            @Value("${deduplication.ttl-minutes:5}") int ttlMinutes) {
+            DeduplicationProperties properties) {
 
         this.redisTemplate = redisTemplate;
-        this.dedupTtl = Duration.ofMinutes(ttlMinutes);
+        this.dedupTtl = properties.ttl();
 
         this.redisErrorCounter = Counter.builder("dedup.redis.errors")
                 .description("Number of Redis errors during deduplication checks")
@@ -45,7 +45,7 @@ public class DeduplicationService {
                 .tag("service", "ingestion-service")
                 .register(meterRegistry);
 
-        log.info("DeduplicationService initialized with TTL: {} minutes", ttlMinutes);
+        log.info("DeduplicationService initialized with TTL: {}", properties.ttl());
     }
 
     @CircuitBreaker(name = "redis-dedup", fallbackMethod = "isDuplicateFallback")

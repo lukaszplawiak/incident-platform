@@ -1,9 +1,10 @@
 package com.incidentplatform.ingestion.alertmanager;
 
+import com.incidentplatform.ingestion.config.AlertManagerProperties;
 import com.incidentplatform.shared.security.JwtUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +32,7 @@ import java.util.Set;
  * {@code alertmanager.token-refresh-enabled} is false, this component is a no-op.
  */
 @Component
+@EnableConfigurationProperties(AlertManagerProperties.class)
 public class AlertManagerTokenRefresher {
 
     private static final Logger log =
@@ -46,11 +48,10 @@ public class AlertManagerTokenRefresher {
 
     public AlertManagerTokenRefresher(
             JwtUtils jwtUtils,
-            @Value("${alertmanager.token-file-path:}") String tokenFilePath,
-            @Value("${alertmanager.token-refresh-enabled:true}") boolean enabled) {
+            AlertManagerProperties properties) {
         this.jwtUtils      = jwtUtils;
-        this.tokenFilePath = tokenFilePath;
-        this.enabled       = enabled;
+        this.tokenFilePath = properties.tokenFilePath();
+        this.enabled       = properties.tokenRefreshEnabled();
     }
 
     // Rotates the token file at 80% of the token lifetime.

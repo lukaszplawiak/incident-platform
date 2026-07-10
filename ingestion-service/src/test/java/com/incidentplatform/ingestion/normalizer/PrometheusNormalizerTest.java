@@ -2,6 +2,7 @@ package com.incidentplatform.ingestion.normalizer;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.ingestion.config.IngestionProperties;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,7 +22,8 @@ class PrometheusNormalizerTest {
 
     @BeforeEach
     void setUp() {
-        normalizer = new PrometheusNormalizer(500);
+        normalizer = new PrometheusNormalizer(
+                new IngestionProperties(new IngestionProperties.Prometheus(500)));
         objectMapper = new ObjectMapper();
     }
 
@@ -329,7 +331,8 @@ class PrometheusNormalizerTest {
         @Test
         @DisplayName("should limit batch to maxBatchSize")
         void shouldLimitBatchSize() throws Exception {
-            final PrometheusNormalizer smallBatchNormalizer = new PrometheusNormalizer(2);
+            final PrometheusNormalizer smallBatchNormalizer = new PrometheusNormalizer(
+                    new IngestionProperties(new IngestionProperties.Prometheus(2)));
 
             final JsonNode payload = objectMapper.readTree("""
                     {

@@ -1,5 +1,6 @@
 package com.incidentplatform.ingestion.alertmanager;
 
+import com.incidentplatform.ingestion.config.AlertManagerProperties;
 import com.incidentplatform.shared.security.JwtUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -48,9 +49,7 @@ class AlertManagerTokenRefresherTest {
                 .when(jwtUtils.getServiceTokenTtl()).thenReturn(SERVICE_TOKEN_TTL);
         return new AlertManagerTokenRefresher(
                 jwtUtils,
-                tokenFile.toString(),
-                enabled
-        );
+                new AlertManagerProperties(tokenFile.toString(), enabled));
     }
 
     private AlertManagerTokenRefresher createRefresherWithPath(String path) {
@@ -58,9 +57,7 @@ class AlertManagerTokenRefresherTest {
                 .when(jwtUtils.getServiceTokenTtl()).thenReturn(SERVICE_TOKEN_TTL);
         return new AlertManagerTokenRefresher(
                 jwtUtils,
-                path,
-                true
-        );
+                new AlertManagerProperties(path, true));
     }
 
     // ─── Initial token provisioning ───────────────────────────────────────────

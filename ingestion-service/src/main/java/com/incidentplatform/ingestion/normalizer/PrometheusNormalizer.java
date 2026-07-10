@@ -5,7 +5,8 @@ import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
-import org.springframework.beans.factory.annotation.Value;
+import com.incidentplatform.ingestion.config.IngestionProperties;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @Component
+@EnableConfigurationProperties(IngestionProperties.class)
 public class PrometheusNormalizer extends BaseNormalizer {
 
     private static final String SOURCE = "prometheus";
@@ -25,8 +27,8 @@ public class PrometheusNormalizer extends BaseNormalizer {
     private final int maxBatchSize;
 
     public PrometheusNormalizer(
-            @Value("${ingestion.prometheus.max-batch-size:500}") int maxBatchSize) {
-        this.maxBatchSize = maxBatchSize;
+            IngestionProperties properties) {
+        this.maxBatchSize = properties.prometheus().maxBatchSize();
     }
 
     @Override

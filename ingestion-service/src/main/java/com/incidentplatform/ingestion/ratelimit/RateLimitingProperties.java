@@ -1,16 +1,26 @@
 package com.incidentplatform.ingestion.ratelimit;
 
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Positive;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
 
 /**
- * Strongly-typed configuration for the rate limiting subsystem.
+ * Strongly-typed, validated configuration for the rate limiting subsystem.
  *
- * <p>Replaces scattered {@code @Value} annotations in {@link RateLimitingConfig}
- * and {@link RateLimitingService} with a single validated, type-safe record.
- * All properties are bound from the {@code rate-limiting} prefix in
- * {@code application.yml}.
+ * <h2>Upgrade from no validation to @Validated + Bean Validation</h2>
+ * Previously this record had no validation — a zero or negative capacity
+ * would silently create a broken rate limiter that rejects all requests.
+ * Now {@code @Validated} triggers Bean Validation at startup, reporting
+ * all violations at once via {@code BindValidationException} before any
+ * request is processed.
  *
- * <p>Example configuration:
+ * <p>Consistent with the approach used for
+ * {@link com.incidentplatform.shared.security.JwtProperties} and
+ * {@link com.incidentplatform.auth.ratelimit.LoginAttemptProperties}.
+ *
+ * <h2>YAML configuration</h2>
  * <pre>{@code
  * rate-limiting:
  *   enabled: true
@@ -34,36 +44,48 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * }</pre>
  */
 @ConfigurationProperties(prefix = "rate-limiting")
+@Validated
 public record RateLimitingProperties(
 
-        // Whether rate limiting is active. Can be disabled in local/test
-        // environments via RATE_LIMITING_ENABLED=false without code changes.
         boolean enabled,
 
-        Tenant tenant,
-        Ip ip,
-        Severity severity
+        @NotNull @Valid Tenant tenant,
+        @NotNull @Valid Ip ip,
+        @NotNull @Valid Severity severity
 
 ) {
 
     public record Tenant(
+            @Positive(message = "rate-limiting.tenant.capacity must be positive")
             long capacity,
+
+            @Positive(message = "rate-limiting.tenant.refill-tokens must be positive")
             long refillTokens,
+
+            @Positive(message = "rate-limiting.tenant.refill-period-seconds must be positive")
             long refillPeriodSeconds
     ) {}
 
     public record Ip(
+            @Positive(message = "rate-limiting.ip.capacity must be positive")
             long capacity,
+
+            @Positive(message = "rate-limiting.ip.refill-tokens must be positive")
             long refillTokens,
+
+            @Positive(message = "rate-limiting.ip.refill-period-seconds must be positive")
             long refillPeriodSeconds
     ) {}
 
     public record Severity(
-            SeverityLimit critical,
-            SeverityLimit high,
-            SeverityLimit medium,
-            SeverityLimit low
+            @NotNull @Valid SeverityLimit critical,
+            @NotNull @Valid SeverityLimit high,
+            @NotNull @Valid SeverityLimit medium,
+            @NotNull @Valid SeverityLimit low
     ) {}
 
-    public record SeverityLimit(long capacity) {}
+    public record SeverityLimit(
+            @Positive(message = "rate-limiting severity capacity must be positive")
+            long capacity
+    ) {}
 }
