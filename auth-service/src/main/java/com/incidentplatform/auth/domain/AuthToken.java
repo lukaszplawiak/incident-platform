@@ -21,7 +21,9 @@ public class AuthToken {
 
     public enum Type {
         INVITE,
-        PASSWORD_RESET
+        PASSWORD_RESET,
+        /** Refresh token — rotated on every use, 30-day TTL by default. */
+        REFRESH
     }
 
     @Id

@@ -20,10 +20,14 @@ public class LogoutService {
     private final JwtUtils jwtUtils;
     private final TokenRevocationService revocationService;
 
+    private final AuthTokenService authTokenService;
+
     public LogoutService(JwtUtils jwtUtils,
-                         TokenRevocationService revocationService) {
-        this.jwtUtils = jwtUtils;
+                         TokenRevocationService revocationService,
+                         AuthTokenService authTokenService) {
+        this.jwtUtils          = jwtUtils;
         this.revocationService = revocationService;
+        this.authTokenService  = authTokenService;
     }
 
     /**
@@ -57,6 +61,9 @@ public class LogoutService {
                         HttpStatus.UNAUTHORIZED));
 
         revocationService.revoke(jti, expiresAt);
+
+        // Invalidate all active refresh tokens — terminates all sessions.
+        authTokenService.invalidateAllRefreshTokens(principal.userId());
 
         log.info("Logout: userId={}, tenant={}, jti={}",
                 principal.userId(), principal.tenantId(), jti);

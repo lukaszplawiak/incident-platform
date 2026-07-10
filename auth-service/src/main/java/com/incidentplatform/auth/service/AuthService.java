@@ -30,17 +30,20 @@ public class AuthService {
     private final JwtUtils jwtUtils;
     private final BCryptPasswordEncoder passwordEncoder;
     private final LoginAttemptService loginAttemptService;
+    private final AuthTokenService authTokenService;
 
     public AuthService(UserRepository userRepository,
                        JwtUtils jwtUtils,
-                       LoginAttemptService loginAttemptService) {
-        this.userRepository = userRepository;
-        this.jwtUtils = jwtUtils;
-        this.passwordEncoder = new BCryptPasswordEncoder();
+                       LoginAttemptService loginAttemptService,
+                       AuthTokenService authTokenService) {
+        this.userRepository   = userRepository;
+        this.jwtUtils         = jwtUtils;
+        this.passwordEncoder  = new BCryptPasswordEncoder();
         this.loginAttemptService = loginAttemptService;
+        this.authTokenService = authTokenService;
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public LoginResponse login(LoginRequest request) {
         final String tenantId = TenantContext.get();
         final String email = request.email();
@@ -91,27 +94,33 @@ public class AuthService {
         // ── 4. Success — clear failure counter ─────────────────────────────
         loginAttemptService.recordSuccess(email, tenantId);
 
-        final String token = jwtUtils.generateToken(
-                user.getId(),
-                tenantId,
-                user.getEmail(),
-                user.getRoleNames()
-        );
+        final String accessToken = jwtUtils.generateToken(
+                user.getId(), tenantId,
+                user.getEmail(), user.getRoleNames());
 
-        // jwt.access-token-ttl (e.g. PT15M). getAccessTokenTtl() is the correct method.
-        final Instant expiresAt = Instant.now()
+        final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());
+
+        // Generate refresh token — stored as SHA-256 hash in auth_tokens.
+        // Raw token returned once to client; never logged.
+        final String rawRefreshToken =
+                authTokenService.generateRefreshToken(user, tenantId);
+
+        final Instant refreshExpiresAt = Instant.now()
+                .plus(jwtUtils.getRefreshTokenTtl());
 
         log.info("Login successful: email={}, tenant={}, roles={}",
                 user.getEmail(), tenantId, user.getRoleNames());
 
         return new LoginResponse(
-                token,
+                accessToken,
+                rawRefreshToken,
                 user.getId(),
                 tenantId,
                 user.getEmail(),
                 user.getRoleNames(),
-                expiresAt
+                accessExpiresAt,
+                refreshExpiresAt
         );
     }
 

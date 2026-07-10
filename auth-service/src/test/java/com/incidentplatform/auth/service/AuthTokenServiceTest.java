@@ -3,6 +3,7 @@ package com.incidentplatform.auth.service;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
+import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,6 +33,9 @@ class AuthTokenServiceTest {
     @Mock
     private AuthTokenRepository tokenRepository;
 
+    @Mock
+    private JwtUtils jwtUtils;
+
     private AuthTokenService service;
 
     private static final String TENANT_ID = "test-tenant";
@@ -41,7 +45,9 @@ class AuthTokenServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new AuthTokenService(tokenRepository);
+        // JwtUtils is needed for generateRefreshToken() and rotateRefreshToken().
+        // TTL is stubbed where needed in individual tests.
+        service = new AuthTokenService(tokenRepository, jwtUtils);
     }
 
     // ── generateInviteToken ───────────────────────────────────────────────

@@ -29,10 +29,22 @@ class JwtUtilsTest {
      * Factory method — keeps tests readable while encapsulating
      * the JwtProperties record construction.
      */
+    private static final Duration REFRESH_TOKEN_TTL = Duration.ofDays(30);
+
     private static JwtUtils buildJwtUtils(String secret,
                                           Duration accessTokenTtl,
                                           Duration serviceTokenTtl) {
-        return new JwtUtils(new JwtProperties(secret, accessTokenTtl, serviceTokenTtl));
+        return new JwtUtils(new JwtProperties(
+                secret, accessTokenTtl, serviceTokenTtl,
+                REFRESH_TOKEN_TTL));
+    }
+
+    private static JwtUtils buildJwtUtils(String secret,
+                                          Duration accessTokenTtl,
+                                          Duration serviceTokenTtl,
+                                          Duration refreshTokenTtl) {
+        return new JwtUtils(new JwtProperties(
+                secret, accessTokenTtl, serviceTokenTtl, refreshTokenTtl));
     }
 
     @BeforeEach
@@ -261,6 +273,12 @@ class JwtUtilsTest {
 
 
         @Test
+        @DisplayName("getRefreshTokenTtl returns configured refresh token TTL")
+        void getRefreshTokenTtlReturnsConfiguredValue() {
+            assertThat(jwtUtils.getRefreshTokenTtl()).isEqualTo(REFRESH_TOKEN_TTL);
+        }
+
+        @Test
         @DisplayName("access token TTL and service token TTL can differ")
         void accessAndServiceTtlCanDiffer() {
             final Duration shortAccess  = Duration.ofMinutes(15);
@@ -347,6 +365,37 @@ class JwtUtilsTest {
         void acceptsMaximumValidTtls() {
             final JwtUtils utils = buildJwtUtils(
                     TEST_SECRET, Duration.ofHours(24), Duration.ofHours(24));
+            utils.validateConfiguration(); // should not throw
+        }
+
+        @Test
+        @DisplayName("throws when refresh-token-ttl is below minimum (P1D)")
+        void throwsWhenRefreshTokenTtlTooShort() {
+            final JwtUtils utils = buildJwtUtils(
+                    TEST_SECRET, ACCESS_TOKEN_TTL, SERVICE_TOKEN_TTL,
+                    Duration.ofHours(23));
+            assertThatThrownBy(utils::validateConfiguration)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("jwt.refresh-token-ttl");
+        }
+
+        @Test
+        @DisplayName("throws when refresh-token-ttl exceeds maximum (P365D)")
+        void throwsWhenRefreshTokenTtlTooLong() {
+            final JwtUtils utils = buildJwtUtils(
+                    TEST_SECRET, ACCESS_TOKEN_TTL, SERVICE_TOKEN_TTL,
+                    Duration.ofDays(366));
+            assertThatThrownBy(utils::validateConfiguration)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("jwt.refresh-token-ttl");
+        }
+
+        @Test
+        @DisplayName("accepts minimum valid refresh-token-ttl (P1D)")
+        void acceptsMinimumRefreshTokenTtl() {
+            final JwtUtils utils = buildJwtUtils(
+                    TEST_SECRET, ACCESS_TOKEN_TTL, SERVICE_TOKEN_TTL,
+                    Duration.ofDays(1));
             utils.validateConfiguration(); // should not throw
         }
     }

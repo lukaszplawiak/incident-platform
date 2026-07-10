@@ -28,9 +28,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyList;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 
@@ -45,6 +43,9 @@ class AuthServiceTest {
     private JwtUtils jwtUtils;
 
     @Mock
+    private AuthTokenService authTokenService;
+
+    @Mock
     private LoginAttemptService loginAttemptService;
 
     private AuthService authService;
@@ -56,7 +57,8 @@ class AuthServiceTest {
 
     @BeforeEach
     void setUp() {
-        authService = new AuthService(userRepository, jwtUtils, loginAttemptService);
+        authService = new AuthService(
+                userRepository, jwtUtils, loginAttemptService, authTokenService);
         TenantContext.set(TENANT_ID);
         // Default: not locked
         given(loginAttemptService.isLocked(any(), any())).willReturn(false);
@@ -85,14 +87,19 @@ class AuthServiceTest {
             given(jwtUtils.generateToken(eq(user.getId()), eq(TENANT_ID),
                     eq(EMAIL), anyList())).willReturn("jwt-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+            given(authTokenService.generateRefreshToken(any(), anyString()))
+                    .willReturn("raw-refresh-token");
 
             final LoginResponse response =
                     authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
 
-            assertThat(response.token()).isEqualTo("jwt-token");
+            assertThat(response.accessToken()).isEqualTo("jwt-token");
+            assertThat(response.refreshToken()).isEqualTo("raw-refresh-token");
             assertThat(response.email()).isEqualTo(EMAIL);
             assertThat(response.roles()).containsExactly("ROLE_ADMIN");
-            assertThat(response.expiresAt()).isAfter(Instant.now());
+            assertThat(response.accessExpiresAt()).isAfter(Instant.now());
+            assertThat(response.refreshExpiresAt()).isAfter(Instant.now());
         }
 
         @Test
@@ -107,6 +114,9 @@ class AuthServiceTest {
             given(jwtUtils.generateToken(any(), any(), any(), any()))
                     .willReturn("token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+            given(authTokenService.generateRefreshToken(any(), anyString()))
+                    .willReturn("raw-refresh-token");
 
             authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
 
