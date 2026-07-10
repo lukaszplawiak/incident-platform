@@ -88,7 +88,7 @@ ingestion:
     max-batch-size: ${PROMETHEUS_MAX_BATCH_SIZE:500}
 
 deduplication:
-  ttl-minutes: ${DEDUP_TTL_MINUTES:5}
+  ttl: ${DEDUPLICATION_TTL:PT5M}
 
 server:
   port: ${SERVER_PORT:8081}
