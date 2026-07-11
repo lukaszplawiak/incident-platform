@@ -12,7 +12,7 @@ import com.incidentplatform.shared.security.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,19 +28,20 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
-    private final BCryptPasswordEncoder passwordEncoder;
+    private final PasswordEncoder passwordEncoder;
     private final LoginAttemptService loginAttemptService;
     private final AuthTokenService authTokenService;
 
     public AuthService(UserRepository userRepository,
                        JwtUtils jwtUtils,
                        LoginAttemptService loginAttemptService,
-                       AuthTokenService authTokenService) {
-        this.userRepository   = userRepository;
-        this.jwtUtils         = jwtUtils;
-        this.passwordEncoder  = new BCryptPasswordEncoder();
+                       AuthTokenService authTokenService,
+                       PasswordEncoder passwordEncoder) {
+        this.userRepository      = userRepository;
+        this.jwtUtils            = jwtUtils;
         this.loginAttemptService = loginAttemptService;
-        this.authTokenService = authTokenService;
+        this.authTokenService    = authTokenService;
+        this.passwordEncoder     = passwordEncoder;
     }
 
     @Transactional

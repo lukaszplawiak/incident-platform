@@ -58,7 +58,7 @@ class AuthServiceTest {
     @BeforeEach
     void setUp() {
         authService = new AuthService(
-                userRepository, jwtUtils, loginAttemptService, authTokenService);
+                userRepository, jwtUtils, loginAttemptService, authTokenService, ENCODER);
         TenantContext.set(TENANT_ID);
         // Default: not locked
         given(loginAttemptService.isLocked(any(), any())).willReturn(false);

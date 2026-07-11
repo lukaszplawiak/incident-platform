@@ -6,6 +6,8 @@ import com.incidentplatform.shared.security.TokenRevocationChecker;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.context.annotation.Bean;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -28,6 +30,23 @@ import org.springframework.security.web.SecurityFilterChain;
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
+
+    /**
+     * Password encoder used by {@code AuthService} and {@code PasswordService}.
+     *
+     * <p>Cost factor 12 (default is 10) — 4x more work for an attacker
+     * brute-forcing stolen hashes. On modern hardware ~250ms per hash,
+     * acceptable for a login endpoint but significant for an attacker.
+     *
+     * <p>Typed as {@link PasswordEncoder} (interface) rather than
+     * {@code BCryptPasswordEncoder} (concrete class) — allows migrating
+     * to Argon2 or SCrypt by changing this single bean without touching
+     * any service code.
+     */
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(12);
+    }
 
     /**
      * Overrides the default JwtAuthFilter from SharedSecurityAutoConfiguration

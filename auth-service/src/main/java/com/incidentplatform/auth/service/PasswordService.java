@@ -14,7 +14,7 @@ import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,13 +39,14 @@ public class PasswordService {
 
     private final UserRepository userRepository;
     private final AuthTokenService authTokenService;
-    private final BCryptPasswordEncoder passwordEncoder;
+    private final PasswordEncoder passwordEncoder;
 
     public PasswordService(UserRepository userRepository,
-                           AuthTokenService authTokenService) {
-        this.userRepository  = userRepository;
+                           AuthTokenService authTokenService,
+                           PasswordEncoder passwordEncoder) {
+        this.userRepository   = userRepository;
         this.authTokenService = authTokenService;
-        this.passwordEncoder = new BCryptPasswordEncoder();
+        this.passwordEncoder  = passwordEncoder;
     }
 
 
