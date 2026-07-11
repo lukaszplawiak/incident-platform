@@ -51,7 +51,7 @@ class PasswordServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PasswordService(userRepository, authTokenService);
+        service = new PasswordService(userRepository, authTokenService, ENCODER);
         TenantContext.set(TENANT_ID);
     }
 
