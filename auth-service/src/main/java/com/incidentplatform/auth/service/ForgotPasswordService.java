@@ -34,12 +34,11 @@ import java.util.Optional;
  * {@code 202 Accepted} in both cases. This prevents attackers from
  * probing which email addresses have accounts by comparing responses.
  *
- * <h2>User Enumeration Protection — Layer 2: timing attack (TODO)</h2>
- * When the user does not exist, this method returns after a fast DB lookup
- * (~2ms). When the user exists, it writes a token and outbox entry (~10ms).
- * An attacker measuring response times at scale could statistically
- * distinguish the two paths. {@code simulateWork()} should be added to the
- * non-existent path to equalise timing.
+ * <h2>User Enumeration Protection — Layer 2: timing equalisation</h2>
+ * When the user does not exist, this method calls {@link WorkSimulator#simulate()}
+ * to sleep for ~10ms (matching the "user exists" path duration) with a small
+ * random jitter. This prevents an attacker from distinguishing the two paths
+ * by measuring response times at scale.
  *
  * @see <a href="https://owasp.org/www-project-web-security-testing-guide/">
  *      OWASP Testing Guide — User Enumeration</a>
@@ -53,13 +52,16 @@ public class ForgotPasswordService {
     private final UserRepository userRepository;
     private final AuthTokenService authTokenService;
     private final AuthEmailOutboxRepository outboxRepository;
+    private final WorkSimulator workSimulator;
 
     public ForgotPasswordService(UserRepository userRepository,
                                  AuthTokenService authTokenService,
-                                 AuthEmailOutboxRepository outboxRepository) {
+                                 AuthEmailOutboxRepository outboxRepository,
+                                 WorkSimulator workSimulator) {
         this.userRepository   = userRepository;
         this.authTokenService = authTokenService;
         this.outboxRepository = outboxRepository;
+        this.workSimulator    = workSimulator;
     }
 
     /**
@@ -84,13 +86,15 @@ public class ForgotPasswordService {
                         email, tenantId);
 
         if (userOpt.isEmpty()) {
-            // User enumeration protection — do NOT reveal that the email
-            // has no account. Log at DEBUG only (not INFO) so the email
-            // address does not appear in centralised log aggregators.
-            //
-            // TODO (backlog): add simulateWork() here to equalise response
-            // timing between existing and non-existing users (timing attack
-            // mitigation — user enumeration protection layer 2).
+            // User enumeration protection layer 2 — equalise timing.
+            // The "user exists" path takes ~10ms (DB find + token gen + 2x
+            // DB write). Without this call the "not found" path returns in
+            // ~2ms — statistically distinguishable under mass probing.
+            // WorkSimulator sleeps 8-11ms to match the real flow duration.
+            // In tests, () -> {} no-op is injected — no real sleep occurs.
+            workSimulator.simulate();
+            // Log at DEBUG only — email address must not appear in INFO logs
+            // (prevents enumeration via centralised log aggregators).
             log.debug("Password reset requested for unknown email — no-op");
             return;
         }
