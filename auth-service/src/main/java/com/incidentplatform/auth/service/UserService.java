@@ -1,11 +1,11 @@
 package com.incidentplatform.auth.service;
 
-import com.incidentplatform.auth.domain.InviteEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.domain.UserRole;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
-import com.incidentplatform.auth.repository.InviteEmailOutboxRepository;
+import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -24,11 +24,11 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final AuthTokenService authTokenService;
-    private final InviteEmailOutboxRepository outboxRepository;
+    private final AuthEmailOutboxRepository outboxRepository;
 
     public UserService(UserRepository userRepository,
                        AuthTokenService authTokenService,
-                       InviteEmailOutboxRepository outboxRepository) {
+                       AuthEmailOutboxRepository outboxRepository) {
         this.userRepository = userRepository;
         this.authTokenService = authTokenService;
         this.outboxRepository = outboxRepository;
@@ -96,7 +96,7 @@ public class UserService {
 
         // Write outbox entry — rawToken stored temporarily until scheduler sends email.
         // InviteEmailScheduler will null raw_token after successful dispatch.
-        final InviteEmailOutbox outboxEntry = InviteEmailOutbox.pending(
+        final AuthEmailOutbox outboxEntry = AuthEmailOutbox.invitePending(
                 user, tokenResult.token(), tokenResult.rawToken());
         outboxRepository.save(outboxEntry);
 

@@ -1,12 +1,12 @@
 package com.incidentplatform.auth.service;
 
 import com.incidentplatform.auth.domain.AuthToken;
-import com.incidentplatform.auth.domain.InviteEmailOutbox;
-import com.incidentplatform.auth.domain.InviteEmailStatus;
+import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
-import com.incidentplatform.auth.repository.InviteEmailOutboxRepository;
+import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -40,7 +40,7 @@ class UserServiceTest {
 
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenService authTokenService;
-    @Mock private InviteEmailOutboxRepository outboxRepository;
+    @Mock private AuthEmailOutboxRepository outboxRepository;
 
     private UserService service;
 
@@ -128,13 +128,13 @@ class UserServiceTest {
 
             service.createUser(new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
 
-            final ArgumentCaptor<InviteEmailOutbox> captor =
-                    ArgumentCaptor.forClass(InviteEmailOutbox.class);
+            final ArgumentCaptor<AuthEmailOutbox> captor =
+                    ArgumentCaptor.forClass(AuthEmailOutbox.class);
             then(outboxRepository).should().save(captor.capture());
 
-            final InviteEmailOutbox saved = captor.getValue();
+            final AuthEmailOutbox saved = captor.getValue();
             assertThat(saved.getEmail()).isEqualTo(EMAIL);
-            assertThat(saved.getStatus()).isEqualTo(InviteEmailStatus.PENDING);
+            assertThat(saved.getStatus()).isEqualTo(AuthEmailStatus.PENDING);
             assertThat(saved.getRawToken()).isEqualTo("raw-invite-token");
             assertThat(saved.getRawToken()).isNotNull();
         }
@@ -170,7 +170,7 @@ class UserServiceTest {
                     any(User.class), anyString()))
                     .willReturn(new InviteTokenResult("raw-invite-token", mockToken));
 
-            given(outboxRepository.save(any(InviteEmailOutbox.class)))
+            given(outboxRepository.save(any(AuthEmailOutbox.class)))
                     .willAnswer(inv -> inv.getArgument(0));
         }
     }

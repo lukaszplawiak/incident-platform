@@ -1,9 +1,9 @@
 package com.incidentplatform.auth.domain;
 
 /**
- * Processing status of an {@link InviteEmailOutbox} entry.
+ * Processing status of an {@link AuthEmailOutbox} entry.
  */
-public enum InviteEmailStatus {
+public enum AuthEmailStatus {
 
     /** Written by UserService — awaiting processing by InviteEmailScheduler. */
     PENDING,

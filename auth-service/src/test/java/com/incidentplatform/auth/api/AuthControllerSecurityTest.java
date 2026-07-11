@@ -4,6 +4,8 @@ import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.service.AuthService;
+import com.incidentplatform.auth.service.ForgotPasswordService;
+import com.incidentplatform.auth.service.PasswordService;
 import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.InviteService;
 import com.incidentplatform.auth.service.LogoutService;
@@ -52,6 +54,8 @@ class AuthControllerSecurityTest {
     private MockMvc mockMvc;
 
     @MockitoBean private AuthService authService;
+    @MockitoBean private ForgotPasswordService forgotPasswordService;
+    @MockitoBean private PasswordService passwordService;
     @MockitoBean private AuthTokenService authTokenService;
     @MockitoBean private InviteService inviteService;
     @MockitoBean private LogoutService logoutService;
@@ -282,4 +286,137 @@ class AuthControllerSecurityTest {
                     .andExpect(status().isUnauthorized());
         }
     }
+
+    @Nested
+    @DisplayName("POST /forgot-password")
+    class ForgotPassword {
+
+        @Test
+        @DisplayName("202 for existing email — user enumeration protection")
+        void existingEmail_returns202() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/forgot-password")
+                            .header("X-Tenant-Id", TENANT_ID)
+                            .contentType("application/json")
+                            .content("""
+                                    {"email":"user@example.com"}
+                                    """))
+                    .andExpect(status().isAccepted());
+        }
+
+        @Test
+        @DisplayName("202 for non-existing email — SAME response, user enumeration protection")
+        void nonExistingEmail_returns202() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/forgot-password")
+                            .header("X-Tenant-Id", TENANT_ID)
+                            .contentType("application/json")
+                            .content("""
+                                    {"email":"nobody@example.com"}
+                                    """))
+                    .andExpect(status().isAccepted());
+        }
+
+        @Test
+        @DisplayName("400 when email is blank")
+        void blankEmail_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/forgot-password")
+                            .header("X-Tenant-Id", TENANT_ID)
+                            .contentType("application/json")
+                            .content("""
+                                    {"email":""}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("400 when email is malformed")
+        void malformedEmail_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/forgot-password")
+                            .header("X-Tenant-Id", TENANT_ID)
+                            .contentType("application/json")
+                            .content("""
+                                    {"email":"not-an-email"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("202 without Authorization header — endpoint is public")
+        void noAuth_returns202() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/forgot-password")
+                            .header("X-Tenant-Id", TENANT_ID)
+                            .contentType("application/json")
+                            .content("""
+                                    {"email":"user@example.com"}
+                                    """))
+                    .andExpect(status().isAccepted());
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /reset-password")
+    class ResetPassword {
+
+        @Test
+        @DisplayName("204 with valid token and new password")
+        void validRequest_returns204() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/reset-password")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"valid-token","newPassword":"NewSecure123!"}
+                                    """))
+                    .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @DisplayName("401 when token invalid or expired")
+        void invalidToken_returns401() throws Exception {
+            org.mockito.BDDMockito.willThrow(
+                            new com.incidentplatform.shared.exception.BusinessException(
+                                    com.incidentplatform.shared.exception.ErrorCodes.UNAUTHORIZED,
+                                    "Token invalid",
+                                    org.springframework.http.HttpStatus.UNAUTHORIZED))
+                    .given(passwordService).resetPassword(any());
+
+            mockMvc.perform(post("/api/v1/auth/reset-password")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"expired-token","newPassword":"NewSecure123!"}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @DisplayName("400 when newPassword too short")
+        void shortPassword_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/reset-password")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"valid-token","newPassword":"short"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("400 when token is blank")
+        void blankToken_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/reset-password")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"","newPassword":"NewSecure123!"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+
+        @Test
+        @DisplayName("204 without Authorization header — endpoint is public")
+        void noAuth_returns204() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/reset-password")
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"valid-token","newPassword":"NewSecure123!"}
+                                    """))
+                    .andExpect(status().isNoContent());
+        }
+    }
+
 }

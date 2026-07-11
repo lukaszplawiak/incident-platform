@@ -1,11 +1,8 @@
 package com.incidentplatform.auth.service;
 
-import com.incidentplatform.auth.domain.AuthToken;
-import com.incidentplatform.auth.domain.InviteEmailOutbox;
-import com.incidentplatform.auth.domain.InviteEmailStatus;
-import com.incidentplatform.auth.domain.User;
+import com.incidentplatform.auth.domain.*;
+import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
-import com.incidentplatform.auth.repository.InviteEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -59,12 +56,12 @@ public class ResendInviteService {
 
     private final UserRepository userRepository;
     private final AuthTokenRepository authTokenRepository;
-    private final InviteEmailOutboxRepository outboxRepository;
+    private final AuthEmailOutboxRepository outboxRepository;
     private final AuthTokenService authTokenService;
 
     public ResendInviteService(UserRepository userRepository,
                                AuthTokenRepository authTokenRepository,
-                               InviteEmailOutboxRepository outboxRepository,
+                               AuthEmailOutboxRepository outboxRepository,
                                AuthTokenService authTokenService) {
         this.userRepository = userRepository;
         this.authTokenRepository = authTokenRepository;
@@ -102,8 +99,8 @@ public class ResendInviteService {
 
         // Guard: no point resending if there's already a PENDING entry
         // (scheduler will send it within 30 seconds)
-        outboxRepository.findLatestByUserId(userId).ifPresent(latest -> {
-            if (latest.getStatus() == InviteEmailStatus.PENDING) {
+        outboxRepository.findLatestByUserIdAndType(userId, AuthEmailType.INVITE).ifPresent(latest -> {
+            if (latest.getStatus() == AuthEmailStatus.PENDING) {
                 throw new BusinessException(
                         ErrorCodes.BUSINESS_RULE_VIOLATION,
                         "An invite email is already queued for dispatch — " +
@@ -135,7 +132,7 @@ public class ResendInviteService {
                 authTokenService.generateInviteTokenWithEntity(user, tenantId);
 
         // Write new PENDING outbox entry — scheduler sends within 30s
-        final InviteEmailOutbox outboxEntry = InviteEmailOutbox.pending(
+        final AuthEmailOutbox outboxEntry = AuthEmailOutbox.invitePending(
                 user, tokenResult.token(), tokenResult.rawToken());
         outboxRepository.save(outboxEntry);
 

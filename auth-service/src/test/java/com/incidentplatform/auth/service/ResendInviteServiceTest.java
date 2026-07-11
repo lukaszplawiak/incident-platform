@@ -1,11 +1,12 @@
 package com.incidentplatform.auth.service;
 
 import com.incidentplatform.auth.domain.AuthToken;
-import com.incidentplatform.auth.domain.InviteEmailOutbox;
-import com.incidentplatform.auth.domain.InviteEmailStatus;
+import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailType;
+import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
-import com.incidentplatform.auth.repository.InviteEmailOutboxRepository;
+import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -42,7 +43,7 @@ class ResendInviteServiceTest {
 
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenRepository authTokenRepository;
-    @Mock private InviteEmailOutboxRepository outboxRepository;
+    @Mock private AuthEmailOutboxRepository outboxRepository;
     @Mock private AuthTokenService authTokenService;
 
     private ResendInviteService service;
@@ -84,12 +85,12 @@ class ResendInviteServiceTest {
             then(authTokenService).should()
                     .generateInviteTokenWithEntity(any(User.class), eq(TENANT_ID));
 
-            final ArgumentCaptor<InviteEmailOutbox> captor =
-                    ArgumentCaptor.forClass(InviteEmailOutbox.class);
+            final ArgumentCaptor<AuthEmailOutbox> captor =
+                    ArgumentCaptor.forClass(AuthEmailOutbox.class);
             then(outboxRepository).should().save(captor.capture());
 
-            final InviteEmailOutbox saved = captor.getValue();
-            assertThat(saved.getStatus()).isEqualTo(InviteEmailStatus.PENDING);
+            final AuthEmailOutbox saved = captor.getValue();
+            assertThat(saved.getStatus()).isEqualTo(AuthEmailStatus.PENDING);
             assertThat(saved.getRawToken()).isEqualTo("new-raw-token");
             assertThat(saved.getEmail()).isEqualTo(EMAIL);
         }
@@ -142,9 +143,9 @@ class ResendInviteServiceTest {
             given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
-            final InviteEmailOutbox permanentlyFailed =
-                    buildOutboxEntry(user, InviteEmailStatus.PERMANENTLY_FAILED);
-            given(outboxRepository.findLatestByUserId(USER_ID))
+            final AuthEmailOutbox permanentlyFailed =
+                    buildOutboxEntry(user, AuthEmailStatus.PERMANENTLY_FAILED);
+            given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
                     .willReturn(Optional.of(permanentlyFailed));
             givenNoExistingValidTokens();
             givenTokenGenerationSucceeds();
@@ -163,9 +164,9 @@ class ResendInviteServiceTest {
             given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
-            final InviteEmailOutbox sent =
-                    buildOutboxEntry(user, InviteEmailStatus.SENT);
-            given(outboxRepository.findLatestByUserId(USER_ID))
+            final AuthEmailOutbox sent =
+                    buildOutboxEntry(user, AuthEmailStatus.SENT);
+            given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
                     .willReturn(Optional.of(sent));
             givenNoExistingValidTokens();
             givenTokenGenerationSucceeds();
@@ -223,9 +224,9 @@ class ResendInviteServiceTest {
             given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
-            final InviteEmailOutbox pending =
-                    buildOutboxEntry(user, InviteEmailStatus.PENDING);
-            given(outboxRepository.findLatestByUserId(USER_ID))
+            final AuthEmailOutbox pending =
+                    buildOutboxEntry(user, AuthEmailStatus.PENDING);
+            given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
                     .willReturn(Optional.of(pending));
 
             assertThatThrownBy(() -> service.resendInvite(USER_ID))
@@ -253,7 +254,7 @@ class ResendInviteServiceTest {
     }
 
     private void givenNoExistingOutboxEntry() {
-        given(outboxRepository.findLatestByUserId(USER_ID))
+        given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
                 .willReturn(Optional.empty());
     }
 
@@ -273,20 +274,20 @@ class ResendInviteServiceTest {
                 .willReturn(new InviteTokenResult("new-raw-token", token));
     }
 
-    private InviteEmailOutbox buildOutboxEntry(User user,
-                                               InviteEmailStatus status) {
+    private AuthEmailOutbox buildOutboxEntry(User user,
+                                             AuthEmailStatus status) {
         final AuthToken token = AuthToken.create(
                 user, TENANT_ID, "hash",
                 AuthToken.Type.INVITE,
                 Instant.now().plusSeconds(3600));
-        final InviteEmailOutbox entry = InviteEmailOutbox.pending(
+        final AuthEmailOutbox entry = AuthEmailOutbox.invitePending(
                 user, token, "raw-token");
-        if (status == InviteEmailStatus.PERMANENTLY_FAILED) {
+        if (status == AuthEmailStatus.PERMANENTLY_FAILED) {
             entry.markFailed("error");
             entry.markFailed("error");
             entry.markFailed("error");
             entry.markPermanentlyFailed("3 retries exhausted");
-        } else if (status == InviteEmailStatus.SENT) {
+        } else if (status == AuthEmailStatus.SENT) {
             entry.markSent();
         }
         return entry;
