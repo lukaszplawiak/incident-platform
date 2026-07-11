@@ -70,7 +70,7 @@ class PasswordServiceTest {
         @DisplayName("updates password hash when current password is correct")
         void updatesPasswordHash() {
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -91,7 +91,7 @@ class PasswordServiceTest {
         @DisplayName("new hash does not match old password")
         void newHashDoesNotMatchOldPassword() {
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -115,7 +115,7 @@ class PasswordServiceTest {
         @DisplayName("throws 401 when current password is wrong")
         void throws401OnWrongPassword() {
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
 
             assertThatThrownBy(() ->
@@ -131,7 +131,7 @@ class PasswordServiceTest {
         @DisplayName("does not save user when current password is wrong")
         void doesNotSaveOnWrongPassword() {
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
 
             assertThatThrownBy(() ->
@@ -140,7 +140,7 @@ class PasswordServiceTest {
                     .isInstanceOf(BusinessException.class);
 
             then(userRepository).should()
-                    .findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID);
+                    .findByIdAndTenantId(USER_ID, TENANT_ID);
             then(userRepository).shouldHaveNoMoreInteractions();
         }
     }
@@ -154,7 +154,7 @@ class PasswordServiceTest {
         @Test
         @DisplayName("throws ResourceNotFoundException when user not in tenant")
         void throwsNotFound() {
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->

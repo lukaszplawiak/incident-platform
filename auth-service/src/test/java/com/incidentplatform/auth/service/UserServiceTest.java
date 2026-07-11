@@ -155,7 +155,7 @@ class UserServiceTest {
         }
 
         private void givenUserCreationSucceeds() {
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));
@@ -188,7 +188,7 @@ class UserServiceTest {
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     "hash", true, List.of("ROLE_ADMIN"));
 
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.of(existing));
 
             assertThatThrownBy(() ->
@@ -207,7 +207,7 @@ class UserServiceTest {
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     "hash", true, List.of());
 
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.of(existing));
 
             assertThatThrownBy(() ->
@@ -231,7 +231,7 @@ class UserServiceTest {
         @DisplayName("resolves tenant from TenantContext")
         void resolvesTenantFromContext() {
             TenantContext.set("company-abc");
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, "company-abc")).willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
                     .willAnswer(inv -> inv.getArgument(0));

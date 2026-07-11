@@ -112,7 +112,7 @@ public class UserManagementService {
     // ── private ───────────────────────────────────────────────────────────
 
     private User findUserInTenant(UUID userId, String tenantId) {
-        return userRepository.findByIdAndTenantIdAndDeletedAtIsNull(userId, tenantId)
+        return userRepository.findByIdAndTenantId(userId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", userId));
     }
 }

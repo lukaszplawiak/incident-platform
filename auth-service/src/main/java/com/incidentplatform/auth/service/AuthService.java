@@ -69,7 +69,7 @@ public class AuthService {
         // Same error message for "not found", "inactive", "OAuth2-only" —
         // prevents user enumeration. Failure is recorded in all three cases.
         final User user = userRepository
-                .findByEmailAndTenantIdAndDeletedAtIsNull(email, tenantId)
+                .findByEmailAndTenantId(email, tenantId)
                 .filter(User::isActive)
                 .filter(u -> u.getPasswordHash() != null)
                 .orElseGet(() -> {

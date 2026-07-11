@@ -60,7 +60,7 @@ class UserManagementServiceTest {
         void replacesRoles() {
             // given
             final User user = buildUser("ROLE_RESPONDER");
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -77,7 +77,7 @@ class UserManagementServiceTest {
         void replacesWithMultipleRoles() {
             // given
             final User user = buildUser("ROLE_RESPONDER");
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -96,7 +96,7 @@ class UserManagementServiceTest {
         void savesUser() {
             // given
             final User user = buildUser("ROLE_RESPONDER");
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -111,7 +111,7 @@ class UserManagementServiceTest {
         @Test
         @DisplayName("throws ResourceNotFoundException when user not in tenant")
         void throwsNotFoundWhenUserMissing() {
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.updateRoles(
@@ -131,7 +131,7 @@ class UserManagementServiceTest {
         void deactivatesUser() {
             // given
             final User user = buildUser("ROLE_RESPONDER"); // active=true
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -149,7 +149,7 @@ class UserManagementServiceTest {
             // given — build inactive user
             final User user = User.forTesting(USER_ID, TENANT_ID,
                     "u@example.com", "hash", false, List.of("ROLE_RESPONDER"));
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -165,7 +165,7 @@ class UserManagementServiceTest {
         @DisplayName("saves user after updating status")
         void savesUser() {
             final User user = buildUser("ROLE_RESPONDER");
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -177,7 +177,7 @@ class UserManagementServiceTest {
         @Test
         @DisplayName("throws ResourceNotFoundException when user not in tenant")
         void throwsNotFoundWhenUserMissing() {
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(USER_ID, TENANT_ID))
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.updateStatus(
