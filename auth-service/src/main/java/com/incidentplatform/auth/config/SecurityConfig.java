@@ -6,20 +6,23 @@ import com.incidentplatform.shared.security.TokenRevocationChecker;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.context.annotation.Bean;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.http.HttpMethod;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 
 /**
  * auth-service security configuration.
  *
- * <p>{@code /api/v1/auth/login} must be public — it is the endpoint that
- * issues tokens. All other endpoints require authentication.
+ * <p>Public auth endpoints are restricted to {@code POST} only — prevents
+ * accidental exposure of e.g. {@code GET /api/v1/auth/reset-password}.
+ * Each path is listed explicitly rather than using a wildcard
+ * ({@code /api/v1/auth/**}) to avoid accidentally opening future endpoints.
  *
  * <p>Note: {@code /api/v1/auth/login} is NOT added to
  * {@link SharedSecurityAutoConfiguration#PUBLIC_PATHS} because that constant
@@ -75,11 +78,11 @@ public class SecurityConfig {
                 .buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
-                        .requestMatchers("/api/v1/auth/login").permitAll()
-                        .requestMatchers("/api/v1/auth/refresh").permitAll()
-                        .requestMatchers("/api/v1/auth/accept-invite").permitAll()
-                        .requestMatchers("/api/v1/auth/forgot-password").permitAll()
-                        .requestMatchers("/api/v1/auth/reset-password").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/refresh").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/accept-invite").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/forgot-password").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/reset-password").permitAll()
                         .anyRequest().authenticated()
                 )
                 .build();
