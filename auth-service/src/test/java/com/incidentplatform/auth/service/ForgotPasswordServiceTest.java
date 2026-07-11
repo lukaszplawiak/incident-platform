@@ -30,7 +30,6 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
-import static org.mockito.Mockito.*;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
@@ -49,11 +48,8 @@ class ForgotPasswordServiceTest {
 
     @BeforeEach
     void setUp() {
-        // no-op WorkSimulator — tests are deterministic and instant.
-        // Production bean (in SchedulerConfig) sleeps 8-11ms.
         service = new ForgotPasswordService(
-                userRepository, authTokenService, outboxRepository,
-                () -> {});
+                userRepository, authTokenService, outboxRepository);
         TenantContext.set(TENANT_ID);
     }
 
@@ -71,7 +67,7 @@ class ForgotPasswordServiceTest {
         @Test
         @DisplayName("does nothing when email not found — no exception, no token")
         void doesNothingWhenEmailNotFound() {
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.empty());
 
             // Must NOT throw — caller always returns 202
@@ -84,34 +80,14 @@ class ForgotPasswordServiceTest {
         @Test
         @DisplayName("does nothing silently for soft-deleted user")
         void doesNothingForSoftDeletedUser() {
-            // findByEmailAndTenantIdAndDeletedAtIsNull excludes soft-deleted
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            // @SQLRestriction("deleted_at IS NULL") on User excludes soft-deleted automatically
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.empty());
 
             service.initiateReset(EMAIL, TENANT_ID);
 
             then(authTokenService).shouldHaveNoInteractions();
         }
-
-        @Test
-        @DisplayName("calls workSimulator when email not found — timing equalisation")
-        void callsWorkSimulatorWhenEmailNotFound() {
-            // Use a service with a mock WorkSimulator (not the no-op from setUp)
-            // so we can verify simulate() is called.
-            final WorkSimulator mockSimulator = mock(WorkSimulator.class);
-            final ForgotPasswordService serviceWithMockSimulator =
-                    new ForgotPasswordService(
-                            userRepository, authTokenService,
-                            outboxRepository, mockSimulator);
-
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
-                    EMAIL, TENANT_ID)).willReturn(Optional.empty());
-
-            serviceWithMockSimulator.initiateReset(EMAIL, TENANT_ID);
-
-            then(mockSimulator).should().simulate();
-        }
-
     }
 
     // ── successful reset initiation ───────────────────────────────────────
@@ -124,7 +100,7 @@ class ForgotPasswordServiceTest {
         @DisplayName("generates PASSWORD_RESET token and writes PENDING outbox entry")
         void generatesTokenAndWritesOutboxEntry() {
             final User user = buildUser();
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.of(user));
             given(outboxRepository.findLatestByUserIdAndType(
                     USER_ID, AuthEmailType.PASSWORD_RESET))
@@ -154,7 +130,7 @@ class ForgotPasswordServiceTest {
         @DisplayName("does not write outbox when reset already PENDING — idempotency guard")
         void doesNotWriteWhenAlreadyPending() {
             final User user = buildUser();
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.of(user));
 
             // Simulate existing PENDING entry
@@ -178,7 +154,7 @@ class ForgotPasswordServiceTest {
         @DisplayName("writes new outbox entry when previous was PERMANENTLY_FAILED")
         void writesNewEntryWhenPreviousPermanentlyFailed() {
             final User user = buildUser();
-            given(userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.of(user));
 
             final AuthEmailOutbox failed = AuthEmailOutbox.passwordResetPending(

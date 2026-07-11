@@ -99,7 +99,7 @@ class ResendInviteServiceTest {
         @DisplayName("invalidates existing valid tokens before generating new one")
         void invalidatesExistingTokens() {
             final User user = buildUserWithoutPassword();
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByIdAndTenantId(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
             givenNoExistingOutboxEntry();
             given(outboxRepository.save(any())).willAnswer(i -> i.getArgument(0));
@@ -140,7 +140,7 @@ class ResendInviteServiceTest {
         @DisplayName("works when previous outbox entry is PERMANENTLY_FAILED")
         void worksWhenPreviousEntryIsPermanentlyFailed() {
             final User user = buildUserWithoutPassword();
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByIdAndTenantId(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
             final AuthEmailOutbox permanentlyFailed =
@@ -161,7 +161,7 @@ class ResendInviteServiceTest {
         @DisplayName("works when previous outbox entry is SENT (re-invite after expiry)")
         void worksWhenPreviousEntryIsSent() {
             final User user = buildUserWithoutPassword();
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByIdAndTenantId(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
             final AuthEmailOutbox sent =
@@ -188,7 +188,7 @@ class ResendInviteServiceTest {
         @Test
         @DisplayName("throws 404 when user not found in tenant")
         void throws404WhenUserNotFound() {
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByIdAndTenantId(
                     USER_ID, TENANT_ID)).willReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.resendInvite(USER_ID))
@@ -205,7 +205,7 @@ class ResendInviteServiceTest {
             final User user = User.forTesting(
                     USER_ID, TENANT_ID, EMAIL,
                     "bcrypt-hash", true, List.of("ROLE_RESPONDER"));
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByIdAndTenantId(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
             assertThatThrownBy(() -> service.resendInvite(USER_ID))
@@ -221,7 +221,7 @@ class ResendInviteServiceTest {
         @DisplayName("throws 409 when invite email already PENDING (dispatch in progress)")
         void throws409WhenEmailAlreadyPending() {
             final User user = buildUserWithoutPassword();
-            given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
+            given(userRepository.findByIdAndTenantId(
                     USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
             final AuthEmailOutbox pending =
@@ -248,7 +248,7 @@ class ResendInviteServiceTest {
     }
 
     private void givenUserWithoutPassword() {
-        given(userRepository.findByIdAndTenantIdAndDeletedAtIsNull(
+        given(userRepository.findByIdAndTenantId(
                 USER_ID, TENANT_ID))
                 .willReturn(Optional.of(buildUserWithoutPassword()));
     }
