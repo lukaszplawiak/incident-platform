@@ -1,7 +1,5 @@
 package com.incidentplatform.auth.exception;
 
-import com.incidentplatform.auth.service.InviteEmailService;
-
 /**
  * Thrown by {@link InviteEmailService} when sending an invite email fails.
  * Caught by {@link com.incidentplatform.auth.scheduler.InviteEmailScheduler}

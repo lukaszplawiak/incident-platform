@@ -1,8 +1,11 @@
 package com.incidentplatform.auth.service;
 
 import com.incidentplatform.auth.domain.User;
+import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.dto.ChangePasswordRequest;
+import com.incidentplatform.auth.dto.ResetPasswordRequest;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -35,11 +38,49 @@ public class PasswordService {
     private static final Logger log = LoggerFactory.getLogger(PasswordService.class);
 
     private final UserRepository userRepository;
+    private final AuthTokenService authTokenService;
     private final BCryptPasswordEncoder passwordEncoder;
 
-    public PasswordService(UserRepository userRepository) {
-        this.userRepository = userRepository;
+    public PasswordService(UserRepository userRepository,
+                           AuthTokenService authTokenService) {
+        this.userRepository  = userRepository;
+        this.authTokenService = authTokenService;
         this.passwordEncoder = new BCryptPasswordEncoder();
+    }
+
+
+    /**
+     * Completes the self-service password recovery flow.
+     *
+     * <ol>
+     *   <li>Validates and consumes the reset token (single-use, 15-minute TTL)</li>
+     *   <li>Sets the new password (BCrypt)</li>
+     *   <li>Invalidates all refresh tokens — forces re-login on all devices.
+     *       This ensures that if an attacker had active sessions via a
+     *       compromised account, they are terminated immediately.</li>
+     * </ol>
+     *
+     * @param request token + new password
+     * @throws com.incidentplatform.shared.exception.BusinessException
+     *         401 if token is invalid, expired, or already used
+     */
+    @Transactional
+    public void resetPassword(ResetPasswordRequest request) {
+        // consumeToken validates, marks used atomically — throws 401 if invalid
+        final AuthToken token = authTokenService.consumeToken(
+                request.token(), AuthToken.Type.PASSWORD_RESET);
+
+        final com.incidentplatform.auth.domain.User user = token.getUser();
+
+        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        userRepository.save(user);
+
+        // Invalidate all refresh tokens — terminates all active sessions.
+        // An attacker who had access to the account is now logged out.
+        authTokenService.invalidateAllRefreshTokens(user.getId());
+
+        log.info("Password reset completed: userId={}, tenant={}",
+                user.getId(), token.getTenantId());
     }
 
     @Transactional

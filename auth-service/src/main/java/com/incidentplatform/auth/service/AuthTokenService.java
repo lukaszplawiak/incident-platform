@@ -154,6 +154,37 @@ public class AuthTokenService {
     public record InviteTokenResult(String rawToken, AuthToken token) {}
 
 
+
+    /**
+     * Generates a password reset token and returns both the raw token and
+     * the persisted {@link AuthToken} entity.
+     *
+     * <p>Analogous to {@link #generateInviteTokenWithEntity} — the outbox
+     * needs both the entity (for the FK) and the raw token (for the email link).
+     *
+     * @return a record containing the raw token and the saved AuthToken entity
+     */
+    @Transactional
+    public InviteTokenResult generatePasswordResetTokenWithEntity(User user,
+                                                                  String tenantId) {
+        final byte[] bytes = new byte[TOKEN_BYTES];
+        secureRandom.nextBytes(bytes);
+        final String rawToken = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString(bytes);
+
+        final AuthToken token = AuthToken.create(
+                user, tenantId, hash(rawToken), AuthToken.Type.PASSWORD_RESET,
+                Instant.now().plus(Duration.ofMinutes(RESET_TTL_MINUTES)));
+
+        tokenRepository.save(token);
+
+        log.info("Auth token generated: type=PASSWORD_RESET, userId={}, tenant={}, " +
+                "expiresAt={}", user.getId(), tenantId, token.getExpiresAt());
+
+        return new InviteTokenResult(rawToken, token);
+    }
+
     /**
      * Generates a refresh token for a newly authenticated user.
      *
