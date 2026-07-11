@@ -89,7 +89,7 @@ public class PasswordService {
         final String tenantId = TenantContext.get();
 
         final User user = userRepository
-                .findByIdAndTenantIdAndDeletedAtIsNull(principal.userId(), tenantId)
+                .findByIdAndTenantId(principal.userId(), tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "User", principal.userId()));
 

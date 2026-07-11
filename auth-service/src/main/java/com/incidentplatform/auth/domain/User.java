@@ -1,6 +1,7 @@
 package com.incidentplatform.auth.domain;
 
 import jakarta.persistence.CascadeType;
+import org.hibernate.annotations.SQLRestriction;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -17,6 +18,7 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
+@SQLRestriction("deleted_at IS NULL")
 public class User {
 
     @Id
@@ -54,7 +56,7 @@ public class User {
 
     @OneToMany(mappedBy = "user",
             cascade = CascadeType.ALL,
-            fetch = FetchType.EAGER,
+            fetch = FetchType.LAZY,
             orphanRemoval = true)
     private List<UserRole> roles = new ArrayList<>();
 
@@ -142,8 +144,9 @@ public class User {
     /**
      * Marks this user as soft-deleted.
      * Called by UserManagementService.deleteUser() — sets deleted_at to now.
-     * All repository queries filter WHERE deleted_at IS NULL so this user
-     * becomes invisible to application code after this call is persisted.
+     * {@code @SQLRestriction("deleted_at IS NULL")} on this entity ensures
+     * all Hibernate queries automatically filter soft-deleted users — no
+     * {@code AndDeletedAtIsNull} suffix needed on repository methods.
      */
     public void softDelete() {
         this.deletedAt = Instant.now();

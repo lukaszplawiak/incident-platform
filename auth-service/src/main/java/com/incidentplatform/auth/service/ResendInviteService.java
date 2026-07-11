@@ -84,7 +84,7 @@ public class ResendInviteService {
         final String tenantId = TenantContext.get();
 
         final User user = userRepository
-                .findByIdAndTenantIdAndDeletedAtIsNull(userId, tenantId)
+                .findByIdAndTenantId(userId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "User", userId.toString()));
 

@@ -63,7 +63,7 @@ public class UserService {
         final String tenantId = TenantContext.get();
 
         // Guard: prevent duplicate email within tenant
-        userRepository.findByEmailAndTenantIdAndDeletedAtIsNull(
+        userRepository.findByEmailAndTenantId(
                         request.email(), tenantId)
                 .ifPresent(existing -> {
                     log.warn("User creation failed — email already exists: " +
