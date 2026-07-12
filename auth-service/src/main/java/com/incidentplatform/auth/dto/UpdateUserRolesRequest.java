@@ -9,8 +9,8 @@ public record UpdateUserRolesRequest(
 
         @NotEmpty(message = "at least one role is required")
         List<@Pattern(
-                regexp = "^(ROLE_ADMIN|ROLE_RESPONDER)$",
-                message = "role must be ROLE_ADMIN or ROLE_RESPONDER"
+                regexp = "^ROLE_[A-Z_]+$",
+                message = "role must be a valid Role enum value (e.g. ROLE_ADMIN, ROLE_RESPONDER)"
         ) String> roles
 
 ) {}
