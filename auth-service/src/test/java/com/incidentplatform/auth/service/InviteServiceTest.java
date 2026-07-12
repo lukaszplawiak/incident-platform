@@ -5,6 +5,10 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.AcceptInviteRequest;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -36,7 +40,12 @@ class InviteServiceTest {
     @Mock
     private UserRepository userRepository;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private InviteService service;
+
+    private static final PasswordEncoder ENCODER = new BCryptPasswordEncoder();
 
     private static final String TENANT_ID = "test-tenant";
     private static final String RAW_TOKEN = "raw-invite-token";
@@ -48,7 +57,9 @@ class InviteServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new InviteService(authTokenService, userRepository);
+        service = new InviteService(
+                authTokenService, userRepository,
+                ENCODER, auditEventPublisher);
     }
 
     // ── acceptInvite — success ────────────────────────────────────────────

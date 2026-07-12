@@ -5,6 +5,8 @@ import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.ratelimit.LoginAttemptService;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.JwtUtils;
@@ -12,6 +14,7 @@ import com.incidentplatform.shared.security.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,17 +34,20 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final LoginAttemptService loginAttemptService;
     private final AuthTokenService authTokenService;
+    private final AuditEventPublisher auditEventPublisher;
 
     public AuthService(UserRepository userRepository,
                        JwtUtils jwtUtils,
                        LoginAttemptService loginAttemptService,
                        AuthTokenService authTokenService,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       AuditEventPublisher auditEventPublisher) {
         this.userRepository      = userRepository;
         this.jwtUtils            = jwtUtils;
         this.loginAttemptService = loginAttemptService;
         this.authTokenService    = authTokenService;
         this.passwordEncoder     = passwordEncoder;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     @Transactional
@@ -112,6 +118,15 @@ public class AuthService {
 
         log.info("Login successful: email={}, tenant={}, roles={}",
                 user.getEmail(), tenantId, user.getRoleNames());
+
+        auditEventPublisher.publishAuth(
+                user.getId(), tenantId,
+                AuditEventTypes.USER_LOGIN,
+                "auth-service",
+                user.getId().toString(),
+                "User logged in",
+                java.util.Map.of("email", user.getEmail(),
+                        "roles", user.getRoleNames()));
 
         return new LoginResponse(
                 accessToken,

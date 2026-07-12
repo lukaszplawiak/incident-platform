@@ -158,7 +158,7 @@ public class EscalationScheduler {
         final String role = task.getEscalationLevel() == 1
                 ? ESCALATION_ROLE_LEVEL_1 : ESCALATION_ROLE_LEVEL_2;
 
-        auditEventPublisher.publishSystem(
+        auditEventPublisher.publishIncident(
                 task.getIncidentId(), task.getTenantId(),
                 AuditEventTypes.ESCALATION_FIRED, SERVICE_NAME,
                 String.format("Escalation level %d fired — %s notified. " +
@@ -183,7 +183,7 @@ public class EscalationScheduler {
                     task.getIncidentId(), task.getTenantId(),
                     task.getSeverity());
 
-            auditEventPublisher.publishSystem(
+            auditEventPublisher.publishIncident(
                     task.getIncidentId(), task.getTenantId(),
                     AuditEventTypes.ESCALATION_SCHEDULED, SERVICE_NAME,
                     String.format("Level 2 escalation scheduled — MANAGER " +

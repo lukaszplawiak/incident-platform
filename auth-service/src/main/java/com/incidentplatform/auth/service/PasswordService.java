@@ -6,6 +6,8 @@ import com.incidentplatform.auth.dto.ChangePasswordRequest;
 import com.incidentplatform.auth.dto.ResetPasswordRequest;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -14,6 +16,7 @@ import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,13 +43,16 @@ public class PasswordService {
     private final UserRepository userRepository;
     private final AuthTokenService authTokenService;
     private final PasswordEncoder passwordEncoder;
+    private final AuditEventPublisher auditEventPublisher;
 
     public PasswordService(UserRepository userRepository,
                            AuthTokenService authTokenService,
-                           PasswordEncoder passwordEncoder) {
-        this.userRepository   = userRepository;
+                           PasswordEncoder passwordEncoder,
+                           AuditEventPublisher auditEventPublisher) {
+        this.userRepository  = userRepository;
         this.authTokenService = authTokenService;
-        this.passwordEncoder  = passwordEncoder;
+        this.passwordEncoder = passwordEncoder;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
 
@@ -80,6 +86,14 @@ public class PasswordService {
         // An attacker who had access to the account is now logged out.
         authTokenService.invalidateAllRefreshTokens(user.getId());
 
+        auditEventPublisher.publishAuth(
+                user.getId(), token.getTenantId(),
+                AuditEventTypes.USER_PASSWORD_RESET,
+                "auth-service",
+                user.getId().toString(),
+                "Password reset via email token",
+                java.util.Map.of());
+
         log.info("Password reset completed: userId={}, tenant={}",
                 user.getId(), token.getTenantId());
     }
@@ -109,6 +123,14 @@ public class PasswordService {
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
+
+        auditEventPublisher.publishAuth(
+                principal.userId(), tenantId,
+                AuditEventTypes.USER_PASSWORD_CHANGED,
+                "auth-service",
+                principal.userId().toString(),
+                "Password changed",
+                java.util.Map.of());
 
         log.info("Password changed: userId={}, tenant={}",
                 principal.userId(), tenantId);

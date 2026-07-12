@@ -4,9 +4,11 @@ import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.AcceptInviteRequest;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,13 +40,17 @@ public class InviteService {
 
     private final AuthTokenService authTokenService;
     private final UserRepository userRepository;
-    private final BCryptPasswordEncoder passwordEncoder;
+    private final PasswordEncoder passwordEncoder;
+    private final AuditEventPublisher auditEventPublisher;
 
     public InviteService(AuthTokenService authTokenService,
-                         UserRepository userRepository) {
+                         UserRepository userRepository,
+                         PasswordEncoder passwordEncoder,
+                         AuditEventPublisher auditEventPublisher) {
         this.authTokenService = authTokenService;
         this.userRepository = userRepository;
-        this.passwordEncoder = new BCryptPasswordEncoder();
+        this.passwordEncoder = passwordEncoder;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     @Transactional
@@ -58,6 +64,14 @@ public class InviteService {
         final String hash = passwordEncoder.encode(request.password());
         user.setPasswordHash(hash);
         userRepository.save(user);
+
+        auditEventPublisher.publishAuth(
+                user.getId(), token.getTenantId(),
+                AuditEventTypes.USER_INVITE_ACCEPTED,
+                "auth-service",
+                user.getId().toString(),
+                "Invite accepted — password set",
+                java.util.Map.of());
 
         log.info("Invite accepted — password set: userId={}, tenant={}",
                 user.getId(), user.getTenantId());

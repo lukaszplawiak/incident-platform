@@ -6,6 +6,8 @@ import com.incidentplatform.auth.domain.UserRole;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -25,13 +27,16 @@ public class UserService {
     private final UserRepository userRepository;
     private final AuthTokenService authTokenService;
     private final AuthEmailOutboxRepository outboxRepository;
+    private final AuditEventPublisher auditEventPublisher;
 
     public UserService(UserRepository userRepository,
                        AuthTokenService authTokenService,
-                       AuthEmailOutboxRepository outboxRepository) {
+                       AuthEmailOutboxRepository outboxRepository,
+                       AuditEventPublisher auditEventPublisher) {
         this.userRepository = userRepository;
         this.authTokenService = authTokenService;
         this.outboxRepository = outboxRepository;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     /**
@@ -86,6 +91,15 @@ public class UserService {
 
         userRepository.save(user);
 
+        auditEventPublisher.publishAuth(
+                user.getId(), tenantId,
+                AuditEventTypes.USER_CREATED,
+                "auth-service",
+                "auth-service",
+                "User created",
+                java.util.Map.of("email", user.getEmail(),
+                        "roles", request.roles()));
+
         log.info("User created: userId={}, email={}, tenant={}, roles={}",
                 user.getId(), user.getEmail(), tenantId, request.roles());
 
@@ -99,6 +113,14 @@ public class UserService {
         final AuthEmailOutbox outboxEntry = AuthEmailOutbox.invitePending(
                 user, tokenResult.token(), tokenResult.rawToken());
         outboxRepository.save(outboxEntry);
+
+        auditEventPublisher.publishAuth(
+                user.getId(), tenantId,
+                AuditEventTypes.USER_INVITE_SENT,
+                "auth-service",
+                "auth-service",
+                "Invite email queued",
+                java.util.Map.of("email", user.getEmail()));
 
         log.info("Invite email queued: userId={}, email={}, tenant={}",
                 user.getId(), user.getEmail(), tenantId);

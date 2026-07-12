@@ -77,7 +77,7 @@ public class PostmortemService {
         log.info("Postmortem updated: incidentId={}, tenant={}",
                 incidentId, tenantId);
 
-        auditEventPublisher.publishSystem(
+        auditEventPublisher.publishIncident(
                 incidentId, tenantId,
                 AuditEventTypes.POSTMORTEM_UPDATED, SERVICE_NAME,
                 "Postmortem content updated by engineer.",

@@ -5,6 +5,8 @@ import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -58,15 +60,18 @@ public class ResendInviteService {
     private final AuthTokenRepository authTokenRepository;
     private final AuthEmailOutboxRepository outboxRepository;
     private final AuthTokenService authTokenService;
+    private final AuditEventPublisher auditEventPublisher;
 
     public ResendInviteService(UserRepository userRepository,
                                AuthTokenRepository authTokenRepository,
                                AuthEmailOutboxRepository outboxRepository,
-                               AuthTokenService authTokenService) {
+                               AuthTokenService authTokenService,
+                               AuditEventPublisher auditEventPublisher) {
         this.userRepository = userRepository;
         this.authTokenRepository = authTokenRepository;
         this.outboxRepository = outboxRepository;
         this.authTokenService = authTokenService;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     /**
@@ -135,6 +140,14 @@ public class ResendInviteService {
         final AuthEmailOutbox outboxEntry = AuthEmailOutbox.invitePending(
                 user, tokenResult.token(), tokenResult.rawToken());
         outboxRepository.save(outboxEntry);
+
+        auditEventPublisher.publishAuth(
+                user.getId(), TenantContext.get(),
+                AuditEventTypes.USER_INVITE_RESENT,
+                "auth-service",
+                user.getId().toString(),
+                "Invite email resent",
+                java.util.Map.of("email", user.getEmail()));
 
         log.info("Invite resend queued: userId={}, email={}, tenant={}",
                 userId, user.getEmail(), tenantId);

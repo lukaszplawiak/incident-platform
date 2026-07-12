@@ -10,6 +10,7 @@ import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.junit.jupiter.api.AfterEach;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -40,6 +41,7 @@ class PasswordServiceTest {
 
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenService authTokenService;
+    @Mock private AuditEventPublisher auditEventPublisher;
 
     private PasswordService service;
 
@@ -51,7 +53,9 @@ class PasswordServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PasswordService(userRepository, authTokenService, ENCODER);
+        service = new PasswordService(
+                userRepository, authTokenService,
+                ENCODER, auditEventPublisher);
         TenantContext.set(TENANT_ID);
     }
 

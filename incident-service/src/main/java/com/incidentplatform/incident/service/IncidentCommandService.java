@@ -121,7 +121,7 @@ public class IncidentCommandService {
         webSocketPublisher.publishStatusChanged(
                 IncidentDto.from(incident), previousStatus.name());
 
-        auditEventPublisher.publishSystem(
+        auditEventPublisher.publishIncident(
                 incident.getId(), tenantId,
                 AuditEventTypes.INCIDENT_RESOLVED, SERVICE_NAME,
                 String.format("Auto-resolved by source '%s' after alert cleared",
@@ -165,7 +165,7 @@ public class IncidentCommandService {
         publishStatusChangeEvent(incident, command.status(), changedBy);
         webSocketPublisher.publishStatusChanged(dto, previousStatus.name());
 
-        auditEventPublisher.publishUser(
+        auditEventPublisher.publishIncidentUser(
                 incidentId, tenantId,
                 command.status().auditEventType(), SERVICE_NAME,
                 changedBy.toString(),
@@ -196,7 +196,7 @@ public class IncidentCommandService {
         final IncidentDto dto = IncidentDto.from(incident);
         webSocketPublisher.publishUpdate(dto);
 
-        auditEventPublisher.publishUser(
+        auditEventPublisher.publishIncidentUser(
                 incidentId, tenantId,
                 AuditEventTypes.INCIDENT_ASSIGNED, SERVICE_NAME,
                 assignedBy.toString(),
@@ -234,7 +234,7 @@ public class IncidentCommandService {
 
         eventPublisher.publishOpened(incident);
 
-        auditEventPublisher.publishSystem(
+        auditEventPublisher.publishIncident(
                 incident.getId(), tenantId,
                 AuditEventTypes.INCIDENT_CREATED, SERVICE_NAME,
                 String.format("Incident created from %s alert: '%s'",
@@ -295,7 +295,7 @@ public class IncidentCommandService {
                 existing.getId(), previousSeverity,
                 alert.severity(), tenantId);
 
-        auditEventPublisher.publishSystem(
+        auditEventPublisher.publishIncident(
                 existing.getId(), tenantId,
                 AuditEventTypes.INCIDENT_SEVERITY_UPDATED, SERVICE_NAME,
                 String.format("Severity updated: %s → %s",

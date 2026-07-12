@@ -57,7 +57,8 @@ class AuditEventKafkaSender {
     void send(AuditEventMessage message) throws JsonProcessingException {
         final String payload = objectMapper.writeValueAsString(message);
         kafkaTemplate.send(auditEventsTopic, message.tenantId(), payload);
-        log.debug("Audit event published: eventType={}, incidentId={}, tenant={}",
-                message.eventType(), message.incidentId(), message.tenantId());
+        log.debug("Audit event published: eventType={}, resourceId={}, resourceType={}, tenant={}",
+                message.eventType(), message.resourceId(),
+                message.resourceType(), message.tenantId());
     }
 }
