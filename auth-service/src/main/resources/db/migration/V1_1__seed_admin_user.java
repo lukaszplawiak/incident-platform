@@ -12,12 +12,16 @@ import java.util.UUID;
 /**
  * Seeds the bootstrap admin user on first deployment.
  *
- * <h2>Why a Java migration instead of SQL with placeholders</h2>
- * Flyway SQL placeholders pass the raw value into the script — the plain-text
- * password would appear in {@code flyway_schema_history}, query logs, and
- * version-controlled migration files. This Java migration reads the password
- * from an environment variable at runtime and BCrypt-hashes it before
- * inserting — plain text never touches the database or migration history.
+ * <h2>Why a Java migration instead of SQL</h2>
+ * SQL Flyway placeholders insert the raw value — a plain-text password would
+ * appear in {@code flyway_schema_history}, PostgreSQL query logs, and the
+ * version-controlled migration file itself. This Java migration reads the
+ * password from an env var at runtime and BCrypt-hashes it in-process —
+ * plain text never reaches the database or migration history.
+ *
+ * <p>Pre-hashing outside Flyway (e.g. via {@code htpasswd -nbBC 12}) is an
+ * alternative but adds an error-prone manual step to every deployment.
+ * The Java migration is self-contained and safer operationally.
  *
  * <h2>Environment variables</h2>
  * <ul>
@@ -57,8 +61,8 @@ public class V1_1__seed_admin_user extends BaseJavaMigration {
 
         // Insert user
         final String insertUser = """
-                INSERT INTO users (id, tenant_id, email, password_hash, active)
-                VALUES (?, ?, ?, ?, TRUE)
+                INSERT INTO users (id, tenant_id, email, password_hash, active, version)
+                VALUES (?, ?, ?, ?, TRUE, 0)
                 ON CONFLICT (email, tenant_id) DO NOTHING
                 """;
 
