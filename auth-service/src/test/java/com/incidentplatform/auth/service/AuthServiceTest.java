@@ -5,6 +5,7 @@ import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.ratelimit.LoginAttemptService;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.TenantContext;
@@ -48,6 +49,9 @@ class AuthServiceTest {
     @Mock
     private LoginAttemptService loginAttemptService;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private AuthService authService;
 
     private static final String TENANT_ID = "test-tenant";
@@ -58,7 +62,8 @@ class AuthServiceTest {
     @BeforeEach
     void setUp() {
         authService = new AuthService(
-                userRepository, jwtUtils, loginAttemptService, authTokenService, ENCODER);
+                userRepository, jwtUtils, loginAttemptService,
+                authTokenService, ENCODER, auditEventPublisher);
         TenantContext.set(TENANT_ID);
         // Default: not locked
         given(loginAttemptService.isLocked(any(), any())).willReturn(false);

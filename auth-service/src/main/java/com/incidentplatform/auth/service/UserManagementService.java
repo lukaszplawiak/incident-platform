@@ -5,6 +5,8 @@ import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
 import com.incidentplatform.auth.dto.UserSummaryDto;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -26,8 +28,12 @@ public class UserManagementService {
 
     private final UserRepository userRepository;
 
-    public UserManagementService(UserRepository userRepository) {
-        this.userRepository = userRepository;
+    private final AuditEventPublisher auditEventPublisher;
+
+    public UserManagementService(UserRepository userRepository,
+                                 AuditEventPublisher auditEventPublisher) {
+        this.userRepository      = userRepository;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     /**
@@ -47,6 +53,14 @@ public class UserManagementService {
 
         user.updateRoles(request.roles(), tenantId);
         userRepository.save(user);
+
+        auditEventPublisher.publishAuth(
+                userId, tenantId,
+                AuditEventTypes.USER_ROLES_UPDATED,
+                "auth-service",
+                userId.toString(),
+                "User roles updated",
+                java.util.Map.of("roles", request.roles()));
 
         log.info("Roles updated: userId={}, tenant={}, roles={}",
                 userId, tenantId, request.roles());
@@ -70,6 +84,14 @@ public class UserManagementService {
 
         user.setActive(request.active());
         userRepository.save(user);
+
+        auditEventPublisher.publishAuth(
+                userId, tenantId,
+                AuditEventTypes.USER_STATUS_UPDATED,
+                "auth-service",
+                userId.toString(),
+                "User status updated",
+                java.util.Map.of("active", request.active()));
 
         log.info("Status updated: userId={}, tenant={}, active={}",
                 userId, tenantId, request.active());
@@ -104,6 +126,14 @@ public class UserManagementService {
         final User user = findUserInTenant(userId, tenantId);
         user.softDelete();
         userRepository.save(user);
+
+        auditEventPublisher.publishAuth(
+                userId, tenantId,
+                AuditEventTypes.USER_DELETED,
+                "auth-service",
+                principal.userId().toString(),
+                "User soft-deleted",
+                java.util.Map.of("deletedBy", principal.userId().toString()));
 
         log.info("User soft-deleted: userId={}, tenant={}, deletedBy={}",
                 userId, tenantId, principal.userId());

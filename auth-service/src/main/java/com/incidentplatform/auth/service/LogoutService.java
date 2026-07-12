@@ -1,5 +1,7 @@
 package com.incidentplatform.auth.service;
 
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.JwtUtils;
@@ -21,13 +23,16 @@ public class LogoutService {
     private final TokenRevocationService revocationService;
 
     private final AuthTokenService authTokenService;
+    private final AuditEventPublisher auditEventPublisher;
 
     public LogoutService(JwtUtils jwtUtils,
                          TokenRevocationService revocationService,
-                         AuthTokenService authTokenService) {
-        this.jwtUtils          = jwtUtils;
-        this.revocationService = revocationService;
-        this.authTokenService  = authTokenService;
+                         AuthTokenService authTokenService,
+                         AuditEventPublisher auditEventPublisher) {
+        this.jwtUtils            = jwtUtils;
+        this.revocationService   = revocationService;
+        this.authTokenService    = authTokenService;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     /**
@@ -64,6 +69,14 @@ public class LogoutService {
 
         // Invalidate all active refresh tokens — terminates all sessions.
         authTokenService.invalidateAllRefreshTokens(principal.userId());
+
+        auditEventPublisher.publishAuth(
+                principal.userId(), principal.tenantId(),
+                AuditEventTypes.USER_LOGOUT,
+                "auth-service",
+                principal.userId().toString(),
+                "User logged out",
+                java.util.Map.of());
 
         log.info("Logout: userId={}, tenant={}, jti={}",
                 principal.userId(), principal.tenantId(), jti);

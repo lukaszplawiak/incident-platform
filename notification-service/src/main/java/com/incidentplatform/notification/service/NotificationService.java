@@ -171,7 +171,7 @@ public class NotificationService {
                         channel.channelName(), request.recipient(),
                         incidentId, tenantId);
 
-                auditEventPublisher.publishSystem(
+                auditEventPublisher.publishIncident(
                         incidentId, tenantId,
                         AuditEventTypes.NOTIFICATION_SENT, SERVICE_NAME,
                         String.format("Notification sent via %s to %s",
@@ -193,7 +193,7 @@ public class NotificationService {
                         channel.channelName(), request.recipient(),
                         incidentId, e.getMessage());
 
-                auditEventPublisher.publishSystem(
+                auditEventPublisher.publishIncident(
                         incidentId, tenantId,
                         AuditEventTypes.NOTIFICATION_FAILED, SERVICE_NAME,
                         String.format("Notification failed via %s to %s: %s",

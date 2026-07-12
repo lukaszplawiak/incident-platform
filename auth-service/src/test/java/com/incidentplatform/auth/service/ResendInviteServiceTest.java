@@ -9,6 +9,7 @@ import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.TenantContext;
@@ -45,6 +46,7 @@ class ResendInviteServiceTest {
     @Mock private AuthTokenRepository authTokenRepository;
     @Mock private AuthEmailOutboxRepository outboxRepository;
     @Mock private AuthTokenService authTokenService;
+    @Mock private AuditEventPublisher auditEventPublisher;
 
     private ResendInviteService service;
 
@@ -56,7 +58,8 @@ class ResendInviteServiceTest {
     void setUp() {
         service = new ResendInviteService(
                 userRepository, authTokenRepository,
-                outboxRepository, authTokenService);
+                outboxRepository, authTokenService,
+                auditEventPublisher);
         TenantContext.set(TENANT_ID);
     }
 

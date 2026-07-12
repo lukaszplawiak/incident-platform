@@ -5,6 +5,7 @@ import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
 import com.incidentplatform.auth.dto.UserSummaryDto;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
@@ -33,6 +34,9 @@ class UserManagementServiceTest {
     @Mock
     private UserRepository userRepository;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private UserManagementService service;
 
     private static final String TENANT_ID = "test-tenant";
@@ -40,7 +44,7 @@ class UserManagementServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new UserManagementService(userRepository);
+        service = new UserManagementService(userRepository, auditEventPublisher);
         TenantContext.set(TENANT_ID);
     }
 

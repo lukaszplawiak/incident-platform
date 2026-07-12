@@ -35,5 +35,21 @@ public final class AuditEventTypes {
     public static final String POSTMORTEM_PERMANENTLY_FAILED = "POSTMORTEM_PERMANENTLY_FAILED";
     public static final String POSTMORTEM_UPDATED        = "POSTMORTEM_UPDATED";
 
+
+    // ── Auth ────────────────────────────────────────────────────────────────
+    public static final String USER_LOGIN              = "USER_LOGIN";
+    public static final String USER_LOGOUT             = "USER_LOGOUT";
+    public static final String USER_LOGIN_FAILED       = "USER_LOGIN_FAILED";
+    public static final String USER_CREATED            = "USER_CREATED";
+    public static final String USER_DELETED            = "USER_DELETED";
+    public static final String USER_ROLES_UPDATED      = "USER_ROLES_UPDATED";
+    public static final String USER_STATUS_UPDATED     = "USER_STATUS_UPDATED";
+    public static final String USER_PASSWORD_CHANGED   = "USER_PASSWORD_CHANGED";
+    public static final String USER_PASSWORD_RESET     = "USER_PASSWORD_RESET";
+    public static final String USER_PASSWORD_RESET_REQUESTED = "USER_PASSWORD_RESET_REQUESTED";
+    public static final String USER_INVITE_SENT        = "USER_INVITE_SENT";
+    public static final String USER_INVITE_ACCEPTED    = "USER_INVITE_ACCEPTED";
+    public static final String USER_INVITE_RESENT      = "USER_INVITE_RESENT";
+
     private AuditEventTypes() {}
 }

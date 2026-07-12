@@ -12,6 +12,7 @@ import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -41,6 +42,7 @@ class UserServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenService authTokenService;
     @Mock private AuthEmailOutboxRepository outboxRepository;
+    @Mock private AuditEventPublisher auditEventPublisher;
 
     private UserService service;
 
@@ -49,7 +51,9 @@ class UserServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new UserService(userRepository, authTokenService, outboxRepository);
+        service = new UserService(
+                userRepository, authTokenService,
+                outboxRepository, auditEventPublisher);
         TenantContext.set(TENANT_ID);
     }
 
