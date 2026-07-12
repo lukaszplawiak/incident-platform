@@ -1,8 +1,8 @@
 package com.incidentplatform.auth.domain;
 
 import jakarta.persistence.CascadeType;
-import org.hibernate.annotations.SQLRestriction;
 import jakarta.persistence.Column;
+import jakarta.persistence.Version;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.GeneratedValue;
@@ -18,7 +18,6 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
-@SQLRestriction("deleted_at IS NULL")
 public class User {
 
     @Id
@@ -51,12 +50,30 @@ public class User {
      * Soft delete timestamp — null means the user is not deleted.
      * Set by {@link #softDelete()}; never cleared once set.
      */
+    /**
+     * Optimistic locking version counter.
+     *
+     * <p>Hibernate increments this on every UPDATE. If two concurrent
+     * requests read the same version and both attempt to save, the second
+     * write throws {@link jakarta.persistence.OptimisticLockException},
+     * which Spring translates to
+     * {@link org.springframework.dao.OptimisticLockingFailureException}.
+     * {@code GlobalExceptionHandler} maps this to {@code 409 Conflict}.
+     *
+     * <p>Prevents lost updates when two admins edit the same user
+     * simultaneously — the second save is rejected rather than silently
+     * overwriting the first admin's changes.
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version = 0L;
+
     @Column(name = "deleted_at")
     private Instant deletedAt;
 
     @OneToMany(mappedBy = "user",
             cascade = CascadeType.ALL,
-            fetch = FetchType.LAZY,
+            fetch = FetchType.EAGER,
             orphanRemoval = true)
     private List<UserRole> roles = new ArrayList<>();
 
@@ -144,9 +161,8 @@ public class User {
     /**
      * Marks this user as soft-deleted.
      * Called by UserManagementService.deleteUser() — sets deleted_at to now.
-     * {@code @SQLRestriction("deleted_at IS NULL")} on this entity ensures
-     * all Hibernate queries automatically filter soft-deleted users — no
-     * {@code AndDeletedAtIsNull} suffix needed on repository methods.
+     * All repository queries filter WHERE deleted_at IS NULL so this user
+     * becomes invisible to application code after this call is persisted.
      */
     public void softDelete() {
         this.deletedAt = Instant.now();
