@@ -28,7 +28,7 @@ class UserPrincipalTest {
         @DisplayName("should default to empty list when roles is null")
         void shouldDefaultToEmptyListWhenRolesNull() {
             final UserPrincipal principal =
-                    new UserPrincipal(USER_ID, TENANT, EMAIL, null);
+                    new UserPrincipal(USER_ID, TENANT, EMAIL, null, List.of());
 
             assertThat(principal.roles()).isNotNull().isEmpty();
         }
@@ -43,7 +43,7 @@ class UserPrincipalTest {
             mutableRoles.add(SecurityRoles.ROLE_RESPONDER);
 
             final UserPrincipal principal =
-                    new UserPrincipal(USER_ID, TENANT, EMAIL, mutableRoles);
+                    new UserPrincipal(USER_ID, TENANT, EMAIL, mutableRoles, List.of());
 
             mutableRoles.add(SecurityRoles.ROLE_ADMIN);
 
@@ -59,8 +59,7 @@ class UserPrincipalTest {
         @DisplayName("should map each role to a SimpleGrantedAuthority")
         void shouldMapRolesToAuthorities() {
             final UserPrincipal principal = new UserPrincipal(
-                    USER_ID, TENANT, EMAIL,
-                    List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER));
+                    USER_ID, TENANT, EMAIL, List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER), List.of());
 
             final List<String> authorityNames = principal.getAuthorities().stream()
                     .map(GrantedAuthority::getAuthority)
@@ -79,7 +78,7 @@ class UserPrincipalTest {
         @DisplayName("should return true when role is present")
         void shouldReturnTrueWhenRolePresent() {
             final UserPrincipal principal = new UserPrincipal(
-                    USER_ID, TENANT, EMAIL, List.of(SecurityRoles.ROLE_ADMIN));
+                    USER_ID, TENANT, EMAIL, List.of(SecurityRoles.ROLE_ADMIN), List.of());
 
             assertThat(principal.hasRole(SecurityRoles.ROLE_ADMIN)).isTrue();
         }
@@ -88,7 +87,7 @@ class UserPrincipalTest {
         @DisplayName("should return false when role is absent")
         void shouldReturnFalseWhenRoleAbsent() {
             final UserPrincipal principal = new UserPrincipal(
-                    USER_ID, TENANT, EMAIL, List.of(SecurityRoles.ROLE_RESPONDER));
+                    USER_ID, TENANT, EMAIL, List.of(SecurityRoles.ROLE_RESPONDER), List.of());
 
             assertThat(principal.hasRole(SecurityRoles.ROLE_ADMIN)).isFalse();
         }

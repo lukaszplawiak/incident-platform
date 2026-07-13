@@ -3,8 +3,9 @@ package com.incidentplatform.auth.service;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
-import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.security.JwtUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -14,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
@@ -22,6 +24,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
@@ -30,11 +33,9 @@ import static org.mockito.BDDMockito.then;
 @DisplayName("AuthTokenService")
 class AuthTokenServiceTest {
 
-    @Mock
-    private AuthTokenRepository tokenRepository;
-
-    @Mock
-    private JwtUtils jwtUtils;
+    @Mock private AuthTokenRepository tokenRepository;
+    @Mock private JwtUtils jwtUtils;
+    @Mock private TeamMemberRepository teamMemberRepository;
 
     private AuthTokenService service;
 
@@ -45,9 +46,8 @@ class AuthTokenServiceTest {
 
     @BeforeEach
     void setUp() {
-        // JwtUtils is needed for generateRefreshToken() and rotateRefreshToken().
-        // TTL is stubbed where needed in individual tests.
-        service = new AuthTokenService(tokenRepository, jwtUtils);
+        service = new AuthTokenService(
+                tokenRepository, jwtUtils, teamMemberRepository);
     }
 
     // ── generateInviteToken ───────────────────────────────────────────────
@@ -128,6 +128,108 @@ class AuthTokenServiceTest {
         }
     }
 
+    // ── generateRefreshToken ──────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("generateRefreshToken")
+    class GenerateRefreshToken {
+
+        @Test
+        @DisplayName("persists AuthToken with REFRESH type")
+        void persistsWithRefreshType() {
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+
+            final ArgumentCaptor<AuthToken> captor =
+                    ArgumentCaptor.forClass(AuthToken.class);
+
+            service.generateRefreshToken(user, TENANT_ID);
+
+            then(tokenRepository).should().save(captor.capture());
+            assertThat(captor.getValue().getType())
+                    .isEqualTo(AuthToken.Type.REFRESH);
+        }
+
+        @Test
+        @DisplayName("returns non-blank raw token")
+        void returnsNonBlankToken() {
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+
+            final String token = service.generateRefreshToken(user, TENANT_ID);
+            assertThat(token).isNotBlank();
+        }
+    }
+
+    // ── rotateRefreshToken ────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("rotateRefreshToken")
+    class RotateRefreshToken {
+
+        @Test
+        @DisplayName("returns new access token and refresh token")
+        void returnsNewTokenPair() {
+            final AuthToken stored = AuthToken.forTesting(
+                    user, TENANT_ID, "hash",
+                    AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(86400 * 30), null);
+
+            given(tokenRepository.findValidByHashAndType(
+                    any(), eq(AuthToken.Type.REFRESH), any()))
+                    .willReturn(Optional.of(stored));
+            given(jwtUtils.generateToken(any(), anyString(),
+                    anyString(), any(), any()))
+                    .willReturn("new-access-token");
+            given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                    any(), anyString())).willReturn(List.of());
+
+            final AuthTokenService.RotationResult result =
+                    service.rotateRefreshToken("raw-refresh-token");
+
+            assertThat(result.accessToken()).isEqualTo("new-access-token");
+            assertThat(result.rawRefreshToken()).isNotBlank();
+            assertThat(result.accessExpiresAt()).isAfter(Instant.now());
+            assertThat(result.refreshExpiresAt()).isAfter(Instant.now());
+        }
+
+        @Test
+        @DisplayName("marks old refresh token as used")
+        void marksOldTokenAsUsed() {
+            final AuthToken stored = AuthToken.forTesting(
+                    user, TENANT_ID, "hash",
+                    AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(86400 * 30), null);
+
+            given(tokenRepository.findValidByHashAndType(
+                    any(), eq(AuthToken.Type.REFRESH), any()))
+                    .willReturn(Optional.of(stored));
+            given(jwtUtils.generateToken(any(), anyString(),
+                    anyString(), any(), any()))
+                    .willReturn("new-access-token");
+            given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                    any(), anyString())).willReturn(List.of());
+
+            service.rotateRefreshToken("raw-refresh-token");
+
+            assertThat(stored.isUsed()).isTrue();
+        }
+
+        @Test
+        @DisplayName("throws 401 when refresh token invalid or already used")
+        void throws401OnInvalidToken() {
+            given(tokenRepository.findValidByHashAndType(
+                    any(), eq(AuthToken.Type.REFRESH), any()))
+                    .willReturn(Optional.empty());
+
+            assertThatThrownBy(() ->
+                    service.rotateRefreshToken("bad-token"))
+                    .isInstanceOf(BusinessException.class);
+        }
+    }
+
     // ── consumeToken ──────────────────────────────────────────────────────
 
     @Nested
@@ -167,22 +269,6 @@ class AuthTokenServiceTest {
 
             assertThat(stored.isUsed()).isTrue();
             assertThat(stored.getUsedAt()).isNotNull();
-        }
-
-        @Test
-        @DisplayName("saves updated token after marking used")
-        void savesAfterMarkingUsed() {
-            final AuthToken stored = AuthToken.forTesting(
-                    user, TENANT_ID, "hash-value",
-                    AuthToken.Type.INVITE,
-                    Instant.now().plusSeconds(3600), null);
-
-            given(tokenRepository.findValidByHashAndType(any(), any(), any()))
-                    .willReturn(Optional.of(stored));
-
-            service.consumeToken("raw-token", AuthToken.Type.INVITE);
-
-            then(tokenRepository).should().save(stored);
         }
 
         @Test

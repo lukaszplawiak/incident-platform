@@ -125,7 +125,6 @@ class LogoutServiceTest {
     // ── helpers ───────────────────────────────────────────────────────────
 
     private UserPrincipal buildPrincipal() {
-        return new UserPrincipal(USER_ID, TENANT_ID, "user@example.com",
-                List.of("ROLE_RESPONDER"));
+        return new UserPrincipal(USER_ID, TENANT_ID, "user@example.com", List.of("ROLE_RESPONDER"), List.of());
     }
 }

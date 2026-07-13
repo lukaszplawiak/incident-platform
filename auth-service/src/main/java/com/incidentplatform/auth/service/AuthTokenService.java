@@ -5,6 +5,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
+import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.shared.security.JwtUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,12 +56,15 @@ public class AuthTokenService {
 
     private final AuthTokenRepository tokenRepository;
     private final JwtUtils jwtUtils;
+    private final TeamMemberRepository teamMemberRepository;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public AuthTokenService(AuthTokenRepository tokenRepository,
-                            JwtUtils jwtUtils) {
-        this.tokenRepository = tokenRepository;
-        this.jwtUtils        = jwtUtils;
+                            JwtUtils jwtUtils,
+                            TeamMemberRepository teamMemberRepository) {
+        this.tokenRepository       = tokenRepository;
+        this.jwtUtils              = jwtUtils;
+        this.teamMemberRepository  = teamMemberRepository;
     }
 
     /**
@@ -228,10 +232,15 @@ public class AuthTokenService {
         final User user        = oldToken.getUser();
         final String tenantId  = oldToken.getTenantId();
 
+        // Load team memberships — must be fresh at rotation time
+        final java.util.List<java.util.UUID> teamIds =
+                teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                        user.getId(), tenantId);
+
         // Generate new access token
         final String newAccessToken = jwtUtils.generateToken(
                 user.getId(), tenantId,
-                user.getEmail(), user.getRoleNames());
+                user.getEmail(), user.getRoleNames(), teamIds);
 
         final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());

@@ -4,6 +4,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.ratelimit.LoginAttemptService;
+import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -52,6 +53,9 @@ class AuthServiceTest {
     @Mock
     private AuditEventPublisher auditEventPublisher;
 
+    @Mock
+    private TeamMemberRepository teamMemberRepository;
+
     private AuthService authService;
 
     private static final String TENANT_ID = "test-tenant";
@@ -63,7 +67,8 @@ class AuthServiceTest {
     void setUp() {
         authService = new AuthService(
                 userRepository, jwtUtils, loginAttemptService,
-                authTokenService, ENCODER, auditEventPublisher);
+                authTokenService, ENCODER,
+                auditEventPublisher, teamMemberRepository);
         TenantContext.set(TENANT_ID);
         // Default: not locked
         given(loginAttemptService.isLocked(any(), any())).willReturn(false);
@@ -90,8 +95,10 @@ class AuthServiceTest {
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(jwtUtils.generateToken(eq(user.getId()), eq(TENANT_ID),
-                    eq(EMAIL), anyList())).willReturn("jwt-token");
+                    eq(EMAIL), anyList(), any())).willReturn("jwt-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                    any(), anyString())).willReturn(List.of());
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
             given(authTokenService.generateRefreshToken(any(), anyString()))
                     .willReturn("raw-refresh-token");
@@ -116,9 +123,11 @@ class AuthServiceTest {
 
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(jwtUtils.generateToken(any(), any(), any(), any()))
+            given(jwtUtils.generateToken(any(), any(), any(), any(), any()))
                     .willReturn("token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                    any(), anyString())).willReturn(List.of());
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
             given(authTokenService.generateRefreshToken(any(), anyString()))
                     .willReturn("raw-refresh-token");

@@ -55,6 +55,7 @@ public class JwtUtils {
     public static final String CLAIM_ROLES        = "roles";
     public static final String CLAIM_EMAIL        = "email";
     public static final String CLAIM_SERVICE_NAME = "serviceName";
+    public static final String CLAIM_TEAM_IDS     = "teamIds";
 
     private static final int MIN_SECRET_BYTES = 64;
 
@@ -129,7 +130,8 @@ public class JwtUtils {
      * TTL controlled by {@code jwt.access-token-ttl} (default PT15M).
      */
     public String generateToken(UUID userId, String tenantId,
-                                String email, List<String> roles) {
+                                String email, List<String> roles,
+                                List<java.util.UUID> teamIds) {
         final Instant now        = Instant.now();
         final Instant expiration = now.plus(properties.accessTokenTtl());
 
@@ -139,6 +141,9 @@ public class JwtUtils {
                 .claim(CLAIM_TENANT_ID, tenantId)
                 .claim(CLAIM_EMAIL, email)
                 .claim(CLAIM_ROLES, roles)
+                .claim(CLAIM_TEAM_IDS, teamIds.stream()
+                        .map(java.util.UUID::toString)
+                        .toList())
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(expiration))
                 .signWith(secretKey)
@@ -239,6 +244,21 @@ public class JwtUtils {
             log.error("Unexpected error during JWT validation", e);
             return Optional.empty();
         }
+    }
+
+
+    /**
+     * Extracts team UUIDs from the {@code teamIds} JWT claim.
+     * Returns an empty list if the claim is absent (e.g. tokens issued
+     * before team support was added).
+     */
+    @SuppressWarnings("unchecked")
+    public List<java.util.UUID> extractTeamIds(Claims claims) {
+        final List<String> raw = claims.get(CLAIM_TEAM_IDS, List.class);
+        if (raw == null) return List.of();
+        return raw.stream()
+                .map(java.util.UUID::fromString)
+                .toList();
     }
 
     public Optional<String> extractTenantId(Claims claims) {
