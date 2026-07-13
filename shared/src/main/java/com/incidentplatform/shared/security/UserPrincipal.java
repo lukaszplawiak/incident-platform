@@ -40,12 +40,24 @@ public record UserPrincipal(
 
         String email,
 
-        List<String> roles
+        List<String> roles,
+
+        /**
+         * UUIDs of teams the user belongs to.
+         * Populated from the {@code teamIds} JWT claim on login.
+         * Empty list means the user has no team assignments.
+         *
+         * <p>Note: team-level roles (MANAGER/RESPONDER) are NOT included
+         * here — only team membership. Team-level role checks require
+         * a server-side lookup via TeamMemberRepository.
+         */
+        List<UUID> teamIds
 
 ) {
 
     public UserPrincipal {
-        roles = roles != null ? List.copyOf(roles) : List.of();
+        roles   = roles   != null ? List.copyOf(roles)   : List.of();
+        teamIds = teamIds != null ? List.copyOf(teamIds) : List.of();
     }
 
     public Collection<? extends GrantedAuthority> getAuthorities() {
@@ -56,5 +68,9 @@ public record UserPrincipal(
 
     public boolean hasRole(String role) {
         return roles.contains(role);
+    }
+
+    public boolean isMemberOf(UUID teamId) {
+        return teamIds.contains(teamId);
     }
 }

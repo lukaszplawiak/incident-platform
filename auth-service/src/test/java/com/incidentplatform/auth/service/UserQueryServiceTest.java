@@ -174,7 +174,6 @@ class UserQueryServiceTest {
     }
 
     private UserPrincipal buildPrincipal(UUID userId) {
-        return new UserPrincipal(userId, TENANT_ID, "user@example.com",
-                List.of("ROLE_RESPONDER"));
+        return new UserPrincipal(userId, TENANT_ID, "user@example.com", List.of("ROLE_RESPONDER"), List.of());
     }
 }

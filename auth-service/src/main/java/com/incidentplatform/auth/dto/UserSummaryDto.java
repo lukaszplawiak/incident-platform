@@ -17,16 +17,26 @@ public record UserSummaryDto(
         String tenantId,
         String email,
         List<String> roles,
+        List<UUID> teamIds,
         boolean active,
         Instant createdAt,
         Instant updatedAt
 ) {
+    /**
+     * Creates a UserSummaryDto without team information.
+     * Use {@link #from(User, List)} when team IDs are available.
+     */
     public static UserSummaryDto from(User user) {
+        return from(user, List.of());
+    }
+
+    public static UserSummaryDto from(User user, List<UUID> teamIds) {
         return new UserSummaryDto(
                 user.getId(),
                 user.getTenantId(),
                 user.getEmail(),
                 user.getRoleNames(),
+                teamIds,
                 user.isActive(),
                 user.getCreatedAt(),
                 user.getUpdatedAt()

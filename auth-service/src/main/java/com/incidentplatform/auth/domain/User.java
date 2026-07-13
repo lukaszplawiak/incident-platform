@@ -27,9 +27,6 @@ public class User {
     @Column(name = "tenant_id", nullable = false)
     private String tenantId;
 
-    @Column(name = "organization_id")
-    private UUID organizationId;
-
     @Column(name = "email", nullable = false)
     private String email;
 
@@ -118,7 +115,6 @@ public class User {
 
     public UUID getId() { return id; }
     public String getTenantId() { return tenantId; }
-    public UUID getOrganizationId() { return organizationId; }
     public String getEmail() { return email; }
     public String getPasswordHash() { return passwordHash; }
     public boolean isActive() { return active; }

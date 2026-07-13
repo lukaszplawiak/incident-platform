@@ -4,6 +4,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.ratelimit.LoginAttemptService;
+import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
@@ -35,19 +36,22 @@ public class AuthService {
     private final LoginAttemptService loginAttemptService;
     private final AuthTokenService authTokenService;
     private final AuditEventPublisher auditEventPublisher;
+    private final TeamMemberRepository teamMemberRepository;
 
     public AuthService(UserRepository userRepository,
                        JwtUtils jwtUtils,
                        LoginAttemptService loginAttemptService,
                        AuthTokenService authTokenService,
                        PasswordEncoder passwordEncoder,
-                       AuditEventPublisher auditEventPublisher) {
-        this.userRepository      = userRepository;
-        this.jwtUtils            = jwtUtils;
-        this.loginAttemptService = loginAttemptService;
-        this.authTokenService    = authTokenService;
-        this.passwordEncoder     = passwordEncoder;
-        this.auditEventPublisher = auditEventPublisher;
+                       AuditEventPublisher auditEventPublisher,
+                       TeamMemberRepository teamMemberRepository) {
+        this.userRepository        = userRepository;
+        this.jwtUtils              = jwtUtils;
+        this.loginAttemptService   = loginAttemptService;
+        this.authTokenService      = authTokenService;
+        this.passwordEncoder       = passwordEncoder;
+        this.auditEventPublisher   = auditEventPublisher;
+        this.teamMemberRepository  = teamMemberRepository;
     }
 
     @Transactional
@@ -101,9 +105,15 @@ public class AuthService {
         // ── 4. Success — clear failure counter ─────────────────────────────
         loginAttemptService.recordSuccess(email, tenantId);
 
+        // Load team memberships for JWT claim — stateless team-auth
+        // downstream services check teamIds without calling auth-service
+        final java.util.List<java.util.UUID> teamIds =
+                teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                        user.getId(), tenantId);
+
         final String accessToken = jwtUtils.generateToken(
                 user.getId(), tenantId,
-                user.getEmail(), user.getRoleNames());
+                user.getEmail(), user.getRoleNames(), teamIds);
 
         final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());

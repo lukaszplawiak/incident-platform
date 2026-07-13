@@ -51,5 +51,13 @@ public final class AuditEventTypes {
     public static final String USER_INVITE_ACCEPTED    = "USER_INVITE_ACCEPTED";
     public static final String USER_INVITE_RESENT      = "USER_INVITE_RESENT";
 
+
+    // ── Teams ────────────────────────────────────────────────────────────────
+    public static final String TEAM_CREATED             = "TEAM_CREATED";
+    public static final String TEAM_DELETED             = "TEAM_DELETED";
+    public static final String TEAM_MEMBER_ADDED        = "TEAM_MEMBER_ADDED";
+    public static final String TEAM_MEMBER_REMOVED      = "TEAM_MEMBER_REMOVED";
+    public static final String TEAM_MEMBER_ROLE_UPDATED = "TEAM_MEMBER_ROLE_UPDATED";
+
     private AuditEventTypes() {}
 }
