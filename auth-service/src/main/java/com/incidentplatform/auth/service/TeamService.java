@@ -98,27 +98,78 @@ public class TeamService {
         return TeamDto.from(requireTeam(teamId));
     }
 
-    // ── deleteTeam ────────────────────────────────────────────────────────
+    // ── archiveTeam ───────────────────────────────────────────────────────
 
     @Transactional
-    public void deleteTeam(UUID teamId, UserPrincipal principal) {
+    public void archiveTeam(UUID teamId, UserPrincipal principal) {
         final String tenantId = TenantContext.get();
         final Team team = requireTeam(teamId);
 
-        team.softDelete();
+        team.archive();
         teamRepository.save(team);
 
         auditEventPublisher.publishAuth(
                 principal.userId(), tenantId,
-                AuditEventTypes.TEAM_DELETED,
+                AuditEventTypes.TEAM_ARCHIVED,
                 "auth-service",
                 principal.userId().toString(),
-                "Team soft-deleted: " + team.getName(),
+                "Team archived: " + team.getName(),
                 Map.of("teamId",   teamId.toString(),
                         "teamName", team.getName()));
 
-        log.info("Team soft-deleted: teamId={}, name={}, tenant={}, by={}",
+        log.info("Team archived: teamId={}, name={}, tenant={}, by={}",
                 teamId, team.getName(), tenantId, principal.userId());
+    }
+
+    // ── restoreTeam ───────────────────────────────────────────────────────
+
+    /**
+     * Restores an archived team.
+     *
+     * <p>Guards:
+     * <ul>
+     *   <li>Team must be archived (not active)</li>
+     *   <li>No active team with the same name in this tenant — a new team
+     *       may have been created with the same name during archiving</li>
+     * </ul>
+     *
+     * <p>TeamMember rows were preserved during archiving — restored team
+     * gets its original membership back automatically.
+     */
+    @Transactional
+    public TeamDto restoreTeam(UUID teamId, UserPrincipal principal) {
+        final String tenantId = TenantContext.get();
+
+        final Team team = teamRepository
+                .findArchivedByIdAndTenantId(teamId, tenantId)
+                .orElseThrow(() -> new com.incidentplatform.shared.exception
+                        .ResourceNotFoundException("ArchivedTeam", teamId.toString()));
+
+        // Guard: name conflict — another active team may have taken the name
+        if (teamRepository.existsByNameAndTenantId(team.getName(), tenantId)) {
+            throw new com.incidentplatform.shared.exception.BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "Cannot restore team \"" + team.getName() + "\" — " +
+                            "an active team with this name already exists in the tenant",
+                    org.springframework.http.HttpStatus.CONFLICT);
+        }
+
+        team.restore();
+        final Team saved = teamRepository.save(team);
+
+        auditEventPublisher.publishAuth(
+                principal.userId(), tenantId,
+                AuditEventTypes.TEAM_RESTORED,
+                "auth-service",
+                principal.userId().toString(),
+                "Team restored: " + team.getName(),
+                Map.of("teamId",   teamId.toString(),
+                        "teamName", team.getName()));
+
+        log.info("Team restored: teamId={}, name={}, tenant={}, by={}",
+                teamId, team.getName(), tenantId, principal.userId());
+
+        return TeamDto.from(saved);
     }
 
     // ── addMember ─────────────────────────────────────────────────────────

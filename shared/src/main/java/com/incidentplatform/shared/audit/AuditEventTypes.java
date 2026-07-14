@@ -50,10 +50,15 @@ public final class AuditEventTypes {
     public static final String USER_INVITE_SENT        = "USER_INVITE_SENT";
     public static final String USER_INVITE_ACCEPTED    = "USER_INVITE_ACCEPTED";
     public static final String USER_INVITE_RESENT      = "USER_INVITE_RESENT";
+    public static final String USER_ARCHIVED           = "USER_ARCHIVED";
+    public static final String USER_RESTORED           = "USER_RESTORED";
+    public static final String USER_ANONYMIZED         = "USER_ANONYMIZED";
 
 
     // ── Teams ────────────────────────────────────────────────────────────────
     public static final String TEAM_CREATED             = "TEAM_CREATED";
+    public static final String TEAM_ARCHIVED            = "TEAM_ARCHIVED";
+    public static final String TEAM_RESTORED            = "TEAM_RESTORED";
     public static final String TEAM_DELETED             = "TEAM_DELETED";
     public static final String TEAM_MEMBER_ADDED        = "TEAM_MEMBER_ADDED";
     public static final String TEAM_MEMBER_REMOVED      = "TEAM_MEMBER_REMOVED";

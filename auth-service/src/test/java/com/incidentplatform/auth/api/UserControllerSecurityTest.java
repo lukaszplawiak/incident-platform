@@ -451,7 +451,7 @@ class UserControllerSecurityTest {
         void userNotFound_returns404() throws Exception {
             org.mockito.BDDMockito.willThrow(
                             new ResourceNotFoundException("User", USER_ID))
-                    .given(userManagementService).deleteUser(eq(USER_ID), any());
+                    .given(userManagementService).archiveUser(eq(USER_ID), any());
 
             mockMvc.perform(delete("/api/v1/users/{id}", USER_ID))
                     .andExpect(status().isNotFound());
@@ -466,7 +466,7 @@ class UserControllerSecurityTest {
                                     ErrorCodes.FORBIDDEN,
                                     "You cannot delete your own account",
                                     HttpStatus.FORBIDDEN))
-                    .given(userManagementService).deleteUser(eq(USER_ID), any());
+                    .given(userManagementService).archiveUser(eq(USER_ID), any());
 
             mockMvc.perform(delete("/api/v1/users/{id}", USER_ID))
                     .andExpect(status().isForbidden());
