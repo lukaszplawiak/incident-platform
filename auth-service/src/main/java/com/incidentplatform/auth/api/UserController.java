@@ -215,30 +215,29 @@ public class UserController {
     @DeleteMapping(value = "/{id}")
     @PreAuthorize("hasRole('ROLE_ADMIN')")
     @Operation(
-            summary = "Soft-delete a user",
+            summary = "Archive a user",
             description = """
-                    Soft-deletes a user — sets deleted_at and immediately revokes
-                    any active JWT via Redis. The user becomes invisible to all
-                    application queries (login, list, profile lookup) but the
-                    record is preserved in the database for audit trail integrity.
+                    Archives a user — hides from all normal queries but preserves
+                    the record and all historical references (audit logs, incidents).
+                    Reversible via POST /api/v1/users/{id}/restore.
 
-                    The same email address can be re-invited after deletion
-                    (partial unique index only enforces uniqueness for non-deleted users).
+                    For permanent GDPR erasure of personal data, use
+                    POST /api/v1/users/{id}/anonymize after archiving.
 
-                    Admins cannot delete their own account.
+                    Admins cannot archive their own account.
                     """
     )
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "User soft-deleted successfully"),
             @ApiResponse(responseCode = "401", description = "Unauthorized"),
             @ApiResponse(responseCode = "403", description = "Forbidden — ROLE_ADMIN required, " +
-                            "or attempting to delete own account"),
+                    "or attempting to delete own account"),
             @ApiResponse(responseCode = "404", description = "User not found in tenant")
     })
     public ResponseEntity<Void> deleteUser(
             @PathVariable UUID id,
             @AuthenticationPrincipal UserPrincipal principal) {
-        userManagementService.deleteUser(id, principal);
+        userManagementService.archiveUser(id, principal);
         return ResponseEntity.noContent().build();
     }
 
@@ -268,4 +267,62 @@ public class UserController {
         passwordService.changePassword(principal, request);
         return ResponseEntity.noContent().build();
     }
+
+    @PostMapping(value = "/{id}/restore")
+    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @Operation(
+            summary = "Restore an archived user",
+            description = """
+                    Restores an archived user to active state.
+                    The user can log in again after restore.
+
+                    Returns 409 if the user is anonymized (irreversible).
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "User restored"),
+            @ApiResponse(responseCode = "404", description = "User not found or not archived"),
+            @ApiResponse(responseCode = "409", description = "User is anonymized — cannot restore")
+    })
+    public ResponseEntity<Void> restoreUser(
+            @PathVariable("id") UUID userId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        userManagementService.restoreUser(userId, principal);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping(value = "/{id}/anonymize")
+    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @Operation(
+            summary = "Anonymize a user (GDPR erasure) — IRREVERSIBLE",
+            description = """
+                    Permanently anonymizes the user's personal data for GDPR compliance.
+
+                    This operation is IRREVERSIBLE. It:
+                    - Replaces email with an anonymous alias
+                    - Removes password hash
+                    - Removes all roles and team memberships
+
+                    The user UUID is preserved so that historical audit records
+                    and incident assignments remain valid.
+
+                    The user must be archived first (DELETE /api/v1/users/{id}).
+
+                    Returns 409 if the user is active or already anonymized.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "User anonymized"),
+            @ApiResponse(responseCode = "404", description = "User not found"),
+            @ApiResponse(responseCode = "409",
+                    description = "User is active (archive first) or already anonymized")
+    })
+    public ResponseEntity<Void> anonymizeUser(
+            @PathVariable("id") UUID userId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        userManagementService.anonymizeUser(userId, principal);
+        return ResponseEntity.noContent().build();
+    }
+
+
 }

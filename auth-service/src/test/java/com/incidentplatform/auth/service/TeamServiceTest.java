@@ -115,23 +115,23 @@ class TeamServiceTest {
     // ── deleteTeam ────────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("deleteTeam")
-    class DeleteTeam {
+    @DisplayName("archiveTeam")
+    class ArchiveTeam {
 
         @Test
-        @DisplayName("soft-deletes team")
-        void softDeletesTeam() {
+        @DisplayName("archives team")
+        void archivesTeam() {
             final Team team = Team.forTesting(TEAM_ID, TENANT_ID, "backend-team");
             given(teamRepository.findByIdAndTenantId(TEAM_ID, TENANT_ID))
                     .willReturn(Optional.of(team));
             given(teamRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            service.deleteTeam(TEAM_ID, buildPrincipal(ADMIN_ID));
+            service.archiveTeam(TEAM_ID, buildPrincipal(ADMIN_ID));
 
             final ArgumentCaptor<Team> captor = ArgumentCaptor.forClass(Team.class);
             then(teamRepository).should().save(captor.capture());
-            assertThat(captor.getValue().isDeleted()).isTrue();
-            assertThat(captor.getValue().getDeletedAt()).isNotNull();
+            assertThat(captor.getValue().isArchived()).isTrue();
+            assertThat(captor.getValue().getArchivedAt()).isNotNull();
         }
 
         @Test
@@ -141,8 +141,64 @@ class TeamServiceTest {
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->
-                    service.deleteTeam(TEAM_ID, buildPrincipal(ADMIN_ID)))
+                    service.archiveTeam(TEAM_ID, buildPrincipal(ADMIN_ID)))
                     .isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
+
+
+    // ── restoreTeam ───────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("restoreTeam")
+    class RestoreTeam {
+
+        @Test
+        @DisplayName("restores archived team")
+        void restoresArchivedTeam() {
+            final Team archived = Team.forTesting(TEAM_ID, TENANT_ID, "backend-team");
+            archived.archive();
+            given(teamRepository.findArchivedByIdAndTenantId(TEAM_ID, TENANT_ID))
+                    .willReturn(Optional.of(archived));
+            given(teamRepository.existsByNameAndTenantId("backend-team", TENANT_ID))
+                    .willReturn(false);
+            given(teamRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            final TeamDto result = service.restoreTeam(TEAM_ID, buildPrincipal(ADMIN_ID));
+
+            assertThat(result.name()).isEqualTo("backend-team");
+            final ArgumentCaptor<Team> captor = ArgumentCaptor.forClass(Team.class);
+            then(teamRepository).should().save(captor.capture());
+            assertThat(captor.getValue().isArchived()).isFalse();
+        }
+
+        @Test
+        @DisplayName("throws 409 when active team with same name exists")
+        void throws409OnNameConflict() {
+            final Team archived = Team.forTesting(TEAM_ID, TENANT_ID, "backend-team");
+            archived.archive();
+            given(teamRepository.findArchivedByIdAndTenantId(TEAM_ID, TENANT_ID))
+                    .willReturn(Optional.of(archived));
+            given(teamRepository.existsByNameAndTenantId("backend-team", TENANT_ID))
+                    .willReturn(true);
+
+            assertThatThrownBy(() ->
+                    service.restoreTeam(TEAM_ID, buildPrincipal(ADMIN_ID)))
+                    .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class)
+                    .extracting(e -> ((com.incidentplatform.shared.exception.BusinessException) e)
+                            .getHttpStatus())
+                    .isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+        }
+
+        @Test
+        @DisplayName("throws 404 when team not found in archived state")
+        void throws404WhenNotArchived() {
+            given(teamRepository.findArchivedByIdAndTenantId(TEAM_ID, TENANT_ID))
+                    .willReturn(Optional.empty());
+
+            assertThatThrownBy(() ->
+                    service.restoreTeam(TEAM_ID, buildPrincipal(ADMIN_ID)))
+                    .isInstanceOf(com.incidentplatform.shared.exception.ResourceNotFoundException.class);
         }
     }
 

@@ -34,4 +34,11 @@ public interface TeamMemberRepository
             @Param("tenantId") String tenantId);
 
     void deleteByTeamIdAndUserId(UUID teamId, UUID userId);
+
+    /**
+     * Removes all team memberships for a user.
+     * Called by {@code UserManagementService.anonymizeUser()} to remove
+     * the user from all teams before anonymizing personal data.
+     */
+    void deleteByUserId(UUID userId);
 }

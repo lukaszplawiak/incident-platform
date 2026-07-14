@@ -5,6 +5,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
@@ -14,21 +16,18 @@ import java.util.UUID;
  * Repository for {@link User} entities.
  *
  * <h2>Soft-delete filtering</h2>
- * Soft-delete filtering is handled globally by
- * {@code @SQLRestriction("deleted_at IS NULL")} on the {@link User} entity.
- * All Hibernate queries — including inherited {@link JpaRepository} methods
- * like {@code findById()} and {@code findAll()} — automatically exclude
- * soft-deleted users. No {@code AndDeletedAtIsNull} suffix is needed.
+ * {@code @SQLRestriction("archived_at IS NULL AND anonymized_at IS NULL")}
+ * on {@link User} automatically excludes archived and anonymized users from
+ * all Hibernate queries. No {@code AndArchivedAtIsNull} suffix is needed.
  *
- * <p>Exception: if a native {@code @Query(nativeQuery = true)} is ever added,
- * it must include {@code AND deleted_at IS NULL} explicitly — native SQL
- * bypasses Hibernate filters.
+ * <h2>Bypassing the restriction</h2>
+ * To read archived or anonymized users (e.g. for restore or admin audit),
+ * use native queries annotated with {@code @Query(nativeQuery = true)} —
+ * these bypass Hibernate's {@code @SQLRestriction}.
  *
  * <h2>@EntityGraph on findByEmailAndTenantId</h2>
- * Roles are loaded lazily ({@code FetchType.LAZY}) to prevent N+1 queries
- * on list endpoints. The login query is the only call site that needs roles
- * immediately (for JWT claims), so only this method eagerly joins roles
- * via {@code @EntityGraph}.
+ * Login is the only call site that immediately needs roles (for JWT claims).
+ * {@code @EntityGraph} issues a single LEFT JOIN FETCH instead of N+1.
  */
 @Repository
 public interface UserRepository extends JpaRepository<User, UUID> {
@@ -57,4 +56,23 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      * or has been soft-deleted — indistinguishable (no information leakage).
      */
     Optional<User> findByIdAndTenantId(UUID id, String tenantId);
+
+    /**
+     * Finds any user by id and tenant regardless of archived/anonymized state.
+     *
+     * <p>Used by:
+     * <ul>
+     *   <li>{@code UserManagementService.restoreUser()} — needs archived user</li>
+     *   <li>{@code UserManagementService.anonymizeUser()} — needs archived user</li>
+     * </ul>
+     *
+     * <p>Native query bypasses {@code @SQLRestriction} intentionally.
+     * Must NOT be used in normal application flows — only for admin operations
+     * on non-active users.
+     */
+    @Query(value = "SELECT * FROM users WHERE id = :id AND tenant_id = :tenantId",
+            nativeQuery = true)
+    Optional<User> findAnyByIdAndTenantId(
+            @Param("id") UUID id,
+            @Param("tenantId") String tenantId);
 }
