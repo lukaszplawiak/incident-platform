@@ -5,10 +5,10 @@ import com.incidentplatform.incident.domain.IncidentFsm;
 import com.incidentplatform.incident.domain.IncidentHistory;
 import com.incidentplatform.incident.domain.IncidentStatus;
 import com.incidentplatform.incident.dto.IncidentDto;
+import com.incidentplatform.incident.dto.AssignTeamRequest;
 import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
 import com.incidentplatform.incident.repository.IncidentRepository;
-import com.incidentplatform.shared.audit.ActorType;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.audit.ChangeSource;
@@ -203,6 +203,70 @@ public class IncidentCommandService {
                 String.format("Incident assigned to userId=%s", assignToId),
                 Map.of("assignedTo", assignToId.toString(),
                         "assignedBy", assignedBy.toString())
+        );
+
+        return dto;
+    }
+
+
+    @Transactional
+    public IncidentDto assignTeam(UUID incidentId,
+                                  AssignTeamRequest request,
+                                  UUID assignedBy,
+                                  String tenantId) {
+        final Incident incident = incidentRepository
+                .findByIdAndTenantId(incidentId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Incident", incidentId));
+
+        incident.assignToTeam(request.teamId());
+        incidentRepository.save(incident);
+
+        log.info("Incident team assigned: incidentId={}, teamId={}, by={}, tenant={}",
+                incidentId, request.teamId(), assignedBy, tenantId);
+
+        final IncidentDto dto = IncidentDto.from(incident);
+        webSocketPublisher.publishUpdate(dto);
+
+        auditEventPublisher.publishIncidentUser(
+                incidentId, tenantId,
+                AuditEventTypes.INCIDENT_TEAM_ASSIGNED, SERVICE_NAME,
+                assignedBy.toString(),
+                String.format("Incident assigned to teamId=%s", request.teamId()),
+                Map.of("teamId", request.teamId().toString(),
+                        "assignedBy", assignedBy.toString())
+        );
+
+        return dto;
+    }
+
+    @Transactional
+    public IncidentDto unassignTeam(UUID incidentId,
+                                    UUID unassignedBy,
+                                    String tenantId) {
+        final Incident incident = incidentRepository
+                .findByIdAndTenantId(incidentId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Incident", incidentId));
+
+        final UUID previousTeamId = incident.getTeamId();
+        incident.unassignTeam();
+        incidentRepository.save(incident);
+
+        log.info("Incident team unassigned: incidentId={}, previousTeamId={}, by={}, tenant={}",
+                incidentId, previousTeamId, unassignedBy, tenantId);
+
+        final IncidentDto dto = IncidentDto.from(incident);
+        webSocketPublisher.publishUpdate(dto);
+
+        auditEventPublisher.publishIncidentUser(
+                incidentId, tenantId,
+                AuditEventTypes.INCIDENT_TEAM_UNASSIGNED, SERVICE_NAME,
+                unassignedBy.toString(),
+                "Incident team assignment removed",
+                previousTeamId != null
+                        ? Map.of("previousTeamId", previousTeamId.toString())
+                        : Map.of()
         );
 
         return dto;

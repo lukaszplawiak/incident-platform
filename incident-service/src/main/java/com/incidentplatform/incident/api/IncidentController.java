@@ -25,14 +25,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
@@ -79,12 +72,15 @@ public class IncidentController {
             @Parameter(description = "Filter by source name: prometheus, wazuh, generic")
             @RequestParam(required = false) String source,
 
+            @Parameter(description = "Filter by team UUID — shows only incidents assigned to this team")
+            @RequestParam(required = false) UUID teamId,
+
             @PageableDefault(size = 20, sort = "createdAt")
             Pageable pageable) {
 
         final String tenantId = TenantContext.get();
         final IncidentFilter filter = new IncidentFilter(
-                status, severity, sourceType, source);
+                status, severity, sourceType, source, teamId);
 
         log.debug("List incidents request: filter={}, pageable={}, tenant={}",
                 filter, pageable, tenantId);
@@ -184,4 +180,54 @@ public class IncidentController {
         return ResponseEntity.ok(
                 commandService.assignTo(id, request.userId(), principal.userId(), tenantId));
     }
+
+    @PatchMapping(
+            value = "/{id}/team",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Assign a team to an incident",
+            description = """
+                    Assigns a team to this incident. The team should be one that
+                    the calling user belongs to (verified via JWT teamIds claim)
+                    unless the caller has ROLE_ADMIN.
+
+                    When the Routing Engine is implemented (backlog), team assignment
+                    will happen automatically based on routing rules. Until then,
+                    this endpoint enables manual team assignment.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Team assigned"),
+            @ApiResponse(responseCode = "404", description = "Incident not found")
+    })
+    public ResponseEntity<IncidentDto> assignTeam(
+            @PathVariable("id") UUID incidentId,
+            @Valid @RequestBody AssignTeamRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        final String tenantId = TenantContext.get();
+        return ResponseEntity.ok(
+                commandService.assignTeam(
+                        incidentId, request, principal.userId(), tenantId));
+    }
+
+    @DeleteMapping(
+            value = "/{id}/team",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Remove team assignment from an incident",
+            description = "Removes the team assignment. Incident becomes unassigned.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Team unassigned"),
+            @ApiResponse(responseCode = "404", description = "Incident not found")
+    })
+    public ResponseEntity<IncidentDto> unassignTeam(
+            @PathVariable("id") UUID incidentId,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        final String tenantId = TenantContext.get();
+        return ResponseEntity.ok(
+                commandService.unassignTeam(
+                        incidentId, principal.userId(), tenantId));
+    }
+
+
 }

@@ -80,6 +80,22 @@ public class Incident {
     @Column(name = "assigned_to")
     private UUID assignedTo;
 
+    /**
+     * Team responsible for this incident. Nullable — unassigned incidents
+     * have {@code null} team_id.
+     *
+     * <p>Set manually via {@code PATCH /api/v1/incidents/{id}/team} or
+     * automatically by the Routing Engine (backlog) based on alert labels
+     * and routing rules:
+     * <pre>Alert → RoutingRule → Service → Team → EscalationPolicy → OnCallUser</pre>
+     *
+     * <p>No FK to {@code auth-service.teams} — cross-service FK would couple
+     * deployments and prevent independent schema evolution. Referential
+     * integrity enforced at application level via JWT {@code teamIds} claim.
+     */
+    @Column(name = "team_id")
+    private UUID teamId;
+
     @Column(name = "acknowledged_at")
     private Instant acknowledgedAt;
 
@@ -164,6 +180,24 @@ public class Incident {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Assigns this incident to a team.
+     * Called by {@code IncidentCommandService.assignTeam()}.
+     */
+    public void assignToTeam(UUID teamId) {
+        this.teamId    = teamId;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * Removes the team assignment from this incident.
+     * Called by {@code IncidentCommandService.unassignTeam()}.
+     */
+    public void unassignTeam() {
+        this.teamId    = null;
+        this.updatedAt = Instant.now();
+    }
+
     public void assignTo(UUID userId) {
         this.assignedTo = userId;
         this.updatedAt = Instant.now();
@@ -239,4 +273,5 @@ public class Incident {
     public Instant getUpdatedAt()          { return updatedAt; }
     public Long getVersion()               { return version; }
     public int getEscalationLevel()        { return escalationLevel; }
+    public UUID getTeamId()                { return teamId; }
 }

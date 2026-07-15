@@ -45,6 +45,9 @@ public record IncidentDto(
         @JsonProperty("assignedTo")
         UUID assignedTo,
 
+        @JsonProperty("teamId")
+        UUID teamId,
+
         @JsonProperty("escalationLevel")
         int escalationLevel,
 
@@ -92,6 +95,7 @@ public record IncidentDto(
                         incident.getSource(),
                         incident.getAlertId(),
                         incident.getAssignedTo(),
+                        incident.getTeamId(),
                         incident.getEscalationLevel(),
                         incident.getAlertFiredAt(),
                         incident.getCreatedAt(),
