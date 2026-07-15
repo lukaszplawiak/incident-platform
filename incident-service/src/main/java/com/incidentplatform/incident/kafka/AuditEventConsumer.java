@@ -47,7 +47,7 @@ public class AuditEventConsumer {
             auditEventRepository.save(auditEvent);
 
             log.debug("Audit event saved: eventType={}, incidentId={}, " +
-                            "tenant={}", message.eventType(), message.incidentId(),
+                            "tenant={}", message.eventType(), message.resourceId(),
                     message.tenantId());
 
         } catch (IOException | IllegalArgumentException e) {
@@ -87,7 +87,7 @@ public class AuditEventConsumer {
     private AuditEvent toEntity(AuditEventMessage message) {
         if (message.actorType() == ActorType.USER) {
             return AuditEvent.user(
-                    message.incidentId(),
+                    message.resourceId(),
                     message.tenantId(),
                     message.eventType(),
                     message.sourceService(),
@@ -97,7 +97,7 @@ public class AuditEventConsumer {
             );
         } else {
             return AuditEvent.system(
-                    message.incidentId(),
+                    message.resourceId(),
                     message.tenantId(),
                     message.eventType(),
                     message.sourceService(),

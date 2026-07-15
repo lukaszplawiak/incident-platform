@@ -52,6 +52,11 @@ public final class IncidentSpecification {
                         filter.source().toLowerCase()));
             }
 
+            if (filter.teamId() != null) {
+                predicates.add(criteriaBuilder.equal(
+                        root.get("teamId"), filter.teamId()));
+            }
+
             if (query != null && query.getResultType() != Long.class) {
                 query.orderBy(criteriaBuilder.desc(root.get("createdAt")));
             }

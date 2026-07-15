@@ -63,6 +63,8 @@ public final class AuditEventTypes {
     public static final String TEAM_MEMBER_ADDED        = "TEAM_MEMBER_ADDED";
     public static final String TEAM_MEMBER_REMOVED      = "TEAM_MEMBER_REMOVED";
     public static final String TEAM_MEMBER_ROLE_UPDATED = "TEAM_MEMBER_ROLE_UPDATED";
+    public static final String INCIDENT_TEAM_ASSIGNED   = "INCIDENT_TEAM_ASSIGNED";
+    public static final String INCIDENT_TEAM_UNASSIGNED = "INCIDENT_TEAM_UNASSIGNED";
 
     private AuditEventTypes() {}
 }
