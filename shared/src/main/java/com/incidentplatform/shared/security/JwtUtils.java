@@ -131,7 +131,7 @@ public class JwtUtils {
      */
     public String generateToken(UUID userId, String tenantId,
                                 String email, List<String> roles,
-                                List<java.util.UUID> teamIds) {
+                                List<UUID> teamIds) {
         final Instant now        = Instant.now();
         final Instant expiration = now.plus(properties.accessTokenTtl());
 

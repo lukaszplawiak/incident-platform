@@ -15,7 +15,6 @@ import com.incidentplatform.shared.security.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +36,7 @@ public class AuthService {
     private final AuthTokenService authTokenService;
     private final AuditEventPublisher auditEventPublisher;
     private final TeamMemberRepository teamMemberRepository;
+    private final TenantSettingsService tenantSettingsService;
 
     public AuthService(UserRepository userRepository,
                        JwtUtils jwtUtils,
@@ -44,7 +44,8 @@ public class AuthService {
                        AuthTokenService authTokenService,
                        PasswordEncoder passwordEncoder,
                        AuditEventPublisher auditEventPublisher,
-                       TeamMemberRepository teamMemberRepository) {
+                       TeamMemberRepository teamMemberRepository,
+                       TenantSettingsService tenantSettingsService) {
         this.userRepository        = userRepository;
         this.jwtUtils              = jwtUtils;
         this.loginAttemptService   = loginAttemptService;
@@ -52,6 +53,7 @@ public class AuthService {
         this.passwordEncoder       = passwordEncoder;
         this.auditEventPublisher   = auditEventPublisher;
         this.teamMemberRepository  = teamMemberRepository;
+        this.tenantSettingsService = tenantSettingsService;
     }
 
     @Transactional
@@ -105,8 +107,37 @@ public class AuthService {
         // ── 4. Success — clear failure counter ─────────────────────────────
         loginAttemptService.recordSuccess(email, tenantId);
 
-        // Load team memberships for JWT claim — stateless team-auth
-        // downstream services check teamIds without calling auth-service
+        // ── 5. MFA check ───────────────────────────────────────────────────
+        // Two conditions trigger MFA second factor:
+        //   a) User has personally enabled MFA
+        //   b) Tenant admin has required MFA for all users in the tenant
+        final boolean mfaEnabled = user.isMfaEnabled();
+        final boolean tenantMfaRequired = tenantSettingsService.isMfaRequired(tenantId);
+
+        if (tenantMfaRequired && !mfaEnabled) {
+            // Tenant requires MFA but user has not configured it yet
+            throw new BusinessException(
+                    "MFA_SETUP_REQUIRED",
+                    "Your organisation requires MFA. Configure TOTP via POST /api/v1/auth/mfa/setup.",
+                    HttpStatus.FORBIDDEN);
+        }
+
+        if (mfaEnabled) {
+            // Issue MFA session token — NOT an access token.
+            // Client must call POST /auth/mfa/verify with this token + TOTP code.
+            final String rawMfaToken =
+                    authTokenService.generateMfaSessionToken(user, tenantId);
+            final Instant mfaExpiresAt = Instant.now()
+                    .plus(java.time.Duration.ofMinutes(
+                            AuthTokenService.MFA_SESSION_MINUTES));
+
+            log.info("MFA required, session token issued: email={}, tenant={}",
+                    email, tenantId);
+
+            return LoginResponse.mfaRequired(rawMfaToken, mfaExpiresAt);
+        }
+
+        // ── 6. No MFA — issue tokens directly ─────────────────────────────
         final java.util.List<java.util.UUID> teamIds =
                 teamMemberRepository.findTeamIdsByUserIdAndTenantId(
                         user.getId(), tenantId);
@@ -118,8 +149,6 @@ public class AuthService {
         final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());
 
-        // Generate refresh token — stored as SHA-256 hash in auth_tokens.
-        // Raw token returned once to client; never logged.
         final String rawRefreshToken =
                 authTokenService.generateRefreshToken(user, tenantId);
 
@@ -135,19 +164,13 @@ public class AuthService {
                 "auth-service",
                 user.getId().toString(),
                 "User logged in",
-                java.util.Map.of("email", user.getEmail(),
-                        "roles", user.getRoleNames()));
+                java.util.Map.of());
 
-        return new LoginResponse(
-                accessToken,
-                rawRefreshToken,
-                user.getId(),
-                tenantId,
-                user.getEmail(),
-                user.getRoleNames(),
-                accessExpiresAt,
-                refreshExpiresAt
-        );
+        return LoginResponse.success(
+                accessToken, rawRefreshToken,
+                user.getId(), tenantId,
+                user.getEmail(), user.getRoleNames(),
+                accessExpiresAt, refreshExpiresAt);
     }
 
     private BusinessException invalidCredentials() {

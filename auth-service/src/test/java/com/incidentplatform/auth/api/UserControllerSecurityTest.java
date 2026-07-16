@@ -52,7 +52,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
         "jwt.access-token-ttl=PT15M",
         "jwt.service-token-ttl=PT1H",
-        "spring.application.name=auth-service"
+        "spring.application.name=auth-service",
+        "mfa.encryption-key=dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE="
 })
 @DisplayName("UserController")
 class UserControllerSecurityTest {

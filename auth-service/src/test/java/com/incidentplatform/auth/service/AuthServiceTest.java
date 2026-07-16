@@ -33,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.BDDMockito.then;
 
 @ExtendWith(MockitoExtension.class)
@@ -57,6 +58,8 @@ class AuthServiceTest {
     @Mock
     private TeamMemberRepository teamMemberRepository;
 
+    @Mock private TenantSettingsService tenantSettingsService;
+
     private AuthService authService;
 
     private static final String TENANT_ID = "test-tenant";
@@ -70,10 +73,13 @@ class AuthServiceTest {
         authService = new AuthService(
                 userRepository, jwtUtils, loginAttemptService,
                 authTokenService, ENCODER,
-                auditEventPublisher, teamMemberRepository);
+                auditEventPublisher, teamMemberRepository,
+                tenantSettingsService);
         TenantContext.set(TENANT_ID);
         // Default: not locked
         given(loginAttemptService.isLocked(any(), any())).willReturn(false);
+        // lenient — not all tests reach this (some fail before MFA check)
+        lenient().when(tenantSettingsService.isMfaRequired(any())).thenReturn(false);
     }
 
     @AfterEach
@@ -114,6 +120,8 @@ class AuthServiceTest {
             assertThat(response.roles()).containsExactly("ROLE_ADMIN");
             assertThat(response.accessExpiresAt()).isAfter(Instant.now());
             assertThat(response.refreshExpiresAt()).isAfter(Instant.now());
+            assertThat(response.mfaRequired()).isFalse();
+            assertThat(response.mfaToken()).isNull();
         }
 
         @Test
@@ -224,4 +232,53 @@ class AuthServiceTest {
             Mockito.verifyNoInteractions(jwtUtils);
         }
     }
+
+    // ── MFA required ─────────────────────────────────────────────────────
+
+    @Nested
+    @DisplayName("login — MFA required")
+    class LoginMfaRequired {
+
+        @Test
+        @DisplayName("returns mfaRequired=true and mfaToken when user has MFA enabled")
+        void returnsMfaTokenWhenMfaEnabled() {
+            final User user = User.forTesting(
+                    UUID.randomUUID(), TENANT_ID, EMAIL,
+                    ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
+            user.storePendingMfaSecret("encrypted-secret");
+            user.enableMfa();
+
+            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(authTokenService.generateMfaSessionToken(any(), anyString()))
+                    .willReturn("raw-mfa-token");
+
+            final LoginResponse response =
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
+
+            assertThat(response.mfaRequired()).isTrue();
+            assertThat(response.mfaToken()).isEqualTo("raw-mfa-token");
+            assertThat(response.accessToken()).isNull();
+            assertThat(response.refreshToken()).isNull();
+        }
+
+        @Test
+        @DisplayName("throws 403 MFA_SETUP_REQUIRED when tenant requires MFA but user not configured")
+        void throws403WhenTenantRequiresMfaAndUserNotConfigured() {
+            final User user = User.forTesting(
+                    UUID.randomUUID(), TENANT_ID, EMAIL,
+                    ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
+
+            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            lenient().when(tenantSettingsService.isMfaRequired(TENANT_ID)).thenReturn(true);
+
+            assertThatThrownBy(() ->
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
+                    .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class)
+                    .hasMessageContaining("MFA");
+        }
+    }
+
+
 }

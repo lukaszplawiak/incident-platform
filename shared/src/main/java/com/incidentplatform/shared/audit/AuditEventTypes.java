@@ -66,5 +66,13 @@ public final class AuditEventTypes {
     public static final String INCIDENT_TEAM_ASSIGNED   = "INCIDENT_TEAM_ASSIGNED";
     public static final String INCIDENT_TEAM_UNASSIGNED = "INCIDENT_TEAM_UNASSIGNED";
 
+    // ── MFA ─────────────────────────────────────────────────────────────────
+    public static final String MFA_ENABLED                = "MFA_ENABLED";
+    public static final String MFA_DISABLED               = "MFA_DISABLED";
+    public static final String MFA_VERIFY_SUCCESS         = "MFA_VERIFY_SUCCESS";
+    public static final String MFA_VERIFY_FAILED          = "MFA_VERIFY_FAILED";
+    public static final String MFA_BACKUP_CODE_USED       = "MFA_BACKUP_CODE_USED";
+    public static final String TENANT_MFA_POLICY_UPDATED  = "TENANT_MFA_POLICY_UPDATED";
+
     private AuditEventTypes() {}
 }
