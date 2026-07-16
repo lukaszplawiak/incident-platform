@@ -77,7 +77,9 @@ public class DevTokenController {
         final List<String> roles = List.of(
                 SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER, SecurityRoles.ROLE_INGESTOR);
 
-        final String token = jwtUtils.generateToken(userId, tenantId, email, roles);
+        // teamIds are empty for dev tokens — no team membership context needed
+        final String token = jwtUtils.generateToken(
+                userId, tenantId, email, roles, java.util.List.of());
 
         log.warn("DEV TOKEN generated: userId={}, tenantId={} — NOT FOR PRODUCTION",
                 userId, tenantId);

@@ -41,7 +41,7 @@ public class IncidentWebSocketController {
                 tenantId, principal != null ? principal.getName() : "anonymous");
 
         final var filter = new com.incidentplatform.incident.dto.IncidentFilter(
-                null, null, null, null);
+                null, null, null, null, null);
         final var pageable = PageRequest.of(0, 50,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
 
@@ -62,7 +62,7 @@ public class IncidentWebSocketController {
         log.debug("WebSocket refresh requested: tenant={}", tenantId);
 
         final var filter = new com.incidentplatform.incident.dto.IncidentFilter(
-                null, null, null, null);
+                null, null, null, null, null);
         final var pageable = PageRequest.of(0, 50,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
 

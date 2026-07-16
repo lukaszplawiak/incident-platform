@@ -70,7 +70,7 @@ class IncidentQueryServiceTest {
         void shouldUseSimpleQueryWhenNoFilters() {
             // given
             final IncidentFilter emptyFilter = new IncidentFilter(
-                    null, null, null, null);
+                    null, null, null, null, null);
             final List<Incident> incidents = List.of(
                     buildIncident(Severity.CRITICAL),
                     buildIncident(Severity.HIGH)
@@ -97,7 +97,7 @@ class IncidentQueryServiceTest {
         void shouldUseSpecificationWhenStatusFilter() {
             // given
             final IncidentFilter filter = new IncidentFilter(
-                    IncidentStatus.OPEN, null, null, null);
+                    IncidentStatus.OPEN, null, null, null, null);
             final List<Incident> incidents = List.of(buildIncident(Severity.CRITICAL));
             final Page<Incident> page = new PageImpl<>(incidents);
 
@@ -122,7 +122,7 @@ class IncidentQueryServiceTest {
         void shouldUseSpecificationWhenSeverityFilter() {
             // given
             final IncidentFilter filter = new IncidentFilter(
-                    null, Severity.CRITICAL, null, null);
+                    null, Severity.CRITICAL, null, null, null);
             final Page<Incident> page = new PageImpl<>(
                     List.of(buildIncident(Severity.CRITICAL)));
 
@@ -145,7 +145,7 @@ class IncidentQueryServiceTest {
         void shouldUseSpecificationWhenMultipleFilters() {
             // given
             final IncidentFilter filter = new IncidentFilter(
-                    IncidentStatus.OPEN, Severity.CRITICAL, SourceType.SECURITY, "wazuh");
+                    IncidentStatus.OPEN, Severity.CRITICAL, SourceType.SECURITY, "wazuh", null);
             final Page<Incident> page = new PageImpl<>(List.of());
 
             given(incidentRepository.findAll(
@@ -167,7 +167,7 @@ class IncidentQueryServiceTest {
         void shouldReturnEmptyPageWhenNoIncidents() {
             // given
             final IncidentFilter emptyFilter = new IncidentFilter(
-                    null, null, null, null);
+                    null, null, null, null, null);
             given(incidentRepository.findByTenantIdOrderByCreatedAtDesc(
                     TENANT_ID, DEFAULT_PAGEABLE))
                     .willReturn(new PageImpl<>(List.of()));
@@ -188,7 +188,7 @@ class IncidentQueryServiceTest {
             final Incident incident = buildIncident(Severity.CRITICAL);
             final Page<Incident> page = new PageImpl<>(List.of(incident));
             final IncidentFilter emptyFilter = new IncidentFilter(
-                    null, null, null, null);
+                    null, null, null, null, null);
 
             given(incidentRepository.findByTenantIdOrderByCreatedAtDesc(
                     TENANT_ID, DEFAULT_PAGEABLE)).willReturn(page);
@@ -218,7 +218,7 @@ class IncidentQueryServiceTest {
             final Page<Incident> page = new PageImpl<>(
                     incidents, DEFAULT_PAGEABLE, 3L);
             final IncidentFilter emptyFilter = new IncidentFilter(
-                    null, null, null, null);
+                    null, null, null, null, null);
 
             given(incidentRepository.findByTenantIdOrderByCreatedAtDesc(
                     TENANT_ID, DEFAULT_PAGEABLE)).willReturn(page);

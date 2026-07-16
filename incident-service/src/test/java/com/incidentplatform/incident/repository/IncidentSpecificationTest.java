@@ -83,7 +83,7 @@ class IncidentSpecificationTest {
 
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, null, null, "prometheus"));
+                            new IncidentFilter(null, null, null, "prometheus", null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -102,7 +102,7 @@ class IncidentSpecificationTest {
 
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, null, null, "PROMETHEUS"));
+                            new IncidentFilter(null, null, null, "PROMETHEUS", null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -120,7 +120,7 @@ class IncidentSpecificationTest {
 
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, null, null, "Prometheus"));
+                            new IncidentFilter(null, null, null, "Prometheus", null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -135,7 +135,7 @@ class IncidentSpecificationTest {
             // given
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, null, null, null));
+                            new IncidentFilter(null, null, null, null, null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -150,7 +150,7 @@ class IncidentSpecificationTest {
             // given
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, null, null, "   "));
+                            new IncidentFilter(null, null, null, "   ", null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -171,7 +171,7 @@ class IncidentSpecificationTest {
             // including "tenantId"; only verify the "status" predicate is built
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(IncidentStatus.OPEN, null, null, null));
+                            new IncidentFilter(IncidentStatus.OPEN, null, null, null, null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -186,7 +186,7 @@ class IncidentSpecificationTest {
             // given
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, Severity.CRITICAL, null, null));
+                            new IncidentFilter(null, Severity.CRITICAL, null, null, null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -201,7 +201,7 @@ class IncidentSpecificationTest {
             // given
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, null, SourceType.OPS, null));
+                            new IncidentFilter(null, null, SourceType.OPS, null, null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
@@ -216,7 +216,7 @@ class IncidentSpecificationTest {
             // given
             final Specification<Incident> spec =
                     IncidentSpecification.withFilter(TENANT_ID,
-                            new IncidentFilter(null, null, null, null));
+                            new IncidentFilter(null, null, null, null, null));
 
             // when
             spec.toPredicate(root, query, criteriaBuilder);
