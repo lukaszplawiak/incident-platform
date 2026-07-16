@@ -4,7 +4,8 @@ import org.flywaydb.core.api.migration.BaseJavaMigration;
 import org.flywaydb.core.api.migration.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.sql.PreparedStatement;
 import java.util.UUID;
@@ -57,7 +58,12 @@ public class V1_1__seed_admin_user extends BaseJavaMigration {
         }
 
         final UUID userId = UUID.randomUUID();
-        final String passwordHash = new BCryptPasswordEncoder().encode(password);
+        // Argon2id — memory-hard, GPU-resistant. Same algorithm as SecurityConfig.
+        // Note: Spring beans cannot be injected into Flyway Java migrations
+        // (Flyway runs before the Spring context is fully initialized).
+        // We instantiate directly — identical parameters to the @Bean in SecurityConfig.
+        final PasswordEncoder encoder = Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
+        final String passwordHash = encoder.encode(password);
 
         // Insert user
         final String insertUser = """
