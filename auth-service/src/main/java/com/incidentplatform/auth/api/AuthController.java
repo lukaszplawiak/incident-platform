@@ -1,6 +1,14 @@
 package com.incidentplatform.auth.api;
 
 import com.incidentplatform.auth.dto.AcceptInviteRequest;
+import com.incidentplatform.auth.dto.MfaBackupCodesStatusResponse;
+import com.incidentplatform.auth.dto.MfaDisableRequest;
+import com.incidentplatform.auth.dto.MfaEnableRequest;
+import com.incidentplatform.auth.dto.MfaEnableResponse;
+import com.incidentplatform.auth.dto.MfaSetupResponse;
+import com.incidentplatform.auth.dto.MfaVerifyBackupRequest;
+import com.incidentplatform.auth.dto.MfaVerifyRequest;
+import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.dto.ForgotPasswordRequest;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
@@ -45,19 +53,22 @@ public class AuthController {
     private final LogoutService logoutService;
     private final ForgotPasswordService forgotPasswordService;
     private final PasswordService passwordService;
+    private final MfaService mfaService;
 
     public AuthController(AuthService authService,
                           AuthTokenService authTokenService,
                           InviteService inviteService,
                           LogoutService logoutService,
                           ForgotPasswordService forgotPasswordService,
-                          PasswordService passwordService) {
+                          PasswordService passwordService,
+                          MfaService mfaService) {
         this.authService           = authService;
         this.authTokenService      = authTokenService;
         this.inviteService         = inviteService;
         this.logoutService         = logoutService;
         this.forgotPasswordService = forgotPasswordService;
         this.passwordService       = passwordService;
+        this.mfaService            = mfaService;
     }
 
     @PostMapping(
@@ -195,4 +206,100 @@ public class AuthController {
         logoutService.logout(rawToken, principal);
         return ResponseEntity.noContent().build();
     }
+
+    // ── MFA endpoints ─────────────────────────────────────────────────────
+
+    @PostMapping(value = "/mfa/setup", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Initiate MFA setup — generates secret and QR URL",
+            description = "Returns a QR URL to scan with Google Authenticator. " +
+                    "Call POST /mfa/enable with the first code to activate.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Setup initiated"),
+            @ApiResponse(responseCode = "409", description = "MFA already enabled")
+    })
+    public ResponseEntity<MfaSetupResponse> setupMfa(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(mfaService.setupMfa(principal));
+    }
+
+    @PostMapping(value = "/mfa/enable",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Enable MFA — verify first TOTP code and receive backup codes",
+            description = "Confirms setup was successful. Returns one-time backup codes " +
+                    "— save them securely, they will not be shown again.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "MFA enabled, backup codes returned"),
+            @ApiResponse(responseCode = "401", description = "Invalid TOTP code"),
+            @ApiResponse(responseCode = "409", description = "No pending setup found")
+    })
+    public ResponseEntity<MfaEnableResponse> enableMfa(
+            @Valid @RequestBody MfaEnableRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(mfaService.enableMfa(request.totpCode(), principal));
+    }
+
+    @PostMapping(value = "/mfa/disable", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Disable MFA — requires password + TOTP code",
+            description = "Both factors required to prevent a stolen session from disabling MFA.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "MFA disabled"),
+            @ApiResponse(responseCode = "401", description = "Invalid password or TOTP code"),
+            @ApiResponse(responseCode = "409", description = "MFA not enabled")
+    })
+    public ResponseEntity<Void> disableMfa(
+            @Valid @RequestBody MfaDisableRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        mfaService.disableMfa(request.password(), request.totpCode(), principal);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping(
+            value = "/mfa/verify",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Complete MFA login — exchange MFA session token + TOTP code for access token",
+            description = "The mfaToken comes from POST /auth/login when mfaRequired=true. " +
+                    "Expires in 5 minutes. Single-use.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "MFA verified — tokens issued"),
+            @ApiResponse(responseCode = "401", description = "Invalid TOTP code or expired/used mfaToken")
+    })
+    public ResponseEntity<LoginResponse> verifyMfa(
+            @Valid @RequestBody MfaVerifyRequest request) {
+        return ResponseEntity.ok(
+                mfaService.verifyMfaToken(request.mfaToken(), request.totpCode()));
+    }
+
+    @PostMapping(
+            value = "/mfa/verify-backup",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Complete MFA login using a backup code",
+            description = "Use when authenticator app is unavailable. " +
+                    "Backup code is consumed and cannot be reused.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Backup code accepted — tokens issued"),
+            @ApiResponse(responseCode = "401", description = "Invalid/used backup code or expired mfaToken")
+    })
+    public ResponseEntity<LoginResponse> verifyMfaBackup(
+            @Valid @RequestBody MfaVerifyBackupRequest request) {
+        return ResponseEntity.ok(
+                mfaService.verifyWithBackupCode(request.mfaToken(), request.backupCode()));
+    }
+
+    @org.springframework.web.bind.annotation.GetMapping(
+            value = "/mfa/backup-codes",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Get backup codes status — count of remaining unused codes")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Status returned"),
+            @ApiResponse(responseCode = "409", description = "MFA not enabled")
+    })
+    public ResponseEntity<MfaBackupCodesStatusResponse> getBackupCodesStatus(
+            @AuthenticationPrincipal UserPrincipal principal) {
+        return ResponseEntity.ok(mfaService.getBackupCodesStatus(principal));
+    }
+
+
 }

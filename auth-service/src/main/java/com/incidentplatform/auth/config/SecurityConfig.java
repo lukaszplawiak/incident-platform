@@ -35,22 +35,16 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
 
     /**
-     * Password encoder using Argon2id — OWASP 2024 recommended algorithm.
+     * Password encoder used by {@code AuthService} and {@code PasswordService}.
      *
-     * <h2>Why Argon2id over BCrypt</h2>
-     * BCrypt uses only ~4KB RAM per attempt — modern GPUs can run thousands
-     * of parallel brute-force attempts. Argon2id is memory-hard: each attempt
-     * requires 64MB RAM by default, reducing GPU parallelism from thousands
-     * of attempts to ~375 (24GB VRAM / 64MB). This is the fundamental
-     * advantage — hardware cost scales with memory, not just compute.
+     * <p>Cost factor 12 (default is 10) — 4x more work for an attacker
+     * brute-forcing stolen hashes. On modern hardware ~250ms per hash,
+     * acceptable for a login endpoint but significant for an attacker.
      *
-     * <p>Spring Security defaults (v5.8+):
-     * memory=65536 (64MB), iterations=3, parallelism=1 — RFC 9106 minimum.
-     * Output format: {@code $argon2id$v=19$m=65536,t=3,p=1$...}
-     *
-     * <p>Typed as {@link PasswordEncoder} (interface) — all services
-     * ({@code AuthService}, {@code PasswordService}, {@code InviteService})
-     * are unaware of the concrete algorithm.
+     * <p>Typed as {@link PasswordEncoder} (interface) rather than
+     * {@code BCryptPasswordEncoder} (concrete class) — allows migrating
+     * to Argon2 or SCrypt by changing this single bean without touching
+     * any service code.
      */
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -89,6 +83,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/accept-invite").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/forgot-password").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/reset-password").permitAll()
+                        // MFA verify — public because client holds only mfaToken, not JWT
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/verify").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/verify-backup").permitAll()
                         .anyRequest().authenticated()
                 )
                 .build();

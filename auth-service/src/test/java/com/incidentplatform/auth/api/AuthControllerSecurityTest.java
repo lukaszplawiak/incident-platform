@@ -3,12 +3,7 @@ package com.incidentplatform.auth.api;
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.domain.User;
-import com.incidentplatform.auth.service.AuthService;
-import com.incidentplatform.auth.service.ForgotPasswordService;
-import com.incidentplatform.auth.service.PasswordService;
-import com.incidentplatform.auth.service.AuthTokenService;
-import com.incidentplatform.auth.service.InviteService;
-import com.incidentplatform.auth.service.LogoutService;
+import com.incidentplatform.auth.service.*;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.JwtUtils;
@@ -45,7 +40,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "jwt.service-token-ttl=PT1H",
         "jwt.refresh-token-ttl=P30D",
         "spring.application.name=auth-service",
-        "security.cors.allowed-origins=http://localhost:4200"
+        "security.cors.allowed-origins=http://localhost:4200",
+        "mfa.encryption-key=dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE="
 })
 @DisplayName("AuthController")
 class AuthControllerSecurityTest {
@@ -59,13 +55,14 @@ class AuthControllerSecurityTest {
     @MockitoBean private AuthTokenService authTokenService;
     @MockitoBean private InviteService inviteService;
     @MockitoBean private LogoutService logoutService;
+    @MockitoBean private MfaService mfaService;
     @MockitoBean private JwtUtils jwtUtils;
     @MockitoBean private ServiceTokenProvider serviceTokenProvider;
 
     private static final String TENANT_ID = "test-tenant";
 
     private static LoginResponse buildLoginResponse() {
-        return new LoginResponse(
+        return LoginResponse.success(
                 "access-token",
                 "refresh-token",
                 UUID.randomUUID(),

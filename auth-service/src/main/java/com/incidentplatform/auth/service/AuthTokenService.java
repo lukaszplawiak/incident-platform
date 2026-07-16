@@ -49,8 +49,9 @@ public class AuthTokenService {
     private static final Logger log =
             LoggerFactory.getLogger(AuthTokenService.class);
 
-    static final int INVITE_TTL_HOURS = 168;
-    static final int RESET_TTL_MINUTES = 15;
+    static final int INVITE_TTL_HOURS   = 168;
+    static final int RESET_TTL_MINUTES  = 15;
+    static final int MFA_SESSION_MINUTES = 5;
 
     private static final int TOKEN_BYTES = 32;
 
@@ -95,6 +96,21 @@ public class AuthTokenService {
      * @throws BusinessException 401 if the token is invalid, expired, or used
      */
     @Transactional
+    /**
+     * Generates a short-lived MFA session token (5 minutes).
+     *
+     * <p>Issued after successful password verification when user has MFA
+     * enabled. The client must exchange it for a real access token via
+     * POST /auth/mfa/verify within 5 minutes.
+     *
+     * <p>Like all tokens, stored as SHA-256 hash — raw token sent to client
+     * once and never persisted in plain text.
+     */
+    public String generateMfaSessionToken(User user, String tenantId) {
+        return generate(user, tenantId, AuthToken.Type.MFA_SESSION,
+                Duration.ofMinutes(MFA_SESSION_MINUTES));
+    }
+
     public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
         final String hash = hash(rawToken);
 

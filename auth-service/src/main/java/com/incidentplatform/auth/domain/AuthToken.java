@@ -23,7 +23,18 @@ public class AuthToken {
         INVITE,
         PASSWORD_RESET,
         /** Refresh token — rotated on every use, 30-day TTL by default. */
-        REFRESH
+        REFRESH,
+
+        /**
+         * MFA session token — issued after successful password verification
+         * when user has MFA enabled. Short TTL (5 minutes). Single-use.
+         * Exchanged for accessToken + refreshToken via POST /auth/mfa/verify.
+         *
+         * <p>This is an opaque token (like REFRESH), not a JWT — it does not
+         * grant access to any API endpoint. It only identifies the user for
+         * the second factor verification step.
+         */
+        MFA_SESSION
     }
 
     @Id
