@@ -60,7 +60,7 @@ class AuditEventConsumerTest {
     }
 
     private String buildAuditEventJson() throws Exception {
-        final AuditEventMessage message = AuditEventMessage.system(
+        final AuditEventMessage message = AuditEventMessage.incident(
                 INCIDENT_ID,
                 TENANT_ID,
                 AuditEventTypes.INCIDENT_OPENED,
@@ -72,7 +72,7 @@ class AuditEventConsumerTest {
     }
 
     private String buildUserAuditEventJson() throws Exception {
-        final AuditEventMessage message = AuditEventMessage.user(
+        final AuditEventMessage message = AuditEventMessage.incidentUser(
                 INCIDENT_ID,
                 TENANT_ID,
                 AuditEventTypes.INCIDENT_ACKNOWLEDGED,

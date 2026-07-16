@@ -48,7 +48,7 @@ class AuditEventPublisherTest {
             willDoNothing().given(sender).send(any(AuditEventMessage.class));
 
             // when
-            publisher.publishSystem(
+            publisher.publishIncident(
                     INCIDENT_ID, TENANT_ID,
                     AuditEventTypes.INCIDENT_CREATED, "incident-service",
                     "Incident created", Map.of());
@@ -67,7 +67,7 @@ class AuditEventPublisherTest {
             // when / then — publisher swallows the exception after all retries
             // (retry exhaustion is handled by @Retryable in AuditEventKafkaSender)
             org.assertj.core.api.Assertions.assertThatCode(() ->
-                    publisher.publishSystem(
+                    publisher.publishIncident(
                             INCIDENT_ID, TENANT_ID,
                             AuditEventTypes.INCIDENT_CREATED, "incident-service",
                             "Incident created", Map.of())
@@ -83,7 +83,7 @@ class AuditEventPublisherTest {
 
             // when / then — JsonProcessingException is caught and logged, not propagated
             org.assertj.core.api.Assertions.assertThatCode(() ->
-                    publisher.publishSystem(
+                    publisher.publishIncident(
                             INCIDENT_ID, TENANT_ID,
                             AuditEventTypes.INCIDENT_CREATED, "incident-service",
                             "Incident created", Map.of())
@@ -102,7 +102,7 @@ class AuditEventPublisherTest {
             willDoNothing().given(sender).send(any(AuditEventMessage.class));
 
             // when
-            publisher.publishUser(
+            publisher.publishAuth(
                     INCIDENT_ID, TENANT_ID,
                     AuditEventTypes.INCIDENT_ACKNOWLEDGED, "incident-service",
                     UUID.randomUUID().toString(),

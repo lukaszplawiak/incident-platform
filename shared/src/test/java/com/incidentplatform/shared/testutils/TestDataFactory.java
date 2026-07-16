@@ -190,8 +190,8 @@ public final class TestDataFactory {
                 TEST_USER_ID,
                 TEST_TENANT_ID,
                 "responder@acme.com",
-                List.of(SecurityRoles.ROLE_RESPONDER)
-        );
+                List.of(SecurityRoles.ROLE_RESPONDER),
+                List.of());
     }
 
     public static UserPrincipal anAdminPrincipal() {
@@ -199,8 +199,8 @@ public final class TestDataFactory {
                 UUID.randomUUID(),
                 TEST_TENANT_ID,
                 "admin@acme.com",
-                List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER)
-        );
+                List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER),
+                List.of());
     }
 
     public static UserPrincipal aPrincipalForTenant(String tenantId) {
@@ -208,7 +208,7 @@ public final class TestDataFactory {
                 UUID.randomUUID(),
                 tenantId,
                 "user@" + tenantId + ".com",
-                List.of(SecurityRoles.ROLE_RESPONDER)
-        );
+                List.of(SecurityRoles.ROLE_RESPONDER),
+                List.of());
     }
 }

@@ -125,7 +125,7 @@ class PostmortemPersistenceServiceTest {
                     "content", "prompt", DURATION);
 
             // then
-            then(auditEventPublisher).should().publishSystem(
+            then(auditEventPublisher).should().publishIncident(
                     eq(INCIDENT_ID), eq(TENANT_ID),
                     eq(AuditEventTypes.POSTMORTEM_GENERATED), anyString(),
                     anyString(), any());
@@ -176,7 +176,7 @@ class PostmortemPersistenceServiceTest {
 
             // then — must be the transient FAILED type, not the terminal
             // PERMANENTLY_FAILED type, since the scheduler will retry this record
-            then(auditEventPublisher).should().publishSystem(
+            then(auditEventPublisher).should().publishIncident(
                     eq(INCIDENT_ID), eq(TENANT_ID),
                     eq(AuditEventTypes.POSTMORTEM_FAILED), anyString(),
                     anyString(), any());
@@ -282,7 +282,7 @@ class PostmortemPersistenceServiceTest {
                     POSTMORTEM_ID, INCIDENT_ID, TENANT_ID, "API down", 3);
 
             // then
-            then(auditEventPublisher).should().publishSystem(
+            then(auditEventPublisher).should().publishIncident(
                     eq(INCIDENT_ID), eq(TENANT_ID),
                     eq(AuditEventTypes.POSTMORTEM_PERMANENTLY_FAILED), anyString(),
                     anyString(), any());
