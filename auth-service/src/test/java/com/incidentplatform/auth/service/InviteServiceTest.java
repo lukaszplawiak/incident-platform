@@ -6,8 +6,9 @@ import com.incidentplatform.auth.dto.AcceptInviteRequest;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,7 +46,8 @@ class InviteServiceTest {
 
     private InviteService service;
 
-    private static final PasswordEncoder ENCODER = new BCryptPasswordEncoder();
+    private static final PasswordEncoder ENCODER =
+            Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
 
     private static final String TENANT_ID = "test-tenant";
     private static final String RAW_TOKEN = "raw-invite-token";
@@ -88,7 +90,7 @@ class InviteServiceTest {
             final String hash = captor.getValue().getPasswordHash();
             assertThat(hash).isNotNull();
             assertThat(hash).isNotEqualTo(NEW_PASSWORD);
-            assertThat(hash).startsWith("$2a$");  // BCrypt prefix
+            assertThat(hash).startsWith("$argon2id$");  // Argon2id prefix
         }
 
         @Test

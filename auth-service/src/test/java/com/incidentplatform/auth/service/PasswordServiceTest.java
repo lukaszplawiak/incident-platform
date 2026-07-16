@@ -20,7 +20,8 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
 import java.util.List;
@@ -49,7 +50,8 @@ class PasswordServiceTest {
     private static final UUID USER_ID        = UUID.randomUUID();
     private static final String CURRENT_PASSWORD = "CurrentPass123!";
     private static final String NEW_PASSWORD     = "NewPassword456!";
-    private static final BCryptPasswordEncoder ENCODER = new BCryptPasswordEncoder();
+    private static final PasswordEncoder ENCODER =
+            Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
 
     @BeforeEach
     void setUp() {
@@ -87,7 +89,7 @@ class PasswordServiceTest {
 
             assertThat(newHash).isNotNull();
             assertThat(newHash).isNotEqualTo(NEW_PASSWORD);
-            assertThat(newHash).startsWith("$2a$");
+            assertThat(newHash).startsWith("$argon2id$");
             assertThat(ENCODER.matches(NEW_PASSWORD, newHash)).isTrue();
         }
 
@@ -190,7 +192,7 @@ class PasswordServiceTest {
             final String newHash = captor.getValue().getPasswordHash();
 
             assertThat(newHash).isNotNull();
-            assertThat(newHash).startsWith("$2a$");
+            assertThat(newHash).startsWith("$argon2id$");
             assertThat(ENCODER.matches(NEW_PASSWORD, newHash)).isTrue();
         }
 

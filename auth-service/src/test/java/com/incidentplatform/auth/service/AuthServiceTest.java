@@ -20,7 +20,8 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -61,7 +62,8 @@ class AuthServiceTest {
     private static final String TENANT_ID = "test-tenant";
     private static final String EMAIL = "admin@example.com";
     private static final String RAW_PASSWORD = "SuperSecret123";
-    private static final BCryptPasswordEncoder ENCODER = new BCryptPasswordEncoder();
+    private static final PasswordEncoder ENCODER =
+            Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
 
     @BeforeEach
     void setUp() {
