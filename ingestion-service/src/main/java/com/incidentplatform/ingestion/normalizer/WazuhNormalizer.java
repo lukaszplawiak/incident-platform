@@ -19,7 +19,8 @@ public class WazuhNormalizer extends BaseNormalizer {
     private static final String SOURCE = "wazuh";
 
     @Override
-    public NormalizationResult normalize(JsonNode rawPayload, String tenantId) {
+    public NormalizationResult normalize(JsonNode rawPayload, String tenantId,
+                                         UUID teamId) {
         log.debug("Normalizing Wazuh alert for tenant: {}", tenantId);
 
         final JsonNode rule = rawPayload.get("rule");
@@ -59,7 +60,8 @@ public class WazuhNormalizer extends BaseNormalizer {
                 ruleDescription,
                 firedAt,
                 fingerprint,
-                metadata
+                metadata,
+                teamId
         )));
     }
 

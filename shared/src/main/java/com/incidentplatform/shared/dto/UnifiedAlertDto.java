@@ -55,7 +55,23 @@ public record UnifiedAlertDto(
         String fingerprint,
 
         @JsonProperty("metadata")
-        Map<String, String> metadata
+        Map<String, String> metadata,
+
+        /**
+         * Team responsible for this alert — resolved from the Integration
+         * that authenticated the request (ApiKey → Integration → Team).
+         *
+         * <p>Null when:
+         * <ul>
+         *   <li>Alert sent with JWT (ROLE_INGESTOR) instead of Integration ApiKey</li>
+         *   <li>Integration was created without a team assignment</li>
+         * </ul>
+         *
+         * <p>Propagated to {@code Incident.team_id} by incident-service.
+         * EscalationScheduler uses it to find the correct on-call engineer.
+         */
+        @JsonProperty("teamId")
+        UUID teamId
 
 ) {
     public UnifiedAlertDto {

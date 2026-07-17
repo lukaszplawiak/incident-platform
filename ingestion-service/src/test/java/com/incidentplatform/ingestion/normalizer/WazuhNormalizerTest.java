@@ -48,7 +48,7 @@ class WazuhNormalizerTest {
                 }
                 """);
 
-        final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
+        final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
 
         assertThat(result.firingAlerts()).hasSize(1);
         assertThat(result.resolvedAlerts()).isEmpty();
@@ -108,7 +108,7 @@ class WazuhNormalizerTest {
                       "agent": { "id": "001", "name": "agent-1" }
                     }
                     """);
-            assertThat(normalizer.normalize(payload, TENANT_ID)
+            assertThat(normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).severity()).isEqualTo(Severity.LOW);
         }
 
@@ -123,7 +123,7 @@ class WazuhNormalizerTest {
                       "agent": { "id": "001", "name": "agent-1" }
                     }
                     """, level));
-            return normalizer.normalize(payload, TENANT_ID)
+            return normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).severity();
         }
     }
@@ -137,7 +137,7 @@ class WazuhNormalizerTest {
         void shouldIncludeBasicMetadata() throws Exception {
             final var metadata = normalizer.normalize(
                     buildValidPayload("5551", 12, "Multiple auth failures", "003", "web-server-01"),
-                    TENANT_ID).firingAlerts().get(0).metadata();
+                    TENANT_ID, null).firingAlerts().get(0).metadata();
             assertThat(metadata).containsEntry("rule_id", "5551");
             assertThat(metadata).containsEntry("agent_id", "003");
             assertThat(metadata).containsEntry("agent_name", "web-server-01");
@@ -157,7 +157,7 @@ class WazuhNormalizerTest {
                       "agent": { "id": "001", "name": "agent-1" }
                     }
                     """);
-            final var metadata = normalizer.normalize(payload, TENANT_ID)
+            final var metadata = normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).metadata();
             assertThat(metadata).containsKey("rule_groups");
             assertThat(metadata.get("rule_groups")).contains("auth_failures").contains("syslog");
@@ -173,7 +173,7 @@ class WazuhNormalizerTest {
                       "data": { "srcip": "192.168.1.100" }
                     }
                     """);
-            final var metadata = normalizer.normalize(payload, TENANT_ID)
+            final var metadata = normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).metadata();
             assertThat(metadata).containsEntry("source_ip", "192.168.1.100");
         }
@@ -188,7 +188,7 @@ class WazuhNormalizerTest {
                       "full_log": "password=secret123 user=admin"
                     }
                     """);
-            final var metadata = normalizer.normalize(payload, TENANT_ID)
+            final var metadata = normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).metadata();
             assertThat(metadata).doesNotContainKey("full_log");
         }
@@ -207,7 +207,7 @@ class WazuhNormalizerTest {
                       "agent": { "id": "001", "name": "agent-1" }
                     }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("rule");
         }
@@ -221,7 +221,7 @@ class WazuhNormalizerTest {
                       "agent": { "id": "001", "name": "agent-1" }
                     }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("id");
         }
@@ -235,7 +235,7 @@ class WazuhNormalizerTest {
                   "rule": { "id": "5551", "level": 8, "description": "Test alert" }
                 }
                 """);
-        final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
+        final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
         assertThat(result.firingAlerts()).hasSize(1);
         assertThat(result.firingAlerts().get(0).title()).contains("unknown");
     }
@@ -250,7 +250,7 @@ class WazuhNormalizerTest {
     @DisplayName("fingerprint should be ruleId:agentId")
     void shouldBuildCorrectFingerprint() throws Exception {
         final String fingerprint = normalizer.normalize(
-                        buildValidPayload("9999", 12, "Test", "007", "server-007"), TENANT_ID)
+                        buildValidPayload("9999", 12, "Test", "007", "server-007"), TENANT_ID, null)
                 .firingAlerts().get(0).fingerprint();
         assertThat(fingerprint).isEqualTo("wazuh:9999:007");
     }

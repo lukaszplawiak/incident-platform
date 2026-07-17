@@ -18,7 +18,8 @@ public class GenericNormalizer extends BaseNormalizer {
     private static final String SOURCE = "generic";
 
     @Override
-    public NormalizationResult normalize(JsonNode rawPayload, String tenantId) {
+    public NormalizationResult normalize(JsonNode rawPayload, String tenantId,
+                                         UUID teamId) {
         log.debug("Normalizing generic alert for tenant: {}", tenantId);
 
         final String title = getTextOrThrow(rawPayload, "title");
@@ -50,7 +51,8 @@ public class GenericNormalizer extends BaseNormalizer {
                 description,
                 firedAt,
                 fingerprint,
-                metadata
+                metadata,
+                teamId
         )));
     }
 

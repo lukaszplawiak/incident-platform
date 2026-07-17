@@ -104,6 +104,14 @@ public class ApiKey {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /**
+     * Set when this key belongs to an {@link Integration}.
+     * Null for manually-created API keys.
+     * Used by {@code ApiKeyLookupServiceImpl} to resolve teamId in a single JOIN.
+     */
+    @Column(name = "integration_id")
+    private UUID integrationId;
+
     protected ApiKey() {}
 
     public static ApiKey createTenant(String tenantId, String name,
@@ -191,4 +199,10 @@ public class ApiKey {
     public Instant getCreatedAt()  { return createdAt; }
     public boolean isTenant()      { return keyType == ApiKeyType.TENANT; }
     public boolean isPersonal()    { return keyType == ApiKeyType.PERSONAL; }
+    public UUID getIntegrationId() { return integrationId; }
+
+    /** Called by {@code IntegrationService} after integration is persisted. */
+    public void setIntegrationId(UUID integrationId) {
+        this.integrationId = integrationId;
+    }
 }

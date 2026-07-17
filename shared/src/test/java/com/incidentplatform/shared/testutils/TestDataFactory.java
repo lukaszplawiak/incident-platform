@@ -27,6 +27,8 @@ public final class TestDataFactory {
             "00000000-0000-0000-0000-000000000002");
     public static final UUID TEST_ALERT_ID = UUID.fromString(
             "00000000-0000-0000-0000-000000000003");
+    public static final UUID TEST_TEAM_ID  = UUID.fromString(
+            "00000000-0000-0000-0000-000000000004");
 
     private TestDataFactory() {
         throw new UnsupportedOperationException("TestDataFactory is a utility class");
@@ -47,7 +49,8 @@ public final class TestDataFactory {
                         "job", "node-exporter",
                         "instance", "prod-server-1:9100",
                         "alertname", "HighCpuUsage"
-                )
+                ),
+                TEST_TEAM_ID
         );
     }
 
@@ -66,7 +69,8 @@ public final class TestDataFactory {
                         "rule_id", "5551",
                         "agent_name", "web-server-01",
                         "source_ip", "192.168.1.100"
-                )
+                ),
+                TEST_TEAM_ID
         );
     }
 
@@ -82,7 +86,8 @@ public final class TestDataFactory {
                 Instant.now(),
                 "prometheus:test-alert-with-severity-"
                         + severity.name().toLowerCase() + ":unknown",
-                Map.of()
+                Map.of(),
+                null  // teamId
         );
     }
 
@@ -97,7 +102,8 @@ public final class TestDataFactory {
                 null,
                 Instant.now(),
                 "prometheus:alert-for-tenant-" + tenantId + ":unknown",
-                Map.of()
+                Map.of(),
+                null  // teamId
         );
     }
 

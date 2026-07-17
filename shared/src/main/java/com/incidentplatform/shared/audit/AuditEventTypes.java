@@ -79,5 +79,9 @@ public final class AuditEventTypes {
     public static final String API_KEY_REVOKED = "API_KEY_REVOKED";
     public static final String API_KEY_USED    = "API_KEY_USED";
 
+    // ── Integrations ──────────────────────────────────────────────────────────
+    public static final String INTEGRATION_CREATED = "INTEGRATION_CREATED";
+    public static final String INTEGRATION_REVOKED = "INTEGRATION_REVOKED";
+
     private AuditEventTypes() {}
 }
