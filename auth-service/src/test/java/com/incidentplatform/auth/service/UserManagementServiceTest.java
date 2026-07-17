@@ -39,6 +39,7 @@ class UserManagementServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private TeamMemberRepository teamMemberRepository;
     @Mock private AuditEventPublisher auditEventPublisher;
+    @Mock private ApiKeyService apiKeyService;
 
     private UserManagementService service;
 
@@ -49,7 +50,7 @@ class UserManagementServiceTest {
     @BeforeEach
     void setUp() {
         service = new UserManagementService(
-                userRepository, teamMemberRepository, auditEventPublisher);
+                userRepository, teamMemberRepository, auditEventPublisher, apiKeyService);
         TenantContext.set(TENANT_ID);
     }
 

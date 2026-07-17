@@ -116,6 +116,27 @@ public class SharedSecurityAutoConfiguration {
      * <p>@ConditionalOnMissingBean ensures auth-service's @Primary bean wins
      * without conflict.
      */
+    /**
+     * No-op API key lookup — used by all services except auth-service.
+     * auth-service provides its own {@code ApiKeyLookupServiceImpl} bean
+     * which overrides this via {@code @ConditionalOnMissingBean}.
+     *
+     * <p>Other services currently reject all API key requests with 401.
+     * Future: API gateway pre-validates keys before routing to services.
+     */
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyAuthFilter.ApiKeyLookupService.class)
+    public ApiKeyAuthFilter.ApiKeyLookupService noOpApiKeyLookupService() {
+        return rawKey -> java.util.Optional.empty();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(ApiKeyAuthFilter.class)
+    public ApiKeyAuthFilter apiKeyAuthFilter(
+            ApiKeyAuthFilter.ApiKeyLookupService lookupService) {
+        return new ApiKeyAuthFilter(lookupService);
+    }
+
     @Bean
     @ConditionalOnMissingBean(JwtAuthFilter.class)
     public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
@@ -127,9 +148,11 @@ public class SharedSecurityAutoConfiguration {
     public SecurityFilterChain defaultSecurityFilterChain(
             HttpSecurity http,
             JwtAuthFilter jwtAuthFilter,
+            ApiKeyAuthFilter apiKeyAuthFilter,
             UnauthorizedEntryPoint unauthorizedEntryPoint) throws Exception {
 
         return buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
+                .addFilterBefore(apiKeyAuthFilter, JwtAuthFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_PATHS).permitAll()
                         .anyRequest().authenticated()

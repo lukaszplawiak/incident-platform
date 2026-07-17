@@ -6,6 +6,7 @@ import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
 import com.incidentplatform.auth.dto.UserSummaryDto;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.auth.service.ApiKeyService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -31,13 +32,16 @@ public class UserManagementService {
     private final UserRepository userRepository;
     private final TeamMemberRepository teamMemberRepository;
     private final AuditEventPublisher auditEventPublisher;
+    private final ApiKeyService apiKeyService;
 
     public UserManagementService(UserRepository userRepository,
                                  TeamMemberRepository teamMemberRepository,
-                                 AuditEventPublisher auditEventPublisher) {
+                                 AuditEventPublisher auditEventPublisher,
+                                 ApiKeyService apiKeyService) {
         this.userRepository       = userRepository;
         this.teamMemberRepository = teamMemberRepository;
         this.auditEventPublisher  = auditEventPublisher;
+        this.apiKeyService        = apiKeyService;
     }
 
     // ── updateRoles ───────────────────────────────────────────────────────
@@ -115,6 +119,9 @@ public class UserManagementService {
         final User user = requireActiveUser(userId, tenantId);
         user.archive();
         userRepository.save(user);
+
+        // Revoke all personal API keys — archived user cannot authenticate
+        apiKeyService.revokeAllPersonalKeysForUser(userId, tenantId);
 
         auditEventPublisher.publishAuth(
                 userId, tenantId,
@@ -228,6 +235,9 @@ public class UserManagementService {
 
         // Remove team memberships before anonymizing
         teamMemberRepository.deleteByUserId(userId);
+
+        // Revoke all personal API keys — anonymized user cannot authenticate
+        apiKeyService.revokeAllPersonalKeysForUser(userId, tenantId);
 
         // Generate a stable anonymous ID for the email alias
         final UUID anonymousId = UUID.randomUUID();
