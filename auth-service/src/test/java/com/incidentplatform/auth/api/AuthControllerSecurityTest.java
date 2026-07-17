@@ -6,6 +6,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.service.*;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
+import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
@@ -58,6 +59,7 @@ class AuthControllerSecurityTest {
     @MockitoBean private MfaService mfaService;
     @MockitoBean private JwtUtils jwtUtils;
     @MockitoBean private ServiceTokenProvider serviceTokenProvider;
+    @MockitoBean private ApiKeyAuthFilter.ApiKeyLookupService ApiKeyLookupService;
 
     private static final String TENANT_ID = "test-tenant";
 

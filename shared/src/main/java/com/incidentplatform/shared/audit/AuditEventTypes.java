@@ -74,5 +74,10 @@ public final class AuditEventTypes {
     public static final String MFA_BACKUP_CODE_USED       = "MFA_BACKUP_CODE_USED";
     public static final String TENANT_MFA_POLICY_UPDATED  = "TENANT_MFA_POLICY_UPDATED";
 
+    // ── API Keys ──────────────────────────────────────────────────────────────
+    public static final String API_KEY_CREATED = "API_KEY_CREATED";
+    public static final String API_KEY_REVOKED = "API_KEY_REVOKED";
+    public static final String API_KEY_USED    = "API_KEY_USED";
+
     private AuditEventTypes() {}
 }

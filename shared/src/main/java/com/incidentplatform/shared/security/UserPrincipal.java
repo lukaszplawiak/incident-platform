@@ -8,29 +8,22 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Authenticated principal built directly from JWT claims by
- * {@link JwtAuthFilter} and set on
- * {@link org.springframework.security.authentication.UsernamePasswordAuthenticationToken}.
+ * Authenticated principal built from either JWT claims or API key lookup.
  *
- * <h2>Why this is not a {@code UserDetails}</h2>
- * Spring Security's {@code UserDetails} interface ({@code isAccountNonExpired()},
- * {@code isAccountNonLocked()}, {@code isCredentialsNonExpired()},
- * {@code isEnabled()}, {@code getPassword()}, {@code getUsername()}) exists to
- * support {@code UserDetailsService}-based authentication flows, where Spring
- * Security loads a user from a store and checks these flags before granting
- * access.
+ * <h2>Two authentication paths</h2>
+ * <ul>
+ *   <li><b>JWT</b> — built by {@link JwtAuthFilter} from token claims.
+ *       {@link #isApiKey} = false, {@link #scopes} = empty.</li>
+ *   <li><b>API Key</b> — built by {@code ApiKeyAuthFilter} from DB lookup.
+ *       {@link #isApiKey} = true, {@link #scopes} = granted key scopes,
+ *       {@link #roles} = owner roles (TENANT key) or owner roles (PERSONAL key).</li>
+ * </ul>
  *
- * <p>This platform uses stateless JWT authentication: {@link JwtAuthFilter}
- * extracts claims from an already-validated token and constructs the
- * {@code Authentication} object directly —
- * <pre>{@code
- * new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities())
- * }</pre>
- * There is no {@code AuthenticationManager} or {@code UserDetailsService} in
- * this architecture, so Spring Security never calls any {@code UserDetails}
- * method other than {@code getAuthorities()}. Implementing the full interface
- * added five no-op methods that always returned {@code true} or {@code null}
- * with no caller — unnecessary complexity for behaviour that is never invoked.
+ * <h2>Why not UserDetails</h2>
+ * Spring Security's {@code UserDetails} exists to support
+ * {@code UserDetailsService}-based flows. This platform uses stateless
+ * JWT/API key auth — {@code AuthenticationManager} is never invoked.
+ * The full interface would add five no-op methods with no callers.
  */
 public record UserPrincipal(
 
@@ -44,20 +37,44 @@ public record UserPrincipal(
 
         /**
          * UUIDs of teams the user belongs to.
-         * Populated from the {@code teamIds} JWT claim on login.
-         * Empty list means the user has no team assignments.
-         *
-         * <p>Note: team-level roles (MANAGER/RESPONDER) are NOT included
-         * here — only team membership. Team-level role checks require
-         * a server-side lookup via TeamMemberRepository.
+         * Populated from JWT {@code teamIds} claim. Empty for API key principals
+         * (team membership not relevant for machine-to-machine calls).
          */
-        List<UUID> teamIds
+        List<UUID> teamIds,
+
+        /**
+         * True when this principal was authenticated via an API key.
+         * False for JWT-authenticated requests.
+         *
+         * <p>Used by service layer to apply scope-based authorization in
+         * addition to role-based authorization.
+         */
+        boolean isApiKey,
+
+        /**
+         * Granted API key scopes — only populated when {@link #isApiKey} is true.
+         * Empty list for JWT-authenticated principals.
+         *
+         * <p>Example values: {@code "incidents:read"}, {@code "alerts:ingest"}.
+         * Checked via {@link #hasScope(String)} in controller/service layer.
+         */
+        List<String> scopes
 
 ) {
 
     public UserPrincipal {
         roles   = roles   != null ? List.copyOf(roles)   : List.of();
         teamIds = teamIds != null ? List.copyOf(teamIds) : List.of();
+        scopes  = scopes  != null ? List.copyOf(scopes)  : List.of();
+    }
+
+    /**
+     * Convenience constructor for JWT-authenticated principals.
+     * Sets {@link #isApiKey} = false and {@link #scopes} = empty.
+     */
+    public UserPrincipal(UUID userId, String tenantId, String email,
+                         List<String> roles, List<UUID> teamIds) {
+        this(userId, tenantId, email, roles, teamIds, false, List.of());
     }
 
     public Collection<? extends GrantedAuthority> getAuthorities() {
@@ -72,5 +89,16 @@ public record UserPrincipal(
 
     public boolean isMemberOf(UUID teamId) {
         return teamIds.contains(teamId);
+    }
+
+    /**
+     * Returns true if this principal (when authenticated via API key)
+     * has been granted the specified scope.
+     *
+     * <p>For JWT principals ({@link #isApiKey} = false), scope checks are
+     * not applicable — use role checks instead.
+     */
+    public boolean hasScope(String scope) {
+        return scopes.contains(scope);
     }
 }

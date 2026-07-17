@@ -1,5 +1,7 @@
 package com.incidentplatform.auth.config;
 
+import com.incidentplatform.auth.service.ApiKeyLookupServiceImpl;
+import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.TokenRevocationChecker;
@@ -15,6 +17,8 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+
+import java.util.Optional;
 
 /**
  * auth-service security configuration.
@@ -52,6 +56,17 @@ public class SecurityConfig {
     }
 
     /**
+     * API key filter — processes Authorization: ApiKey ipl_... headers.
+     * Registered BEFORE JwtAuthFilter so API key requests are handled
+     * without reaching JWT processing.
+     */
+    @Bean
+    public ApiKeyAuthFilter apiKeyAuthFilter(
+            ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService) {
+        return new ApiKeyAuthFilter(apiKeyLookupService);
+    }
+
+    /**
      * Overrides the default JwtAuthFilter from SharedSecurityAutoConfiguration
      * with one that checks the Redis revocation list on every request.
      *
@@ -72,10 +87,12 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthFilter jwtAuthFilter,
-                                                   UnauthorizedEntryPoint unauthorizedEntryPoint)
+                                                   UnauthorizedEntryPoint unauthorizedEntryPoint,
+                                                   ApiKeyAuthFilter apiKeyAuthFilter)
             throws Exception {
         return SharedSecurityAutoConfiguration
                 .buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
+                .addFilterBefore(apiKeyAuthFilter, JwtAuthFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/login").permitAll()

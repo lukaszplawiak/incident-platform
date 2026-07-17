@@ -12,10 +12,7 @@ import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
-import com.incidentplatform.shared.security.JwtUtils;
-import com.incidentplatform.shared.security.ServiceTokenProvider;
-import com.incidentplatform.shared.security.TenantContext;
-import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
+import com.incidentplatform.shared.security.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -81,6 +78,9 @@ class UserControllerSecurityTest {
 
     @MockitoBean
     private ServiceTokenProvider serviceTokenProvider;
+
+    @MockitoBean
+    private ApiKeyAuthFilter.ApiKeyLookupService ApiKeyLookupService;
 
     private static final String TENANT_ID = "test-tenant";
     private static final UUID USER_ID = UUID.randomUUID();
