@@ -64,6 +64,7 @@ public class OncallScheduleService {
 
         final OncallSchedule schedule = OncallSchedule.create(
                 tenantId,
+                request.teamId(),
                 request.userId(),
                 request.userName(),
                 request.email(),
@@ -90,6 +91,30 @@ public class OncallScheduleService {
             String tenantId, String role) {
         return repository.findCurrentOncallByRole(tenantId, role, Instant.now())
                 .map(CurrentOncallResponse::from);
+    }
+
+    /**
+     * Returns the current on-call person for a specific team and role.
+     * Primary query used by EscalationScheduler via HTTP.
+     *
+     * @return empty when no active schedule found for this team/role
+     */
+    @Transactional(readOnly = true)
+    public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
+            String tenantId, UUID teamId, String role) {
+        return repository.findCurrentOncallByTeamAndRole(
+                        tenantId, teamId, role, Instant.now())
+                .map(CurrentOncallResponse::from);
+    }
+
+    @Transactional(readOnly = true)
+    public List<CurrentOncallResponse> getAllCurrentOncallForTeam(
+            String tenantId, UUID teamId) {
+        return repository.findAllCurrentOncallForTeam(
+                        tenantId, teamId, Instant.now())
+                .stream()
+                .map(CurrentOncallResponse::from)
+                .toList();
     }
 
     @Transactional(readOnly = true)

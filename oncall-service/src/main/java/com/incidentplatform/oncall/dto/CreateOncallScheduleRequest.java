@@ -7,9 +7,17 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @StartBeforeEnd
 public record CreateOncallScheduleRequest(
+
+        /**
+         * Team this schedule entry belongs to.
+         * When provided, the entry is used for team-based on-call routing.
+         * Null = tenant-wide schedule (no team filtering).
+         */
+        UUID teamId,
 
         @NotBlank(message = "userId is required")
         String userId,

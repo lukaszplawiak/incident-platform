@@ -116,6 +116,7 @@ class StartBeforeEndValidatorTest {
 
     private CreateOncallScheduleRequest buildRequest(Instant startsAt, Instant endsAt) {
         return new CreateOncallScheduleRequest(
+                null,
                 "user-1",
                 "Jan Kowalski",
                 "jan@example.com",
