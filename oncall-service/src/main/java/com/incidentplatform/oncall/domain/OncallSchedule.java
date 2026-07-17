@@ -34,6 +34,15 @@ public class OncallSchedule {
     @Column(name = "tenant_id", nullable = false)
     private String tenantId;
 
+    /**
+     * Team this schedule entry belongs to.
+     * Null = tenant-wide schedule (legacy/no team assigned).
+     * Set by EscalationScheduler to find the correct on-call engineer
+     * for a given team: findCurrentOncallByTeamAndRole(tenantId, teamId, role).
+     */
+    @Column(name = "team_id")
+    private UUID teamId;
+
     @NotBlank
     @Column(name = "user_id", nullable = false)
     private String userId;
@@ -80,6 +89,7 @@ public class OncallSchedule {
     protected OncallSchedule() {}
 
     public static OncallSchedule create(String tenantId,
+                                        UUID teamId,
                                         String userId,
                                         String userName,
                                         String email,
@@ -92,6 +102,7 @@ public class OncallSchedule {
         final OncallSchedule schedule = new OncallSchedule();
         schedule.id = UUID.randomUUID();
         schedule.tenantId = tenantId;
+        schedule.teamId = teamId;
         schedule.userId = userId;
         schedule.userName = userName;
         schedule.email = email;
@@ -116,6 +127,7 @@ public class OncallSchedule {
 
     public UUID getId()            { return id; }
     public String getTenantId()    { return tenantId; }
+    public UUID getTeamId()        { return teamId; }
     public String getUserId()      { return userId; }
     public String getUserName()    { return userName; }
     public String getEmail()       { return email; }

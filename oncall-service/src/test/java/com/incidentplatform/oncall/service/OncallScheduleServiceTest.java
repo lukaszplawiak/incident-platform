@@ -293,6 +293,7 @@ class OncallScheduleServiceTest {
 
     private CreateOncallScheduleRequest buildRequest(String role) {
         return new CreateOncallScheduleRequest(
+                null,
                 "user-1",
                 "Jan Kowalski",
                 "jan@example.com",
@@ -308,6 +309,7 @@ class OncallScheduleServiceTest {
     private OncallSchedule buildSchedule(OncallRole role) {
         return OncallSchedule.create(
                 TENANT_ID,
+                null,
                 "user-1",
                 "Jan Kowalski",
                 "jan@example.com",

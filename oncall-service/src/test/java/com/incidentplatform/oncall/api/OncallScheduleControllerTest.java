@@ -41,8 +41,9 @@ class OncallScheduleControllerTest {
                     UUID.randomUUID().toString(),
                     "John Doe",
                     "john@example.com",
-                    null,
-                    null,
+                    null,  // teamId
+                    null,  // phone
+                    null,  // slackUserId
                     OncallRole.PRIMARY.name(),
                     Instant.now().plusSeconds(3600)
             );

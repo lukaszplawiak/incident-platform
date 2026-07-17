@@ -30,6 +30,47 @@ public interface OncallScheduleRepository
             @Param("role") String role,
             @Param("now") Instant now);
 
+    /**
+     * Finds the current on-call person for a specific team and role.
+     *
+     * <p>This is the primary query used by the EscalationScheduler:
+     * "who is PRIMARY on-call for backend-team right now?".
+     *
+     * <p>Called via HTTP from escalation-service with circuit breaker.
+     * Covered by index: idx_oncall_schedules_team_role_time.
+     */
+    @Query("""
+            SELECT s FROM OncallSchedule s
+            WHERE s.tenantId = :tenantId
+            AND s.teamId = :teamId
+            AND s.role = :role
+            AND s.startsAt <= :now
+            AND s.endsAt > :now
+            ORDER BY s.startsAt DESC
+            """)
+    Optional<OncallSchedule> findCurrentOncallByTeamAndRole(
+            @Param("tenantId") String tenantId,
+            @Param("teamId") UUID teamId,
+            @Param("role") String role,
+            @Param("now") Instant now);
+
+    /**
+     * Returns all current on-call entries for a specific team
+     * (all roles: PRIMARY, SECONDARY, MANAGER).
+     */
+    @Query("""
+            SELECT s FROM OncallSchedule s
+            WHERE s.tenantId = :tenantId
+            AND s.teamId = :teamId
+            AND s.startsAt <= :now
+            AND s.endsAt > :now
+            ORDER BY s.role ASC
+            """)
+    List<OncallSchedule> findAllCurrentOncallForTeam(
+            @Param("tenantId") String tenantId,
+            @Param("teamId") UUID teamId,
+            @Param("now") Instant now);
+
     @Query("""
             SELECT s FROM OncallSchedule s
             WHERE s.tenantId = :tenantId

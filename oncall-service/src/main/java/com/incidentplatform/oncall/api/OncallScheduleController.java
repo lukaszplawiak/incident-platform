@@ -206,4 +206,49 @@ public class OncallScheduleController {
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.noContent().build());
     }
+
+    /**
+     * Returns the current on-call person for a specific team and role.
+     * Called by escalation-service via HTTP with circuit breaker.
+     *
+     * <p>This is the key endpoint for team-based on-call routing:
+     * EscalationScheduler calls this to find who to notify when an incident
+     * assigned to a team needs escalation.
+     */
+    @GetMapping(value = "/current", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Get current on-call for a team",
+            description = """
+                    Returns the current on-call person for the specified team and role.
+                    Used by escalation-service to determine who to notify for an incident.
+
+                    Parameters:
+                    - teamId: UUID of the team (required for team-based routing)
+                    - role: PRIMARY (default), SECONDARY, or MANAGER
+
+                    Returns 200 with body when found, 204 No Content when no active schedule.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "On-call person found"),
+            @ApiResponse(responseCode = "204", description = "No active on-call for this team/role")
+    })
+    public ResponseEntity<CurrentOncallResponse> getCurrentOncallForTeam(
+            @RequestParam UUID teamId,
+            @RequestParam(defaultValue = "PRIMARY") String role) {
+        final String tenantId = com.incidentplatform.shared.security.TenantContext.get();
+        return service.getCurrentOncallForTeam(tenantId, teamId, role)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    @GetMapping(value = "/current/all", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Get all current on-call for a team (all roles)")
+    public ResponseEntity<List<CurrentOncallResponse>> getAllCurrentOncallForTeam(
+            @RequestParam UUID teamId) {
+        final String tenantId = com.incidentplatform.shared.security.TenantContext.get();
+        return ResponseEntity.ok(
+                service.getAllCurrentOncallForTeam(tenantId, teamId));
+    }
+
+
 }
