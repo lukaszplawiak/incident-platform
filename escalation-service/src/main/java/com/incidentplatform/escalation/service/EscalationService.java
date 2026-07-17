@@ -26,6 +26,7 @@ public class EscalationService {
     @Transactional
     public void scheduleEscalation(UUID incidentId,
                                    String tenantId,
+                                   UUID teamId,
                                    Instant incidentOpenedAt,
                                    Severity severity,
                                    String title) {
@@ -38,7 +39,7 @@ public class EscalationService {
         }
 
         final EscalationTask task = EscalationTask.createLevel1(
-                incidentId, tenantId, incidentOpenedAt, severity, title);
+                incidentId, tenantId, teamId, incidentOpenedAt, severity, title);
 
         taskRepository.save(task);
 
@@ -52,6 +53,7 @@ public class EscalationService {
     @Transactional
     public void scheduleLevel2Escalation(UUID incidentId,
                                          String tenantId,
+                                         UUID teamId,
                                          Severity severity,
                                          String title) {
 
@@ -63,7 +65,7 @@ public class EscalationService {
         }
 
         final EscalationTask task = EscalationTask.createLevel2(
-                incidentId, tenantId, Instant.now(), severity, title);
+                incidentId, tenantId, teamId, Instant.now(), severity, title);
 
         taskRepository.save(task);
 

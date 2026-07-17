@@ -126,3 +126,23 @@ security:
     # Override per environment: dev=localhost, prod=https://app.incidentplatform.com
     # This property has no inline default — it must be set here or via env var.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}
+# oncall-service HTTP client
+oncall:
+  service:
+    url: ${ONCALL_SERVICE_URL:http://oncall-service:8085}
+
+# Resilience4j circuit breaker for oncall-service HTTP calls
+resilience4j:
+  circuitbreaker:
+    instances:
+      oncall-service:
+        # Open circuit after 50% failures in last 10 calls
+        failureRateThreshold: 50
+        minimumNumberOfCalls: 10
+        # Stay open for 30s before trying again (half-open)
+        waitDurationInOpenState: 30s
+        # Allow 3 test calls in half-open state
+        permittedNumberOfCallsInHalfOpenState: 3
+        # Count both exceptions and slow calls as failures
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10

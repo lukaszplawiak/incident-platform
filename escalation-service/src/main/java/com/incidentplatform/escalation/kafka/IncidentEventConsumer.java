@@ -126,12 +126,19 @@ public class IncidentEventConsumer {
                 ? Instant.parse(event.get("occurredAt").asText())
                 : Instant.now();
 
+        // Extract teamId from IncidentOpenedEvent — set by incident-service
+        // from UnifiedAlertDto.teamId (resolved via Integration ApiKey).
+        // Null for manually-created incidents or pre-routing incidents.
+        final UUID teamId = event.has("teamId") && !event.get("teamId").isNull()
+                ? UUID.fromString(event.get("teamId").asText())
+                : null;
+
         log.info("Scheduling escalation for opened incident: " +
-                        "incidentId={}, tenant={}, severity={}",
-                incidentId, tenantId, severity);
+                        "incidentId={}, tenant={}, severity={}, teamId={}",
+                incidentId, tenantId, severity, teamId);
 
         escalationService.scheduleEscalation(
-                incidentId, tenantId, openedAt, severity, title);
+                incidentId, tenantId, teamId, openedAt, severity, title);
     }
 
     private void handleAcknowledged(JsonNode event, String tenantId) {
