@@ -42,6 +42,15 @@ public class EscalationTask {
     @Column(name = "tenant_id", nullable = false, updatable = false)
     private String tenantId;
 
+    /**
+     * Team responsible for this incident — copied from Incident.team_id
+     * at task creation. Used by EscalationScheduler to call oncall-service:
+     * GET /oncall/current?teamId={teamId}&role=PRIMARY
+     * Null = no team assigned, on-call routing skipped with warning.
+     */
+    @Column(name = "team_id")
+    private UUID teamId;
+
     @NotNull
     @Column(name = "incident_opened_at", nullable = false, updatable = false)
     private Instant incidentOpenedAt;
@@ -80,26 +89,29 @@ public class EscalationTask {
 
     public static EscalationTask createLevel1(UUID incidentId,
                                               String tenantId,
+                                              UUID teamId,
                                               Instant incidentOpenedAt,
                                               Severity severity,
                                               String title) {
         final int timeoutMinutes = resolveTimeout(severity);
-        return create(incidentId, tenantId, incidentOpenedAt,
+        return create(incidentId, tenantId, teamId, incidentOpenedAt,
                 severity, title, 1, timeoutMinutes);
     }
 
     public static EscalationTask createLevel2(UUID incidentId,
                                               String tenantId,
+                                              UUID teamId,
                                               Instant level1EscalatedAt,
                                               Severity severity,
                                               String title) {
         final int timeoutMinutes = resolveTimeout(severity);
-        return create(incidentId, tenantId, level1EscalatedAt,
+        return create(incidentId, tenantId, teamId, level1EscalatedAt,
                 severity, title, 2, timeoutMinutes);
     }
 
     private static EscalationTask create(UUID incidentId,
                                          String tenantId,
+                                         UUID teamId,
                                          Instant startAt,
                                          Severity severity,
                                          String title,
@@ -109,6 +121,7 @@ public class EscalationTask {
         task.id = UUID.randomUUID();
         task.incidentId = incidentId;
         task.tenantId = tenantId;
+        task.teamId = teamId;
         task.incidentOpenedAt = startAt;
         task.scheduledEscalationAt = startAt.plusSeconds(timeoutMinutes * 60L);
         task.status = EscalationTaskStatus.PENDING;
@@ -154,6 +167,7 @@ public class EscalationTask {
     public UUID getId()                       { return id; }
     public UUID getIncidentId()               { return incidentId; }
     public String getTenantId()               { return tenantId; }
+    public UUID getTeamId()                   { return teamId; }
     public Instant getIncidentOpenedAt()      { return incidentOpenedAt; }
     public Instant getScheduledEscalationAt() { return scheduledEscalationAt; }
     public EscalationTaskStatus getStatus()   { return status; }

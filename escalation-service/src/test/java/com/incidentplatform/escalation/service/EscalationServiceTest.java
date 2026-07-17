@@ -33,6 +33,7 @@ class EscalationServiceTest {
     private EscalationService escalationService;
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
+    private static final UUID TEAM_ID = UUID.randomUUID();
     private static final String TENANT_ID = "test-tenant";
 
     @BeforeEach
@@ -54,7 +55,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, Instant.now(),
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Instant.now(),
                     Severity.CRITICAL, "High CPU Usage");
 
             // then
@@ -81,7 +82,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, openedAt, Severity.CRITICAL, "Test");
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, openedAt, Severity.CRITICAL, "Test");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -103,7 +104,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, openedAt, Severity.HIGH, "Test");
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, openedAt, Severity.HIGH, "Test");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -125,7 +126,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, openedAt, Severity.MEDIUM, "Test");
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, openedAt, Severity.MEDIUM, "Test");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -145,7 +146,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleEscalation(
-                    INCIDENT_ID, TENANT_ID, Instant.now(),
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Instant.now(),
                     Severity.CRITICAL, "High CPU");
 
             // then
@@ -167,7 +168,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleLevel2Escalation(
-                    INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "High CPU");
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Severity.CRITICAL, "High CPU");
 
             // then
             final ArgumentCaptor<EscalationTask> captor =
@@ -187,7 +188,7 @@ class EscalationServiceTest {
 
             // when
             escalationService.scheduleLevel2Escalation(
-                    INCIDENT_ID, TENANT_ID, Severity.CRITICAL, "High CPU");
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Severity.CRITICAL, "High CPU");
 
             // then
             then(taskRepository).should(never()).save(any());
@@ -203,10 +204,10 @@ class EscalationServiceTest {
         void shouldCancelAllPendingTasks() {
             // given
             final EscalationTask task1 = EscalationTask.createLevel1(
-                    INCIDENT_ID, TENANT_ID, Instant.now(),
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Instant.now(),
                     Severity.CRITICAL, "High CPU");
             final EscalationTask task2 = EscalationTask.createLevel2(
-                    INCIDENT_ID, TENANT_ID, Instant.now(),
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Instant.now(),
                     Severity.CRITICAL, "High CPU");
 
             given(taskRepository.findAllByIncidentId(INCIDENT_ID))
@@ -240,7 +241,7 @@ class EscalationServiceTest {
         void shouldNotCancelEscalatedTask() {
             // given
             final EscalationTask task = EscalationTask.createLevel1(
-                    INCIDENT_ID, TENANT_ID, Instant.now(),
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Instant.now(),
                     Severity.CRITICAL, "High CPU");
             task.markEscalated();
 

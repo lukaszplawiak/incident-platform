@@ -1,6 +1,8 @@
 package com.incidentplatform.escalation.scheduler;
 
+import com.incidentplatform.escalation.client.OncallServiceClient;
 import com.incidentplatform.escalation.domain.EscalationTask;
+import com.incidentplatform.escalation.dto.OncallUserDto;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
@@ -19,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @Component
 public class EscalationScheduler {
@@ -35,16 +38,19 @@ public class EscalationScheduler {
     private final IncidentEventKafkaSender kafkaSender;
     private final EscalationService escalationService;
     private final AuditEventPublisher auditEventPublisher;
+    private final OncallServiceClient oncallServiceClient;
 
     public EscalationScheduler(
             EscalationTaskRepository taskRepository,
             IncidentEventKafkaSender kafkaSender,
             EscalationService escalationService,
-            AuditEventPublisher auditEventPublisher) {
+            AuditEventPublisher auditEventPublisher,
+            OncallServiceClient oncallServiceClient) {
         this.taskRepository = taskRepository;
         this.kafkaSender = kafkaSender;
         this.escalationService = escalationService;
         this.auditEventPublisher = auditEventPublisher;
+        this.oncallServiceClient = oncallServiceClient;
     }
 
     /**
@@ -104,10 +110,48 @@ public class EscalationScheduler {
     }
 
     private void escalate(EscalationTask task) {
+        // ── Resolve on-call engineer ──────────────────────────────────
+        // Determine which role to page based on escalation level:
+        //   Level 1 → SECONDARY (primary was already paged at incident creation)
+        //   Level 2 → MANAGER
+        final String role = task.getEscalationLevel() == 1
+                ? ESCALATION_ROLE_LEVEL_1 : ESCALATION_ROLE_LEVEL_2;
+
+        UUID escalateTo = null;
+
+        if (task.getTeamId() != null) {
+            final java.util.Optional<OncallUserDto> oncallUser =
+                    oncallServiceClient.getCurrentOncall(
+                            task.getTenantId(), task.getTeamId(), role);
+
+            if (oncallUser.isPresent()) {
+                try {
+                    escalateTo = UUID.fromString(oncallUser.get().userId());
+                    log.info("On-call resolved: userId={}, email={}, " +
+                                    "teamId={}, role={}, incidentId={}",
+                            escalateTo, oncallUser.get().email(),
+                            task.getTeamId(), role, task.getIncidentId());
+                } catch (IllegalArgumentException e) {
+                    log.warn("oncall-service returned invalid userId: {}",
+                            oncallUser.get().userId());
+                }
+            } else {
+                log.warn("No active on-call found: teamId={}, role={}, " +
+                                "tenant={}, incidentId={} — escalating without assignee",
+                        task.getTeamId(), role, task.getTenantId(),
+                        task.getIncidentId());
+            }
+        } else {
+            log.warn("EscalationTask has no teamId — skipping on-call routing: " +
+                            "incidentId={}, tenant={}. Configure an Integration " +
+                            "with a team assignment for automatic routing.",
+                    task.getIncidentId(), task.getTenantId());
+        }
+
         final IncidentEscalatedEvent event = new IncidentEscalatedEvent(
                 task.getIncidentId(),
                 task.getTenantId(),
-                null,
+                escalateTo,
                 task.getEscalationLevel(),
                 task.getSeverity(),
                 task.getTitle(),
@@ -155,9 +199,6 @@ public class EscalationScheduler {
                 task.getIncidentId(), task.getTenantId(),
                 task.getSeverity(), task.getEscalationLevel());
 
-        final String role = task.getEscalationLevel() == 1
-                ? ESCALATION_ROLE_LEVEL_1 : ESCALATION_ROLE_LEVEL_2;
-
         auditEventPublisher.publishIncident(
                 task.getIncidentId(), task.getTenantId(),
                 AuditEventTypes.ESCALATION_FIRED, SERVICE_NAME,
@@ -174,6 +215,7 @@ public class EscalationScheduler {
             escalationService.scheduleLevel2Escalation(
                     task.getIncidentId(),
                     task.getTenantId(),
+                    task.getTeamId(),
                     task.getSeverity(),
                     task.getTitle()
             );

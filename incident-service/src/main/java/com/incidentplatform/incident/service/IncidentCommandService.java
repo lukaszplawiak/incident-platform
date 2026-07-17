@@ -286,6 +286,14 @@ public class IncidentCommandService {
                 alert.firedAt()
         );
 
+        // Set teamId from Integration-based routing.
+        // UnifiedAlertDto.teamId is resolved by ApiKeyLookupServiceImpl
+        // from the Integration that authenticated the alert request.
+        // Null for JWT-authenticated requests or integrations without team.
+        if (alert.teamId() != null) {
+            incident.assignToTeam(alert.teamId());
+        }
+
         incidentRepository.save(incident);
 
         historyRepository.save(IncidentHistory.forCreation(

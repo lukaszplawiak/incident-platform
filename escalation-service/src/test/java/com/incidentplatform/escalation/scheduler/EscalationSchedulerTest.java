@@ -1,5 +1,6 @@
 package com.incidentplatform.escalation.scheduler;
 
+import com.incidentplatform.escalation.client.OncallServiceClient;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.domain.EscalationTaskStatus;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
@@ -53,6 +54,9 @@ class EscalationSchedulerTest {
     @Mock
     private AuditEventPublisher auditEventPublisher;
 
+    @Mock
+    private OncallServiceClient oncallServiceClient;
+
     private EscalationScheduler scheduler;
 
     private static final String TENANT_ID = "test-tenant";
@@ -63,7 +67,8 @@ class EscalationSchedulerTest {
                 taskRepository,
                 kafkaSender,
                 escalationService,
-                auditEventPublisher);
+                auditEventPublisher,
+                oncallServiceClient);
     }
 
     @AfterEach
@@ -94,7 +99,7 @@ class EscalationSchedulerTest {
             assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
 
             then(escalationService).should().scheduleLevel2Escalation(
-                    task.getIncidentId(), TENANT_ID,
+                    task.getIncidentId(), TENANT_ID, task.getTeamId(),
                     task.getSeverity(), task.getTitle());
         }
 
@@ -117,7 +122,7 @@ class EscalationSchedulerTest {
             assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
 
             then(escalationService).should(never())
-                    .scheduleLevel2Escalation(any(), any(), any(), any());
+                    .scheduleLevel2Escalation(any(), any(), any(), any(), any());
         }
 
         @Test
@@ -339,11 +344,11 @@ class EscalationSchedulerTest {
         final Instant openedAt = Instant.now().minusSeconds(60 * 60L);
         if (level == 1) {
             return EscalationTask.createLevel1(
-                    UUID.randomUUID(), tenantId, openedAt,
+                    UUID.randomUUID(), tenantId, UUID.randomUUID(), openedAt,
                     Severity.CRITICAL, "High CPU Usage");
         } else {
             return EscalationTask.createLevel2(
-                    UUID.randomUUID(), tenantId, openedAt,
+                    UUID.randomUUID(), tenantId, UUID.randomUUID(), openedAt,
                     Severity.CRITICAL, "High CPU Usage");
         }
     }

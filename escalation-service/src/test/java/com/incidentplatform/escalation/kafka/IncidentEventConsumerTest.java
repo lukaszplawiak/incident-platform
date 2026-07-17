@@ -129,7 +129,7 @@ class IncidentEventConsumerTest {
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);
             then(escalationService).should().scheduleEscalation(
-                    eq(INCIDENT_ID), tenantCaptor.capture(),
+                    eq(INCIDENT_ID), tenantCaptor.capture(), any(),
                     any(), eq(Severity.CRITICAL), any());
             assertThat(tenantCaptor.getValue()).isEqualTo(TENANT_ID);
         }
@@ -146,7 +146,7 @@ class IncidentEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             // then
-            then(escalationService).should().scheduleEscalation(
+            then(escalationService).should().scheduleEscalation(any(),
                     any(), any(), any(), eq(Severity.HIGH), any());
         }
 
@@ -200,7 +200,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(escalationService).should(never())
-                    .scheduleEscalation(any(), any(), any(), any(), any());
+                    .scheduleEscalation(any(), any(), any(), any(), any(), any());
         }
     }
 
@@ -221,7 +221,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(escalationService).should(never())
-                    .scheduleEscalation(any(), any(), any(), any(), any());
+                    .scheduleEscalation(any(), any(), any(), any(), any(), any());
             then(escalationService).should(never())
                     .cancelEscalation(any(), any());
             then(acknowledgment).should().acknowledge();
@@ -250,7 +250,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(escalationService).should(never())
-                    .scheduleEscalation(any(), any(), any(), any(), any());
+                    .scheduleEscalation(any(), any(), any(), any(), any(), any());
             then(escalationService).should(never())
                     .cancelEscalation(any(), any());
             then(acknowledgment).should().acknowledge();
@@ -319,7 +319,7 @@ class IncidentEventConsumerTest {
             // then
             then(escalationService).should()
                     .scheduleEscalation(any(), scheduleCaptor.capture(),
-                            any(), any(), any());
+                            any(), any(), any(), any());
             then(escalationService).should()
                     .cancelEscalation(any(), cancelCaptor.capture());
 
@@ -358,7 +358,7 @@ class IncidentEventConsumerTest {
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
                     .given(escalationService)
-                    .scheduleEscalation(any(), any(), any(), any(), any());
+                    .scheduleEscalation(any(), any(), any(), any(), any(), any());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
