@@ -8,11 +8,13 @@ import com.incidentplatform.ingestion.normalizer.UnknownSourceException;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -47,10 +49,21 @@ public class AlertIngestionService {
                 normalizersBySource.keySet());
     }
 
+    /**
+     * Ingests an alert payload from an external monitoring system.
+     *
+     * @param teamId  resolved from the Integration ApiKey via
+     *                {@code ApiKeyLookupServiceImpl.resolveTeamId()}.
+     *                Null when authenticated with JWT or Integration has no team.
+     *                Propagated to every {@link com.incidentplatform.shared.dto.UnifiedAlertDto}
+     *                so incident-service can set {@code Incident.team_id}.
+     */
     public IngestionSummary ingest(String source,
                                    JsonNode rawPayload,
-                                   String tenantId) {
-        log.info("Starting ingestion: source={}, tenant={}", source, tenantId);
+                                   String tenantId,
+                                   UUID teamId) {
+        log.info("Starting ingestion: source={}, tenant={}, teamId={}",
+                source, tenantId, teamId);
 
         final AlertNormalizer normalizer = findNormalizer(source);
 
@@ -61,7 +74,7 @@ public class AlertIngestionService {
 
         NormalizationResult result;
         try {
-            result = normalizer.normalize(rawPayload, tenantId);
+            result = normalizer.normalize(rawPayload, tenantId, teamId);
         } catch (NormalizationException e) {
             log.error("Normalization failed for entire payload: source={}, " +
                     "tenant={}, reason={}", source, tenantId, e.getReason());

@@ -32,8 +32,10 @@ public class PrometheusNormalizer extends BaseNormalizer {
     }
 
     @Override
-    public NormalizationResult normalize(JsonNode rawPayload, String tenantId) {
-        log.debug("Normalizing Prometheus batch for tenant: {}", tenantId);
+    public NormalizationResult normalize(JsonNode rawPayload, String tenantId,
+                                         UUID teamId) {
+        log.debug("Normalizing Prometheus batch for tenant: {}, teamId: {}",
+                tenantId, teamId);
 
         final JsonNode alerts = rawPayload.get("alerts");
         if (alerts == null || !alerts.isArray() || alerts.isEmpty()) {
@@ -63,7 +65,7 @@ public class PrometheusNormalizer extends BaseNormalizer {
             if (STATUS_RESOLVED.equals(status)) {
                 resolvedAlerts.add(normalizeResolvedAlert(alert, tenantId, i));
             } else {
-                firingAlerts.add(normalizeFiringAlert(alert, tenantId, i));
+                firingAlerts.add(normalizeFiringAlert(alert, tenantId, teamId, i));
             }
         }
 
@@ -83,6 +85,7 @@ public class PrometheusNormalizer extends BaseNormalizer {
 
     private UnifiedAlertDto normalizeFiringAlert(JsonNode alert,
                                                  String tenantId,
+                                                 UUID teamId,
                                                  int index) {
         final JsonNode labels = alert.get("labels");
         if (isMissingOrNotObject(labels)) {
@@ -122,7 +125,8 @@ public class PrometheusNormalizer extends BaseNormalizer {
                 description,
                 firedAt,
                 fingerprint,
-                metadata
+                metadata,
+                teamId  // resolved from Integration ApiKey
         );
     }
 

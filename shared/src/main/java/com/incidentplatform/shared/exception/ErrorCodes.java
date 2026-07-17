@@ -34,6 +34,7 @@ public final class ErrorCodes {
     public static final String EMAIL_ALREADY_EXISTS  = "EMAIL_ALREADY_EXISTS";
     public static final String INVALID_TOKEN         = "INVALID_TOKEN";
     public static final String BUSINESS_RULE_VIOLATION = "BUSINESS_RULE_VIOLATION";
+    public static final String ALREADY_EXISTS = "ALREADY_EXISTS";
 
     // ── Ingestion domain ─────────────────────────────────────────────────────
     public static final String NORMALIZATION_FAILED  = "NORMALIZATION_FAILED";

@@ -43,7 +43,7 @@ class UnifiedAlertDtoTest {
         final UnifiedAlertDto dto = new UnifiedAlertDto(
                 null, "tenant", "prometheus", SourceType.OPS,
                 Severity.HIGH, "title", null, Instant.now(),
-                "prometheus:title:unknown", null
+                "prometheus:title:unknown", null, null
         );
 
         // then
@@ -60,7 +60,7 @@ class UnifiedAlertDtoTest {
         final UnifiedAlertDto dto = new UnifiedAlertDto(
                 UUID.randomUUID(), "tenant", "prometheus", SourceType.OPS,
                 Severity.HIGH, "title", null, Instant.now(),
-                "prometheus:title:unknown", mutableMetadata
+                "prometheus:title:unknown", mutableMetadata, null
         );
 
         // when
@@ -88,7 +88,7 @@ class UnifiedAlertDtoTest {
         final UnifiedAlertDto dto = new UnifiedAlertDto(
                 UUID.randomUUID(), "tenant", "wazuh", SourceType.SECURITY,
                 Severity.HIGH, "Brute force", null, Instant.now(),
-                "wazuh:5551:003", Map.of()
+                "wazuh:5551:003", Map.of(), null
         );
 
         // then
@@ -136,12 +136,12 @@ class UnifiedAlertDtoTest {
         final UnifiedAlertDto dto1 = new UnifiedAlertDto(
                 id, "tenant", "prometheus", SourceType.OPS,
                 Severity.HIGH, "title", null, now,
-                "prometheus:title:server", Map.of()
+                "prometheus:title:server", Map.of(), null
         );
         final UnifiedAlertDto dto2 = new UnifiedAlertDto(
                 id, "tenant", "prometheus", SourceType.OPS,
                 Severity.HIGH, "title", null, now,
-                "prometheus:title:server", Map.of()
+                "prometheus:title:server", Map.of(), null
         );
 
         // then
@@ -179,7 +179,7 @@ class UnifiedAlertDtoTest {
         return new UnifiedAlertDto(
                 UUID.randomUUID(), "test-tenant", source, SourceType.OPS,
                 severity, title, null, Instant.now(),
-                "prometheus:title:unknown", Map.of()
+                "prometheus:title:unknown", Map.of(), null
         );
     }
 }

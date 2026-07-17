@@ -91,7 +91,8 @@ class IncidentKafkaConsumerTest {
                 "High CPU usage", "CPU exceeded 95%",
                 Instant.now().minusSeconds(60),
                 "prometheus:highcpu:server-1",
-                Map.of("instance", "server-1:9100")
+                Map.of("instance", "server-1:9100"),
+                null
         );
         return objectMapper.writeValueAsString(alert);
     }

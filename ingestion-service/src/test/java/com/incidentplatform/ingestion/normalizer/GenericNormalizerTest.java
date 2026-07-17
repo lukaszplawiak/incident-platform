@@ -45,7 +45,7 @@ class GenericNormalizerTest {
                 """);
 
         // when
-        final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
+        final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
 
         // then
         assertThat(result.firingAlerts()).hasSize(1);
@@ -104,7 +104,7 @@ class GenericNormalizerTest {
             final JsonNode payload = buildPayload("INVALID", "title", "OPS");
 
             // then
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("severity")
                     .hasMessageContaining("INVALID");
@@ -117,13 +117,13 @@ class GenericNormalizerTest {
             final JsonNode payload = buildPayload("", "title", "OPS");
 
             // then
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class);
         }
 
         private Severity normalizeSeverity(String severity) throws Exception {
             return normalizer.normalize(
-                            buildPayload(severity, "title", "OPS"), TENANT_ID)
+                            buildPayload(severity, "title", "OPS"), TENANT_ID, null)
                     .firingAlerts().get(0).severity();
         }
     }
@@ -136,7 +136,7 @@ class GenericNormalizerTest {
         @DisplayName("should parse OPS sourceType")
         void shouldParseOps() throws Exception {
             final JsonNode payload = buildPayload("HIGH", "title", "OPS");
-            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
+            final var alert = normalizer.normalize(payload, TENANT_ID, null).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
         }
 
@@ -144,7 +144,7 @@ class GenericNormalizerTest {
         @DisplayName("should parse SECURITY sourceType")
         void shouldParseSecurity() throws Exception {
             final JsonNode payload = buildPayload("HIGH", "title", "SECURITY");
-            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
+            final var alert = normalizer.normalize(payload, TENANT_ID, null).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.SECURITY);
         }
 
@@ -152,7 +152,7 @@ class GenericNormalizerTest {
         @DisplayName("should default to OPS for unknown sourceType")
         void shouldDefaultToOpsForUnknown() throws Exception {
             final JsonNode payload = buildPayload("HIGH", "title", "UNKNOWN");
-            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
+            final var alert = normalizer.normalize(payload, TENANT_ID, null).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
         }
 
@@ -165,7 +165,7 @@ class GenericNormalizerTest {
                       "title": "Test alert"
                     }
                     """);
-            final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
+            final var alert = normalizer.normalize(payload, TENANT_ID, null).firingAlerts().get(0);
             assertThat(alert.sourceType()).isEqualTo(SourceType.OPS);
         }
     }
@@ -187,7 +187,7 @@ class GenericNormalizerTest {
                       }
                     }
                     """, longValue));
-            final var metadata = normalizer.normalize(payload, TENANT_ID)
+            final var metadata = normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).metadata();
             assertThat(metadata.get("longField")).hasSize(500);
         }
@@ -201,7 +201,7 @@ class GenericNormalizerTest {
                       "title": "Test alert"
                     }
                     """);
-            final var metadata = normalizer.normalize(payload, TENANT_ID)
+            final var metadata = normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).metadata();
             assertThat(metadata).isNotNull().isEmpty();
         }
@@ -220,7 +220,7 @@ class GenericNormalizerTest {
                       "sourceType": "OPS"
                     }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("title");
         }
@@ -234,7 +234,7 @@ class GenericNormalizerTest {
                       "sourceType": "OPS"
                     }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("severity");
         }
@@ -249,7 +249,7 @@ class GenericNormalizerTest {
                   "title": "Test alert"
                 }
                 """);
-        final var alert = normalizer.normalize(payload, TENANT_ID).firingAlerts().get(0);
+        final var alert = normalizer.normalize(payload, TENANT_ID, null).firingAlerts().get(0);
         assertThat(alert.source()).isEqualTo("generic");
     }
 
@@ -258,7 +258,7 @@ class GenericNormalizerTest {
     void fingerprintShouldBeBasedOnTitle() throws Exception {
         final JsonNode payload = buildPayload("HIGH",
                 "Database connection pool exhausted", "OPS");
-        final String fingerprint = normalizer.normalize(payload, TENANT_ID)
+        final String fingerprint = normalizer.normalize(payload, TENANT_ID, null)
                 .firingAlerts().get(0).fingerprint();
         assertThat(fingerprint).isEqualTo("generic:database connection pool exhausted");
     }

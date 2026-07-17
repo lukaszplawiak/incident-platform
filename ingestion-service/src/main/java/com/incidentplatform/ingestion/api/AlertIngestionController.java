@@ -6,6 +6,9 @@ import com.incidentplatform.ingestion.ratelimit.RateLimitResult;
 import com.incidentplatform.ingestion.service.AlertIngestionService;
 import com.incidentplatform.ingestion.service.IngestionSummary;
 import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.UserPrincipal;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import java.util.UUID;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -61,7 +64,10 @@ public class AlertIngestionController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN') or hasRole('ROLE_SERVICE')")
+    @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN') "
+            + "or hasRole('ROLE_SERVICE')"
+            + "or (principal instanceof T(com.incidentplatform.shared.security.UserPrincipal) "
+            + "and @apiKeyAuthorizationService.hasScope(principal, 'alerts:ingest'))")
     @Operation(
             summary = "Ingest alerts from external source",
             description = "Accepts alert payload from monitoring system, " +
@@ -123,10 +129,18 @@ public class AlertIngestionController {
             )
             @RequestBody JsonNode rawPayload,
 
-            HttpServletRequest httpRequest) {
+            HttpServletRequest httpRequest,
+            @AuthenticationPrincipal UserPrincipal principal) {
 
         final String tenantId = TenantContext.get();
         final String clientIp = resolveClientIp(httpRequest);
+
+        // Resolve teamId from Integration ApiKey
+        // principal.teamIds() has exactly one entry when authenticated via
+        // an Integration ApiKey (set by ApiKeyLookupServiceImpl.resolveTeamId()).
+        // Null for JWT-authenticated requests or keys without team assignment.
+        final UUID teamId = (principal != null && !principal.teamIds().isEmpty())
+                ? principal.teamIds().get(0) : null;
 
         log.info("Alert ingestion request: source={}, tenant={}, ip={}",
                 source, tenantId, clientIp);
@@ -153,7 +167,7 @@ public class AlertIngestionController {
         }
 
         final IngestionSummary summary = alertIngestionService.ingest(
-                source, rawPayload, tenantId);
+                source, rawPayload, tenantId, teamId);
 
         return ResponseEntity.ok(summary);
     }

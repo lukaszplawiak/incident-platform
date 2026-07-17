@@ -1,7 +1,9 @@
 package com.incidentplatform.auth.service;
 
 import com.incidentplatform.auth.domain.ApiKey;
+import com.incidentplatform.auth.domain.Integration;
 import com.incidentplatform.auth.repository.ApiKeyRepository;
+import com.incidentplatform.auth.repository.IntegrationRepository;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
@@ -40,15 +42,18 @@ public class ApiKeyLookupServiceImpl
             LoggerFactory.getLogger(ApiKeyLookupServiceImpl.class);
 
     private final ApiKeyRepository apiKeyRepository;
+    private final IntegrationRepository integrationRepository;
     private final ApiKeyHasher apiKeyHasher;
     private final ApiKeyService apiKeyService;
 
     public ApiKeyLookupServiceImpl(ApiKeyRepository apiKeyRepository,
+                                   IntegrationRepository integrationRepository,
                                    ApiKeyHasher apiKeyHasher,
                                    ApiKeyService apiKeyService) {
-        this.apiKeyRepository = apiKeyRepository;
-        this.apiKeyHasher     = apiKeyHasher;
-        this.apiKeyService    = apiKeyService;
+        this.apiKeyRepository      = apiKeyRepository;
+        this.integrationRepository = integrationRepository;
+        this.apiKeyHasher          = apiKeyHasher;
+        this.apiKeyService         = apiKeyService;
     }
 
     @Override
@@ -81,18 +86,21 @@ public class ApiKeyLookupServiceImpl
     private UserPrincipal buildPrincipal(ApiKey apiKey) {
         final List<String> roles;
         final UUID userId;
+        // teamId — resolved from Integration for routing alerts to correct team
+        final UUID teamId = resolveTeamId(apiKey);
 
         if (apiKey.isTenant()) {
-            // TENANT keys — represent the organisation, not a specific user.
-            // Grant ROLE_RESPONDER by default — ADMIN scope checked separately
-            // via key scopes (TEAMS_WRITE scope implies admin-level actions).
             roles  = List.of("ROLE_RESPONDER");
-            userId = apiKey.getId(); // use key UUID as surrogate userId for audit
+            userId = apiKey.getId();
         } else {
-            // PERSONAL keys — inherit owner's roles
             roles  = apiKey.getOwnerUser().getRoleNames();
             userId = apiKey.getOwnerUser().getId();
         }
+
+        // teamId is stored in teamIds list — ingestion-service reads
+        // principal.teamIds().get(0) to set UnifiedAlertDto.teamId
+        final List<UUID> teamIds = teamId != null
+                ? List.of(teamId) : List.of();
 
         return new UserPrincipal(
                 userId,
@@ -101,9 +109,25 @@ public class ApiKeyLookupServiceImpl
                         ? "api-key:" + apiKey.getName()
                         : apiKey.getOwnerUser().getEmail(),
                 roles,
-                List.of(),      // teamIds — not relevant for API key auth
-                true,           // isApiKey = true
+                teamIds,
+                true,
                 apiKey.getScopes()
         );
+    }
+
+    /**
+     * Resolves the teamId for an API key that belongs to an Integration.
+     *
+     * <p>Integration keys have {@code integrationId} set — one JOIN fetches
+     * the team. Personal keys and manually-created Tenant keys return null.
+     */
+    private UUID resolveTeamId(ApiKey apiKey) {
+        if (apiKey.getIntegrationId() == null) {
+            return null;
+        }
+        return integrationRepository.findById(apiKey.getIntegrationId())
+                .filter(Integration::isActive)
+                .map(i -> i.getTeam() != null ? i.getTeam().getId() : null)
+                .orElse(null);
     }
 }

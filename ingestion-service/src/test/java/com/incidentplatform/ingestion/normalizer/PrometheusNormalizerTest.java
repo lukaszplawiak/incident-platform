@@ -55,7 +55,7 @@ class PrometheusNormalizerTest {
                     }
                     """);
 
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
+            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
 
             assertThat(result.firingAlerts()).hasSize(1);
             assertThat(result.resolvedAlerts()).isEmpty();
@@ -87,7 +87,7 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-            assertThat(normalizer.normalize(payload, TENANT_ID)
+            assertThat(normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).title()).isEqualTo("HighCpuUsage");
         }
 
@@ -106,7 +106,7 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-            assertThat(normalizer.normalize(payload, TENANT_ID)
+            assertThat(normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).fingerprint())
                     .isEqualTo("prometheus:highcpuusage:node-exporter");
         }
@@ -126,7 +126,7 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-            assertThat(normalizer.normalize(payload, TENANT_ID)
+            assertThat(normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).firedAt()).isNotNull();
         }
 
@@ -146,7 +146,7 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-            final var metadata = normalizer.normalize(payload, TENANT_ID)
+            final var metadata = normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).metadata();
             assertThat(metadata).doesNotContainKey("alertname");
             assertThat(metadata).doesNotContainKey("severity");
@@ -175,7 +175,7 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
+            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
             assertThat(result.firingAlerts()).isEmpty();
             assertThat(result.resolvedAlerts()).hasSize(1);
             final var resolved = result.resolvedAlerts().get(0);
@@ -202,9 +202,9 @@ class PrometheusNormalizerTest {
                     }
                     """;
             final NormalizationResult firing = normalizer.normalize(
-                    objectMapper.readTree(String.format(alertJson, "firing")), TENANT_ID);
+                    objectMapper.readTree(String.format(alertJson, "firing")), TENANT_ID, null);
             final NormalizationResult resolved = normalizer.normalize(
-                    objectMapper.readTree(String.format(alertJson, "resolved")), TENANT_ID);
+                    objectMapper.readTree(String.format(alertJson, "resolved")), TENANT_ID, null);
             assertThat(firing.firingAlerts().get(0).fingerprint())
                     .isEqualTo(resolved.resolvedAlerts().get(0).alertFingerprint());
         }
@@ -257,7 +257,7 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """, rawSeverity));
-            return normalizer.normalize(payload, TENANT_ID)
+            return normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).severity();
         }
     }
@@ -291,7 +291,7 @@ class PrometheusNormalizerTest {
                       ]
                     }
                     """);
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
+            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
             assertThat(result.firingAlerts()).hasSize(2);
             assertThat(result.resolvedAlerts()).isEmpty();
         }
@@ -321,7 +321,7 @@ class PrometheusNormalizerTest {
                       ]
                     }
                     """);
-            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID);
+            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
             assertThat(result.firingAlerts()).hasSize(1);
             assertThat(result.resolvedAlerts()).hasSize(1);
             assertThat(result.totalProcessed()).isEqualTo(2);
@@ -352,7 +352,7 @@ class PrometheusNormalizerTest {
                       ]
                     }
                     """);
-            assertThat(smallBatchNormalizer.normalize(payload, TENANT_ID).firingAlerts()).hasSize(2);
+            assertThat(smallBatchNormalizer.normalize(payload, TENANT_ID, null).firingAlerts()).hasSize(2);
         }
     }
 
@@ -366,7 +366,7 @@ class PrometheusNormalizerTest {
             final JsonNode payload = objectMapper.readTree("""
                     { "version": "4", "status": "firing" }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("alerts");
         }
@@ -377,7 +377,7 @@ class PrometheusNormalizerTest {
             final JsonNode payload = objectMapper.readTree("""
                     { "alerts": [] }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class);
         }
 
@@ -392,7 +392,7 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID))
+            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("alertname");
         }
@@ -418,9 +418,9 @@ class PrometheusNormalizerTest {
                     }
                     """;
             final NormalizationResult result1 = normalizer.normalize(
-                    objectMapper.readTree(alertJson), TENANT_ID);
+                    objectMapper.readTree(alertJson), TENANT_ID, null);
             final NormalizationResult result2 = normalizer.normalize(
-                    objectMapper.readTree(alertJson), TENANT_ID);
+                    objectMapper.readTree(alertJson), TENANT_ID, null);
             assertThat(result1.firingAlerts().get(0).fingerprint())
                     .isEqualTo(result2.firingAlerts().get(0).fingerprint());
         }
@@ -442,9 +442,9 @@ class PrometheusNormalizerTest {
                       }}]
                     }
                     """);
-            final String f1 = normalizer.normalize(payload1, TENANT_ID)
+            final String f1 = normalizer.normalize(payload1, TENANT_ID, null)
                     .firingAlerts().get(0).fingerprint();
-            final String f2 = normalizer.normalize(payload2, TENANT_ID)
+            final String f2 = normalizer.normalize(payload2, TENANT_ID, null)
                     .firingAlerts().get(0).fingerprint();
             assertThat(f1).isNotEqualTo(f2);
         }
@@ -459,7 +459,7 @@ class PrometheusNormalizerTest {
                       }}]
                     }
                     """);
-            final String fingerprint = normalizer.normalize(payload, TENANT_ID)
+            final String fingerprint = normalizer.normalize(payload, TENANT_ID, null)
                     .firingAlerts().get(0).fingerprint();
             assertThat(fingerprint).isEqualTo(fingerprint.toLowerCase());
         }
