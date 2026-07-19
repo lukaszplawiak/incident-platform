@@ -71,7 +71,7 @@ COMMENT ON COLUMN invite_email_outbox.raw_token
 
 -- ShedLock table — prevents InviteEmailScheduler from running concurrently
 -- across multiple auth-service instances.
-CREATE TABLE shedlock
+CREATE TABLE IF NOT EXISTS shedlock
 (
     name       VARCHAR(64)  NOT NULL,
     lock_until TIMESTAMPTZ  NOT NULL,

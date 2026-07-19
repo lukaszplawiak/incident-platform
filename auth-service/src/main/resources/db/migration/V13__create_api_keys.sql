@@ -24,8 +24,8 @@
 --   request that uses a key. SHA-256 is the industry standard for API key
 --   hashing (GitHub, Stripe, Twilio all use it for this reason).
 --
--- scopes stored as PostgreSQL TEXT ARRAY:
---   Allows efficient @> (contains) operator for scope checking.
+-- scopes stored as comma-separated TEXT:
+--   Example: "incidents:read,incidents:write,alerts:ingest"
 --   Scope values defined in ApiKeyScope enum:
 --     incidents:read, incidents:write, alerts:ingest,
 --     postmortems:read, postmortems:write,
@@ -48,7 +48,7 @@ CREATE TABLE api_keys
     name          VARCHAR(255) NOT NULL,                     -- human-readable label
     key_hash      VARCHAR(64)  NOT NULL,                     -- SHA-256 of raw key
     key_prefix    VARCHAR(8)   NOT NULL,                     -- first 8 chars for UI
-    scopes        TEXT[]       NOT NULL DEFAULT '{}',        -- granted permissions
+    scopes        TEXT         NOT NULL DEFAULT '',           -- comma-separated permissions
     owner_user_id UUID         REFERENCES users (id) ON DELETE SET NULL,
     last_used_at  TIMESTAMPTZ,
     expires_at    TIMESTAMPTZ,                               -- NULL = non-expiring
@@ -92,5 +92,6 @@ COMMENT ON COLUMN api_keys.key_prefix
     IS 'First 8 chars of raw key — shown in UI for identification without '
        'revealing the secret. Example: "ipl_abc1" for "ipl_abc12345...xyz".';
 COMMENT ON COLUMN api_keys.scopes
-    IS 'Granted API scopes. Subset of ApiKeyScope enum values. '
+    IS 'Granted API scopes as comma-separated TEXT. '
+       'Example: incidents:read,alerts:ingest. '
        'PERSONAL keys cannot exceed owner role permissions.';

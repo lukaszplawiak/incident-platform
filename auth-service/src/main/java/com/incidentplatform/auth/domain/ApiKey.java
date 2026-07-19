@@ -1,5 +1,6 @@
 package com.incidentplatform.auth.domain;
 
+import com.incidentplatform.auth.converter.ScopesConverter;
 import jakarta.persistence.Column;
 import jakarta.persistence.Convert;
 import jakarta.persistence.Entity;
@@ -72,12 +73,12 @@ public class ApiKey {
     private String keyPrefix;
 
     /**
-     * Granted scopes stored as PostgreSQL {@code TEXT[]}.
-     * Mapped via {@link com.incidentplatform.auth.converter.StringListConverter}
-     * — standard JPA AttributeConverter, no external dependencies.
+     * Granted scopes stored as comma-separated VARCHAR.
+     * Example: "incidents:read,incidents:write,alerts:ingest"
+     * Mapped via {@link ScopesConverter} — standard JPA AttributeConverter.
      */
-    @Convert(converter = com.incidentplatform.auth.converter.StringListConverter.class)
-    @Column(name = "scopes", columnDefinition = "text[]", nullable = false)
+    @Convert(converter = ScopesConverter.class)
+    @Column(name = "scopes", columnDefinition = "TEXT", nullable = false)
     private List<String> scopes;
 
     /**
