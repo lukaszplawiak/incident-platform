@@ -58,7 +58,7 @@
              declared explicitly in <dependencies> below. Property centralises the version. -->
         <commons-compress.version>1.28.0</commons-compress.version>
         <!-- CVE-2026-42198 — fix in 42.7.11 -->
-        <postgresql.version>42.7.11</postgresql.version>
+        <postgresql.version>42.7.12</postgresql.version>
         <!-- NVD API key for OWASP Dependency-Check — speeds up NVD database
              download from ~15 min to ~2 min. Empty by default — override via:
                ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
