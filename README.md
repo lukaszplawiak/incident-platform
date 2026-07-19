@@ -90,12 +90,21 @@ Prometheus / Wazuh / Generic
   └─────────────────────┘
 
   All services → Kafka: audit.events → incident-service audit consumer → audit_events table
+
+  ┌─────────────────────┐
+  │    auth-service      │  port 8087
+  │                     │  Authentication, MFA (TOTP), JWT refresh
+  │                     │  Users, Teams, Roles, TenantSettings
+  │                     │  API Keys + Integration-based alert routing
+  └─────────────────────┘
+  (consumed by all services for JWT verification via shared library)
 ```
 
 ### Services
 
 | Service | Port | Responsibility |
 |---|---|---|
+| auth-service | 8087 | Authentication, users, teams, API keys, MFA, integrations |
 | ingestion-service | 8081 | Alert normalization, deduplication, rate limiting |
 | incident-service | 8082 | Incident lifecycle FSM, WebSocket, audit log |
 | notification-service | 8083 | Multi-channel notifications, on-call routing |
@@ -149,6 +158,16 @@ The notification consumer deserializes Kafka messages to `JsonNode` and extracts
 
 **Why bucket4j in-memory instead of Redis-backed rate limiting?**
 In-memory rate limiting is sufficient for a single instance. The tradeoff is documented: each instance maintains independent counters in a load-balanced deployment. Migration to bucket4j-redis requires changing one class — `RateLimitingService`.
+
+
+**Why auth-service is a modular monolith rather than split into auth + identity?**
+All identity concerns (users, teams, API keys, integrations) are colocated with authentication to avoid distributed transaction complexity and HTTP latency on the login hot path. `AuthService.login()` reads `User` credentials in the same database transaction — after splitting this would require a Redis credential cache (Wzorzec B) and Outbox Pattern for invite flow. This is documented as a future backlog item in `AuthServiceApplication.java` with the exact migration plan.
+
+**Why API Key authentication uses SHA-256 instead of Argon2?**
+API keys have ~143 bits of entropy (24 bytes SecureRandom → base64). Brute-forcing a leaked SHA-256 hash requires 2^143 attempts — computationally infeasible regardless of hash speed. Argon2's memory-hard cost (100ms+) would add latency to every API request that uses key authentication. SHA-256 is the industry standard for high-entropy API key hashing (GitHub, Stripe, Twilio).
+
+**Why Integration-based routing instead of label matching for alert → team routing?**
+Label-based routing (RoutingRules matching on alert labels) requires DevOps teams to configure labels in Prometheus/Wazuh per alert. Integration-based routing (PagerDuty model) delegates routing responsibility to the platform: admin creates an Integration named "Prometheus Payment API" → assigns it to "backend-team" → gets an API key. Alertmanager uses that key — the source of the alert IS the routing decision. No per-alert label configuration needed.
 
 **Why a separate oncall-service instead of extending notification-service?**
 On-call schedule management is a distinct bounded context. A separate service allows independent scaling, independent deployment, and future extension (PagerDuty integration, calendar sync) without touching the notification pipeline.
@@ -268,6 +287,7 @@ Health and metrics endpoints run on a dedicated port per service, never mixed wi
 
 | Service | API Port | Management Port |
 |---|---|---|
+| auth-service | 8087 | 8087 (shared) |
 | ingestion-service | 8081 | 8091 |
 | incident-service | 8082 | 8092 |
 | notification-service | 8083 | 8093 |
@@ -401,11 +421,25 @@ Each service requires `src/main/resources/application-local.yml` — this file i
 
 > **Important**: Use only standard ASCII hyphens (`-`) in YAML comments, not em dashes (`—`). Em dashes are multi-byte UTF-8 characters that prevent Spring Boot from loading the file.
 
-**Create this file in all 6 services:**
+**Create this file in all 7 services:**
 
 ```yaml
 jwt:
   secret: local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only
+
+logging:
+  level:
+    com.incidentplatform: DEBUG
+```
+
+**auth-service** additionally requires an MFA encryption key:
+
+```yaml
+jwt:
+  secret: local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only
+
+mfa:
+  encryption-key: dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE=
 
 logging:
   level:
@@ -450,27 +484,46 @@ logging:
 ./mvnw clean install -DskipTests
 ```
 
-### Step 4 — Start all 6 services (separate terminals)
+### Step 4 — Start all services
+
+#### Option A — Maven (development, hot reload)
 
 ```bash
-# Terminal 1
-./mvnw spring-boot:run -pl ingestion-service -Dspring-boot.run.profiles=local
+# Terminal 1 — auth-service (users, teams, API keys, MFA)
+./mvnw spring-boot:run -pl auth-service -Dspring-boot.run.profiles=local
 
 # Terminal 2
-./mvnw spring-boot:run -pl incident-service -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -pl ingestion-service -Dspring-boot.run.profiles=local
 
 # Terminal 3
-./mvnw spring-boot:run -pl notification-service -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -pl incident-service -Dspring-boot.run.profiles=local
 
 # Terminal 4
-./mvnw spring-boot:run -pl escalation-service -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -pl notification-service -Dspring-boot.run.profiles=local
 
 # Terminal 5
-./mvnw spring-boot:run -pl postmortem-service -Dspring-boot.run.profiles=local
+./mvnw spring-boot:run -pl escalation-service -Dspring-boot.run.profiles=local
 
 # Terminal 6
+./mvnw spring-boot:run -pl postmortem-service -Dspring-boot.run.profiles=local
+
+# Terminal 7
 ./mvnw spring-boot:run -pl oncall-service -Dspring-boot.run.profiles=local
 ```
+
+#### Option B — Docker Compose (all services in containers)
+
+```bash
+cd docker
+cp .env.example .env
+# Edit .env — fill in JWT_SECRET and MFA_ENCRYPTION_KEY:
+#   JWT_SECRET=$(openssl rand -base64 64)
+#   MFA_ENCRYPTION_KEY=$(openssl rand -base64 32)
+docker compose up -d
+```
+
+> **auth-service** requires `MFA_ENCRYPTION_KEY` — a 32-byte base64 AES-256-GCM key
+> for encrypting TOTP secrets at rest. See `docker/.env.example` for all required variables.
 
 ### Step 5 — (Optional) Start monitoring stack
 
@@ -507,6 +560,9 @@ for port in 8091 8092 8093 8094 8095 8096; do
   echo -n "Port $port: "
   curl -s http://localhost:$port/actuator/health | jq -r .status
 done
+# auth-service uses its main port for health (no separate management port configured)
+echo -n "Port 8087: "
+curl -s http://localhost:8087/actuator/health | jq -r .status
 ```
 
 Expected:
@@ -517,6 +573,7 @@ Port 8093: UP
 Port 8094: UP
 Port 8095: UP
 Port 8096: UP
+Port 8087: UP
 ```
 
 ### Infrastructure URLs
@@ -893,14 +950,31 @@ curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
 
 ---
 
+## Makefile commands
+
+```bash
+make dev-up          # Start infrastructure (postgres, redis, kafka)
+make dev-down        # Stop all containers
+make dev-reset       # Stop + remove volumes (clean database)
+make build           # Build all modules (skip tests)
+make test            # Run all tests
+make run-auth        # Start auth-service locally (profile=local)
+make run-ingestion   # Start ingestion-service locally
+make run-incident    # Start incident-service locally
+# ... etc for each service
+```
+
+---
+
 ## Running Tests
 
 ```bash
 # All modules
-./mvnw test -pl shared,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service
+./mvnw test -pl shared,auth-service,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service
 
 # Single module
 ./mvnw test -pl incident-service
+./mvnw test -pl auth-service
 ```
 
 ### Test Coverage Highlights
@@ -930,6 +1004,25 @@ curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
 
 ```
 incident-platform/
+├── shared/                        # Shared library (jar, not a runnable service)
+│   └── src/main/java/
+│       ├── dto/                   # Shared DTOs: ErrorResponse, PageResponse
+│       ├── events/                # Kafka event records: IncidentOpenedEvent, AuditEventMessage, ...
+│       ├── exception/             # GlobalExceptionHandler, BusinessException, ResourceNotFoundException
+│       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, ServiceTokenProvider
+│           └── kafka/             # TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor
+│
+├── auth-service/                  # port 8087 — identity and access management
+│   └── src/main/java/
+│       ├── api/                   # AuthController, UserController, TeamController,
+│       │                          # ApiKeyController, IntegrationController, TenantSettingsController
+│       ├── service/               # AuthService, UserService, TeamService, MfaService,
+│       │                          # ApiKeyService, IntegrationService, TenantSettingsService
+│       │                          # AuthTokenService, InviteService, ForgotPasswordService
+│       ├── domain/                # User, Team, TeamMember, ApiKey, Integration,
+│       │                          # AuthToken, MfaBackupCode, TenantSettings
+│       └── repository/            # JPA repositories for all domain entities
+│
 ├── shared/                        # Shared library (jar, not a runnable service)
 │   └── src/main/java/
 │       ├── dto/                   # Shared DTOs: ErrorResponse, PageResponse
@@ -981,7 +1074,8 @@ incident-platform/
 │   └── generate-alertmanager-token.sh  # Generates JWT token for Alertmanager — run once before starting the stack
 │
 ├── docker/
-│   ├── docker-compose.yml         # PostgreSQL, Redis (AOF), Kafka (KRaft), Kafka Exporter, pgAdmin, Kafka UI, Prometheus, Alertmanager, Grafana
+│   ├── docker-compose.yml         # Full stack: infrastructure + all 8 application services
+│   ├── .env.example               # Environment variable template — copy to .env and fill in
 │   ├── prometheus.yml             # Scrape config for all 6 management ports + kafka-exporter
 │   ├── prometheus.rules.yml       # Alert rules: infrastructure, ingestion, incident-service, Kafka lag, JVM
 │   ├── alertmanager.yml           # Alert routing to ingestion-service webhook, credentials_file auth
