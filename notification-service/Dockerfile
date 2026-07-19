@@ -15,6 +15,7 @@ COPY notification-service/pom.xml notification-service/
 COPY escalation-service/pom.xml escalation-service/
 COPY postmortem-service/pom.xml postmortem-service/
 COPY oncall-service/pom.xml oncall-service/
+COPY auth-service/pom.xml auth-service/
 
 RUN --mount=type=cache,target=/root/.m2,id=notification-service-m2 \
     ./mvnw dependency:go-offline -pl shared,notification-service -am -q --no-transfer-progress
