@@ -66,7 +66,7 @@ COMMENT ON COLUMN notification_queue.processed_at
 
 -- ShedLock table — prevents duplicate scheduler execution across
 -- multiple notification-service instances.
-CREATE TABLE shedlock
+CREATE TABLE IF NOT EXISTS shedlock
 (
     name       VARCHAR(64)  NOT NULL,
     lock_until TIMESTAMPTZ  NOT NULL,
