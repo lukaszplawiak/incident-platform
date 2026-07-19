@@ -241,6 +241,302 @@ services:
       timeout: 5s
       retries: 5
 
+  # ==========================================================
+  # APPLICATION SERVICES
+  # Build from source: docker compose build
+  # Start all:        docker compose up -d
+  #
+  # Ports:
+  #   auth-service        8087
+  #   ingestion-service   8081
+  #   incident-service    8082
+  #   notification-service 8083
+  #   escalation-service  8084
+  #   postmortem-service  8085
+  #   oncall-service      8086
+  #
+  # Required secrets (set in .env.example or environment):
+  #   JWT_SECRET          — min 64 chars, same across all services
+  #   MFA_ENCRYPTION_KEY  — 32-byte base64 (openssl rand -base64 32)
+  #   POSTGRES_PASSWORD   — PostgreSQL password
+  # ==========================================================
+
+  # ----------------------------------------------------------
+  # auth-service: port 8087
+  # ----------------------------------------------------------
+  auth-service:
+    build:
+      context: ..
+      dockerfile: auth-service/Dockerfile
+    container_name: incident-auth-service
+    restart: unless-stopped
+    ports:
+      - "${AUTH_SERVICE_PORT:-8087}:8087"
+    environment:
+      SERVER_PORT: 8087
+      # Database
+      DB_URL: jdbc:postgresql://postgres:5432/incidentdb
+      DB_USERNAME: incident_app
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      # JWT — shared secret across all services
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
+      JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
+      JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # MFA
+      MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY}
+      MFA_TOTP_ISSUER: ${MFA_TOTP_ISSUER:-IncidentPlatform}
+      # Mail (optional — invite emails)
+      MAIL_HOST: ${MAIL_HOST:-mailhog}
+      MAIL_PORT: ${MAIL_PORT:-1025}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      INVITE_EMAIL_FROM: ${INVITE_EMAIL_FROM:-noreply@incident-platform.local}
+      # App
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8087}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:8087/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ----------------------------------------------------------
+  # ingestion-service: port 8081
+  # ----------------------------------------------------------
+  ingestion-service:
+    build:
+      context: ..
+      dockerfile: ingestion-service/Dockerfile
+    container_name: incident-ingestion-service
+    restart: unless-stopped
+    ports:
+      - "${INGESTION_SERVICE_PORT:-8081}:8081"
+    environment:
+      SERVER_PORT: 8081
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
+      JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
+      JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      ALERTMANAGER_TOKEN_FILE_PATH: /etc/secrets/alertmanager-token
+      ALERTMANAGER_TOKEN_REFRESH_ENABLED: "true"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    volumes:
+      - ./secrets:/etc/secrets:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:8081/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ----------------------------------------------------------
+  # incident-service: port 8082
+  # ----------------------------------------------------------
+  incident-service:
+    build:
+      context: ..
+      dockerfile: incident-service/Dockerfile
+    container_name: incident-incident-service
+    restart: unless-stopped
+    ports:
+      - "${INCIDENT_SERVICE_PORT:-8082}:8082"
+    environment:
+      SERVER_PORT: 8082
+      DB_NAME: incidentdb
+      DB_USER: incident_app
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
+      JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
+      JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:8082/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ----------------------------------------------------------
+  # notification-service: port 8083
+  # ----------------------------------------------------------
+  notification-service:
+    build:
+      context: ..
+      dockerfile: notification-service/Dockerfile
+    container_name: incident-notification-service
+    restart: unless-stopped
+    ports:
+      - "${NOTIFICATION_SERVICE_PORT:-8083}:8083"
+    environment:
+      SERVER_PORT: 8083
+      DB_NAME: incidentdb
+      DB_USER: incident_app
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
+      JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
+      JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+      INCIDENT_SERVICE_URL: http://incident-service:8082
+      ONCALL_SERVICE_URL: http://oncall-service:8086
+      MAIL_HOST: ${MAIL_HOST:-mailhog}
+      MAIL_PORT: ${MAIL_PORT:-1025}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      NOTIFICATION_FALLBACK_EMAIL: ${NOTIFICATION_FALLBACK_EMAIL:-oncall@incident-platform.local}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:8083/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ----------------------------------------------------------
+  # escalation-service: port 8084
+  # ----------------------------------------------------------
+  escalation-service:
+    build:
+      context: ..
+      dockerfile: escalation-service/Dockerfile
+    container_name: incident-escalation-service
+    restart: unless-stopped
+    ports:
+      - "${ESCALATION_SERVICE_PORT:-8084}:8084"
+    environment:
+      SERVER_PORT: 8084
+      DB_NAME: incidentdb
+      DB_USER: incident_app
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
+      JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
+      JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+      ONCALL_SERVICE_URL: http://oncall-service:8086
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:8084/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ----------------------------------------------------------
+  # postmortem-service: port 8085
+  # ----------------------------------------------------------
+  postmortem-service:
+    build:
+      context: ..
+      dockerfile: postmortem-service/Dockerfile
+    container_name: incident-postmortem-service
+    restart: unless-stopped
+    ports:
+      - "${POSTMORTEM_SERVICE_PORT:-8085}:8085"
+    environment:
+      SERVER_PORT: 8085
+      DB_NAME: incidentdb
+      DB_USER: incident_app
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
+      JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
+      JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9094
+      INCIDENT_SERVICE_URL: http://incident-service:8082
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-30}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:8085/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # ----------------------------------------------------------
+  # oncall-service: port 8086
+  # ----------------------------------------------------------
+  oncall-service:
+    build:
+      context: ..
+      dockerfile: oncall-service/Dockerfile
+    container_name: incident-oncall-service
+    restart: unless-stopped
+    ports:
+      - "${ONCALL_SERVICE_PORT:-8086}:8086"
+    environment:
+      SERVER_PORT: 8086
+      DB_NAME: incidentdb
+      DB_USER: incident_app
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
+      JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
+      JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:8086/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+
 volumes:
   postgres_data:
   redis_data:
