@@ -22,10 +22,10 @@
 #
 # Output:
 #   Writes token to docker/secrets/alertmanager-token.txt (chmod 600)
-#   Prints export command to copy into .env
+#   Prints export command to copy into .env.example
 #
 # Run this once when setting up the environment, and again when the token
-# is about to expire. Add the generated .env line to your CI/CD secrets
+# is about to expire. Add the generated .env.example line to your CI/CD secrets
 # manager (GitHub Actions secrets, Vault, AWS SSM) — never commit it to git.
 #
 # Prerequisites: Python 3 (standard library only — no pip install needed)

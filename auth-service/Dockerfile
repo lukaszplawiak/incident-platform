@@ -1,0 +1,49 @@
+# syntax=docker/dockerfile:1.24
+# ---- Build stage ----
+FROM eclipse-temurin:21.0.11_10-jdk-alpine AS builder
+
+WORKDIR /build
+
+COPY mvnw mvnw.cmd ./
+COPY .mvn .mvn
+
+COPY pom.xml ./
+COPY shared/pom.xml shared/
+COPY ingestion-service/pom.xml ingestion-service/
+COPY incident-service/pom.xml incident-service/
+COPY notification-service/pom.xml notification-service/
+COPY escalation-service/pom.xml escalation-service/
+COPY postmortem-service/pom.xml postmortem-service/
+COPY oncall-service/pom.xml oncall-service/
+COPY auth-service/pom.xml auth-service/
+
+RUN --mount=type=cache,target=/root/.m2,id=auth-service-m2 \
+    ./mvnw dependency:go-offline -pl shared,auth-service -am -q --no-transfer-progress
+
+COPY shared/src shared/src
+COPY auth-service/src auth-service/src
+
+RUN --mount=type=cache,target=/root/.m2,id=auth-service-m2 \
+    ./mvnw package -pl shared,auth-service -am \
+    -DskipTests --no-transfer-progress
+
+# ---- Runtime stage ----
+FROM eclipse-temurin:21.0.11_10-jre-alpine
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+WORKDIR /app
+
+COPY --from=builder /build/auth-service/target/auth-service-*.jar app.jar
+
+RUN chown appuser:appgroup app.jar
+
+USER appuser
+
+EXPOSE 8087
+
+ENTRYPOINT ["java", \
+  "-XX:+UseContainerSupport", \
+  "-XX:MaxRAMPercentage=75.0", \
+  "-Djava.security.egd=file:/dev/./urandom", \
+  "-jar", "app.jar"]
