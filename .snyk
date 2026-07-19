@@ -113,3 +113,37 @@ ignore:
         expires: '2027-01-01T00:00:00.000Z'
 
 patch: {}
+  # ── Tomcat (new CVEs, July 2026) ───────────────────────────────────────────
+  # Fix requires upgrade to Spring Boot 4.0 (Tomcat 11.x).
+  # Spring Boot 3.5.x is EOL — no patch available on 3.x line.
+
+  SNYK-JAVA-ORGAPACHETOMCATEMBED-17732890:
+    - '*':
+        reason: >
+          Tomcat Improper Authentication CVE requires Spring Boot 4.0 (Tomcat 11.x).
+          Spring Boot 3.5.x reached EOL 2026-06-30 — no 3.x patch available.
+          Tracked for resolution during Spring Boot 4.x migration.
+          All endpoints require JWT authentication. No unauthenticated access.
+        expires: '2027-01-01T00:00:00.000Z'
+
+  SNYK-JAVA-ORGAPACHETOMCATEMBED-17733746:
+    - '*':
+        reason: >
+          Tomcat Error Condition CVE requires Spring Boot 4.0 (Tomcat 11.x).
+          Spring Boot 3.5.x reached EOL 2026-06-30 — no 3.x patch available.
+          Tracked for resolution during Spring Boot 4.x migration.
+        expires: '2027-01-01T00:00:00.000Z'
+
+  # ── logback (via spring-kafka-test, test scope only) ──────────────────────
+  # logback-core is pulled in transitively by spring-kafka-test -> zookeeper.
+  # This dependency is TEST SCOPE ONLY — never present in production artifacts.
+  # No production risk. Fix requires spring-kafka 4.x migration.
+
+  SNYK-JAVA-CHQOSLOGBACK-17675439:
+    - '*':
+        reason: >
+          logback-core Expression Injection CVE introduced via spring-kafka-test
+          -> zookeeper -> logback-core. This is TEST SCOPE ONLY — the vulnerable
+          library is never included in production artifacts or Docker images.
+          Fix requires spring-kafka 4.x migration (tracked with Spring Boot 4.x).
+        expires: '2027-01-01T00:00:00.000Z'
