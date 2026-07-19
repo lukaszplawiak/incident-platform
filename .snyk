@@ -112,7 +112,6 @@ ignore:
           Tracked for resolution during Spring Boot 4.x migration.
         expires: '2027-01-01T00:00:00.000Z'
 
-patch: {}
   # ── Tomcat (new CVEs, July 2026) ───────────────────────────────────────────
   # Fix requires upgrade to Spring Boot 4.0 (Tomcat 11.x).
   # Spring Boot 3.5.x is EOL — no patch available on 3.x line.
@@ -147,3 +146,5 @@ patch: {}
           library is never included in production artifacts or Docker images.
           Fix requires spring-kafka 4.x migration (tracked with Spring Boot 4.x).
         expires: '2027-01-01T00:00:00.000Z'
+
+patch: {}
