@@ -78,7 +78,6 @@ public class SecurityConfig {
      * {@code @ConditionalOnMissingBean} default in SharedSecurityAutoConfiguration.
      */
     @Bean
-    @Primary
     public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils,
                                        TokenRevocationChecker revocationChecker) {
         return new JwtAuthFilter(jwtUtils, revocationChecker);

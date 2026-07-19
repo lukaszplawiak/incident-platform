@@ -77,7 +77,13 @@ public record InviteEmailProperties(
          * scheduler picks it up. Prevents racing against a UserService that
          * just committed within the same scheduler cycle. Default: 30 seconds.
          */
-        @NotNull(message = "invite.email.pending-threshold-seconds must not be null")
+        /**
+         * How long after creation a PENDING outbox entry must be before the
+         * scheduler picks it up. Spring Boot maps {@code pending-threshold}
+         * → {@code pendingThreshold} (Duration). ISO-8601 format: PT30S.
+         * Default: PT30S (30 seconds).
+         */
+        @NotNull(message = "invite.email.pending-threshold must not be null")
         Duration pendingThreshold,
 
         /**

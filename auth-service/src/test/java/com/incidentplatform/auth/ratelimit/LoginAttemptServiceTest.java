@@ -18,6 +18,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
 
@@ -43,6 +44,7 @@ class LoginAttemptServiceTest {
                 true, MAX_FAILURES,
                 Duration.ofMinutes(15), Duration.ofMinutes(10));
 
+        lenient().when(redis.opsForValue()).thenReturn(valueOps);
         service = new LoginAttemptService(redis, props, new SimpleMeterRegistry());
     }
 
@@ -55,21 +57,21 @@ class LoginAttemptServiceTest {
         @Test
         @DisplayName("returns false when no lockout key exists")
         void returnsFalseWhenNotLocked() {
-            given(redis.hasKey(anyString())).willReturn(false);
+            given(valueOps.get(anyString())).willReturn(null);
             assertThat(service.isLocked(EMAIL, TENANT)).isFalse();
         }
 
         @Test
         @DisplayName("returns true when lockout key exists")
         void returnsTrueWhenLocked() {
-            given(redis.hasKey(anyString())).willReturn(true);
+            given(valueOps.get(anyString())).willReturn("1");
             assertThat(service.isLocked(EMAIL, TENANT)).isTrue();
         }
 
         @Test
         @DisplayName("returns false (fail open) when Redis throws")
         void returnsFalseOnRedisException() {
-            given(redis.hasKey(anyString()))
+            given(valueOps.get(anyString()))
                     .willThrow(new RuntimeException("Redis unavailable"));
             assertThat(service.isLocked(EMAIL, TENANT)).isFalse();
         }
@@ -84,7 +86,7 @@ class LoginAttemptServiceTest {
         @Test
         @DisplayName("increments attempts counter")
         void incrementsCounter() {
-            given(redis.opsForValue()).willReturn(valueOps);
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn(1L);
 
             service.recordFailure(EMAIL, TENANT);
@@ -96,7 +98,7 @@ class LoginAttemptServiceTest {
         @Test
         @DisplayName("sets TTL on first attempt")
         void setsTtlOnFirstAttempt() {
-            given(redis.opsForValue()).willReturn(valueOps);
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn(1L);
 
             service.recordFailure(EMAIL, TENANT);
@@ -109,7 +111,7 @@ class LoginAttemptServiceTest {
         @Test
         @DisplayName("does not set TTL on subsequent attempts")
         void doesNotSetTtlOnSubsequentAttempts() {
-            given(redis.opsForValue()).willReturn(valueOps);
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn(3L);
 
             service.recordFailure(EMAIL, TENANT);
@@ -120,7 +122,7 @@ class LoginAttemptServiceTest {
         @Test
         @DisplayName("locks account when max failures reached")
         void locksAccountAtMaxFailures() {
-            given(redis.opsForValue()).willReturn(valueOps);
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn((long) MAX_FAILURES);
 
             service.recordFailure(EMAIL, TENANT);
@@ -134,7 +136,7 @@ class LoginAttemptServiceTest {
         @Test
         @DisplayName("does not lock before max failures")
         void doesNotLockBeforeMaxFailures() {
-            given(redis.opsForValue()).willReturn(valueOps);
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn((long) MAX_FAILURES - 1);
 
             service.recordFailure(EMAIL, TENANT);

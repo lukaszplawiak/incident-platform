@@ -2,6 +2,8 @@ package com.incidentplatform.auth;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
+import org.springframework.context.annotation.ComponentScan;
 
 /**
  * Auth Service — identity, access management, and organisational configuration
@@ -80,7 +82,11 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * @see <a href="https://martinfowler.com/articles/break-monolith-into-microservices.html">
  *     Strangler Fig pattern — incremental service extraction</a>
  */
-@SpringBootApplication
+@SpringBootApplication(exclude = {UserDetailsServiceAutoConfiguration.class})
+@ComponentScan(basePackages = {
+        "com.incidentplatform.auth",
+        "com.incidentplatform.shared"
+})
 public class AuthServiceApplication {
 
     public static void main(String[] args) {

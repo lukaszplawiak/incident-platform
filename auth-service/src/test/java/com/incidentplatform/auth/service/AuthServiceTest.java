@@ -75,7 +75,6 @@ class AuthServiceTest {
                 authTokenService, ENCODER,
                 auditEventPublisher, teamMemberRepository,
                 tenantSettingsService);
-        TenantContext.set(TENANT_ID);
         // Default: not locked
         given(loginAttemptService.isLocked(any(), any())).willReturn(false);
         // lenient — not all tests reach this (some fail before MFA check)
@@ -112,7 +111,7 @@ class AuthServiceTest {
                     .willReturn("raw-refresh-token");
 
             final LoginResponse response =
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID);
 
             assertThat(response.accessToken()).isEqualTo("jwt-token");
             assertThat(response.refreshToken()).isEqualTo("raw-refresh-token");
@@ -142,7 +141,7 @@ class AuthServiceTest {
             given(authTokenService.generateRefreshToken(any(), anyString()))
                     .willReturn("raw-refresh-token");
 
-            authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
+            authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID);
 
             then(loginAttemptService).should().recordSuccess(EMAIL, TENANT_ID);
         }
@@ -162,7 +161,7 @@ class AuthServiceTest {
                     .willReturn(Duration.ofMinutes(14));
 
             assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
                     .isInstanceOf(BusinessException.class)
                     .extracting(ex -> ((BusinessException) ex).getHttpStatus())
                     .isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -176,7 +175,7 @@ class AuthServiceTest {
                     .willReturn(Duration.ofMinutes(1));
 
             assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
                     .isInstanceOf(BusinessException.class);
 
             then(userRepository).shouldHaveNoInteractions();
@@ -196,7 +195,7 @@ class AuthServiceTest {
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
                     .isInstanceOf(BusinessException.class);
 
             then(loginAttemptService).should().recordFailure(EMAIL, TENANT_ID);
@@ -213,7 +212,7 @@ class AuthServiceTest {
                     .willReturn(Optional.of(user));
 
             assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, "WrongPass")))
+                    authService.login(new LoginRequest(EMAIL, "WrongPass"), TENANT_ID))
                     .isInstanceOf(BusinessException.class);
 
             then(loginAttemptService).should().recordFailure(EMAIL, TENANT_ID);
@@ -226,7 +225,7 @@ class AuthServiceTest {
                     .willReturn(Optional.empty());
 
             assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
                     .isInstanceOf(BusinessException.class);
 
             Mockito.verifyNoInteractions(jwtUtils);
@@ -254,7 +253,7 @@ class AuthServiceTest {
                     .willReturn("raw-mfa-token");
 
             final LoginResponse response =
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD));
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID);
 
             assertThat(response.mfaRequired()).isTrue();
             assertThat(response.mfaToken()).isEqualTo("raw-mfa-token");
@@ -274,7 +273,7 @@ class AuthServiceTest {
             lenient().when(tenantSettingsService.isMfaRequired(TENANT_ID)).thenReturn(true);
 
             assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD)))
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
                     .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class)
                     .hasMessageContaining("MFA");
         }

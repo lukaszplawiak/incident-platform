@@ -83,7 +83,9 @@ public class TokenRevocationService implements TokenRevocationChecker {
     @Override
     public boolean isRevoked(String jti) {
         try {
-            return Boolean.TRUE.equals(redis.hasKey(revokedKey(jti)));
+            // Use get() != null instead of hasKey() to avoid ClassCastException
+            // in Spring Data Redis 3.x + Lettuce 6.x.
+            return redis.opsForValue().get(revokedKey(jti)) != null;
         } catch (Exception e) {
             log.error("Redis unavailable during revocation check — " +
                     "failing open: jti={}, error={}", jti, e.getMessage());

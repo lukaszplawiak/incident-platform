@@ -83,8 +83,14 @@ public class AuthController {
             @ApiResponse(responseCode = "401", description = "Invalid credentials or account locked")
     })
     public ResponseEntity<LoginResponse> login(
-            @Valid @RequestBody LoginRequest request) {
-        return ResponseEntity.ok(authService.login(request));
+            @Valid @RequestBody LoginRequest request,
+            @RequestHeader(value = "X-Tenant-Id",
+                    required = false,
+                    defaultValue = "default") String tenantId) {
+        // X-Tenant-Id is read directly from the header because this is a
+        // public endpoint — JwtAuthFilter.shouldNotFilter() skips it, so
+        // TenantContext is never populated for unauthenticated requests.
+        return ResponseEntity.ok(authService.login(request, tenantId));
     }
 
     @PostMapping(
@@ -99,6 +105,7 @@ public class AuthController {
     })
     public ResponseEntity<Void> acceptInvite(
             @Valid @RequestBody AcceptInviteRequest request) {
+        // tenantId is embedded in the invite token — no X-Tenant-Id header needed.
         inviteService.acceptInvite(request);
         return ResponseEntity.noContent().build();
     }
@@ -179,8 +186,12 @@ public class AuthController {
             @ApiResponse(responseCode = "401", description = "Token invalid, expired, or already used")
     })
     public ResponseEntity<Void> resetPassword(
-            @Valid @RequestBody ResetPasswordRequest request) {
-        passwordService.resetPassword(request);
+            @Valid @RequestBody ResetPasswordRequest request,
+            @RequestHeader(value = "X-Tenant-Id",
+                    required = false,
+                    defaultValue = "default") String tenantId) {
+        // tenantId from header — PasswordService needs it to validate the token
+        passwordService.resetPassword(request, tenantId);
         return ResponseEntity.noContent().build();
     }
 
@@ -267,6 +278,7 @@ public class AuthController {
     })
     public ResponseEntity<LoginResponse> verifyMfa(
             @Valid @RequestBody MfaVerifyRequest request) {
+        // tenantId is embedded in the MFA session token — no X-Tenant-Id header needed.
         return ResponseEntity.ok(
                 mfaService.verifyMfaToken(request.mfaToken(), request.totpCode()));
     }
@@ -284,6 +296,7 @@ public class AuthController {
     })
     public ResponseEntity<LoginResponse> verifyMfaBackup(
             @Valid @RequestBody MfaVerifyBackupRequest request) {
+        // tenantId is embedded in the MFA session token — no X-Tenant-Id header needed.
         return ResponseEntity.ok(
                 mfaService.verifyWithBackupCode(request.mfaToken(), request.backupCode()));
     }

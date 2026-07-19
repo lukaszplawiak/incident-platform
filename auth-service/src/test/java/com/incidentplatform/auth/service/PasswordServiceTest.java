@@ -58,7 +58,6 @@ class PasswordServiceTest {
         service = new PasswordService(
                 userRepository, authTokenService,
                 ENCODER, auditEventPublisher);
-        TenantContext.set(TENANT_ID);
     }
 
     @AfterEach
@@ -185,7 +184,7 @@ class PasswordServiceTest {
                     AuthToken.Type.PASSWORD_RESET)).willReturn(token);
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD));
+            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
 
             final ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
             then(userRepository).should().save(captor.capture());
@@ -205,7 +204,7 @@ class PasswordServiceTest {
                     AuthToken.Type.PASSWORD_RESET)).willReturn(token);
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD));
+            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
 
             then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
         }
@@ -219,7 +218,7 @@ class PasswordServiceTest {
                     AuthToken.Type.PASSWORD_RESET)).willReturn(token);
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
-            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD));
+            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
 
             final ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
             then(userRepository).should().save(captor.capture());
@@ -245,7 +244,7 @@ class PasswordServiceTest {
 
             assertThatThrownBy(() ->
                     service.resetPassword(
-                            new ResetPasswordRequest("bad-token", NEW_PASSWORD)))
+                            new ResetPasswordRequest("bad-token", NEW_PASSWORD), TENANT_ID))
                     .isInstanceOf(BusinessException.class)
                     .extracting(ex -> ((BusinessException) ex).getHttpStatus())
                     .isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -264,7 +263,7 @@ class PasswordServiceTest {
 
             assertThatThrownBy(() ->
                     service.resetPassword(
-                            new ResetPasswordRequest("bad-token", NEW_PASSWORD)))
+                            new ResetPasswordRequest("bad-token", NEW_PASSWORD), TENANT_ID))
                     .isInstanceOf(BusinessException.class);
 
             then(authTokenService).should()

@@ -11,7 +11,6 @@ import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
-import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,7 +71,7 @@ public class PasswordService {
      *         401 if token is invalid, expired, or already used
      */
     @Transactional
-    public void resetPassword(ResetPasswordRequest request) {
+    public void resetPassword(ResetPasswordRequest request, String tenantId) {
         // consumeToken validates, marks used atomically — throws 401 if invalid
         final AuthToken token = authTokenService.consumeToken(
                 request.token(), AuthToken.Type.PASSWORD_RESET);
@@ -101,10 +100,9 @@ public class PasswordService {
     @Transactional
     public void changePassword(UserPrincipal principal,
                                ChangePasswordRequest request) {
-        final String tenantId = TenantContext.get();
 
         final User user = userRepository
-                .findByIdAndTenantId(principal.userId(), tenantId)
+                .findByIdAndTenantId(principal.userId(), principal.tenantId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "User", principal.userId()));
 
@@ -114,7 +112,7 @@ public class PasswordService {
         if (!passwordEncoder.matches(
                 request.currentPassword(), user.getPasswordHash())) {
             log.warn("Password change failed — wrong current password: " +
-                    "userId={}, tenant={}", principal.userId(), tenantId);
+                    "userId={}, tenant={}", principal.userId(), principal.tenantId());
             throw new BusinessException(
                     ErrorCodes.UNAUTHORIZED,
                     "Invalid credentials",
@@ -125,7 +123,7 @@ public class PasswordService {
         userRepository.save(user);
 
         auditEventPublisher.publishAuth(
-                principal.userId(), tenantId,
+                principal.userId(), principal.tenantId(),
                 AuditEventTypes.USER_PASSWORD_CHANGED,
                 "auth-service",
                 principal.userId().toString(),
@@ -133,6 +131,6 @@ public class PasswordService {
                 java.util.Map.of());
 
         log.info("Password changed: userId={}, tenant={}",
-                principal.userId(), tenantId);
+                principal.userId(), principal.tenantId());
     }
 }
