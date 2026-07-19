@@ -3,9 +3,9 @@ spring:
     name: auth-service
 
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/auth_db}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
+    username: ${DB_USERNAME:incident_app}
+    password: ${DB_PASSWORD:incident_secret}
     hikari:
       maximum-pool-size: 5
       minimum-idle: 2
@@ -22,9 +22,13 @@ spring:
         default_schema: public
 
   flyway:
+    table: flyway_schema_history_auth
     enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: false
+    locations: classpath:db/migration,classpath:com/incidentplatform/auth
+    baseline-on-migrate: true
+    baseline-version: 0
+    validate-on-migrate: true
+    out-of-order: true
 
   data:
     redis:
@@ -81,7 +85,7 @@ invite:
     from: ${INVITE_EMAIL_FROM:noreply@incidentplatform.com}
     app-base-url: ${APP_BASE_URL:http://localhost:3000}
     max-retry-attempts: ${INVITE_EMAIL_MAX_RETRIES:3}
-    pending-threshold-seconds: ${INVITE_EMAIL_PENDING_THRESHOLD_SECONDS:30}
+    pending-threshold: ${INVITE_EMAIL_PENDING_THRESHOLD:PT30S}
     scheduler-interval-ms: ${INVITE_EMAIL_SCHEDULER_INTERVAL_MS:30000}
     retry-interval-ms: ${INVITE_EMAIL_RETRY_INTERVAL_MS:300000}
 
@@ -90,9 +94,21 @@ management:
     web:
       exposure:
         include: health,info,prometheus
+  health:
+    mail:
+      enabled: false
+    defaults:
+      enabled: true
+    status:
+      order: DOWN,OUT_OF_SERVICE,UNKNOWN,UP
   endpoint:
     health:
       show-details: when-authorized
+      group:
+        readiness:
+          include: db,redis
+        liveness:
+          include: ping
 
 server:
   port: ${SERVER_PORT:8087}

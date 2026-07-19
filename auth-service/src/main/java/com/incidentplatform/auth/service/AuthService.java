@@ -57,8 +57,7 @@ public class AuthService {
     }
 
     @Transactional
-    public LoginResponse login(LoginRequest request) {
-        final String tenantId = TenantContext.get();
+    public LoginResponse login(LoginRequest request, String tenantId) {
         final String email = request.email();
 
         // ── 1. Check lockout BEFORE any DB query or BCrypt ────────────────

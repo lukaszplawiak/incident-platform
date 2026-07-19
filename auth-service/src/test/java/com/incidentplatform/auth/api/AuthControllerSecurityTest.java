@@ -84,9 +84,10 @@ class AuthControllerSecurityTest {
         @Test
         @DisplayName("200 without Authorization header — login is public")
         void login_noTokenRequired_returns200() throws Exception {
-            given(authService.login(any())).willReturn(buildLoginResponse());
+            given(authService.login(any(), any())).willReturn(buildLoginResponse());
 
             mockMvc.perform(post("/api/v1/auth/login")
+                            .header("X-Tenant-Id", TENANT_ID)
                             .contentType("application/json")
                             .content("""
                                     {"email":"user@example.com","password":"secret123"}
@@ -100,6 +101,7 @@ class AuthControllerSecurityTest {
         @DisplayName("400 when email missing")
         void missingEmail_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/login")
+                            .header("X-Tenant-Id", TENANT_ID)
                             .contentType("application/json")
                             .content("""
                                     {"password":"secret123"}
@@ -111,6 +113,7 @@ class AuthControllerSecurityTest {
         @DisplayName("400 when email malformed")
         void malformedEmail_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/login")
+                            .header("X-Tenant-Id", TENANT_ID)
                             .contentType("application/json")
                             .content("""
                                     {"email":"not-an-email","password":"secret123"}
@@ -122,6 +125,7 @@ class AuthControllerSecurityTest {
         @DisplayName("400 when password missing")
         void missingPassword_returns400() throws Exception {
             mockMvc.perform(post("/api/v1/auth/login")
+                            .header("X-Tenant-Id", TENANT_ID)
                             .contentType("application/json")
                             .content("""
                                     {"email":"user@example.com"}
@@ -132,12 +136,13 @@ class AuthControllerSecurityTest {
         @Test
         @DisplayName("401 when credentials invalid")
         void invalidCredentials_returns401() throws Exception {
-            given(authService.login(any()))
+            given(authService.login(any(), any()))
                     .willThrow(new BusinessException(
                             ErrorCodes.UNAUTHORIZED, "Invalid credentials",
                             HttpStatus.UNAUTHORIZED));
 
             mockMvc.perform(post("/api/v1/auth/login")
+                            .header("X-Tenant-Id", TENANT_ID)
                             .contentType("application/json")
                             .content("""
                                     {"email":"user@example.com","password":"wrong"}
@@ -374,7 +379,7 @@ class AuthControllerSecurityTest {
                                     com.incidentplatform.shared.exception.ErrorCodes.UNAUTHORIZED,
                                     "Token invalid",
                                     org.springframework.http.HttpStatus.UNAUTHORIZED))
-                    .given(passwordService).resetPassword(any());
+                    .given(passwordService).resetPassword(any(), any());
 
             mockMvc.perform(post("/api/v1/auth/reset-password")
                             .contentType("application/json")

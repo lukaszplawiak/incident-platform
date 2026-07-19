@@ -77,8 +77,10 @@ public class LoginAttemptService {
     public boolean isLocked(String email, String tenantId) {
         if (!props.enabled()) return false;
         try {
-            return Boolean.TRUE.equals(
-                    redis.hasKey(lockedKey(email, tenantId)));
+            // Use get() != null instead of hasKey() to avoid ClassCastException
+            // in Spring Data Redis 3.x where hasKey() may return Long
+            // instead of Boolean when used with Lettuce 6.x.
+            return redis.opsForValue().get(lockedKey(email, tenantId)) != null;
         } catch (Exception e) {
             // Redis unavailable — fail open (allow the request) to prevent
             // a Redis outage from locking out all users.

@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -31,6 +32,7 @@ import java.nio.charset.StandardCharsets;
  * remember to add.
  */
 @Component
+@ConditionalOnProperty(name = "kafka.topics.incidents-lifecycle")
 public class IncidentEventKafkaSender {
 
     private static final Logger log =

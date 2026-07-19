@@ -19,6 +19,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.BDDMockito.then;
 
 @ExtendWith(MockitoExtension.class)
@@ -37,6 +38,7 @@ class TokenRevocationServiceTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(redis.opsForValue()).thenReturn(valueOps);
         service = new TokenRevocationService(redis);
     }
 
@@ -49,7 +51,7 @@ class TokenRevocationServiceTest {
         @Test
         @DisplayName("stores jti in Redis with TTL equal to remaining lifetime")
         void storesJtiWithTtl() {
-            given(redis.opsForValue()).willReturn(valueOps);
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
             final Date expiresAt = Date.from(Instant.now().plusSeconds(3600));
 
             service.revoke(JTI, expiresAt);
@@ -73,7 +75,7 @@ class TokenRevocationServiceTest {
         @Test
         @DisplayName("does not throw when Redis unavailable")
         void doesNotThrowOnRedisFailure() {
-            given(redis.opsForValue()).willReturn(valueOps);
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
             org.mockito.BDDMockito.willThrow(new RuntimeException("Redis down"))
                     .given(valueOps).set(anyString(), anyString(), any(Duration.class));
 
@@ -91,7 +93,7 @@ class TokenRevocationServiceTest {
         @Test
         @DisplayName("returns true when jti is in revocation list")
         void returnsTrueWhenRevoked() {
-            given(redis.hasKey("auth:revoked:" + JTI)).willReturn(true);
+            given(valueOps.get("auth:revoked:" + JTI)).willReturn("1");
 
             assertThat(service.isRevoked(JTI)).isTrue();
         }
@@ -99,7 +101,7 @@ class TokenRevocationServiceTest {
         @Test
         @DisplayName("returns false when jti is not revoked")
         void returnsFalseWhenNotRevoked() {
-            given(redis.hasKey("auth:revoked:" + JTI)).willReturn(false);
+            given(valueOps.get("auth:revoked:" + JTI)).willReturn(null);
 
             assertThat(service.isRevoked(JTI)).isFalse();
         }
@@ -107,7 +109,7 @@ class TokenRevocationServiceTest {
         @Test
         @DisplayName("returns false (fail-open) when Redis unavailable")
         void returnsFalseOnRedisFailure() {
-            given(redis.hasKey(anyString()))
+            given(valueOps.get(anyString()))
                     .willThrow(new RuntimeException("Redis down"));
 
             // Fail-open: Redis outage must not reject all requests

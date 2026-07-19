@@ -65,20 +65,37 @@ public class V1_1__seed_admin_user extends BaseJavaMigration {
         final PasswordEncoder encoder = Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
         final String passwordHash = encoder.encode(password);
 
-        // Insert user
-        final String insertUser = """
-                INSERT INTO users (id, tenant_id, email, password_hash, active, version)
-                VALUES (?, ?, ?, ?, TRUE, 0)
-                ON CONFLICT (email, tenant_id) DO NOTHING
-                """;
-
+        // Check if admin already exists before inserting.
+        // Cannot use ON CONFLICT because the unique constraint
+        // uq_users_email_tenant_active is a partial index (WHERE archived_at IS NULL)
+        // and PostgreSQL does not support ON CONFLICT targeting partial indexes.
+        final String checkExists = """
+        SELECT COUNT(*) FROM users WHERE email = ? AND tenant_id = ?
+        """;
+        boolean exists = false;
         try (PreparedStatement stmt =
-                     context.getConnection().prepareStatement(insertUser)) {
-            stmt.setObject(1, userId);
+                     context.getConnection().prepareStatement(checkExists)) {
+            stmt.setString(1, email);
             stmt.setString(2, tenantId);
-            stmt.setString(3, email);
-            stmt.setString(4, passwordHash);
-            stmt.executeUpdate();
+            try (var rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    exists = rs.getLong(1) > 0;
+                }
+            }
+        }
+        if (!exists) {
+            final String insertUser = """
+            INSERT INTO users (id, tenant_id, email, password_hash, active, version)
+            VALUES (?, ?, ?, ?, TRUE, 0)
+            """;
+            try (PreparedStatement stmt =
+                         context.getConnection().prepareStatement(insertUser)) {
+                stmt.setObject(1, userId);
+                stmt.setString(2, tenantId);
+                stmt.setString(3, email);
+                stmt.setString(4, passwordHash);
+                stmt.executeUpdate();
+            }
         }
 
         // Resolve the actual user id (may differ if ON CONFLICT skipped insert)
