@@ -102,6 +102,11 @@ public class SecurityConfig {
                         // MFA verify — public because client holds only mfaToken, not JWT
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/verify").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/verify-backup").permitAll()
+                        // MFA required-by-tenant setup flow — public because the client
+                        // holds only mfaSetupToken, having never received a JWT (login
+                        // was blocked pending MFA configuration; see AuthService.login())
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/setup-required").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/enable-required").permitAll()
                         .anyRequest().authenticated()
                 )
                 .build();

@@ -1,20 +1,7 @@
 package com.incidentplatform.auth.api;
 
-import com.incidentplatform.auth.dto.AcceptInviteRequest;
-import com.incidentplatform.auth.dto.MfaBackupCodesStatusResponse;
-import com.incidentplatform.auth.dto.MfaDisableRequest;
-import com.incidentplatform.auth.dto.MfaEnableRequest;
-import com.incidentplatform.auth.dto.MfaEnableResponse;
-import com.incidentplatform.auth.dto.MfaSetupResponse;
-import com.incidentplatform.auth.dto.MfaVerifyBackupRequest;
-import com.incidentplatform.auth.dto.MfaVerifyRequest;
+import com.incidentplatform.auth.dto.*;
 import com.incidentplatform.auth.service.MfaService;
-import com.incidentplatform.auth.dto.ForgotPasswordRequest;
-import com.incidentplatform.auth.dto.LoginRequest;
-import com.incidentplatform.auth.dto.LoginResponse;
-import com.incidentplatform.auth.dto.RefreshRequest;
-import com.incidentplatform.auth.dto.RefreshResponse;
-import com.incidentplatform.auth.dto.ResetPasswordRequest;
 import com.incidentplatform.auth.service.AuthService;
 import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.ForgotPasswordService;
@@ -263,6 +250,51 @@ public class AuthController {
             @AuthenticationPrincipal UserPrincipal principal) {
         mfaService.disableMfa(request.password(), request.totpCode(), principal);
         return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping(
+            value = "/mfa/setup-required",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Set up MFA when the tenant requires it and login was blocked",
+            description = """
+                       Public — uses the mfaSetupToken from a login response with
+                       mfaSetupRequired=true, instead of a Bearer access token, since
+                       login has not completed at this point. May be called more than
+                       once (e.g. to get a fresh QR) before POST /mfa/enable-required
+                       is called — the setup token is not consumed here.
+                       """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Setup initiated"),
+            @ApiResponse(responseCode = "401", description = "Invalid or expired setup token"),
+            @ApiResponse(responseCode = "409", description = "MFA already enabled")
+    })
+    public ResponseEntity<MfaSetupResponse> setupMfaRequired(
+            @Valid @RequestBody MfaSetupRequiredRequest request) {
+        return ResponseEntity.ok(mfaService.setupMfaWithSetupToken(request.mfaSetupToken()));
+    }
+
+    @PostMapping(
+            value = "/mfa/enable-required",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Complete forced MFA setup and finish login",
+            description = """
+                       Public — consumes the mfaSetupToken (single-use), verifies the
+                       TOTP code, enables MFA, and — since this is the whole point of
+                       the tenant-required-MFA flow — completes the login that was
+                       blocked pending setup. Returns both the one-time backup codes
+                       and real access/refresh tokens in a single response.
+                       """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "MFA enabled, login completed"),
+            @ApiResponse(responseCode = "401", description = "Invalid TOTP code or setup token"),
+            @ApiResponse(responseCode = "409", description = "No pending setup found")
+    })
+    public ResponseEntity<MfaEnableWithLoginResponse> enableMfaRequired(
+            @Valid @RequestBody MfaEnableRequiredRequest request) {
+        return ResponseEntity.ok(mfaService.enableMfaWithSetupToken(
+                request.mfaSetupToken(), request.totpCode()));
     }
 
     @PostMapping(

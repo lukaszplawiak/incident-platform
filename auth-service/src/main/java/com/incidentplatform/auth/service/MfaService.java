@@ -3,10 +3,7 @@ package com.incidentplatform.auth.service;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.MfaBackupCode;
 import com.incidentplatform.auth.domain.User;
-import com.incidentplatform.auth.dto.LoginResponse;
-import com.incidentplatform.auth.dto.MfaBackupCodesStatusResponse;
-import com.incidentplatform.auth.dto.MfaEnableResponse;
-import com.incidentplatform.auth.dto.MfaSetupResponse;
+import com.incidentplatform.auth.dto.*;
 import com.incidentplatform.auth.repository.MfaBackupCodeRepository;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
@@ -227,6 +224,105 @@ public class MfaService {
         }
 
         return issueTokens(user, tenantId);
+    }
+
+    // ── Setup (forced flow — tenant requires MFA, no access token yet) ─────
+
+    /**
+     * Same as {@link #setupMfa(UserPrincipal)} but for the tenant-required-MFA
+     * login flow (see AuthService.login()'s MFA_SETUP_REQUIRED branch),
+     * where the user has no access token — identifies the user via the
+     * setup token instead of the authenticated principal.
+     *
+     * <p>Uses {@link AuthTokenService#peekToken} rather than
+     * {@link AuthTokenService#consumeToken} — this step may legitimately be
+     * retried (QR didn't scan, user wants a fresh secret) before the final
+     * {@link #enableMfaWithSetupToken} call actually consumes the token.
+     */
+    @Transactional
+    public MfaSetupResponse setupMfaWithSetupToken(String rawSetupToken) {
+        final AuthToken setupToken = authTokenService.peekToken(
+                rawSetupToken, AuthToken.Type.MFA_SETUP_REQUIRED);
+
+        final User user = setupToken.getUser();
+        final String tenantId = setupToken.getTenantId();
+
+        if (user.isMfaEnabled()) {
+            throw new BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "MFA is already enabled.",
+                    HttpStatus.CONFLICT);
+        }
+
+        final String plainSecret     = totpService.generateSecret();
+        final String encryptedSecret = aesEncryptionService.encrypt(plainSecret);
+
+        user.storePendingMfaSecret(encryptedSecret);
+        userRepository.save(user);
+
+        final String qrUrl = totpService.generateQrUrl(
+                plainSecret, user.getEmail(), tenantId);
+
+        log.info("MFA setup (tenant-required flow) initiated: userId={}, tenant={}",
+                user.getId(), tenantId);
+
+        return new MfaSetupResponse(qrUrl, plainSecret);
+    }
+
+    /**
+     * Same as {@link #enableMfa(String, UserPrincipal)} but for the
+     * tenant-required-MFA login flow. Consumes the setup token (single-use,
+     * unlike the setup step) and — since the whole point of this flow is
+     * that login was blocked pending MFA configuration — completes login
+     * by issuing real access/refresh tokens via the same
+     * {@link #issueTokens} used by TOTP and backup-code verification.
+     */
+    @Transactional
+    public MfaEnableWithLoginResponse enableMfaWithSetupToken(
+            String rawSetupToken, String totpCode) {
+        final AuthToken setupToken = authTokenService.consumeToken(
+                rawSetupToken, AuthToken.Type.MFA_SETUP_REQUIRED);
+
+        final User user = setupToken.getUser();
+        final String tenantId = setupToken.getTenantId();
+
+        if (user.getMfaPendingSecret() == null) {
+            throw new BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "No pending MFA setup found. Call POST /auth/mfa/setup-required first.",
+                    HttpStatus.CONFLICT);
+        }
+
+        final String plainSecret = aesEncryptionService.decrypt(
+                user.getMfaPendingSecret());
+
+        if (!totpService.verify(plainSecret, totpCode)) {
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    "Invalid TOTP code. Verify your authenticator app clock is synced.",
+                    HttpStatus.UNAUTHORIZED);
+        }
+
+        user.enableMfa();
+        userRepository.save(user);
+
+        final List<String> plainCodes = totpService.generateBackupCodes();
+        saveBackupCodes(user, plainCodes);
+
+        auditEventPublisher.publishAuth(
+                user.getId(), tenantId,
+                AuditEventTypes.MFA_ENABLED,
+                "auth-service",
+                user.getId().toString(),
+                "MFA enabled (tenant-required flow, login completed)",
+                Map.of());
+
+        log.info("MFA enabled via tenant-required flow, completing login: userId={}, tenant={}",
+                user.getId(), tenantId);
+
+        final LoginResponse loginResponse = issueTokens(user, tenantId);
+
+        return new MfaEnableWithLoginResponse(plainCodes, loginResponse);
     }
 
     // ── Verify backup code ────────────────────────────────────────────────
