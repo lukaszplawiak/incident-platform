@@ -148,6 +148,29 @@ class UserQueryServiceTest {
             assertThat(result.email()).isEqualTo("me@example.com");
             assertThat(result.tenantId()).isEqualTo(TENANT_ID);
             assertThat(result.roles()).containsExactly("ROLE_RESPONDER");
+            assertThat(result.mfaEnabled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("reflects mfaEnabled=true — regression test for UserSummaryDto silently dropping it")
+        void reflectsMfaEnabledState() {
+            // given — mfaEnabled was previously missing from UserSummaryDto
+            // entirely, so GET /users/me had no way to tell the frontend's
+            // self-service MFA settings screen whether MFA was already on.
+            final UUID userId = UUID.randomUUID();
+            final User user = buildUser(userId, "me@example.com");
+            user.storePendingMfaSecret("encrypted-secret");
+            user.enableMfa();
+            final UserPrincipal principal = buildPrincipal(userId);
+
+            given(userRepository.findByIdAndTenantId(userId, TENANT_ID))
+                    .willReturn(Optional.of(user));
+
+            // when
+            final UserSummaryDto result = service.getMe(principal);
+
+            // then
+            assertThat(result.mfaEnabled()).isTrue();
         }
 
         @Test

@@ -557,6 +557,6 @@ class UserControllerSecurityTest {
     private UserSummaryDto buildUserSummary() {
         return new UserSummaryDto(
                 UUID.randomUUID(), TENANT_ID, "user@example.com",
-                List.of("ROLE_RESPONDER"), List.of(), true, Instant.now(), Instant.now());
+                List.of("ROLE_RESPONDER"), List.of(), true, false, Instant.now(), Instant.now());
     }
 }
