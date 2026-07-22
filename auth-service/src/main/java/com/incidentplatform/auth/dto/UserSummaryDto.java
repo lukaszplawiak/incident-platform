@@ -11,6 +11,12 @@ import java.util.UUID;
  *
  * <p>Never includes {@code passwordHash} — that field is internal and
  * must never be exposed via API, regardless of the caller's role.
+ *
+ * <p>{@code mfaEnabled} added — GET /users/me returns this DTO and is
+ * the endpoint the frontend's self-service MFA settings screen calls to
+ * decide whether to show "Set up MFA" or "MFA enabled, manage / disable".
+ * User.isMfaEnabled() existed on the domain entity already; this DTO
+ * simply hadn't been asked for it before.
  */
 public record UserSummaryDto(
         UUID id,
@@ -19,6 +25,7 @@ public record UserSummaryDto(
         List<String> roles,
         List<UUID> teamIds,
         boolean active,
+        boolean mfaEnabled,
         Instant createdAt,
         Instant updatedAt
 ) {
@@ -38,6 +45,7 @@ public record UserSummaryDto(
                 user.getRoleNames(),
                 teamIds,
                 user.isActive(),
+                user.isMfaEnabled(),
                 user.getCreatedAt(),
                 user.getUpdatedAt()
         );
