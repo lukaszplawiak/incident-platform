@@ -321,7 +321,7 @@ class OncallScheduleControllerSecurityTest {
 
     private OncallScheduleDto buildScheduleDto() {
         return new OncallScheduleDto(
-                SCHEDULE_ID, TENANT_ID, "user-1", "Jan Kowalski",
+                SCHEDULE_ID, TENANT_ID, null, "user-1", "Jan Kowalski",
                 "jan@example.com", "+48100200300", "U0123456789", "PRIMARY",
                 Instant.now(), Instant.now().plusSeconds(86400),
                 "test schedule", Instant.now()

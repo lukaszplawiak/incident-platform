@@ -378,4 +378,30 @@ class OncallScheduleServiceTest {
                     .findByTenantIdAndSlackUserId("tenant-b", "U0123456789");
         }
     }
+
+    @Test
+    @DisplayName("should carry teamId through to the response DTO")
+    void shouldIncludeTeamIdInResponse() {
+        // given — regression test for OncallScheduleDto silently
+        // dropping teamId even though CreateOncallScheduleRequest
+        // accepted it (see OncallScheduleDto changelog).
+        final UUID teamId = UUID.randomUUID();
+        final CreateOncallScheduleRequest request = new CreateOncallScheduleRequest(
+                teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                "+48100200300", "U0123456789", OncallRole.PRIMARY.name(),
+                STARTS_AT, ENDS_AT, "Test schedule"
+        );
+
+        given(repository.existsOverlappingForCreate(
+                eq(TENANT_ID), eq(OncallRole.PRIMARY.name()), any(), any()))
+                .willReturn(false);
+        given(repository.save(any()))
+                .willAnswer(i -> i.getArgument(0));
+
+        // when
+        final OncallScheduleDto result = service.create(TENANT_ID, request);
+
+        // then
+        assertThat(result.teamId()).isEqualTo(teamId);
+    }
 }
