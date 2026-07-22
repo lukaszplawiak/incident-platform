@@ -34,7 +34,22 @@ public class AuthToken {
          * grant access to any API endpoint. It only identifies the user for
          * the second factor verification step.
          */
-        MFA_SESSION
+        MFA_SESSION,
+        /**
+         * MFA setup-required token — issued after successful password
+         * verification when the tenant requires MFA but the user has not
+         * configured it yet (see AuthService.login()). Distinct from
+         * MFA_SESSION: that token is for verifying an *already-configured*
+         * second factor; this one is for completing setup when the user has
+         * none yet and therefore holds no access token at all. Not consumed
+         * by the setup step (POST /mfa/setup-required may be retried),
+         * consumed only by the final POST /mfa/enable-required, which also
+         * completes login by issuing real access/refresh tokens. 10-minute
+         * TTL — longer than MFA_SESSION's 5, since installing/configuring an
+         * authenticator app takes longer than typing a code from one already
+         * set up.
+         */
+        MFA_SETUP_REQUIRED
     }
 
     @Id

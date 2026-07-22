@@ -262,8 +262,13 @@ class AuthServiceTest {
         }
 
         @Test
-        @DisplayName("throws 403 MFA_SETUP_REQUIRED when tenant requires MFA but user not configured")
-        void throws403WhenTenantRequiresMfaAndUserNotConfigured() {
+        @DisplayName("returns mfaSetupRequired=true and mfaSetupToken when tenant requires MFA "
+                + "but user has none configured — regression test for the login deadlock this "
+                + "replaces (previously threw a bare 403 with no token, and POST /mfa/setup "
+                + "requires a Bearer token login never issued in this branch, permanently "
+                + "locking out any user without personal MFA the moment a tenant admin turned "
+                + "mfaRequired on)")
+        void returnsMfaSetupTokenWhenTenantRequiresMfaAndUserNotConfigured() {
             final User user = User.forTesting(
                     UUID.randomUUID(), TENANT_ID, EMAIL,
                     ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
@@ -271,11 +276,19 @@ class AuthServiceTest {
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
             lenient().when(tenantSettingsService.isMfaRequired(TENANT_ID)).thenReturn(true);
+            given(authTokenService.generateMfaSetupRequiredToken(any(), anyString()))
+                    .willReturn("raw-mfa-setup-token");
 
-            assertThatThrownBy(() ->
-                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
-                    .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class)
-                    .hasMessageContaining("MFA");
+            final LoginResponse response =
+                    authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID);
+
+            assertThat(response.mfaSetupRequired()).isTrue();
+            assertThat(response.mfaSetupToken()).isEqualTo("raw-mfa-setup-token");
+            assertThat(response.mfaSetupExpiresAt()).isNotNull();
+            assertThat(response.mfaRequired()).isFalse();
+            assertThat(response.mfaToken()).isNull();
+            assertThat(response.accessToken()).isNull();
+            assertThat(response.refreshToken()).isNull();
         }
     }
 

@@ -52,6 +52,7 @@ public class AuthTokenService {
     static final int INVITE_TTL_HOURS   = 168;
     static final int RESET_TTL_MINUTES  = 15;
     static final int MFA_SESSION_MINUTES = 5;
+    static final int MFA_SETUP_REQUIRED_MINUTES = 10;
 
     private static final int TOKEN_BYTES = 32;
 
@@ -109,6 +110,50 @@ public class AuthTokenService {
     public String generateMfaSessionToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.MFA_SESSION,
                 Duration.ofMinutes(MFA_SESSION_MINUTES));
+    }
+
+    /**
+     * Generates a short-lived MFA setup-required token (10 minutes).
+     *
+     * <p>Issued after successful password verification when the tenant
+     * requires MFA but the user has none configured — see
+     * AuthService.login()'s MFA_SETUP_REQUIRED branch. The user has no
+     * access token at this point (login has not completed), so this token
+     * is what POST /mfa/setup-required and POST /mfa/enable-required accept
+     * instead of a Bearer token.
+     */
+    public String generateMfaSetupRequiredToken(User user, String tenantId) {
+        return generate(user, tenantId, AuthToken.Type.MFA_SETUP_REQUIRED,
+                Duration.ofMinutes(MFA_SETUP_REQUIRED_MINUTES));
+    }
+
+    /**
+     * Non-destructive lookup — validates the token exists, matches the
+     * expected type, and hasn't expired or been used, WITHOUT marking it
+     * used.
+     *
+     * <p>Used by the forced-MFA-setup flow's setup step
+     * (MfaService.setupMfaWithSetupToken), which may legitimately be
+     * retried — e.g. the user's authenticator app didn't scan the QR
+     * cleanly the first time — before the final enable step
+     * (MfaService.enableMfaWithSetupToken) actually consumes the token via
+     * {@link #consumeToken}.
+     *
+     * @throws BusinessException 401 if the token is invalid, expired, or used
+     */
+    @Transactional(readOnly = true)
+    public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
+        final String hash = hash(rawToken);
+
+        return tokenRepository
+                .findValidByHashAndType(hash, expectedType, Instant.now())
+                .orElseThrow(() -> {
+                    log.warn("Invalid or expired {} token attempted (peek)", expectedType);
+                    return new BusinessException(
+                            ErrorCodes.UNAUTHORIZED,
+                            "Invalid or expired token",
+                            HttpStatus.UNAUTHORIZED);
+                });
     }
 
     public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {

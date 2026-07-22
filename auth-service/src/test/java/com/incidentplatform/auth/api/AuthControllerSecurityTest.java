@@ -422,5 +422,99 @@ class AuthControllerSecurityTest {
                     .andExpect(status().isNoContent());
         }
     }
+    @Nested
+    @DisplayName("POST /mfa/setup-required")
+    class MfaSetupRequired {
+
+        @Test
+        @DisplayName("200 without Authorization header — public, identified by mfaSetupToken")
+        void noAuth_returns200() throws Exception {
+            given(mfaService.setupMfaWithSetupToken(anyString()))
+                    .willReturn(new com.incidentplatform.auth.dto.MfaSetupResponse(
+                            "otpauth://totp/test", "BASE32SECRET"));
+
+            mockMvc.perform(post("/api/v1/auth/mfa/setup-required")
+                            .contentType("application/json")
+                            .content("""
+                                    {"mfaSetupToken":"raw-setup-token"}
+                                    """))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.secret").value("BASE32SECRET"));
+        }
+
+        @Test
+        @DisplayName("401 when setup token invalid or expired")
+        void invalidToken_returns401() throws Exception {
+            willThrow(new BusinessException(
+                    ErrorCodes.UNAUTHORIZED, "Invalid or expired token", HttpStatus.UNAUTHORIZED))
+                    .given(mfaService).setupMfaWithSetupToken(anyString());
+
+            mockMvc.perform(post("/api/v1/auth/mfa/setup-required")
+                            .contentType("application/json")
+                            .content("""
+                                    {"mfaSetupToken":"expired-token"}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @DisplayName("400 when mfaSetupToken is blank")
+        void blankToken_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/mfa/setup-required")
+                            .contentType("application/json")
+                            .content("""
+                                    {"mfaSetupToken":""}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Nested
+    @DisplayName("POST /mfa/enable-required")
+    class MfaEnableRequired {
+
+        @Test
+        @DisplayName("200 without Authorization header — public, completes login")
+        void noAuth_returns200() throws Exception {
+            given(mfaService.enableMfaWithSetupToken(anyString(), anyString()))
+                    .willReturn(new com.incidentplatform.auth.dto.MfaEnableWithLoginResponse(
+                            List.of("aaaa1111", "bbbb2222"), buildLoginResponse()));
+
+            mockMvc.perform(post("/api/v1/auth/mfa/enable-required")
+                            .contentType("application/json")
+                            .content("""
+                                    {"mfaSetupToken":"raw-setup-token","totpCode":"123456"}
+                                    """))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.backupCodes").isArray())
+                    .andExpect(jsonPath("$.login.accessToken").value("access-token"));
+        }
+
+        @Test
+        @DisplayName("401 when TOTP code invalid")
+        void invalidCode_returns401() throws Exception {
+            willThrow(new BusinessException(
+                    ErrorCodes.UNAUTHORIZED, "Invalid TOTP code", HttpStatus.UNAUTHORIZED))
+                    .given(mfaService).enableMfaWithSetupToken(anyString(), anyString());
+
+            mockMvc.perform(post("/api/v1/auth/mfa/enable-required")
+                            .contentType("application/json")
+                            .content("""
+                                    {"mfaSetupToken":"raw-setup-token","totpCode":"000000"}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        @Test
+        @DisplayName("400 when totpCode is not 6 digits")
+        void malformedCode_returns400() throws Exception {
+            mockMvc.perform(post("/api/v1/auth/mfa/enable-required")
+                            .contentType("application/json")
+                            .content("""
+                                    {"mfaSetupToken":"raw-setup-token","totpCode":"12"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+        }
+    }
 
 }

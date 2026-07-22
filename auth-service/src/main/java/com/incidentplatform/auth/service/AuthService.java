@@ -114,11 +114,26 @@ public class AuthService {
         final boolean tenantMfaRequired = tenantSettingsService.isMfaRequired(tenantId);
 
         if (tenantMfaRequired && !mfaEnabled) {
-            // Tenant requires MFA but user has not configured it yet
-            throw new BusinessException(
-                    "MFA_SETUP_REQUIRED",
-                    "Your organisation requires MFA. Configure TOTP via POST /api/v1/auth/mfa/setup.",
-                    HttpStatus.FORBIDDEN);
+            // Tenant requires MFA but user has not configured it yet.
+            // Password was verified correctly above — issue a short-lived
+            // setup-required token instead of a bare error, so the user can
+            // actually complete setup. Previously this threw a plain
+            // BusinessException with no token at all: since POST /mfa/setup
+            // requires a Bearer access token that login never issues in this
+            // branch, there was no way for an affected user to ever
+            // configure MFA and log in again — a permanent, self-service-proof
+            // lockout the moment mfaRequired was turned on for a tenant with
+            // any user lacking personal MFA.
+            final String rawSetupToken =
+                    authTokenService.generateMfaSetupRequiredToken(user, tenantId);
+            final Instant setupExpiresAt = Instant.now()
+                    .plus(java.time.Duration.ofMinutes(
+                            AuthTokenService.MFA_SETUP_REQUIRED_MINUTES));
+
+            log.info("Tenant requires MFA, setup-required token issued: email={}, tenant={}",
+                    email, tenantId);
+
+            return LoginResponse.mfaSetupRequired(rawSetupToken, setupExpiresAt);
         }
 
         if (mfaEnabled) {

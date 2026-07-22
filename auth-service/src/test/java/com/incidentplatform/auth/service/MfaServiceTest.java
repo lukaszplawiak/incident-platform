@@ -4,6 +4,7 @@ import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.MfaBackupCode;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.MfaEnableResponse;
+import com.incidentplatform.auth.dto.MfaEnableWithLoginResponse;
 import com.incidentplatform.auth.dto.MfaSetupResponse;
 import com.incidentplatform.auth.repository.MfaBackupCodeRepository;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
@@ -211,6 +212,161 @@ class MfaServiceTest {
                     .isInstanceOf(BusinessException.class)
                     .extracting(e -> ((BusinessException) e).getHttpStatus())
                     .isEqualTo(HttpStatus.UNAUTHORIZED);
+        }
+    }
+
+    // ── setupMfaWithSetupToken (tenant-required flow) ───────────────────────
+
+    @Nested
+    @DisplayName("setupMfaWithSetupToken")
+    class SetupMfaWithSetupToken {
+
+        @Test
+        @DisplayName("generates secret and QR URL, identifying the user via the setup token")
+        void generatesSecretAndQrUrl() {
+            final User user = buildUser(false);
+            final AuthToken setupToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
+                    Instant.now().plusSeconds(600), null);
+
+            given(authTokenService.peekToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+            given(totpService.generateSecret()).willReturn("BASE32SECRET");
+            given(aesEncryptionService.encrypt("BASE32SECRET")).willReturn("encrypted");
+            given(totpService.generateQrUrl(anyString(), anyString(), anyString()))
+                    .willReturn("otpauth://totp/test");
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            final MfaSetupResponse response = service.setupMfaWithSetupToken("raw-setup-token");
+
+            assertThat(response.secret()).isEqualTo("BASE32SECRET");
+            assertThat(response.qrUrl()).isEqualTo("otpauth://totp/test");
+            assertThat(user.getMfaPendingSecret()).isEqualTo("encrypted");
+        }
+
+        @Test
+        @DisplayName("does not consume the setup token — may be retried before enable")
+        void doesNotConsumeToken() {
+            final User user = buildUser(false);
+            final AuthToken setupToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
+                    Instant.now().plusSeconds(600), null);
+
+            given(authTokenService.peekToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+            given(totpService.generateSecret()).willReturn("BASE32SECRET");
+            given(aesEncryptionService.encrypt(anyString())).willReturn("encrypted");
+            given(totpService.generateQrUrl(anyString(), anyString(), anyString()))
+                    .willReturn("otpauth://totp/test");
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.setupMfaWithSetupToken("raw-setup-token");
+
+            then(authTokenService).should(org.mockito.Mockito.never())
+                    .consumeToken(anyString(), any());
+        }
+
+        @Test
+        @DisplayName("throws 409 when MFA is already enabled")
+        void throws409WhenAlreadyEnabled() {
+            final User user = buildUser(true);
+            final AuthToken setupToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
+                    Instant.now().plusSeconds(600), null);
+
+            given(authTokenService.peekToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+
+            assertThatThrownBy(() -> service.setupMfaWithSetupToken("raw-setup-token"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.CONFLICT);
+        }
+    }
+
+    // ── enableMfaWithSetupToken (tenant-required flow) ──────────────────────
+
+    @Nested
+    @DisplayName("enableMfaWithSetupToken")
+    class EnableMfaWithSetupToken {
+
+        @Test
+        @DisplayName("enables MFA, consumes the setup token, and completes login with real tokens")
+        void enablesMfaAndCompletesLogin() {
+            final User user = buildUser(false);
+            user.storePendingMfaSecret("encrypted-secret");
+            final AuthToken setupToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
+                    Instant.now().plusSeconds(600), null);
+
+            given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+            given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
+            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(true);
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any()))
+                    .willReturn("access-token");
+            given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
+            given(authTokenService.generateRefreshToken(any(), anyString()))
+                    .willReturn("refresh-token");
+            given(totpService.generateBackupCodes())
+                    .willReturn(List.of("aaaa1111", "bbbb2222"));
+
+            final MfaEnableWithLoginResponse response =
+                    service.enableMfaWithSetupToken("raw-setup-token", "123456");
+
+            assertThat(user.isMfaEnabled()).isTrue();
+            assertThat(response.backupCodes()).isNotEmpty();
+            assertThat(response.login().accessToken()).isEqualTo("access-token");
+            assertThat(response.login().refreshToken()).isEqualTo("refresh-token");
+            assertThat(response.login().mfaSetupRequired()).isFalse();
+            then(backupCodeRepository).should().saveAll(any());
+        }
+
+        @Test
+        @DisplayName("throws 401 on invalid TOTP code without consuming backup codes or issuing tokens")
+        void throws401OnInvalidCode() {
+            final User user = buildUser(false);
+            user.storePendingMfaSecret("encrypted-secret");
+            final AuthToken setupToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
+                    Instant.now().plusSeconds(600), null);
+
+            given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+            given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
+            given(totpService.verify("PLAIN_SECRET", "000000")).willReturn(false);
+
+            assertThatThrownBy(() ->
+                    service.enableMfaWithSetupToken("raw-setup-token", "000000"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+            then(backupCodeRepository).should(org.mockito.Mockito.never()).saveAll(any());
+            then(jwtUtils).should(org.mockito.Mockito.never())
+                    .generateToken(any(), anyString(), anyString(), any(), any());
+        }
+
+        @Test
+        @DisplayName("throws 409 when no pending setup found")
+        void throws409WhenNoPendingSetup() {
+            final User user = buildUser(false); // no pending secret
+            final AuthToken setupToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
+                    Instant.now().plusSeconds(600), null);
+
+            given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+
+            assertThatThrownBy(() ->
+                    service.enableMfaWithSetupToken("raw-setup-token", "123456"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.CONFLICT);
         }
     }
 
