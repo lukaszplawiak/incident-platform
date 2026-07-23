@@ -61,6 +61,53 @@ spec:
                 port:
                   number: 8081
 
+          # auth-service — login, MFA, users, teams, API keys,
+          # integrations, tenant settings. Six distinct base paths under
+          # one service (verified against every @RequestMapping in
+          # auth-service/src/main/java/.../api/*.java).
+          - path: /api/v1/auth
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8087
+          - path: /api/v1/users
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8087
+          - path: /api/v1/teams
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8087
+          - path: /api/v1/api-keys
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8087
+          - path: /api/v1/integrations
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8087
+          - path: /api/v1/tenants
+            pathType: Prefix
+            backend:
+              service:
+                name: auth-service
+                port:
+                  number: 8087
+
           # incident-service — main service, WebSocket included
           - path: /api/v1/incidents
             pathType: Prefix

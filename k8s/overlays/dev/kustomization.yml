@@ -41,6 +41,8 @@ patches:
         value: 120
 
 images:
+  - name: auth-service
+    newTag: dev
   - name: incident-service
     newTag: dev
   - name: ingestion-service

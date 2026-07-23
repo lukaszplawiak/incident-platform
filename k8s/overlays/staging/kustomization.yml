@@ -67,6 +67,8 @@ patches:
         value: 5
 
 images:
+  - name: auth-service
+    newTag: "1.0.0"
   - name: incident-service
     newTag: "1.0.0"
   - name: ingestion-service

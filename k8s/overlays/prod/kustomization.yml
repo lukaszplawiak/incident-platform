@@ -26,6 +26,8 @@ patches:
         value: 2
 
 images:
+  - name: auth-service
+    newTag: staging
   - name: incident-service
     newTag: staging
   - name: ingestion-service

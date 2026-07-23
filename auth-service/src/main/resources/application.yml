@@ -4,7 +4,7 @@ spring:
 
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
-    username: ${DB_USERNAME:incident_app}
+    username: ${DB_USER:incident_app}
     password: ${DB_PASSWORD:incident_secret}
     hikari:
       maximum-pool-size: 5
@@ -90,6 +90,9 @@ invite:
     retry-interval-ms: ${INVITE_EMAIL_RETRY_INTERVAL_MS:300000}
 
 management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
   endpoints:
     web:
       exposure:
@@ -109,6 +112,8 @@ management:
           include: db,redis
         liveness:
           include: ping
+  server:
+    port: ${MANAGEMENT_PORT:8097}
 
 server:
   port: ${SERVER_PORT:8087}
