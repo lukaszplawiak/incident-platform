@@ -16,6 +16,8 @@ resources:
   - infrastructure/ingress.yml
 
   # Application services
+  - auth-service/deployment.yml
+  - auth-service/service-hpa.yml
   - ingestion-service/deployment.yml
   - ingestion-service/service-hpa.yml
   - incident-service/deployment.yml

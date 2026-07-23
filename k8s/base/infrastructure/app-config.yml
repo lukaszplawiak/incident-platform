@@ -16,6 +16,7 @@ data:
   KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
 
   # Redis
+  # (used by auth-service — token revocation checks, login rate limiting)
   REDIS_HOST: "redis"
   REDIS_PORT: "6379"
 
@@ -24,8 +25,17 @@ data:
   ONCALL_SERVICE_URL: "http://oncall-service:8086"
   NOTIFICATION_SERVICE_URL: "http://notification-service:8083"
 
-  # JWT expiration (24 hours)
-  JWT_EXPIRATION_MS: "86400000"
+  # Auth service — non-secret configuration. JWT_SECRET and
+  # MFA_ENCRYPTION_KEY are secrets and live in app-secrets, not here.
+  JWT_ACCESS_TOKEN_TTL: "PT15M"
+  JWT_REFRESH_TOKEN_TTL: "P30D"
+  JWT_SERVICE_TOKEN_TTL: "PT1H"
+  MFA_TOTP_ISSUER: "IncidentPlatform"
+  APP_BASE_URL: "https://incident-platform.local"
+  CORS_ALLOWED_ORIGINS: "https://incident-platform.local"
+  INVITE_EMAIL_FROM: "noreply@incident-platform.local"
+  MAIL_HOST: "mailhog"
+  MAIL_PORT: "1025"
 
   # WebSocket
   WEBSOCKET_ALLOWED_ORIGINS: "http://localhost:4200,http://incident-platform-frontend"

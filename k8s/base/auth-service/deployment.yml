@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  labels:
+    app: auth-service
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth-service
+  # RollingUpdate — zero downtime deployment.
+  # maxUnavailable: 0 — during update, always keep requested replicas running.
+  # maxSurge: 1 — allow one extra pod during update.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: auth-service
+    spec:
+      # Wait for dependencies before starting — prevents startup failures.
+      # No wait-for-kafka: auth-service does not produce or consume Kafka
+      # messages (verified — no KafkaConfig, no @KafkaListener/KafkaTemplate
+      # anywhere in this module), unlike incident/notification/escalation/
+      # postmortem-service.
+      initContainers:
+        - name: wait-for-postgresql
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z postgresql 5432; do
+                echo "Waiting for PostgreSQL...";
+                sleep 2;
+              done
+        - name: wait-for-redis
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z redis 6379; do
+                echo "Waiting for Redis...";
+                sleep 2;
+              done
+      containers:
+        - name: auth-service
+          image: auth-service:latest
+          # Never pull if image exists locally (for Minikube dev)
+          # Change to Always for staging/prod with registry
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8087
+              name: http
+            - containerPort: 8097
+              name: management
+          envFrom:
+            # Load all non-sensitive config from ConfigMap — DB, Redis,
+            # and auth-specific settings (JWT TTLs, MFA issuer, CORS,
+            # mail, invite sender) all live here. See app-config.yml.
+            - configMapRef:
+                name: app-config
+          env:
+            # Load secrets individually from Secret
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: JWT_SECRET
+            - name: MFA_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: MFA_ENCRYPTION_KEY
+            - name: SERVER_PORT
+              value: "8087"
+            - name: MANAGEMENT_PORT
+              value: "8097"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          # readinessProbe — when pod is ready to receive traffic.
+          # Kubernetes sends traffic only after this probe succeeds.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8097
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          # livenessProbe — when to restart the pod.
+          # Kubernetes restarts pod if this probe fails.
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8097
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3

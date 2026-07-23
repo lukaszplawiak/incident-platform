@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service
+  labels:
+    app: auth-service
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  selector:
+    app: auth-service
+  ports:
+    - name: http
+      port: 8087
+      targetPort: 8087
+    - name: management
+      port: 8097
+      targetPort: 8097
+---
+# HorizontalPodAutoscaler — automatically scales replicas based on CPU/memory.
+# When CPU > 70% → add replica (up to maxReplicas).
+# When CPU < 70% → remove replica (down to minReplicas).
+#
+# auth-service has no @Scheduled jobs with @SchedulerLock (unlike escalation/
+# notification/postmortem-service) — its two scheduled jobs (AuthEmailScheduler)
+# currently have no distributed-lock protection. Scaling this beyond
+# minReplicas: 1 today would let every replica run those jobs independently
+# and duplicate outbox-email sends. Flagged as a separate, pre-existing gap
+# to fix before raising maxReplicas — kept at 1 here deliberately, not
+# matched to the other services' 2-3.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: auth-service-hpa
+  labels:
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: auth-service
+  minReplicas: 1
+  maxReplicas: 1
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
