@@ -13,6 +13,12 @@ on:
 jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Build, test and coverage
+  #
+  # Always runs in full, regardless of which paths changed — every
+  # service depends on `shared`, so there's no safe way to skip modules
+  # here. This is also the fast, cheap, always-correct baseline check;
+  # only the expensive downstream jobs (Docker builds, smoke test) are
+  # worth being selective about.
   # ──────────────────────────────────────────────────────────
   build-and-test:
     name: Build, Test & Coverage
@@ -35,7 +41,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           ./mvnw verify \
-            -pl shared,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service \
+            -pl shared,auth-service,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service \
             --no-transfer-progress
 
       - name: Upload Jacoco coverage reports
@@ -45,6 +51,7 @@ jobs:
           name: jacoco-reports
           path: |
             shared/target/site/jacoco/
+            auth-service/target/site/jacoco/
             ingestion-service/target/site/jacoco/
             incident-service/target/site/jacoco/
             notification-service/target/site/jacoco/
@@ -61,6 +68,7 @@ jobs:
           name: test-results
           path: |
             shared/target/surefire-reports/
+            auth-service/target/surefire-reports/
             ingestion-service/target/surefire-reports/
             incident-service/target/surefire-reports/
             notification-service/target/surefire-reports/
@@ -76,6 +84,7 @@ jobs:
         with:
           paths: |
             ${{ github.workspace }}/shared/target/site/jacoco/jacoco.xml,
+            ${{ github.workspace }}/auth-service/target/site/jacoco/jacoco.xml,
             ${{ github.workspace }}/ingestion-service/target/site/jacoco/jacoco.xml,
             ${{ github.workspace }}/incident-service/target/site/jacoco/jacoco.xml,
             ${{ github.workspace }}/notification-service/target/site/jacoco/jacoco.xml,
@@ -88,24 +97,102 @@ jobs:
           min-coverage-changed-files: 60
 
   # ──────────────────────────────────────────────────────────
-  # Job 2: Build Docker images — after merge to main ONLY
+  # Job 2: Detect what changed
+  #
+  # Feeds two downstream decisions:
+  # - `services` (JSON array): which service Docker images actually
+  #   need building. Any single service filter matching means only
+  #   that service is rebuilt. A change under `shared/**` (every
+  #   service's Dockerfile COPYs and builds it) or `pom.xml` forces
+  #   ALL 7 — there's no safe way to build a subset in that case. Push
+  #   to main always builds all 7 too, as a periodic safety net against
+  #   drift the path-based logic might miss.
+  # - `infra` (boolean): did anything change that could plausibly break
+  #   the docker-compose-smoke-test job (job 5)? Gates whether that
+  #   expensive job runs on a PR at all.
+  # ──────────────────────────────────────────────────────────
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.compute.outputs.services }}
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Filter changed paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared:
+              - 'shared/**'
+              - 'pom.xml'
+            auth-service:
+              - 'auth-service/**'
+            incident-service:
+              - 'incident-service/**'
+            ingestion-service:
+              - 'ingestion-service/**'
+            notification-service:
+              - 'notification-service/**'
+            escalation-service:
+              - 'escalation-service/**'
+            postmortem-service:
+              - 'postmortem-service/**'
+            oncall-service:
+              - 'oncall-service/**'
+            infra:
+              - 'docker/**'
+              - '**/Dockerfile'
+              - 'k8s/**'
+              - '**/src/main/resources/application*.yml'
+              - 'pom.xml'
+              - '*/pom.xml'
+
+      - name: Compute Docker build matrix
+        id: compute
+        env:
+          CHANGES: ${{ steps.filter.outputs.changes }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          ALL='["auth-service","incident-service","ingestion-service","notification-service","escalation-service","postmortem-service","oncall-service"]'
+          SHARED_CHANGED=$(echo "$CHANGES" | jq 'contains(["shared"])')
+
+          if [ "$EVENT_NAME" = "push" ] || [ "$SHARED_CHANGED" = "true" ]; then
+            echo "services=$ALL" >> "$GITHUB_OUTPUT"
+          else
+            # Keep only entries that are actual service names (drop the
+            # 'infra' and 'shared' pseudo-filters, which aren't
+            # buildable services themselves).
+            FILTERED=$(echo "$CHANGES" | jq -c --argjson all "$ALL" '[.[] | select(. as $x | $all | index($x))]')
+            echo "services=$FILTERED" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ──────────────────────────────────────────────────────────
+  # Job 3: Build Docker images
+  #
+  # Runs on every PR now, not just after merge to main — a broken
+  # Dockerfile should block a PR, not be discovered on main after the
+  # fact. push: false everywhere — this job never publishes an image,
+  # it only proves each one builds.
+  #
+  # Matrix is computed by detect-changes (job 2), not hand-listed —
+  # only services whose own directory or `shared` actually changed get
+  # built. Skips entirely (matrix of zero) if this PR touches nothing
+  # under any service or shared/.
   # ──────────────────────────────────────────────────────────
   docker-build:
     name: Build Docker Images
     runs-on: ubuntu-latest
-    needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [ build-and-test, detect-changes ]
+    if: needs.detect-changes.outputs.services != '[]'
 
     strategy:
       fail-fast: false
       matrix:
-        service:
-          - ingestion-service
-          - incident-service
-          - notification-service
-          - escalation-service
-          - postmortem-service
-          - oncall-service
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
 
     steps:
       - name: Checkout code
@@ -123,3 +210,160 @@ jobs:
           tags: incident-platform/${{ matrix.service }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ──────────────────────────────────────────────────────────
+  # Job 4: Validate Kubernetes manifests
+  #
+  # Always runs, unconditionally — unlike Docker builds and the smoke
+  # test, this is cheap (seconds, no JVM/container boot), so there's no
+  # meaningful cost/benefit case for filtering it.
+  #
+  # Two layers:
+  # 1. `kubectl kustomize` — proves base/ and all three overlays
+  #    actually build: every resource path in every kustomization.yml
+  #    resolves, every patch target exists. This is exactly the check
+  #    that would have caught auth-service's ingress/kustomization
+  #    gaps immediately instead of an ad-hoc manual review.
+  # 2. kubeconform — validates the *rendered* output against the real
+  #    Kubernetes API schemas. Catches things kustomize build can't:
+  #    wrong apiVersion, typo'd field names, wrong types. Runs against
+  #    rendered YAML, not source YAML, so it sees exactly what would
+  #    actually be sent to a cluster.
+  # ──────────────────────────────────────────────────────────
+  validate-k8s-manifests:
+    name: Validate Kubernetes Manifests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubectl (bundles kustomize)
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'v1.31.0'
+
+      - name: Install kubeconform
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: Render and validate base
+        run: |
+          kubectl kustomize k8s/base > /tmp/base-rendered.yml
+          kubeconform -strict -summary /tmp/base-rendered.yml
+
+      - name: Render and validate dev overlay
+        run: |
+          kubectl kustomize k8s/overlays/dev > /tmp/dev-rendered.yml
+          kubeconform -strict -summary /tmp/dev-rendered.yml
+
+      - name: Render and validate staging overlay
+        run: |
+          kubectl kustomize k8s/overlays/staging > /tmp/staging-rendered.yml
+          kubeconform -strict -summary /tmp/staging-rendered.yml
+
+      - name: Render and validate prod overlay
+        run: |
+          kubectl kustomize k8s/overlays/prod > /tmp/prod-rendered.yml
+          kubeconform -strict -summary /tmp/prod-rendered.yml
+
+      - name: Cross-check every service has a Deployment in base
+        run: |
+          # Direct, cheap defense against exactly the auth-service gap
+          # this job was written to catch: fails loudly if a service
+          # directory with a Dockerfile has no matching Deployment.
+          set -e
+          for dir in */; do
+            service="${dir%/}"
+            if [ -f "$service/Dockerfile" ]; then
+              if ! grep -q "name: $service$" /tmp/base-rendered.yml; then
+                echo "::error::$service has a Dockerfile but no Deployment found in k8s/base"
+                exit 1
+              fi
+            fi
+          done
+          echo "Every service with a Dockerfile has a matching k8s Deployment."
+
+  # ──────────────────────────────────────────────────────────
+  # Job 5: Smoke test — boot the real stack via docker compose and
+  # confirm every service reports healthy.
+  #
+  # Static validation (jobs 3 and 4) proves the files are well-formed.
+  # It cannot prove the application actually starts — wrong port
+  # numbers, missing required env vars, or services that can't reach
+  # their dependencies all pass static validation and fail here (this
+  # is exactly how the DB_HOST/DB_URL bug was found).
+  #
+  # Scoped to postgres/redis/kafka + the 7 application services —
+  # deliberately skips kafka-ui/kafka-exporter/pgadmin/alertmanager/
+  # prometheus/grafana, which are local dev conveniences unrelated to
+  # whether the platform itself runs.
+  #
+  # Depends only on detect-changes, NOT on docker-build — this job
+  # builds everything itself via `docker compose up` (compose's own
+  # `build:` blocks), it doesn't consume docker-build's images at all.
+  # Making it depend on docker-build would let a docker-build skip
+  # (empty matrix — nothing service-specific changed) cascade-skip this
+  # job too, even when e.g. only docker-compose.yml itself changed.
+  #
+  # Runs on every push to main unconditionally (safety net — catches
+  # things path-filtering can miss, e.g. a transitive dependency bump
+  # changing runtime behavior with no docker/k8s/yml file touched). On
+  # pull_request, only runs when detect-changes found an infra-relevant
+  # path changed.
+  # ──────────────────────────────────────────────────────────
+  docker-compose-smoke-test:
+    name: Docker Compose Smoke Test
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: github.event_name == 'push' || needs.detect-changes.outputs.infra == 'true'
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Start the stack
+        env:
+          # Only JWT_SECRET and MFA_ENCRYPTION_KEY have no default in
+          # docker-compose.yml — everything else falls back safely for
+          # a smoke test. Dummy CI-only values, never used anywhere
+          # real.
+          JWT_SECRET: ci-smoke-test-secret-not-for-real-use-minimum-64-characters-long-k8s
+          MFA_ENCRYPTION_KEY: Y2ktc21va2UtdGVzdC1rZXktbm90LWZvci1yZWFsLXVzZS0zMmJ5dGVz
+        run: |
+          docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 300 \
+            postgres redis kafka \
+            auth-service ingestion-service incident-service notification-service \
+            escalation-service postmortem-service oncall-service
+
+      - name: Check every service's health endpoint
+        run: |
+          set -e
+          declare -A ports=(
+            [auth-service]=8087
+            [ingestion-service]=8081
+            [incident-service]=8082
+            [notification-service]=8083
+            [escalation-service]=8084
+            [postmortem-service]=8085
+            [oncall-service]=8086
+          )
+          for service in "${!ports[@]}"; do
+            port="${ports[$service]}"
+            status=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$port/actuator/health")
+            if [ "$status" != "200" ]; then
+              echo "::error::$service health check returned HTTP $status (expected 200)"
+              exit 1
+            fi
+            echo "$service: healthy"
+          done
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker/docker-compose.yml down -v

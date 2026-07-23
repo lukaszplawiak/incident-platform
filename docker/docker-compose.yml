@@ -275,8 +275,10 @@ services:
     environment:
       SERVER_PORT: 8087
       # Database
-      DB_URL: jdbc:postgresql://postgres:5432/incidentdb
-      DB_USERNAME: incident_app
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: incidentdb
+      DB_USER: incident_app
       DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
       # JWT — shared secret across all services
       JWT_SECRET: ${JWT_SECRET}
@@ -305,8 +307,8 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
-             "http://localhost:8087/actuator/health"]
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider",
+              "http://localhost:8087/actuator/health" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -325,6 +327,9 @@ services:
       - "${INGESTION_SERVICE_PORT:-8081}:8081"
     environment:
       SERVER_PORT: 8081
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: incidentdb
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
       JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
@@ -364,6 +369,8 @@ services:
       - "${INCIDENT_SERVICE_PORT:-8082}:8082"
     environment:
       SERVER_PORT: 8082
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
       DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
@@ -399,6 +406,8 @@ services:
       - "${NOTIFICATION_SERVICE_PORT:-8083}:8083"
     environment:
       SERVER_PORT: 8083
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
       DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
@@ -443,6 +452,8 @@ services:
       - "${ESCALATION_SERVICE_PORT:-8084}:8084"
     environment:
       SERVER_PORT: 8084
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
       DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
@@ -479,6 +490,8 @@ services:
       - "${POSTMORTEM_SERVICE_PORT:-8085}:8085"
     environment:
       SERVER_PORT: 8085
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
       DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
@@ -517,6 +530,8 @@ services:
       - "${ONCALL_SERVICE_PORT:-8086}:8086"
     environment:
       SERVER_PORT: 8086
+      DB_HOST: postgres
+      DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
       DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
