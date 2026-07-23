@@ -35,11 +35,26 @@ import java.util.UUID;
  * <h2>Idempotency</h2>
  * Both INSERTs use {@code ON CONFLICT DO NOTHING} — safe to re-run after a
  * schema repair without overwriting a password that was changed post-setup.
+ *
+ * <h2>Renumbered from V1_1 to V14_1</h2>
+ * Originally ran right after V1 (before the `users.version` column
+ * existed). When optimistic locking was added, this migration's INSERT
+ * was updated to populate `version`, but its Flyway version number was
+ * never moved — Flyway always applies migrations in ascending version
+ * order on a fresh database regardless of `out-of-order` (that setting
+ * only permits a low-numbered migration to apply *after* a higher one
+ * elsewhere; it does not reorder a single migrate run). The result: this
+ * migration failed with "column version does not exist" on every
+ * completely fresh database, from the moment the version column
+ * reference was added, until now. Renumbered to run after V9 (which adds
+ * `users.version`) — placed after V14 specifically, the last migration
+ * that exists as of this fix, to avoid needing to verify every other
+ * migration doesn't also touch something this one depends on.
  */
-public class V1_1__seed_admin_user extends BaseJavaMigration {
+public class V14_1__seed_admin_user extends BaseJavaMigration {
 
     private static final Logger log =
-            LoggerFactory.getLogger(V1_1__seed_admin_user.class);
+            LoggerFactory.getLogger(V14_1__seed_admin_user.class);
 
     private static final String DEFAULT_EMAIL = "admin@incidentplatform.com";
     private static final String DEFAULT_PASSWORD = "changeme";
