@@ -210,7 +210,37 @@ jobs:
           echo "Every service with a Dockerfile has a matching k8s Deployment."
 
   # ──────────────────────────────────────────────────────────
-  # Job 4: Smoke test — boot the real stack via docker compose and
+  # Job 4a: Detect whether this PR touches anything that could plausibly
+  # break the smoke test — gates job 4b so it doesn't run on every PR
+  # unconditionally. Most PRs change application code only, and the
+  # smoke test (7 JVMs + Kafka + Postgres booting) is expensive for a
+  # check that statistically finds nothing in that case. Always runs
+  # on push to main regardless of paths — see job 4b's `if:`.
+  # ──────────────────────────────────────────────────────────
+  detect-infra-changes:
+    name: Detect Infra-Relevant Changes
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.filter.outputs.infra }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for changes to files that could break the smoke test
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            infra:
+              - 'docker/**'
+              - '**/Dockerfile'
+              - 'k8s/**'
+              - '**/src/main/resources/application*.yml'
+              - 'pom.xml'
+              - '*/pom.xml'
+
+  # ──────────────────────────────────────────────────────────
+  # Job 4b: Smoke test — boot the real stack via docker compose and
   # confirm every service reports healthy.
   #
   # Static validation (jobs 2 and 3) proves the files are well-formed.
@@ -222,11 +252,18 @@ jobs:
   # deliberately skips kafka-ui/kafka-exporter/pgadmin/alertmanager/
   # prometheus/grafana, which are local dev conveniences unrelated to
   # whether the platform itself runs.
+  #
+  # Runs on every push to main unconditionally (safety net — catches
+  # things path-filtering can miss, e.g. a transitive dependency bump
+  # changing runtime behavior with no docker/k8s/yml file touched). On
+  # pull_request, only runs when detect-infra-changes found a relevant
+  # path changed — see that job's comment for the reasoning.
   # ──────────────────────────────────────────────────────────
   docker-compose-smoke-test:
     name: Docker Compose Smoke Test
     runs-on: ubuntu-latest
-    needs: docker-build
+    needs: [ docker-build, detect-infra-changes ]
+    if: github.event_name == 'push' || needs.detect-infra-changes.outputs.infra == 'true'
     timeout-minutes: 20
 
     steps:
