@@ -36,25 +36,32 @@ import java.util.UUID;
  * Both INSERTs use {@code ON CONFLICT DO NOTHING} — safe to re-run after a
  * schema repair without overwriting a password that was changed post-setup.
  *
- * <h2>Renumbered from V1_1 to V14_1</h2>
- * Originally ran right after V1 (before the `users.version` column
- * existed). When optimistic locking was added, this migration's INSERT
- * was updated to populate `version`, but its Flyway version number was
- * never moved — Flyway always applies migrations in ascending version
- * order on a fresh database regardless of `out-of-order` (that setting
- * only permits a low-numbered migration to apply *after* a higher one
- * elsewhere; it does not reorder a single migrate run). The result: this
- * migration failed with "column version does not exist" on every
- * completely fresh database, from the moment the version column
- * reference was added, until now. Renumbered to run after V9 (which adds
- * `users.version`) — placed after V14 specifically, the last migration
- * that exists as of this fix, to avoid needing to verify every other
- * migration doesn't also touch something this one depends on.
+ * <h2>Does NOT set users.version</h2>
+ * This migration runs immediately after V1 — the `users.version` column
+ * doesn't exist yet (it's added later, by V9__add_users_version_column.sql).
+ * A previous edit added `version` to this INSERT when optimistic locking
+ * was introduced, without moving this migration's position — since Flyway
+ * always applies migrations in ascending version order on a fresh
+ * database, that made this migration fail with "column version does not
+ * exist" on every completely fresh database (out-of-order: true in
+ * application.yml does not help here — it only permits a low-numbered
+ * migration to apply after a higher one elsewhere; it doesn't reorder
+ * execution within one migrate run).
+ *
+ * <p>Deliberately NOT fixed by renumbering this migration to run after V9
+ * instead: doing so would rename the file, which Flyway's
+ * validate-on-migrate would reject on any environment where version "1.1"
+ * is already recorded as applied (`flyway_schema_history_auth`) — Flyway
+ * refuses to start if a recorded migration's file can't be resolved.
+ * Fixed in place instead: the row this migration creates simply doesn't
+ * set `version` explicitly. When V9 runs afterward, its
+ * `DEFAULT 0 NOT NULL` backfills version=0 onto this row along with every
+ * other existing row — identical end state, without moving anything.
  */
-public class V14_1__seed_admin_user extends BaseJavaMigration {
+public class V1_1__seed_admin_user extends BaseJavaMigration {
 
     private static final Logger log =
-            LoggerFactory.getLogger(V14_1__seed_admin_user.class);
+            LoggerFactory.getLogger(V1_1__seed_admin_user.class);
 
     private static final String DEFAULT_EMAIL = "admin@incidentplatform.com";
     private static final String DEFAULT_PASSWORD = "changeme";
@@ -99,9 +106,13 @@ public class V14_1__seed_admin_user extends BaseJavaMigration {
             }
         }
         if (!exists) {
+            // No `version` column here — see class Javadoc. It doesn't exist
+            // yet at this point in the migration sequence; V9 backfills it
+            // with DEFAULT 0 for this row (and every other existing row)
+            // once it runs.
             final String insertUser = """
-            INSERT INTO users (id, tenant_id, email, password_hash, active, version)
-            VALUES (?, ?, ?, ?, TRUE, 0)
+            INSERT INTO users (id, tenant_id, email, password_hash, active)
+            VALUES (?, ?, ?, ?, TRUE)
             """;
             try (PreparedStatement stmt =
                          context.getConnection().prepareStatement(insertUser)) {
