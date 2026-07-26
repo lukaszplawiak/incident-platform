@@ -28,6 +28,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -316,6 +317,120 @@ class OncallScheduleControllerSecurityTest {
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
                     .andExpect(status().isForbidden());
+        }
+    }
+
+    // ── GET /current — SERVICE, ADMIN only ──────────────────────────────────
+    //
+    // Regression coverage for the /current vs /current/all inconsistency:
+    // these two paths look related but have deliberately different role
+    // requirements (see SecurityConfig's class Javadoc for the reasoning),
+    // and until now neither had any test coverage at all.
+
+    @Nested
+    @DisplayName("GET /current — SERVICE and ADMIN only")
+    class CurrentOncallEndpoint {
+
+        @Test
+        @WithMockUser(roles = "SERVICE")
+        @DisplayName("204 for SERVICE")
+        void returns204ForService() throws Exception {
+            given(service.getAllCurrentOncall(any())).willReturn(List.of());
+
+            mockMvc.perform(get("/api/v1/oncall/current"))
+                    .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("204 for ADMIN")
+        void returns204ForAdmin() throws Exception {
+            given(service.getAllCurrentOncall(any())).willReturn(List.of());
+
+            mockMvc.perform(get("/api/v1/oncall/current"))
+                    .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("403 for RESPONDER — internal service-to-service endpoint, not for end users")
+        void returns403ForResponder() throws Exception {
+            mockMvc.perform(get("/api/v1/oncall/current"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "INGESTOR")
+        @DisplayName("403 for INGESTOR")
+        void returns403ForIngestor() throws Exception {
+            mockMvc.perform(get("/api/v1/oncall/current"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("401 without token")
+        void returns401Unauthenticated() throws Exception {
+            mockMvc.perform(get("/api/v1/oncall/current"))
+                    .andExpect(status().isUnauthorized());
+        }
+    }
+
+    // ── GET /current/all — RESPONDER, ADMIN only ────────────────────────────
+    //
+    // Previously had no dedicated SecurityConfig rule at all — silently fell
+    // through to "any authenticated user", meaning SERVICE and INGESTOR
+    // could reach it too, by accident. Now explicit and narrower.
+
+    @Nested
+    @DisplayName("GET /current/all — RESPONDER and ADMIN only")
+    class CurrentOncallAllEndpoint {
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("200 for RESPONDER")
+        void returns200ForResponder() throws Exception {
+            given(service.getAllCurrentOncallForTeam(any(), any())).willReturn(List.of());
+
+            mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .param("teamId", UUID.randomUUID().toString()))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("200 for ADMIN")
+        void returns200ForAdmin() throws Exception {
+            given(service.getAllCurrentOncallForTeam(any(), any())).willReturn(List.of());
+
+            mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .param("teamId", UUID.randomUUID().toString()))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @WithMockUser(roles = "SERVICE")
+        @DisplayName("403 for SERVICE — no known internal caller needs this, only the frontend does")
+        void returns403ForService() throws Exception {
+            mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .param("teamId", UUID.randomUUID().toString()))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "INGESTOR")
+        @DisplayName("403 for INGESTOR")
+        void returns403ForIngestor() throws Exception {
+            mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .param("teamId", UUID.randomUUID().toString()))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("401 without token")
+        void returns401Unauthenticated() throws Exception {
+            mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .param("teamId", UUID.randomUUID().toString()))
+                    .andExpect(status().isUnauthorized());
         }
     }
 
