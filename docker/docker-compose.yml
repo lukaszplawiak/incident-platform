@@ -272,6 +272,7 @@ services:
     restart: unless-stopped
     ports:
       - "${AUTH_SERVICE_PORT:-8087}:8087"
+      - "${INCIDENT_SERVICE_MGMT_PORT:-8087}:8087"
     environment:
       SERVER_PORT: 8087
       # Database
@@ -325,6 +326,7 @@ services:
     restart: unless-stopped
     ports:
       - "${INGESTION_SERVICE_PORT:-8081}:8081"
+      - "${INCIDENT_SERVICE_MGMT_PORT:-8091}:8091"
     environment:
       SERVER_PORT: 8081
       DB_HOST: postgres
@@ -367,6 +369,7 @@ services:
     restart: unless-stopped
     ports:
       - "${INCIDENT_SERVICE_PORT:-8082}:8082"
+      - "${INCIDENT_SERVICE_MGMT_PORT:-8092}:8092"
     environment:
       SERVER_PORT: 8082
       DB_HOST: postgres
@@ -404,6 +407,7 @@ services:
     restart: unless-stopped
     ports:
       - "${NOTIFICATION_SERVICE_PORT:-8083}:8083"
+      - "${INCIDENT_SERVICE_MGMT_PORT:-8093}:8093"
     environment:
       SERVER_PORT: 8083
       DB_HOST: postgres
@@ -450,6 +454,7 @@ services:
     restart: unless-stopped
     ports:
       - "${ESCALATION_SERVICE_PORT:-8084}:8084"
+      - "${INCIDENT_SERVICE_MGMT_PORT:-8094}:8094"
     environment:
       SERVER_PORT: 8084
       DB_HOST: postgres
@@ -488,6 +493,7 @@ services:
     restart: unless-stopped
     ports:
       - "${POSTMORTEM_SERVICE_PORT:-8085}:8085"
+      - "${INCIDENT_SERVICE_MGMT_PORT:-8095}:8095"
     environment:
       SERVER_PORT: 8085
       DB_HOST: postgres
@@ -528,6 +534,7 @@ services:
     restart: unless-stopped
     ports:
       - "${ONCALL_SERVICE_PORT:-8086}:8086"
+      - "${INCIDENT_SERVICE_MGMT_PORT:-8096}:8096"
     environment:
       SERVER_PORT: 8086
       DB_HOST: postgres
