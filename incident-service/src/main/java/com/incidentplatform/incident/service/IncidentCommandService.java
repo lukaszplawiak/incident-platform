@@ -16,6 +16,7 @@ import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
+import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -209,11 +210,30 @@ public class IncidentCommandService {
     }
 
 
+    /**
+     * Assigns a team to an incident.
+     *
+     * <p>ROLE_ADMIN can assign any team. Everyone else must be a member of
+     * the target team ({@link UserPrincipal#isMemberOf}, populated from the
+     * JWT {@code teamIds} claim) — otherwise throws
+     * {@link BusinessException#notTeamMember} (403).
+     *
+     * <p>This check previously didn't exist at all — any authenticated
+     * RESPONDER, regardless of team membership, could assign any incident
+     * to any team. Found while adding security test coverage for
+     * IncidentController.
+     */
     @Transactional
     public IncidentDto assignTeam(UUID incidentId,
                                   AssignTeamRequest request,
-                                  UUID assignedBy,
+                                  UserPrincipal principal,
                                   String tenantId) {
+        if (!principal.hasRole("ROLE_ADMIN") && !principal.isMemberOf(request.teamId())) {
+            throw BusinessException.notTeamMember(request.teamId());
+        }
+
+        final UUID assignedBy = principal.userId();
+
         final Incident incident = incidentRepository
                 .findByIdAndTenantId(incidentId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -240,15 +260,36 @@ public class IncidentCommandService {
         return dto;
     }
 
+    /**
+     * Unassigns an incident's team.
+     *
+     * <p>ROLE_ADMIN can unassign any incident. Everyone else must be a
+     * member of the incident's <em>current</em> team — checked against
+     * {@code incident.getTeamId()} after it's loaded, since that's the
+     * team membership actually being revoked, not a team named anywhere
+     * in the request (there is no request body for this endpoint).
+     * Throws {@link BusinessException#notTeamMember} (403) otherwise.
+     *
+     * <p>Same previously-missing check as {@link #assignTeam} — see that
+     * method's Javadoc for context.
+     */
     @Transactional
     public IncidentDto unassignTeam(UUID incidentId,
-                                    UUID unassignedBy,
+                                    UserPrincipal principal,
                                     String tenantId) {
         final Incident incident = incidentRepository
                 .findByIdAndTenantId(incidentId, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Incident", incidentId));
 
+        final UUID currentTeamId = incident.getTeamId();
+        if (currentTeamId != null
+                && !principal.hasRole("ROLE_ADMIN")
+                && !principal.isMemberOf(currentTeamId)) {
+            throw BusinessException.notTeamMember(currentTeamId);
+        }
+
+        final UUID unassignedBy = principal.userId();
         final UUID previousTeamId = incident.getTeamId();
         incident.unassignTeam();
         incidentRepository.save(incident);
@@ -263,10 +304,9 @@ public class IncidentCommandService {
                 incidentId, tenantId,
                 AuditEventTypes.INCIDENT_TEAM_UNASSIGNED, SERVICE_NAME,
                 unassignedBy.toString(),
-                "Incident team assignment removed",
-                previousTeamId != null
-                        ? Map.of("previousTeamId", previousTeamId.toString())
-                        : Map.of()
+                String.format("Incident unassigned from teamId=%s", previousTeamId),
+                Map.of("previousTeamId", previousTeamId != null ? previousTeamId.toString() : "null",
+                        "unassignedBy", unassignedBy.toString())
         );
 
         return dto;

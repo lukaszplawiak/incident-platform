@@ -3,6 +3,7 @@ package com.incidentplatform.incident.service;
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.domain.IncidentHistory;
 import com.incidentplatform.incident.domain.IncidentStatus;
+import com.incidentplatform.incident.dto.AssignTeamRequest;
 import com.incidentplatform.incident.dto.IncidentDto;
 import com.incidentplatform.incident.dto.UpdateStatusCommand;
 import com.incidentplatform.incident.repository.IncidentHistoryRepository;
@@ -15,6 +16,7 @@ import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
+import com.incidentplatform.shared.security.UserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,6 +27,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -488,6 +491,175 @@ class IncidentCommandServiceTest {
             assertThatThrownBy(() ->
                     commandService.assignTo(unknownId, USER_ID, USER_ID, TENANT_ID))
                     .isInstanceOf(ResourceNotFoundException.class);
+        }
+    }
+
+    @Nested
+    @DisplayName("assignTeam")
+    class AssignTeam {
+
+        @Test
+        @DisplayName("should assign team when caller is a member of the target team")
+        void shouldAssignWhenCallerIsMember() {
+            // given
+            final UUID teamId = UUID.randomUUID();
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            final UserPrincipal responder = new UserPrincipal(
+                    USER_ID, TENANT_ID, "responder@acme.com",
+                    List.of("ROLE_RESPONDER"), List.of(teamId));
+
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            // when
+            final IncidentDto result = commandService.assignTeam(
+                    incident.getId(), new AssignTeamRequest(teamId), responder, TENANT_ID);
+
+            // then
+            assertThat(result.teamId()).isEqualTo(teamId);
+            then(incidentRepository).should().save(incident);
+        }
+
+        @Test
+        @DisplayName("should throw FORBIDDEN when caller is not a member of the target team")
+        void shouldThrowWhenCallerIsNotMember() {
+            // given — responder belongs to a DIFFERENT team than the one
+            // being assigned
+            final UUID targetTeamId = UUID.randomUUID();
+            final UUID responderTeamId = UUID.randomUUID();
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            final UserPrincipal responder = new UserPrincipal(
+                    USER_ID, TENANT_ID, "responder@acme.com",
+                    List.of("ROLE_RESPONDER"), List.of(responderTeamId));
+
+            // when / then
+            assertThatThrownBy(() -> commandService.assignTeam(
+                    incident.getId(), new AssignTeamRequest(targetTeamId), responder, TENANT_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                            .isEqualTo("FORBIDDEN"));
+
+            // Never even looked up the incident — membership is checked
+            // before touching the repository.
+            then(incidentRepository).should(never()).findByIdAndTenantId(any(), anyString());
+            then(incidentRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should allow ADMIN to assign a team they are not a member of")
+        void shouldAllowAdminRegardlessOfMembership() {
+            // given — admin has no teams at all
+            final UUID teamId = UUID.randomUUID();
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            final UserPrincipal admin = new UserPrincipal(
+                    USER_ID, TENANT_ID, "admin@acme.com",
+                    List.of("ROLE_ADMIN"), List.of());
+
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            // when
+            final IncidentDto result = commandService.assignTeam(
+                    incident.getId(), new AssignTeamRequest(teamId), admin, TENANT_ID);
+
+            // then
+            assertThat(result.teamId()).isEqualTo(teamId);
+            then(incidentRepository).should().save(incident);
+        }
+    }
+
+    @Nested
+    @DisplayName("unassignTeam")
+    class UnassignTeam {
+
+        @Test
+        @DisplayName("should unassign when caller is a member of the incident's current team")
+        void shouldUnassignWhenCallerIsMemberOfCurrentTeam() {
+            // given
+            final UUID teamId = UUID.randomUUID();
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            incident.assignToTeam(teamId);
+            final UserPrincipal responder = new UserPrincipal(
+                    USER_ID, TENANT_ID, "responder@acme.com",
+                    List.of("ROLE_RESPONDER"), List.of(teamId));
+
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            // when
+            final IncidentDto result = commandService.unassignTeam(
+                    incident.getId(), responder, TENANT_ID);
+
+            // then
+            assertThat(result.teamId()).isNull();
+            then(incidentRepository).should().save(incident);
+        }
+
+        @Test
+        @DisplayName("should throw FORBIDDEN when caller is not a member of the incident's current team")
+        void shouldThrowWhenCallerIsNotMemberOfCurrentTeam() {
+            // given — responder belongs to a team, but not the one
+            // currently assigned to this incident
+            final UUID currentTeamId = UUID.randomUUID();
+            final UUID responderTeamId = UUID.randomUUID();
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            incident.assignToTeam(currentTeamId);
+            final UserPrincipal responder = new UserPrincipal(
+                    USER_ID, TENANT_ID, "responder@acme.com",
+                    List.of("ROLE_RESPONDER"), List.of(responderTeamId));
+
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            // when / then
+            assertThatThrownBy(() -> commandService.unassignTeam(
+                    incident.getId(), responder, TENANT_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .satisfies(ex -> assertThat(((BusinessException) ex).getErrorCode())
+                            .isEqualTo("FORBIDDEN"));
+
+            then(incidentRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should allow ADMIN to unassign a team they are not a member of")
+        void shouldAllowAdminRegardlessOfMembership() {
+            // given
+            final UUID teamId = UUID.randomUUID();
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            incident.assignToTeam(teamId);
+            final UserPrincipal admin = new UserPrincipal(
+                    USER_ID, TENANT_ID, "admin@acme.com",
+                    List.of("ROLE_ADMIN"), List.of());
+
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            // when
+            final IncidentDto result = commandService.unassignTeam(
+                    incident.getId(), admin, TENANT_ID);
+
+            // then
+            assertThat(result.teamId()).isNull();
+        }
+
+        @Test
+        @DisplayName("should succeed with no membership check when incident has no team assigned")
+        void shouldSucceedWhenNoTeamCurrentlyAssigned() {
+            // given — incident.teamId is already null; nothing to be "a
+            // member of", so the check is skipped entirely regardless of role
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            final UserPrincipal responder = new UserPrincipal(
+                    USER_ID, TENANT_ID, "responder@acme.com",
+                    List.of("ROLE_RESPONDER"), List.of());
+
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            // when / then — does not throw
+            final IncidentDto result = commandService.unassignTeam(
+                    incident.getId(), responder, TENANT_ID);
+            assertThat(result.teamId()).isNull();
         }
     }
 
