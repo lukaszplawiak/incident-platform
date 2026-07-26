@@ -5,6 +5,7 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -25,6 +26,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.then;
 
@@ -38,6 +40,9 @@ class IncidentEventConsumerTest {
     @Mock
     private Acknowledgment acknowledgment;
 
+    @Mock
+    private DeadLetterPublisher deadLetterPublisher;
+
     private IncidentEventConsumer consumer;
     private ObjectMapper objectMapper;
 
@@ -49,7 +54,7 @@ class IncidentEventConsumerTest {
     void setUp() {
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
-        consumer = new IncidentEventConsumer(notificationService, objectMapper);
+        consumer = new IncidentEventConsumer(notificationService, objectMapper, deadLetterPublisher);
     }
 
     @AfterEach
@@ -331,7 +336,7 @@ class IncidentEventConsumerTest {
         }
 
         @Test
-        @DisplayName("should acknowledge when severity is unrecognized — poison pill")
+        @DisplayName("should route to DLT and acknowledge when severity is unrecognized — poison pill")
         void shouldAcknowledgeOnUnrecognizedSeverity() {
             // given — bad severity cannot be fixed by retrying
             final String badSeverityPayload = String.format("""
@@ -349,8 +354,38 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — acknowledged to skip the poison pill
+            // then — routed to DLT (previously: only logged and discarded),
+            // acknowledged to skip the poison pill
+            then(deadLetterPublisher).should().publish(
+                    eq(badSeverityPayload), eq(TOPIC), eq(TENANT_ID), anyString());
             then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("should route to DLT and acknowledge when tenantId is missing from both header and payload — poison pill")
+        void shouldRouteToDltWhenTenantIdMissing() {
+            // given — no X-Tenant-Id header (buildRecord's tenantId param is
+            // null) and no tenantId field in the payload either
+            final String payloadWithoutTenantId = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "title": "High CPU",
+                      "severity": "CRITICAL"
+                    }""", INCIDENT_ID);
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(payloadWithoutTenantId, null,
+                            IncidentEventTypes.INCIDENT_OPENED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — routed to DLT rather than silently discarded, tenantId
+            // reported as "unknown" since it was never resolved
+            then(deadLetterPublisher).should().publish(
+                    eq(payloadWithoutTenantId), eq(TOPIC), eq("unknown"), anyString());
+            then(acknowledgment).should().acknowledge();
+            then(notificationService).shouldHaveNoInteractions();
         }
     }
 }
