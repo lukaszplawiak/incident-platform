@@ -362,7 +362,14 @@ jobs:
 
       - name: Dump logs on failure
         if: failure()
-        run: docker compose -f docker/docker-compose.yml logs
+        run: |
+          for service in postgres redis kafka \
+            auth-service ingestion-service incident-service notification-service \
+            escalation-service postmortem-service oncall-service; do
+            echo "::group::Logs — $service"
+            docker compose -f docker/docker-compose.yml logs "$service"
+            echo "::endgroup::"
+          done
 
       - name: Tear down
         if: always()
