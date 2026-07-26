@@ -2,6 +2,8 @@ package com.incidentplatform.shared.exception;
 
 import org.springframework.http.HttpStatus;
 
+import java.util.UUID;
+
 public class BusinessException extends RuntimeException {
 
     private final String errorCode;
@@ -79,5 +81,17 @@ public class BusinessException extends RuntimeException {
 
     public static BusinessException conflict(String errorCode, String message) {
         return new BusinessException(errorCode, message, HttpStatus.CONFLICT);
+    }
+
+    public static BusinessException notTeamMember(UUID teamId) {
+        return new BusinessException(
+                ErrorCodes.FORBIDDEN,
+                String.format(
+                        "You are not a member of team '%s'. Only members of the " +
+                                "target team, or ADMIN, can assign or unassign it " +
+                                "on an incident.",
+                        teamId),
+                HttpStatus.FORBIDDEN
+        );
     }
 }

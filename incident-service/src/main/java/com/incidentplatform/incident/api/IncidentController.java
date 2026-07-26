@@ -110,7 +110,7 @@ public class IncidentController {
             value = "/{id}/history",
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Get incident status change history (audit log)")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Status change history"),
@@ -185,12 +185,14 @@ public class IncidentController {
             value = "/{id}/team",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(
             summary = "Assign a team to an incident",
             description = """
-                    Assigns a team to this incident. The team should be one that
-                    the calling user belongs to (verified via JWT teamIds claim)
-                    unless the caller has ROLE_ADMIN.
+                    Assigns a team to this incident. The caller must be a member of
+                    the target team (verified via JWT teamIds claim) unless the
+                    caller has ROLE_ADMIN — enforced in IncidentCommandService,
+                    returns 403 with error code FORBIDDEN otherwise.
 
                     When the Routing Engine is implemented (backlog), team assignment
                     will happen automatically based on routing rules. Until then,
@@ -198,6 +200,7 @@ public class IncidentController {
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Team assigned"),
+            @ApiResponse(responseCode = "403", description = "Not a member of the target team"),
             @ApiResponse(responseCode = "404", description = "Incident not found")
     })
     public ResponseEntity<IncidentDto> assignTeam(
@@ -207,17 +210,25 @@ public class IncidentController {
         final String tenantId = TenantContext.get();
         return ResponseEntity.ok(
                 commandService.assignTeam(
-                        incidentId, request, principal.userId(), tenantId));
+                        incidentId, request, principal, tenantId));
     }
 
     @DeleteMapping(
             value = "/{id}/team",
             produces = MediaType.APPLICATION_JSON_VALUE)
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(
             summary = "Remove team assignment from an incident",
-            description = "Removes the team assignment. Incident becomes unassigned.")
+            description = """
+                    Removes the team assignment. Incident becomes unassigned.
+                    The caller must be a member of the incident's current team
+                    (verified via JWT teamIds claim) unless the caller has
+                    ROLE_ADMIN — enforced in IncidentCommandService, returns 403
+                    with error code FORBIDDEN otherwise.
+                    """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Team unassigned"),
+            @ApiResponse(responseCode = "403", description = "Not a member of the incident's current team"),
             @ApiResponse(responseCode = "404", description = "Incident not found")
     })
     public ResponseEntity<IncidentDto> unassignTeam(
@@ -226,7 +237,7 @@ public class IncidentController {
         final String tenantId = TenantContext.get();
         return ResponseEntity.ok(
                 commandService.unassignTeam(
-                        incidentId, principal.userId(), tenantId));
+                        incidentId, principal, tenantId));
     }
 
 
