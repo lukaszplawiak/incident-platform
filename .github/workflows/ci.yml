@@ -332,7 +332,7 @@ jobs:
           # a smoke test. Dummy CI-only values, never used anywhere
           # real.
           JWT_SECRET: ci-smoke-test-secret-not-for-real-use-minimum-64-characters-long-k8s
-          MFA_ENCRYPTION_KEY: Y2ktc21va2UtdGVzdC1rZXktbm90LWZvci1yZWFsLXVzZS0zMmJ5dGVz
+          MFA_ENCRYPTION_KEY: n8WIymtbGNC8V61F6BVDfbswbkBLJNqY9bi+GYJEt5M=
         run: |
           docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 300 \
             postgres redis kafka \
