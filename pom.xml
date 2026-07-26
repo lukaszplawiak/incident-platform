@@ -24,6 +24,7 @@
 
     <modules>
         <module>shared</module>
+        <module>service-parent</module>
         <module>ingestion-service</module>
         <module>incident-service</module>
         <module>escalation-service</module>

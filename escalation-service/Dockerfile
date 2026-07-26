@@ -8,6 +8,7 @@ COPY mvnw mvnw.cmd ./
 COPY .mvn .mvn
 
 COPY pom.xml ./
+COPY service-parent/pom.xml service-parent/
 COPY shared/pom.xml shared/
 COPY ingestion-service/pom.xml ingestion-service/
 COPY incident-service/pom.xml incident-service/
@@ -18,13 +19,13 @@ COPY oncall-service/pom.xml oncall-service/
 COPY auth-service/pom.xml auth-service/
 
 RUN --mount=type=cache,target=/root/.m2,id=escalation-service-m2 \
-    ./mvnw dependency:go-offline -pl shared,escalation-service -am -q --no-transfer-progress
+    ./mvnw dependency:go-offline -pl shared,service-parent,escalation-service -am -q --no-transfer-progress
 
 COPY shared/src shared/src
 COPY escalation-service/src escalation-service/src
 
 RUN --mount=type=cache,target=/root/.m2,id=escalation-service-m2 \
-    ./mvnw package -pl shared,escalation-service -am \
+    ./mvnw package -pl shared,service-parent,escalation-service -am \
     -DskipTests --no-transfer-progress
 
 FROM eclipse-temurin:21.0.11_10-jre-alpine

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.incidentplatform</groupId>
+        <artifactId>incident-platform</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <artifactId>service-parent</artifactId>
+    <packaging>pom</packaging>
+
+    <name>service-parent</name>
+    <description>
+        Shared parent for the 7 runnable Spring Boot application modules
+        (auth, incident, ingestion, notification, escalation, postmortem,
+        oncall-service). Declares spring-boot-maven-plugin exactly once here
+        so every service inherits a working `mvn package` -&gt; executable
+        app.jar with a proper Main-Class manifest entry, without repeating
+        the plugin declaration in each service's own pom.xml.
+
+        Previously only auth-service declared this plugin directly; the
+        other 6 services had no &lt;build&gt; section at all, so `mvn package`
+        produced a plain jar with no Main-Class attribute — never runnable
+        via `java -jar`, which is exactly how every Dockerfile's ENTRYPOINT
+        invokes it. Every one of those 6 containers crash-looped with
+        "no main manifest attribute, in app.jar". This module exists so
+        that class of bug is structurally impossible going forward: a new
+        service parented here gets a working jar automatically, with
+        nothing to remember to add.
+
+        Deliberately NOT the parent of `shared` — `shared` is a plain
+        library module with no @SpringBootApplication main class. If it
+        inherited this plugin's repackage execution, `mvn package` would
+        fail outright with "Unable to find main class" and break the
+        entire multi-module build, since every other module depends on
+        `shared`. `shared` continues to extend the root `incident-platform`
+        parent directly, bypassing this one.
+    </description>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

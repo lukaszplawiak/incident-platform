@@ -4,9 +4,9 @@
 	<modelVersion>4.0.0</modelVersion>
 	<parent>
 		<groupId>com.incidentplatform</groupId>
-		<artifactId>incident-platform</artifactId>
+		<artifactId>service-parent</artifactId>
 		<version>1.0.0-SNAPSHOT</version>
-		<relativePath>../pom.xml</relativePath>
+		<relativePath>../service-parent/pom.xml</relativePath>
 	</parent>
 	<artifactId>postmortem-service</artifactId>
 	<dependencies>
