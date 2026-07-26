@@ -20,13 +20,17 @@ spec:
 # When CPU > 70% → add replica (up to maxReplicas).
 # When CPU < 70% → remove replica (down to minReplicas).
 #
-# auth-service has no @Scheduled jobs with @SchedulerLock (unlike escalation/
-# notification/postmortem-service) — its two scheduled jobs (AuthEmailScheduler)
-# currently have no distributed-lock protection. Scaling this beyond
-# minReplicas: 1 today would let every replica run those jobs independently
-# and duplicate outbox-email sends. Flagged as a separate, pre-existing gap
-# to fix before raising maxReplicas — kept at 1 here deliberately, not
-# matched to the other services' 2-3.
+# Correction: an earlier version of this file capped maxReplicas at 1,
+# on the assumption that AuthEmailScheduler's two @Scheduled jobs had no
+# distributed-lock protection. That assumption was wrong — verified
+# directly against the code: AuthEmailScheduler.processPending()/
+# retryFailed() both carry @SchedulerLock, SchedulerConfig.java registers
+# both @EnableSchedulerLock and a JdbcTemplateLockProvider bean, and the
+# shedlock table is created in V5__create_invite_email_outbox.sql. Same
+# pattern as escalation/notification/postmortem-service. Scaling beyond
+# 1 replica is safe; matched to incident-service's maxReplicas: 3 as
+# auth-service is the authentication gateway for the whole platform and
+# a comparably central, likely hot-path service.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -39,7 +43,7 @@ spec:
     kind: Deployment
     name: auth-service
   minReplicas: 1
-  maxReplicas: 1
+  maxReplicas: 3
   metrics:
     - type: Resource
       resource:
