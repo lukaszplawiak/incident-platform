@@ -60,20 +60,21 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * controller, previously with no test coverage of any kind (neither
  * security nor functional).
  *
- * <p>Every endpoint here requires {@code hasRole('RESPONDER') or
- * hasRole('ADMIN')} — no endpoint in this controller is reachable by
- * ROLE_SERVICE or ROLE_INGESTOR. Written after fixing two bugs this
- * absence of coverage had let through undetected:
- * <ul>
- *   <li>{@code GET /{id}/history} used {@code hasRole('ROLE_RESPONDER')} —
- *       Spring's hasRole() auto-prepends "ROLE_", so this checked for
- *       authority "ROLE_ROLE_RESPONDER", which no user ever has. The
- *       endpoint was unreachable by anyone, including admins.</li>
- *   <li>{@code PATCH/DELETE /{id}/team} had no {@code @PreAuthorize} at
- *       all and no team-membership check anywhere — any authenticated
- *       user of any role could reassign or unassign any incident's team,
- *       regardless of their own team membership.</li>
- * </ul>
+ * <p>Written after fixing a real gap this absence of coverage had let
+ * through undetected: {@code PATCH/DELETE /{id}/team} had no
+ * {@code @PreAuthorize} at all and no team-membership check anywhere —
+ * any authenticated user of any role could reassign or unassign any
+ * incident's team, regardless of their own team membership.
+ *
+ * <p>Note: an earlier version of this comment also claimed {@code GET
+ * /{id}/history}'s {@code hasRole('ROLE_RESPONDER')} was a bug causing
+ * a permanent 403 for everyone (mistakenly assuming Spring double-
+ * prepends "ROLE_"). That claim was wrong — Spring Security's classic
+ * SpEL {@code hasRole()} checks whether the argument already starts
+ * with the role prefix and does not re-prepend it, so
+ * {@code hasRole('ROLE_X')} and {@code hasRole('X')} are functionally
+ * identical. No fix was needed there; corrected here to avoid
+ * repeating the mistake.
  *
  * <h2>Why NOT plain {@code @WithMockUser}</h2>
  * {@code @WithMockUser} authenticates as a generic
@@ -384,7 +385,7 @@ class IncidentControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("GET /incidents/{id}/history — 200 (regression test for the ROLE_ prefix bug)")
+        @DisplayName("GET /incidents/{id}/history — 200 for ADMIN")
         void getHistory_returns200() throws Exception {
             given(queryService.findHistory(any(), anyString())).willReturn(List.of());
 
