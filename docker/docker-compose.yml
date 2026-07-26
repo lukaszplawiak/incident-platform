@@ -272,7 +272,7 @@ services:
     restart: unless-stopped
     ports:
       - "${AUTH_SERVICE_PORT:-8087}:8087"
-      - "${AUTH_SERVICE_MGMT_PORT:-8087}:8087"
+      - "${AUTH_SERVICE_MGMT_PORT:-8097}:8097"
     environment:
       SERVER_PORT: 8087
       # Database
