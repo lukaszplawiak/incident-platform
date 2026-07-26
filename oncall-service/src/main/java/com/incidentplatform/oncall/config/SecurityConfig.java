@@ -19,7 +19,22 @@ import org.springframework.security.web.SecurityFilterChain;
  * <h2>Layer 1 — URL-level (SecurityFilterChain)</h2>
  * <ul>
  *   <li>{@code /api/v1/oncall/current} — restricted to {@code ROLE_SERVICE}
- *       and {@code ROLE_ADMIN}. Called by internal services via service tokens.</li>
+ *       and {@code ROLE_ADMIN}. Called by internal services via service tokens
+ *       (notification-service, escalation-service) — never by end users, so
+ *       there's no reason for RESPONDER to reach it directly.</li>
+ *   <li>{@code /api/v1/oncall/current/all} — {@code ROLE_RESPONDER} and
+ *       {@code ROLE_ADMIN}. Backs the admin panel's "Currently on-call"
+ *       display. Previously had no dedicated rule — being a different exact
+ *       path from {@code /current}, it silently fell through to the
+ *       generic "any authenticated user" rule below, which meant SERVICE
+ *       and INGESTOR could reach it too, by accident rather than design.
+ *       No internal service caller was found using it (grepped the whole
+ *       codebase) — only the frontend does. This rule is now explicit and
+ *       narrower: RESPONDER/ADMIN only.
+ *       Matches PagerDuty's own permission model: viewing who is on-call is
+ *       kept broadly available (their docs: "beneficial for everyone to
+ *       see"), while only managing/editing schedules is more restricted —
+ *       see the POST/DELETE {@code /schedules} rules below, ADMIN-only.</li>
  *   <li>All other requests — must be authenticated. Unauthenticated requests
  *       receive {@code 401 Unauthorized} via {@link UnauthorizedEntryPoint}.</li>
  * </ul>
@@ -45,6 +60,8 @@ public class SecurityConfig {
         return SharedSecurityAutoConfiguration.buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
+                        .requestMatchers("/api/v1/oncall/current/all")
+                        .hasAnyRole(SecurityRoles.RESPONDER, SecurityRoles.ADMIN)
                         .requestMatchers("/api/v1/oncall/current")
                         .hasAnyRole(SecurityRoles.SERVICE, SecurityRoles.ADMIN)
                         .anyRequest().authenticated()
