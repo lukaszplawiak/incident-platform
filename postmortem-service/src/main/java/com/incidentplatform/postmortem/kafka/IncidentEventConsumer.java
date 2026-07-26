@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
@@ -53,11 +54,14 @@ public class IncidentEventConsumer {
 
     private final PostmortemPersistenceService persistenceService;
     private final ObjectMapper objectMapper;
+    private final DeadLetterPublisher deadLetterPublisher;
 
     public IncidentEventConsumer(PostmortemPersistenceService persistenceService,
-                                 ObjectMapper objectMapper) {
+                                 ObjectMapper objectMapper,
+                                 DeadLetterPublisher deadLetterPublisher) {
         this.persistenceService = persistenceService;
         this.objectMapper = objectMapper;
+        this.deadLetterPublisher = deadLetterPublisher;
     }
 
     @KafkaListener(
@@ -94,18 +98,36 @@ public class IncidentEventConsumer {
 
         } catch (UnrecognizedSeverityException e) {
             // Poison pill — unrecognized severity cannot be fixed by retrying.
-            log.error("Skipping postmortem generation — unrecognized severity: {}",
+            // Route to DLT, then acknowledge to unblock the partition.
+            final String tenantId = TenantContext.getOrNull();
+            log.error("Poison pill (unrecognized severity) — routing to DLT: " +
+                            "topic={}, partition={}, offset={}, tenant={}, error={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenantId, e.getMessage());
+
+            deadLetterPublisher.publish(
+                    record.value(),
+                    record.topic(),
+                    tenantId != null ? tenantId : "unknown",
                     e.getMessage());
             acknowledgment.acknowledge();
             return;
 
         } catch (IllegalArgumentException e) {
             // Poison pill — unparseable JSON, missing tenantId, bad UUID, or
-            // missing required field. Retrying will never succeed.
-            log.error("Poison pill in incident lifecycle event — skipping: " +
-                            "topic={}, partition={}, offset={}, error={}",
-                    record.topic(), record.partition(),
-                    record.offset(), e.getMessage());
+            // missing required field. Retrying will never succeed. Route to
+            // DLT, then acknowledge to unblock the partition.
+            final String tenantId = TenantContext.getOrNull();
+            log.error("Poison pill detected — routing to DLT: " +
+                            "topic={}, partition={}, offset={}, tenant={}, error={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenantId, e.getMessage());
+
+            deadLetterPublisher.publish(
+                    record.value(),
+                    record.topic(),
+                    tenantId != null ? tenantId : "unknown",
+                    e.getMessage());
             acknowledgment.acknowledge();
             return;
 
