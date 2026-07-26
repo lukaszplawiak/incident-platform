@@ -341,7 +341,6 @@ jobs:
 
       - name: Check every service's health endpoint
         run: |
-          set -e
           declare -A ports=(
             [auth-service]=8097
             [ingestion-service]=8091
@@ -351,15 +350,21 @@ jobs:
             [postmortem-service]=8095
             [oncall-service]=8096
           )
-          for service in "${!ports[@]}"; do
+          failed=0
+          for service in auth-service ingestion-service incident-service notification-service escalation-service postmortem-service oncall-service; do
             port="${ports[$service]}"
-            status=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$port/actuator/health")
+            echo "Checking $service on port $port..."
+            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:$port/actuator/health" || echo "CURL_FAILED")
             if [ "$status" != "200" ]; then
-              echo "::error::$service health check returned HTTP $status (expected 200)"
-              exit 1
+              echo "::error::$service health check returned '$status' (expected 200) on port $port"
+              failed=1
+            else
+              echo "$service: healthy"
             fi
-            echo "$service: healthy"
           done
+          if [ "$failed" -eq 1 ]; then
+            exit 1
+          fi
 
       - name: Dump logs on failure
         if: failure()
