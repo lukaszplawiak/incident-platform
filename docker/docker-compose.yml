@@ -308,8 +308,8 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: [ "CMD", "wget", "--quiet", "--tries=1", "--spider",
-              "http://localhost:8087/actuator/health" ]
+      test: [ "CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
+              "http://localhost:8097/actuator/health" ]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -351,8 +351,8 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
-             "http://localhost:8081/actuator/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
+             "http://localhost:8091/actuator/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -383,14 +383,15 @@ services:
       JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      WEBSOCKET_ALLOWED_ORIGINS: ${WEBSOCKET_ALLOWED_ORIGINS:-http://localhost:4200,http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
-             "http://localhost:8082/actuator/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
+             "http://localhost:8092/actuator/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -426,8 +427,8 @@ services:
       MAIL_PORT: ${MAIL_PORT:-1025}
       MAIL_USERNAME: ${MAIL_USERNAME:-}
       MAIL_PASSWORD: ${MAIL_PASSWORD:-}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
-      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-xoxb-placeholder-not-a-real-token}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-placeholder-signing-secret-not-real}
       NOTIFICATION_FALLBACK_EMAIL: ${NOTIFICATION_FALLBACK_EMAIL:-oncall@incident-platform.local}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
@@ -436,8 +437,8 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
-             "http://localhost:8083/actuator/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
+             "http://localhost:8093/actuator/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -475,8 +476,8 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
-             "http://localhost:8084/actuator/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
+             "http://localhost:8094/actuator/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -507,7 +508,7 @@ services:
       JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       INCIDENT_SERVICE_URL: http://incident-service:8082
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-your-api-key-here}
       GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-30}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
@@ -516,8 +517,8 @@ services:
       kafka:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
-             "http://localhost:8085/actuator/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
+             "http://localhost:8095/actuator/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -551,8 +552,8 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
-             "http://localhost:8086/actuator/health"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
+             "http://localhost:8096/actuator/health"]
       interval: 15s
       timeout: 5s
       retries: 5

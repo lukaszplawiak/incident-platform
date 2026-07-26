@@ -41,7 +41,7 @@ jobs:
       - name: Run tests with coverage
         run: |
           ./mvnw verify \
-            -pl shared,auth-service,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service \
+            -pl shared,service-parent,auth-service,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service \
             --no-transfer-progress
 
       - name: Upload Jacoco coverage reports
@@ -128,6 +128,7 @@ jobs:
           filters: |
             shared:
               - 'shared/**'
+              - 'service-parent/**'
               - 'pom.xml'
             auth-service:
               - 'auth-service/**'
@@ -342,13 +343,13 @@ jobs:
         run: |
           set -e
           declare -A ports=(
-            [auth-service]=8087
-            [ingestion-service]=8081
-            [incident-service]=8082
-            [notification-service]=8083
-            [escalation-service]=8084
-            [postmortem-service]=8085
-            [oncall-service]=8086
+            [auth-service]=8097
+            [ingestion-service]=8091
+            [incident-service]=8092
+            [notification-service]=8093
+            [escalation-service]=8094
+            [postmortem-service]=8095
+            [oncall-service]=8096
           )
           for service in "${!ports[@]}"; do
             port="${ports[$service]}"
