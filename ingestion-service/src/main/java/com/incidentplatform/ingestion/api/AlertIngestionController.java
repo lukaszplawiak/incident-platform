@@ -67,7 +67,7 @@ public class AlertIngestionController {
     @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN') "
             + "or hasRole('ROLE_SERVICE')"
             + "or (principal instanceof T(com.incidentplatform.shared.security.UserPrincipal) "
-            + "and @apiKeyAuthorizationService.hasScope(principal, 'alerts:ingest'))")
+            + "and principal.hasScope('alerts:ingest'))")
     @Operation(
             summary = "Ingest alerts from external source",
             description = "Accepts alert payload from monitoring system, " +
