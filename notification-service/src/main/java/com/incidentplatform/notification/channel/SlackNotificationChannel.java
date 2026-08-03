@@ -3,6 +3,7 @@ package com.incidentplatform.notification.channel;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.domain.Severity;
 import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
@@ -19,26 +20,35 @@ public class SlackNotificationChannel implements NotificationChannel {
     private static final Logger log =
             LoggerFactory.getLogger(SlackNotificationChannel.class);
 
-    private static final String SLACK_API_POST =
-            "https://slack.com/api/chat.postMessage";
-    public static final String SLACK_API_UPDATE =
-            "https://slack.com/api/chat.update";
+    // Built from the configurable apiBaseUrl in the constructor, not a
+    // hardcoded constant — lets tests point this class at a local WireMock
+    // server instead of the real Slack API. Defaults to the real Slack API
+    // via application.yml (notification.channels.slack.api-base-url).
+    private final String slackApiPostUrl;
+    private final String slackApiUpdateUrl;
 
     private final boolean enabled;
     private final String botToken;
     private final String defaultChannel;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    private final SlackMessageStore messageStore;
 
     public SlackNotificationChannel(
             RestClient.Builder restClientBuilder,
             ObjectMapper objectMapper,
-            NotificationChannelProperties properties) {
+            NotificationChannelProperties properties,
+            SlackMessageStore messageStore) {
         this.restClient = restClientBuilder.build();
         this.objectMapper = objectMapper;
         this.enabled        = properties.channels().slack().enabled();
         this.botToken       = properties.channels().slack().botToken();
         this.defaultChannel = properties.channels().slack().channel();
+        this.messageStore = messageStore;
+
+        final String apiBaseUrl = properties.channels().slack().apiBaseUrl();
+        this.slackApiPostUrl = apiBaseUrl + "/chat.postMessage";
+        this.slackApiUpdateUrl = apiBaseUrl + "/chat.update";
     }
 
     @Override
@@ -51,12 +61,34 @@ public class SlackNotificationChannel implements NotificationChannel {
         return enabled;
     }
 
+    /**
+     * Sends the incident notification to the default channel, and
+     * additionally as a DM if the recipient is a Slack user ID.
+     *
+     * <h2>Fixed: the returned ts was previously discarded entirely</h2>
+     * {@code sendWithAckButton} returns the Slack message {@code ts} —
+     * needed later to update this specific message via {@code chat.update}
+     * once the incident is acknowledged (e.g. from a *different* channel's
+     * button, or the web UI). Previously this method called
+     * {@code sendWithAckButton} and threw away its return value in both
+     * call sites — meaning {@link SlackMessageStore} was never actually
+     * populated, ever, in any deployment. The "update every other Slack
+     * message for this incident after ACK" loop in
+     * {@code SlackActionService.updateSlackMessages} always found nothing
+     * to update beyond the one message Slack's own callback payload already
+     * identifies directly — not a scaling issue, a wiring bug.
+     */
     @Override
     public void send(NotificationRequest request) {
-        sendWithAckButton(defaultChannel, request);
+        final String defaultChannelTs = sendWithAckButton(defaultChannel, request);
+        messageStore.save(request.incidentId(), defaultChannel,
+                request.tenantId(), defaultChannelTs);
 
         if (isSlackUserId(request.recipient())) {
-            sendWithAckButton(request.recipient(), request);
+            final String dmTs = sendWithAckButton(request.recipient(), request);
+            messageStore.save(request.incidentId(), request.recipient(),
+                    request.tenantId(), dmTs);
+
             log.info("Slack DM with ACK button sent to on-call: " +
                             "userId={}, incidentId={}",
                     request.recipient(), request.incidentId());
@@ -78,7 +110,7 @@ public class SlackNotificationChannel implements NotificationChannel {
         );
 
         final String responseBody = restClient.post()
-                .uri(SLACK_API_POST)
+                .uri(slackApiPostUrl)
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + botToken)
                 .body(payload)
@@ -115,7 +147,7 @@ public class SlackNotificationChannel implements NotificationChannel {
         );
 
         restClient.post()
-                .uri(SLACK_API_UPDATE)
+                .uri(slackApiUpdateUrl)
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + botToken)
                 .body(payload)

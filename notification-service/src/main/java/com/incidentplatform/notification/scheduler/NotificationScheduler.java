@@ -4,6 +4,7 @@ import com.incidentplatform.notification.config.NotificationSchedulerProperties;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.service.NotificationService;
+import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -47,15 +48,20 @@ public class NotificationScheduler {
 
     private final NotificationQueueRepository queueRepository;
     private final NotificationService notificationService;
+    private final SlackMessageStore messageStore;
     private final Duration pendingThreshold;
+    private final Duration slackMessageTsRetention;
 
     public NotificationScheduler(
             NotificationQueueRepository queueRepository,
             NotificationService notificationService,
+            SlackMessageStore messageStore,
             NotificationSchedulerProperties properties) {
         this.queueRepository = queueRepository;
         this.notificationService = notificationService;
+        this.messageStore = messageStore;
         this.pendingThreshold = properties.pendingThreshold();
+        this.slackMessageTsRetention = properties.slackMessageTsRetention();
     }
 
     /**
@@ -111,6 +117,44 @@ public class NotificationScheduler {
             } finally {
                 TenantContext.clear();
             }
+        }
+    }
+
+    /**
+     * Deletes {@code slack_message_ts} rows older than
+     * {@code slackMessageTsRetention} (default 7 days).
+     *
+     * <p>Most rows are removed immediately after a successful Slack ACK
+     * update ({@code SlackMessageStore.removeAllForIncident}, called from
+     * {@code SlackActionService}). This job only catches the remainder:
+     * incidents acknowledged some other way (e.g. the web UI instead of
+     * the Slack button), whose rows would otherwise accumulate forever.
+     *
+     * <p>Runs once per hour by default — far less frequently than the
+     * outbox processor, since this is pure housekeeping with no latency
+     * requirement. Uses the same ShedLock instance name pattern as
+     * {@link #processPendingNotifications} to prevent concurrent cleanup
+     * across replicas (harmless if it did run concurrently — DELETE is
+     * naturally idempotent — but avoids redundant work).
+     */
+    @Scheduled(
+            fixedDelayString = "${notification.scheduler.slack-ts-cleanup-interval-ms:3600000}",
+            initialDelayString = "60000"
+    )
+    @SchedulerLock(
+            name = "notification-service:cleanupOldSlackMessageTs",
+            lockAtMostFor = "4m",
+            lockAtLeastFor = "10s"
+    )
+    public void cleanupOldSlackMessageTs() {
+        final Instant threshold = Instant.now().minus(slackMessageTsRetention);
+        final int deleted = messageStore.deleteOlderThan(threshold);
+
+        if (deleted > 0) {
+            log.info("Slack message ts cleanup: deleted {} entries older than {}",
+                    deleted, slackMessageTsRetention);
+        } else {
+            log.debug("Slack message ts cleanup: nothing to delete");
         }
     }
 }

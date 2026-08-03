@@ -100,6 +100,7 @@ notification:
       bot-token: ${SLACK_BOT_TOKEN}
       channel: "#incidents"
       signing-secret: ${SLACK_SIGNING_SECRET}
+      api-base-url: ${SLACK_API_BASE_URL:https://slack.com/api}
     sms:
       enabled: true
       from-number: ${SMS_FROM:+1234567890}
@@ -115,6 +116,12 @@ notification:
     # How long PENDING entries must exist before scheduler picks them up.
     pending-threshold: ${NOTIFICATION_SCHEDULER_PENDING_THRESHOLD:PT30S}
     interval-ms: ${NOTIFICATION_SCHEDULER_INTERVAL_MS:30000}
+    # How long a slack_message_ts row is kept before the cleanup job
+    # deletes it — only matters for incidents acknowledged some other way
+    # than the Slack button (e.g. the web UI), since the Slack-ACK path
+    # deletes its own rows immediately.
+    slack-message-ts-retention: ${NOTIFICATION_SLACK_TS_RETENTION:P7D}
+    slack-ts-cleanup-interval-ms: ${NOTIFICATION_SLACK_TS_CLEANUP_INTERVAL_MS:3600000}
 
 oncall-service:
   base-url: ${ONCALL_SERVICE_URL:http://localhost:8086}

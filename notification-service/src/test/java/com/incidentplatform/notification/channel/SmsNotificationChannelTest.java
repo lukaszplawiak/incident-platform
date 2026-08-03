@@ -28,7 +28,7 @@ class SmsNotificationChannelTest {
         channel = new SmsNotificationChannel(new NotificationChannelProperties(
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
-                        new NotificationChannelProperties.Slack(true, "token", "#ch", "secret"),
+                        new NotificationChannelProperties.Slack(true, "token", "#ch", "secret", "http://localhost"),
                         new NotificationChannelProperties.Sms(true, FROM_NUMBER)),
                 new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", "")));
     }
@@ -56,7 +56,7 @@ class SmsNotificationChannelTest {
                     new SmsNotificationChannel(new NotificationChannelProperties(
                             new NotificationChannelProperties.Channels(
                                     new NotificationChannelProperties.Email(true, "alerts@test.com"),
-                                    new NotificationChannelProperties.Slack(true, "token", "#ch", "secret"),
+                                    new NotificationChannelProperties.Slack(true, "token", "#ch", "secret", "http://localhost"),
                                     new NotificationChannelProperties.Sms(false, FROM_NUMBER)),
                             new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", "")));
             assertThat(disabled.isEnabled()).isFalse();
