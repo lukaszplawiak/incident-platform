@@ -2,16 +2,45 @@ package com.incidentplatform.ingestion.service;
 
 import com.incidentplatform.ingestion.config.DeduplicationProperties;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * Redis-backed alert deduplication using {@code SETNX} semantics
+ * ({@code setIfAbsent} with a TTL).
+ *
+ * <h2>Fixed: the @CircuitBreaker never actually opened</h2>
+ * Previously {@code isDuplicate} wrapped its Redis call in its own
+ * {@code try/catch (Exception e)} and returned {@code false} (fail open)
+ * from inside the catch block. Resilience4j's {@code @CircuitBreaker} is
+ * an AOP proxy wrapped around the whole method call — it only sees
+ * whether the method call it intercepted returned normally or threw. A
+ * caught-and-swallowed exception looks exactly like success from the
+ * proxy's point of view: {@code circuitBreaker.recordFailure(...)} was
+ * never invoked, the failure rate stayed at 0%, the circuit never
+ * opened, and {@code isDuplicateFallback} was unreachable dead code.
+ *
+ * <p>The internal try/catch is removed here — a real Redis failure
+ * (matching {@code resilience4j.circuitbreaker.instances.redis-dedup
+ * .record-exceptions} in application.yml: connection failures, not
+ * arbitrary exceptions) now propagates out of {@code isDuplicate} so the
+ * proxy actually sees it, records it, and — once the failure-rate
+ * threshold is crossed — opens the circuit and calls
+ * {@link #isDuplicateFallback} directly, without waiting for another
+ * Redis timeout first. Same fix applied to the same bug found
+ * independently in {@code OncallClientImpl} and {@code IncidentAckClient}
+ * (notification-service) — {@code escalation-service}'s
+ * {@code OncallServiceClient} and {@code postmortem-service}'s
+ * {@code GeminiClientImpl} already did this correctly and were used as
+ * the reference pattern here.
+ */
 @Component
 public class DeduplicationService {
 
@@ -52,40 +81,39 @@ public class DeduplicationService {
     public boolean isDuplicate(UnifiedAlertDto alert) {
         final String key = KEY_PREFIX + alert.tenantId() + ":" + alert.fingerprint();
 
-        try {
-            final Boolean wasSet = redisTemplate.opsForValue()
-                    .setIfAbsent(key, "1", dedupTtl);
+        // No try/catch here — a Redis failure must propagate out of this
+        // method for @CircuitBreaker's proxy to see it and record it.
+        // See this class's Javadoc.
+        final Boolean wasSet = redisTemplate.opsForValue()
+                .setIfAbsent(key, "1", dedupTtl);
 
-            if (Boolean.TRUE.equals(wasSet)) {
-                log.debug("New alert registered: fingerprint={}, tenant={}",
-                        alert.fingerprint(), alert.tenantId());
-                return false;
-            } else {
-                duplicatesRejectedCounter.increment();
-                log.info("Duplicate alert rejected: fingerprint={}, source={}, " +
-                                "tenant={}", alert.fingerprint(), alert.source(),
-                        alert.tenantId());
-                return true;
-            }
-
-        } catch (Exception e) {
-            redisErrorCounter.increment();
-
-            log.error("Redis deduplication failed for fingerprint: {}, " +
-                            "source: {}, tenant: {}. " +
-                            "Allowing alert through to avoid data loss. " +
-                            "Check Redis connectivity. " +
-                            "Redis error counter incremented for Prometheus alerting.",
-                    alert.fingerprint(), alert.source(), alert.tenantId(), e);
+        if (Boolean.TRUE.equals(wasSet)) {
+            log.debug("New alert registered: fingerprint={}, tenant={}",
+                    alert.fingerprint(), alert.tenantId());
             return false;
+        } else {
+            duplicatesRejectedCounter.increment();
+            log.info("Duplicate alert rejected: fingerprint={}, source={}, " +
+                            "tenant={}", alert.fingerprint(), alert.source(),
+                    alert.tenantId());
+            return true;
         }
     }
 
-    public boolean isDuplicateFallback(UnifiedAlertDto alert, Exception ex) {
+    /**
+     * Called by the Resilience4j proxy — either when {@link #isDuplicate}
+     * throws a matching exception, or when the circuit is already OPEN
+     * (in which case {@code ex} is a
+     * {@link io.github.resilience4j.circuitbreaker.CallNotPermittedException},
+     * not a Redis exception — the broad {@code Exception} parameter type
+     * here is Resilience4j's own required convention for fallback
+     * methods, not the anti-pattern this class used to have internally).
+     */
+    boolean isDuplicateFallback(UnifiedAlertDto alert, Exception ex) {
         redisErrorCounter.increment();
-        log.error("Redis circuit breaker OPEN — dedup disabled. " +
-                        "Allowing alert through. fingerprint={}, tenant={}",
-                alert.fingerprint(), alert.tenantId());
+        log.error("Redis unavailable for deduplication — allowing alert through " +
+                        "to avoid data loss: fingerprint={}, tenant={}, error={}",
+                alert.fingerprint(), alert.tenantId(), ex.getMessage(), ex);
         return false;
     }
 }
