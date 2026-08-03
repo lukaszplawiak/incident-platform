@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
+import org.springframework.web.util.HtmlUtils;
 
 @Component
 public class EmailNotificationChannel implements NotificationChannel {
@@ -66,6 +67,25 @@ public class EmailNotificationChannel implements NotificationChannel {
         }
     }
 
+    /**
+     * Builds the HTML email body.
+     *
+     * <h2>Fixed: unescaped HTML injection via subject/message</h2>
+     * {@code request.subject()}/{@code request.message()} ultimately
+     * originate from external alert sources (Prometheus, Wazuh — see
+     * ingestion-service's normalizers) — free-text fields this platform
+     * does not control. Previously interpolated directly into raw HTML via
+     * {@code String.format}, so a malicious or malformed alert title/
+     * description containing HTML markup would be embedded verbatim in
+     * the email body. Most modern mail clients strip {@code <script>} and
+     * disable JS execution in rendered HTML email by policy, so classic
+     * XSS wasn't the primary concern here — but unescaped markup could
+     * still break the email's layout or inject deceptive content dressed
+     * up as a legitimate platform notification. Fixed using Spring's own
+     * {@link HtmlUtils#htmlEscape}, applied to both fields — no new
+     * dependency, this codebase's first use of HTML escaping (nothing
+     * else builds raw HTML from external strings today).
+     */
     private String buildHtmlBody(NotificationRequest request) {
         final String severityColor = switch (request.severity()) {
             case CRITICAL -> "#FF0000";
@@ -73,6 +93,9 @@ public class EmailNotificationChannel implements NotificationChannel {
             case MEDIUM   -> "#FFAA00";
             case LOW      -> "#00AA00";
         };
+
+        final String safeSubject = escapeHtml(request.subject());
+        final String safeMessage = escapeHtml(request.message());
 
         return String.format("""
                 <html>
@@ -89,12 +112,24 @@ public class EmailNotificationChannel implements NotificationChannel {
                 </html>
                 """,
                 severityColor,
-                request.subject(),
-                request.message(),
+                safeSubject,
+                safeMessage,
                 request.incidentId(),
                 severityColor,
                 request.severity().name(),
                 request.tenantId()
         );
+    }
+
+    /**
+     * Null-safe wrapper around {@link HtmlUtils#htmlEscape(String)} —
+     * {@code request.message()} is a plain, nullable field on
+     * {@link NotificationRequest} (see e.g.
+     * {@code SmsNotificationChannelTest}'s "should not throw when message
+     * is null" case), and {@code HtmlUtils.htmlEscape} does not itself
+     * accept null.
+     */
+    private static String escapeHtml(String value) {
+        return value == null ? "" : HtmlUtils.htmlEscape(value);
     }
 }
