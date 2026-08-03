@@ -21,8 +21,16 @@
 #   JWT_SECRET="..." TOKEN_EXPIRY_DAYS=90 ./scripts/generate-alertmanager-token.sh
 #
 # Output:
-#   Writes token to docker/secrets/alertmanager-token.txt (chmod 600)
+#   Writes token to docker/secrets/alertmanager-token (chmod 600)
 #   Prints export command to copy into .env.example
+#
+#   IMPORTANT: this filename must exactly match ALERTMANAGER_TOKEN_FILE_PATH
+#   in docker-compose.yml (what AlertManagerTokenRefresher writes to) and
+#   credentials_file in alertmanager.yml (what Alertmanager reads from) —
+#   all three mount the same docker/secrets/ host directory at different
+#   container paths, so the filename is the only thing tying them together.
+#   These three previously disagreed (alertmanager-token.txt / alertmanager-token
+#   / token) and the mechanism silently never worked as a result.
 #
 # Run this once when setting up the environment, and again when the token
 # is about to expire. Add the generated .env.example line to your CI/CD secrets
@@ -35,7 +43,7 @@ set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-OUTPUT_FILE="${TOKEN_FILE:-docker/secrets/alertmanager-token.txt}"
+OUTPUT_FILE="${TOKEN_FILE:-docker/secrets/alertmanager-token}"
 EXPIRY_DAYS="${TOKEN_EXPIRY_DAYS:-30}"
 
 # ─── Validate JWT_SECRET ──────────────────────────────────────────────────────

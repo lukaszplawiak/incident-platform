@@ -10,8 +10,8 @@
 #   export JWT_SECRET="your-64-char-secret"
 #   ./scripts/generate-alertmanager-token.sh
 #
-# The token is written to docker/secrets/alertmanager-token.txt which is mounted
-# into the Alertmanager container at /etc/alertmanager/secrets/token.
+# The token is written to docker/secrets/alertmanager-token which is mounted
+# into the Alertmanager container at /etc/alertmanager/secrets/alertmanager-token.
 # docker/secrets/ is in .gitignore — never committed to the repository.
 
 global:
@@ -50,7 +50,17 @@ receivers:
             # credentials_file is read on every outgoing request — not once at startup.
             # This means AlertManagerTokenRefresher can rotate the file and Alertmanager
             # picks up the new token automatically without restart.
-            credentials_file: '/etc/alertmanager/secrets/token'
+            #
+            # Filename must match exactly what AlertManagerTokenRefresher writes
+            # (ALERTMANAGER_TOKEN_FILE_PATH in docker-compose.yml,
+            # /etc/secrets/alertmanager-token there — same file, mounted at a
+            # different container path here) and what
+            # scripts/generate-alertmanager-token.sh writes for the initial
+            # bootstrap token. All three previously used different filenames
+            # (alertmanager-token.txt / alertmanager-token / token) — none of
+            # them actually matched, so this mechanism could not have worked
+            # even for the very first, manually-bootstrapped token.
+            credentials_file: '/etc/alertmanager/secrets/alertmanager-token'
 
 inhibit_rules:
   - source_matchers:
