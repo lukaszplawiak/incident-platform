@@ -19,26 +19,35 @@ import org.springframework.kafka.listener.ContainerProperties;
 @EnableKafka
 public class KafkaConfig {
 
-    @Value("${kafka.topics.incidents-lifecycle}")
-    private String incidentsLifecycleTopic;
+    private final String incidentsLifecycleTopic;
+    private final String alertsRawTopic;
+    private final String alertsResolvedTopic;
+    private final String auditEventsTopic;
+    private final String incidentsDeadLetterTopic;
+    private final int listenerConcurrency;
+    private final int deadLetterRetentionDays;
 
-    @Value("${kafka.topics.alerts-raw}")
-    private String alertsRawTopic;
-
-    @Value("${kafka.topics.alerts-resolved}")
-    private String alertsResolvedTopic;
-
-    @Value("${kafka.topics.audit-events}")
-    private String auditEventsTopic;
-
-    @Value("${kafka.topics.incidents-dead-letter:incidents.dead-letter}")
-    private String incidentsDeadLetterTopic;
-
-    @Value("${spring.kafka.listener.concurrency:3}")
-    private int listenerConcurrency;
-
-    @Value("${kafka.dead-letter.retention-days:30}")
-    private int deadLetterRetentionDays;
+    // Constructor injection instead of field-injected @Value — consistent
+    // with AlertKafkaProducer (ingestion-service) and the platform's general
+    // preference for constructor injection over field injection (easier to
+    // unit-test, fields can be final, dependencies are visible in one place).
+    public KafkaConfig(
+            @Value("${kafka.topics.incidents-lifecycle}") String incidentsLifecycleTopic,
+            @Value("${kafka.topics.alerts-raw}") String alertsRawTopic,
+            @Value("${kafka.topics.alerts-resolved}") String alertsResolvedTopic,
+            @Value("${kafka.topics.audit-events}") String auditEventsTopic,
+            @Value("${kafka.topics.incidents-dead-letter:incidents.dead-letter}")
+            String incidentsDeadLetterTopic,
+            @Value("${spring.kafka.listener.concurrency:3}") int listenerConcurrency,
+            @Value("${kafka.dead-letter.retention-days:30}") int deadLetterRetentionDays) {
+        this.incidentsLifecycleTopic = incidentsLifecycleTopic;
+        this.alertsRawTopic = alertsRawTopic;
+        this.alertsResolvedTopic = alertsResolvedTopic;
+        this.auditEventsTopic = auditEventsTopic;
+        this.incidentsDeadLetterTopic = incidentsDeadLetterTopic;
+        this.listenerConcurrency = listenerConcurrency;
+        this.deadLetterRetentionDays = deadLetterRetentionDays;
+    }
 
     // ── Topic definitions ─────────────────────────────────────────────────────
 

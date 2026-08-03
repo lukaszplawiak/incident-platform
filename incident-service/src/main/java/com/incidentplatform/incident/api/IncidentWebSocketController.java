@@ -11,6 +11,9 @@ import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.messaging.handler.annotation.SendTo;
 import org.springframework.messaging.simp.annotation.SubscribeMapping;
 import org.springframework.stereotype.Controller;
+import com.incidentplatform.incident.dto.IncidentDto;
+import com.incidentplatform.incident.dto.IncidentFilter;
+import com.incidentplatform.incident.service.IncidentQueryService;
 
 import java.security.Principal;
 import java.util.List;
@@ -40,7 +43,7 @@ public class IncidentWebSocketController {
         log.info("WebSocket subscribe: tenant={}, principal={}",
                 tenantId, principal != null ? principal.getName() : "anonymous");
 
-        final var filter = new com.incidentplatform.incident.dto.IncidentFilter(
+        final var filter = new IncidentFilter(
                 null, null, null, null, null);
         final var pageable = PageRequest.of(0, 50,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
@@ -61,7 +64,7 @@ public class IncidentWebSocketController {
 
         log.debug("WebSocket refresh requested: tenant={}", tenantId);
 
-        final var filter = new com.incidentplatform.incident.dto.IncidentFilter(
+        final var filter = new IncidentFilter(
                 null, null, null, null, null);
         final var pageable = PageRequest.of(0, 50,
                 Sort.by(Sort.Direction.DESC, "createdAt"));

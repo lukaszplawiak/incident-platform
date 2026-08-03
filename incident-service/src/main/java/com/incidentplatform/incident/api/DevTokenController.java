@@ -67,28 +67,47 @@ public class DevTokenController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "Generate test JWT token (LOCAL ONLY)")
+    @Operation(
+            summary = "Generate test JWT token (LOCAL ONLY)",
+            description = "roles accepts a comma-separated list, e.g. " +
+                    "?roles=ROLE_RESPONDER or ?roles=ROLE_ADMIN,ROLE_RESPONDER. " +
+                    "Defaults to all three roles for convenience when testing " +
+                    "endpoints that don't care about role restrictions.")
     public ResponseEntity<Map<String, String>> generateToken(
             @RequestParam(defaultValue = "test-tenant") String tenantId,
-            @RequestParam(defaultValue = SecurityRoles.ROLE_ADMIN) String role) {
+            @RequestParam(defaultValue =
+                    SecurityRoles.ROLE_ADMIN + "," + SecurityRoles.ROLE_RESPONDER
+                            + "," + SecurityRoles.ROLE_INGESTOR)
+            List<String> roles) {
 
         final UUID userId = UUID.randomUUID();
         final String email = "dev-user@" + tenantId + ".local";
-        final List<String> roles = List.of(
-                SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER, SecurityRoles.ROLE_INGESTOR);
 
-        // teamIds are empty for dev tokens — no team membership context needed
+        // Fixed: this used to accept a single `role` param that was
+        // documented in Swagger but never actually used — every generated
+        // token silently got all three roles regardless of what was
+        // requested, making it impossible to use this endpoint to test
+        // role-restricted (e.g. ADMIN-only) endpoints locally.
+        //
+        // Now accepts a comma-separated `roles` list — Spring's built-in
+        // conversion binds a comma-separated query param directly to
+        // List<String>, no manual parsing needed. Defaults to all three
+        // roles (the old, always-on behavior) so the common case of "I
+        // don't care about roles, just give me a working token" still
+        // needs no query param — but ?roles=ROLE_RESPONDER now genuinely
+        // grants only that role, for testing role restrictions.
         final String token = jwtUtils.generateToken(
                 userId, tenantId, email, roles, java.util.List.of());
 
-        log.warn("DEV TOKEN generated: userId={}, tenantId={} — NOT FOR PRODUCTION",
-                userId, tenantId);
+        log.warn("DEV TOKEN generated: userId={}, tenantId={}, roles={} — NOT FOR PRODUCTION",
+                userId, tenantId, roles);
 
         return ResponseEntity.ok(Map.of(
                 "token", token,
                 "userId", userId.toString(),
                 "tenantId", tenantId,
                 "email", email,
+                "roles", String.join(",", roles),
                 "usage", "Authorization: Bearer " + token
         ));
     }
