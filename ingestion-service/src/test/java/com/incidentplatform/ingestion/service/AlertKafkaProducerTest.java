@@ -7,6 +7,7 @@ import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.lenient;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("AlertKafkaProducer")
@@ -42,6 +44,7 @@ class AlertKafkaProducerTest {
 
     private AlertKafkaProducer producer;
     private ObjectMapper objectMapper;
+    private SimpleMeterRegistry meterRegistry;
 
     private static final String TENANT_ID = "acme-corp";
     private static final String ALERTS_RAW_TOPIC = "alerts.raw";
@@ -51,12 +54,13 @@ class AlertKafkaProducerTest {
     void setUp() {
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
+        meterRegistry = new SimpleMeterRegistry();
         producer = new AlertKafkaProducer(
                 kafkaTemplate, objectMapper,
-                ALERTS_RAW_TOPIC, ALERTS_RESOLVED_TOPIC);
+                ALERTS_RAW_TOPIC, ALERTS_RESOLVED_TOPIC, meterRegistry);
 
-        given(kafkaTemplate.send(any(ProducerRecord.class)))
-                .willReturn(CompletableFuture.completedFuture(sendResult));
+        lenient().when(kafkaTemplate.send(any(ProducerRecord.class)))
+                .thenReturn(CompletableFuture.completedFuture(sendResult));
     }
 
     // ─── helpers ────────────────────────────────────────────────────────────
@@ -258,6 +262,56 @@ class AlertKafkaProducerTest {
             assertThat(deserialized.tenantId()).isEqualTo(TENANT_ID);
             assertThat(deserialized.alertFingerprint())
                     .isEqualTo(notification.alertFingerprint());
+        }
+    }
+
+    // ─── kafka.publish.errors counter ───────────────────────────────────────
+
+    @Nested
+    @DisplayName("kafka.publish.errors counter")
+    class KafkaPublishErrorCounter {
+
+        private double counterValue() {
+            return meterRegistry.get("kafka.publish.errors").counter().count();
+        }
+
+        @Test
+        @DisplayName("increments when publishFiring's Kafka send fails asynchronously")
+        void incrementsOnPublishFiringSendFailure() {
+            // given — overrides the happy-path stub from setUp() with a
+            // future that completes exceptionally, simulating a real
+            // broker-unreachable failure surfacing via whenComplete(...)
+            given(kafkaTemplate.send(any(ProducerRecord.class)))
+                    .willReturn(CompletableFuture.failedFuture(
+                            new org.apache.kafka.common.errors.TimeoutException(
+                                    "Broker unreachable")));
+
+            // when
+            producer.publishFiring(buildAlert());
+
+            // then
+            assertThat(counterValue()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("increments when publishResolved's Kafka send fails asynchronously")
+        void incrementsOnPublishResolvedSendFailure() {
+            given(kafkaTemplate.send(any(ProducerRecord.class)))
+                    .willReturn(CompletableFuture.failedFuture(
+                            new org.apache.kafka.common.errors.TimeoutException(
+                                    "Broker unreachable")));
+
+            producer.publishResolved(buildResolved());
+
+            assertThat(counterValue()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("does not increment on successful publish")
+        void doesNotIncrementOnSuccess() {
+            producer.publishFiring(buildAlert());
+
+            assertThat(counterValue()).isEqualTo(0.0);
         }
     }
 }

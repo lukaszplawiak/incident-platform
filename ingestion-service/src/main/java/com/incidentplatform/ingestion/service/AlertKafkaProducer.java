@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.slf4j.Logger;
@@ -15,6 +17,46 @@ import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 
+/**
+ * Fire-and-forget Kafka producer for ingested alerts.
+ *
+ * <h2>Fixed: real Kafka send failures were invisible — no metric, and a
+ * misleadingly-named exception path in the caller</h2>
+ * A genuine Kafka broker outage was previously only a single ERROR log
+ * line inside {@code .whenComplete(...)} — no {@link Counter}, unlike
+ * this same module's {@code DeduplicationService.redisErrorCounter} and
+ * {@code RateLimitingService.redisErrorCounter} for the equivalent
+ * "infrastructure dependency failed" case. Nobody would notice a Kafka
+ * outage silently dropping alerts here except by reading logs after the
+ * fact.
+ *
+ * <p>Separately, {@link AlertIngestionService} catches
+ * {@link AlertPublishException} and routes it to the dead-letter topic
+ * with a log message reading "Kafka publish failed" — but this
+ * exception can only ever be thrown from the {@code catch
+ * (JsonProcessingException e)} block below, i.e. a serialization
+ * failure, never an actual Kafka send failure (those happen
+ * asynchronously in {@code .whenComplete(...)} and were never
+ * propagated to the caller at all). See
+ * {@link AlertIngestionService}'s own comment at that catch block for
+ * the corrected explanation.
+ *
+ * <p>This gap is intentionally NOT closed with a dead-letter-on-send-
+ * failure mechanism here: {@code DeadLetterPublisher} itself publishes
+ * to Kafka, so it cannot help when the underlying problem is "Kafka is
+ * unreachable" — routing a Kafka-send failure to a Kafka-based DLQ is a
+ * chicken-and-egg. A real guarantee against alert loss during a full
+ * Kafka outage would need a durable, non-Kafka-dependent store (the
+ * Transactional Outbox pattern already used in auth-service's
+ * {@code AuthEmailOutbox}) — a significant addition given
+ * ingestion-service has no database today, and deliberately out of
+ * scope for this fix. Tracked separately as a larger backlog item.
+ * What's fixed here is proportionate to that existing, deliberate
+ * trade-off (see the comment on {@link #publishFiring} below): making
+ * the failure observable and the code's own behavior honestly
+ * documented, not silently misleading about a safety net that doesn't
+ * structurally exist.
+ */
 @Component
 public class AlertKafkaProducer {
 
@@ -25,23 +67,34 @@ public class AlertKafkaProducer {
     private final ObjectMapper objectMapper;
     private final String alertsRawTopic;
     private final String alertsResolvedTopic;
+    private final Counter kafkaPublishErrorCounter;
 
     public AlertKafkaProducer(
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
             @Value("${kafka.topics.alerts-raw}") String alertsRawTopic,
-            @Value("${kafka.topics.alerts-resolved}") String alertsResolvedTopic) {
+            @Value("${kafka.topics.alerts-resolved}") String alertsResolvedTopic,
+            MeterRegistry meterRegistry) {
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.alertsRawTopic = alertsRawTopic;
         this.alertsResolvedTopic = alertsResolvedTopic;
+
+        this.kafkaPublishErrorCounter = Counter.builder("kafka.publish.errors")
+                .description("Number of alerts/notifications that failed to publish " +
+                        "to Kafka (fire-and-forget send failure) — these are LOST, " +
+                        "not dead-lettered; see AlertKafkaProducer's Javadoc")
+                .tag("service", "ingestion-service")
+                .register(meterRegistry);
     }
 
     // Fire-and-forget: Kafka errors are logged but not propagated to the caller.
     // Blocking on broker availability would cause HTTP 5xx during Kafka outages —
     // Alertmanager would retry aggressively, creating alert floods.
     // Trade-off: occasional alert loss vs. endpoint availability under pressure.
-    // A DLQ would eliminate message loss in a production deployment.
+    // Send failures are counted (kafkaPublishErrorCounter) and logged, but not
+    // retried or dead-lettered — see this class's Javadoc for why a Kafka-based
+    // DLQ can't help when Kafka itself is the thing that's unreachable.
     public void publishFiring(UnifiedAlertDto alert) {
         try {
             final String payload = objectMapper.writeValueAsString(alert);
@@ -73,7 +126,9 @@ public class AlertKafkaProducer {
             kafkaTemplate.send(record)
                     .whenComplete((result, ex) -> {
                         if (ex != null) {
-                            log.error("Failed to publish firing alert to Kafka: " +
+                            kafkaPublishErrorCounter.increment();
+                            log.error("Failed to publish firing alert to Kafka — " +
+                                            "ALERT LOST (fire-and-forget, no retry): " +
                                             "topic={}, alertId={}, source={}, tenant={}",
                                     alertsRawTopic, alert.alertId(),
                                     alert.source(), alert.tenantId(), ex);
@@ -115,7 +170,9 @@ public class AlertKafkaProducer {
             kafkaTemplate.send(record)
                     .whenComplete((result, ex) -> {
                         if (ex != null) {
-                            log.error("Failed to publish resolved notification: " +
+                            kafkaPublishErrorCounter.increment();
+                            log.error("Failed to publish resolved notification — " +
+                                            "NOTIFICATION LOST (fire-and-forget, no retry): " +
                                             "topic={}, eventId={}, tenant={}",
                                     alertsResolvedTopic, notification.eventId(),
                                     notification.tenantId(), ex);

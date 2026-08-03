@@ -94,11 +94,22 @@ public class AlertIngestionService {
                 kafkaProducer.publishFiring(alert);
                 processed++;
             } catch (AlertKafkaProducer.AlertPublishException e) {
-                log.error("Failed to publish firing alert: alertId={}, " +
-                        "source={}, tenant={}", alert.alertId(), source, tenantId, e);
+                // Despite the class name, this can only be thrown from a JSON
+                // serialization failure inside AlertKafkaProducer — a genuinely
+                // poison-pill scenario (this exact alert object will never
+                // serialize, retrying won't help), which is why DLQ is the
+                // right response here. It is NOT thrown for real Kafka send
+                // failures (broker down, etc.) — those happen asynchronously
+                // and never propagate to this catch block; see
+                // AlertKafkaProducer's Javadoc for why and how those are
+                // handled instead (a counter + log, no DLQ — a Kafka-based
+                // DLQ can't help when Kafka itself is unreachable).
+                log.error("Failed to serialize firing alert for Kafka — " +
+                                "routing to DLQ: alertId={}, source={}, tenant={}",
+                        alert.alertId(), source, tenantId, e);
                 deadLetterPublisher.publish(
                         rawPayload, source, tenantId,
-                        "Kafka publish failed: " + e.getMessage());
+                        "Alert serialization failed: " + e.getMessage());
                 deadLetter++;
             }
         }
@@ -108,11 +119,14 @@ public class AlertIngestionService {
                 kafkaProducer.publishResolved(notification);
                 resolved++;
             } catch (AlertKafkaProducer.AlertPublishException e) {
-                log.error("Failed to publish resolved notification: eventId={}, " +
-                        "tenant={}", notification.eventId(), tenantId, e);
+                // Same caveat as above — serialization failure only, not a
+                // real Kafka send failure.
+                log.error("Failed to serialize resolved notification for Kafka — " +
+                                "routing to DLQ: eventId={}, tenant={}",
+                        notification.eventId(), tenantId, e);
                 deadLetterPublisher.publish(
                         rawPayload, source, tenantId,
-                        "Kafka resolved publish failed: " + e.getMessage());
+                        "Resolved notification serialization failed: " + e.getMessage());
                 deadLetter++;
             }
         }
