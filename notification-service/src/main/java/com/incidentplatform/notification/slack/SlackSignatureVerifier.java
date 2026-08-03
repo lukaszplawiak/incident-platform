@@ -9,6 +9,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
+import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
 @Component
@@ -88,14 +89,21 @@ public class SlackSignatureVerifier {
     }
 
     private boolean constantTimeEquals(String a, String b) {
-        if (a.length() != b.length()) {
-            return false;
-        }
-        int result = 0;
-        for (int i = 0; i < a.length(); i++) {
-            result |= a.charAt(i) ^ b.charAt(i);
-        }
-        return result == 0;
+        // MessageDigest.isEqual instead of a hand-rolled loop — same
+        // reasoning and same JDK method already used by TotpService
+        // (auth-service) for the equivalent concern (comparing a
+        // user-submitted code against an expected value without leaking
+        // timing information). Previously this method returned early on a
+        // length mismatch before ever entering the XOR loop — a genuine,
+        // if low-risk, timing side-channel (Slack's signature format has a
+        // fixed, publicly documented length, so an attacker gains little
+        // from this in practice, but there's no reason to keep a
+        // partially-correct hand-rolled version when the JDK's own
+        // constant-time comparison — correct regardless of length — is
+        // one call away).
+        return MessageDigest.isEqual(
+                a.getBytes(StandardCharsets.UTF_8),
+                b.getBytes(StandardCharsets.UTF_8));
     }
 
     private String bytesToHex(byte[] bytes) {
