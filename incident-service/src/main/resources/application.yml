@@ -2,6 +2,19 @@ spring:
   application:
     name: incident-service
 
+    # Virtual threads (Project Loom, stable since Java 21) — one line,
+    # meaningful throughput improvement for an I/O-bound service like this
+    # one (JPA/JDBC, Kafka, WebSocket all spend most of their time waiting,
+    # not computing). Caveat worth knowing: virtual threads can "pin" to
+    # their OS carrier thread during a `synchronized` block, temporarily
+    # losing the scalability benefit for that section. HikariCP (used here)
+    # and the Postgres JDBC driver are both current enough to avoid the
+    # worst of this, but if CPU/thread-pool metrics look off after enabling
+    # this, that's the first thing to check.
+  threads:
+    virtual:
+      enabled: true
+
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
     username: ${DB_USER:incident_app}

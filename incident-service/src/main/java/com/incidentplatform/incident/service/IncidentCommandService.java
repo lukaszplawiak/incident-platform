@@ -429,23 +429,6 @@ public class IncidentCommandService {
      * This service no longer inspects incident state to decide what to do;
      * it only decides *which* domain operation the request maps to.
      *
-     * <p>ESCALATED is not a reachable target here — escalation is tracked as
-     * an independent attribute (see {@link Incident#getEscalationLevel()}),
-     * not a status this endpoint can set. OPEN is also unreachable since
-     * IncidentFsm has no transitions back to it. The exhaustive switch over
-     * all 4 IncidentStatus values forces a compile error if either is ever
-     * added back without updating this dispatcher.
-     */
-    /**
-     * Dispatches a REST-API-driven status change to the corresponding domain
-     * method on {@link Incident}, rather than calling a generic transitionTo()
-     * and separately deciding what side effects to apply here.
-     *
-     * <p>Each branch delegates entirely to the entity — acknowledge() handles
-     * its own auto-assign rule, resolve()/close() are pure status transitions.
-     * This service no longer inspects incident state to decide what to do;
-     * it only decides *which* domain operation the request maps to.
-     *
      * <h2>Why this is a separate method from {@link #publishStatusChangeEvent}</h2>
      * Both switches map the same {@link IncidentStatus} and could in
      * principle be merged into one — each case would mutate the entity AND
