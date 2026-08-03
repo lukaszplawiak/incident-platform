@@ -151,8 +151,8 @@ services:
   #   export JWT_SECRET="your-64-char-secret"
   #   ./scripts/generate-alertmanager-token.sh
   #
-  # Token is written to docker/secrets/alertmanager-token.txt and mounted
-  # into the container at /etc/alertmanager/secrets/token.
+  # Token is written to docker/secrets/alertmanager-token and mounted
+  # into the container at /etc/alertmanager/secrets/alertmanager-token.
   # Alertmanager reads the file on every outgoing request — token rotation
   # is handled automatically by AlertManagerTokenRefresher in ingestion-service.
   # ----------------------------------------------------------
@@ -344,7 +344,12 @@ services:
       ALERTMANAGER_TOKEN_REFRESH_ENABLED: "true"
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     volumes:
-      - ./secrets:/etc/secrets:ro
+      # NOT :ro — AlertManagerTokenRefresher must be able to write the
+      # rotated token here (docker/secrets/alertmanager-token). This
+      # directory contains only that one generated file (see
+      # scripts/generate-alertmanager-token.sh), nothing else, so
+      # granting write access here doesn't expose any other secret.
+      - ./secrets:/etc/secrets
     depends_on:
       kafka:
         condition: service_healthy

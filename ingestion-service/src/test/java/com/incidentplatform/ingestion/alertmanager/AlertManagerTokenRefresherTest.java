@@ -87,7 +87,7 @@ class AlertManagerTokenRefresherTest {
         @DisplayName("initial token must be pre-provisioned by the generate script")
         void initialTokenMustBeProvisionedExternally() {
             // This test documents the expected operational contract:
-            // docker/secrets/alertmanager-token.txt must exist before the stack starts.
+            // docker/secrets/alertmanager-token must exist before the stack starts.
             // AlertManagerTokenRefresher only rotates an existing token — it does not
             // create it. If the file is missing, Alertmanager will fail to authenticate.
             assertThat(tokenFile)
