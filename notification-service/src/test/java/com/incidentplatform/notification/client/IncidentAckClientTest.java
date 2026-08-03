@@ -3,9 +3,6 @@ package com.incidentplatform.notification.client;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
-import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
-import io.github.resilience4j.circuitbreaker.CircuitBreaker;
-import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -13,6 +10,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
@@ -23,6 +21,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.patch;
 import static com.github.tomakehurst.wiremock.client.WireMock.patchRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
@@ -38,6 +37,27 @@ import static org.mockito.Mockito.mock;
  * <p>HttpClient is configured with HTTP/1.1 only — WireMock standalone
  * does not support HTTP/2, and JdkClientHttpRequestFactory defaults to
  * HTTP/2 which causes RST_STREAM errors against WireMock.
+ *
+ * <h2>Why the error-path tests changed from "returns false" to "throws"</h2>
+ * {@code client} here is constructed via plain {@code new
+ * IncidentAckClient(...)} — no Spring context, no Resilience4j AOP proxy.
+ * The class's own fix (see its Javadoc) removed the internal catch that
+ * used to swallow failures inline; real failures now propagate so the
+ * *real*, Spring-managed proxy can see and record them in production.
+ * Calling the bare object directly here means those same failures now
+ * surface as thrown exceptions in this test instead of a silently
+ * swallowed {@code false}. What actually produces the graceful
+ * {@code false} in production — {@code acknowledgeIncidentFallback},
+ * called by the proxy once it catches the propagated failure — is
+ * tested directly and separately below.
+ *
+ * <p>The previous {@code CircuitBreakerOpen} nested class here asserted
+ * that {@code CallNotPermittedException} is not a
+ * {@code RestClientException} — a type-hierarchy check used to justify
+ * the (broken) design of catching {@code Exception} broadly "just in
+ * case". Removed: it never exercised a real circuit breaker (no Spring
+ * proxy in this test setup either) and gave false confidence in a design
+ * that was actually the bug.
  */
 @DisplayName("IncidentAckClient")
 class IncidentAckClientTest {
@@ -98,14 +118,15 @@ class IncidentAckClientTest {
         }
 
         @Test
-        @DisplayName("returns false on HTTP 500")
-        void returnsFalseOnServerError() {
+        @DisplayName("propagates on HTTP 500 — no Spring proxy in this test to redirect to the fallback")
+        void throwsOnServerError() {
             wireMock.stubFor(patch(urlPathEqualTo(
                     "/api/v1/incidents/" + INCIDENT_ID + "/status"))
                     .willReturn(aResponse().withStatus(500)));
 
-            assertThat(client.acknowledgeIncident(INCIDENT_ID, TENANT_ID, USER_ID))
-                    .isFalse();
+            assertThatThrownBy(() ->
+                    client.acknowledgeIncident(INCIDENT_ID, TENANT_ID, USER_ID))
+                    .isInstanceOf(RestClientException.class);
         }
 
         @Test
@@ -122,38 +143,29 @@ class IncidentAckClientTest {
         }
 
         @Test
-        @DisplayName("returns false on connection refused")
-        void returnsFalseOnConnectionRefused() {
+        @DisplayName("propagates on connection refused")
+        void throwsOnConnectionRefused() {
             wireMock.stop();
 
-            assertThat(client.acknowledgeIncident(INCIDENT_ID, TENANT_ID, USER_ID))
-                    .isFalse();
+            assertThatThrownBy(() ->
+                    client.acknowledgeIncident(INCIDENT_ID, TENANT_ID, USER_ID))
+                    .isInstanceOf(RestClientException.class);
 
             wireMock.start();
         }
     }
 
-    // ── catch(Exception e) handles CallNotPermittedException ──────────────
-
     @Nested
-    @DisplayName("circuit breaker open")
-    class CircuitBreakerOpen {
+    @DisplayName("acknowledgeIncidentFallback")
+    class AcknowledgeIncidentFallback {
 
         @Test
-        @DisplayName("CallNotPermittedException is not RestClientException — caught by catch(Exception e)")
-        void callNotPermittedExceptionIsNotRestClientException() {
-            // Verify the exception type hierarchy — this is what makes
-            // catch(Exception e) necessary in addition to catch(RestClientException e)
-            final CircuitBreaker cb = CircuitBreaker.of("test",
-                    CircuitBreakerConfig.ofDefaults());
-            final CallNotPermittedException ex =
-                    CallNotPermittedException.createCallNotPermittedException(cb);
-
-            assertThat(ex)
-                    .isNotInstanceOf(
-                            org.springframework.web.client.RestClientException.class);
-            assertThat(ex)
-                    .isInstanceOf(RuntimeException.class);
+        @DisplayName("returns false regardless of the exception it's given — " +
+                "this method did not exist before this fix")
+        void alwaysReturnsFalse() {
+            assertThat(client.acknowledgeIncidentFallback(
+                    INCIDENT_ID, TENANT_ID, USER_ID, new RuntimeException("boom")))
+                    .isFalse();
         }
     }
 }
