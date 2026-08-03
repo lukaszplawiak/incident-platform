@@ -24,6 +24,7 @@ import java.time.Duration;
  *   scheduler:
  *     pending-threshold: ${NOTIFICATION_SCHEDULER_PENDING_THRESHOLD:PT30S}
  *     interval-ms: ${NOTIFICATION_SCHEDULER_INTERVAL_MS:30000}
+ *     slack-message-ts-retention: ${NOTIFICATION_SLACK_TS_RETENTION:P7D}
  * }</pre>
  */
 @ConfigurationProperties(prefix = "notification.scheduler")
@@ -37,6 +38,18 @@ public record NotificationSchedulerProperties(
          * Default: PT30S (30 seconds).
          */
         @NotNull(message = "notification.scheduler.pending-threshold must not be null")
-        Duration pendingThreshold
+        Duration pendingThreshold,
+
+        /**
+         * How long a {@code slack_message_ts} row is kept before the
+         * cleanup job deletes it. Rows for incidents acknowledged via
+         * Slack are deleted immediately after the ACK update; this
+         * threshold only matters for incidents acknowledged some other
+         * way (e.g. the web UI), whose rows would otherwise never be
+         * cleaned up. Default: P7D (7 days) — matches the original design
+         * intent noted in this table's Flyway migration comment.
+         */
+        @NotNull(message = "notification.scheduler.slack-message-ts-retention must not be null")
+        Duration slackMessageTsRetention
 
 ) {}

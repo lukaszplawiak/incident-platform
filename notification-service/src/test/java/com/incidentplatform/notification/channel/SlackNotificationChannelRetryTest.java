@@ -3,6 +3,7 @@ package com.incidentplatform.notification.channel;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
+import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.domain.Severity;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
@@ -10,6 +11,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -21,8 +25,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+@ExtendWith(MockitoExtension.class)
 @DisplayName("SlackNotificationChannel — retry behaviour")
 class SlackNotificationChannelRetryTest {
+
+    @Mock
+    private SlackMessageStore messageStore;
 
     private SlackNotificationChannel channel;
 
@@ -32,13 +40,15 @@ class SlackNotificationChannelRetryTest {
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
                         new NotificationChannelProperties.Slack(
-                                true, "xoxb-test-token", "#incidents", "signing-secret"),
+                                true, "xoxb-test-token", "#incidents", "signing-secret",
+                                "http://localhost"),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", ""));
         channel = new SlackNotificationChannel(
                 RestClient.builder(),
                 new ObjectMapper(),
-                properties);
+                properties,
+                messageStore);
     }
 
     @Nested

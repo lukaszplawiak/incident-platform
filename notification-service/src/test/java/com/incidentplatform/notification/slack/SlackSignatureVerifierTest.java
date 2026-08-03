@@ -26,7 +26,8 @@ class SlackSignatureVerifierTest {
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
                         new NotificationChannelProperties.Slack(
-                                true, "test-token", "#test", TEST_SIGNING_SECRET),
+                                true, "test-token", "#test", TEST_SIGNING_SECRET,
+                                "http://localhost"),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 new NotificationChannelProperties.Fallback(
                         "oncall@test.com", "#incidents", ""));

@@ -40,6 +40,7 @@ import org.springframework.validation.annotation.Validated;
  *       bot-token: ${SLACK_BOT_TOKEN}
  *       channel: ${SLACK_CHANNEL:#incidents}
  *       signing-secret: ${SLACK_SIGNING_SECRET}
+ *       api-base-url: ${SLACK_API_BASE_URL:https://slack.com/api}
  *     sms:
  *       enabled: true
  *       from-number: ${SMS_FROM:+1234567890}
@@ -84,7 +85,15 @@ public record NotificationChannelProperties(
             String channel,
 
             @NotBlank(message = "notification.channels.slack.signing-secret must not be blank")
-            String signingSecret
+            String signingSecret,
+
+            // Configurable rather than hardcoded to https://slack.com/api —
+            // lets tests point SlackNotificationChannel at a local WireMock
+            // server instead of needing to reach the real Slack API (or,
+            // previously, being unable to test the HTTP call at all).
+            // Defaults to the real Slack API in application.yml.
+            @NotBlank(message = "notification.channels.slack.api-base-url must not be blank")
+            String apiBaseUrl
     ) {}
 
     public record Sms(
