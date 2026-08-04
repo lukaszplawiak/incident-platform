@@ -61,19 +61,69 @@ public class OncallScheduleController {
      * Method-level duplication would add noise without extra safety here
      * since the URL-level rule is already more restrictive than "any
      * authenticated user".
+     *
+     * <h2>Fixed: this endpoint used to be mapped by TWO separate methods</h2>
+     * Both this method and a since-removed {@code getCurrentOncallForTeam}
+     * were annotated {@code @GetMapping("/current")} — differing only in
+     * their {@code produces} attribute, which is not enough for Spring to
+     * treat them as distinct routes. That doesn't fail at startup (the two
+     * {@code RequestMappingInfo} are different enough to both register),
+     * but at request time Spring picks whichever mapping's condition is
+     * more specific for the actual {@code Accept} header sent — in
+     * practice, the team-scoped method (which required {@code teamId}) won
+     * for any client sending {@code Accept: application/json}, regardless
+     * of whether {@code teamId} was actually supplied. Concretely: every
+     * call notification-service's {@code OncallClientImpl} makes to this
+     * endpoint (which never sends {@code teamId} — see its own Javadoc)
+     * was very likely being routed to the team-scoped handler and failing
+     * with 400 Bad Request (missing required parameter), meaning
+     * notification-service's on-call lookups for outgoing notifications
+     * were silently broken, falling back to
+     * {@code NotificationRouter}'s generic fallback addresses instead of
+     * the real on-call person.
+     *
+     * <p>Fixed by merging both into this single method, extending the
+     * branching it already did for the optional {@code role} parameter to
+     * also branch on {@code teamId} — the same pattern, not a new one.
+     * Zero change needed on either caller's side: escalation-service's
+     * {@code OncallServiceClient} keeps calling
+     * {@code /current?teamId=...&role=...} exactly as before, and
+     * notification-service's {@code OncallClientImpl} keeps calling
+     * {@code /current?role=...} exactly as before — each now reaches the
+     * correct branch unambiguously, in one method, one route.
      */
-    @GetMapping("/current")
-    @Operation(summary = "Get current on-call schedule",
-            description = "Returns the currently active on-call person for the " +
-                    "given role. Called by internal services (notification, escalation). " +
-                    "Access restricted to ROLE_SERVICE and ROLE_ADMIN at URL level.")
+    @GetMapping(value = "/current", produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+            summary = "Get current on-call schedule",
+            description = """
+                    Returns the currently active on-call person(s).
+
+                    - teamId + role: current on-call for that team/role (used by
+                      escalation-service for team-based routing).
+                    - role only: current on-call for that role, tenant-wide.
+                    - neither: all current on-call entries, tenant-wide (all roles).
+
+                    Called by internal services (notification-service, escalation-service).
+                    Access restricted to ROLE_SERVICE and ROLE_ADMIN at URL level.
+                    """)
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Current on-call details"),
-            @ApiResponse(responseCode = "204", description = "No on-call configured for this role/tenant")
+            @ApiResponse(responseCode = "204", description = "No on-call configured for this role/team/tenant")
     })
     public ResponseEntity<?> getCurrentOncall(
+            @RequestParam(required = false) UUID teamId,
             @RequestParam(required = false) String role) {
         final String tenantId = TenantContext.get();
+
+        if (teamId != null) {
+            final String effectiveRole = (role == null || role.isBlank())
+                    ? "PRIMARY" : role;
+            log.debug("GET /api/v1/oncall/current?teamId={}&role={}, tenant={}",
+                    teamId, effectiveRole, tenantId);
+            return service.getCurrentOncallForTeam(tenantId, teamId, effectiveRole)
+                    .map(ResponseEntity::ok)
+                    .orElse(ResponseEntity.noContent().build());
+        }
 
         if (role != null && !role.isBlank()) {
             log.debug("GET /api/v1/oncall/current?role={}, tenant={}",
@@ -209,46 +259,19 @@ public class OncallScheduleController {
 
     /**
      * Returns the current on-call person for a specific team and role.
-     * Called by escalation-service via HTTP with circuit breaker.
      *
-     * <p>This is the key endpoint for team-based on-call routing:
-     * EscalationScheduler calls this to find who to notify when an incident
-     * assigned to a team needs escalation.
+     * <p>{@code teamId}-based routing is handled by {@link #getCurrentOncall}
+     * above — this used to be a second {@code @GetMapping("/current")}
+     * method, which created a duplicate route mapping. See that method's
+     * Javadoc for the full account of what that broke and why it was
+     * merged rather than just moved to a different path.
      */
-    @GetMapping(value = "/current", produces = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(
-            summary = "Get current on-call for a team",
-            description = """
-                    Returns the current on-call person for the specified team and role.
-                    Used by escalation-service to determine who to notify for an incident.
-
-                    Parameters:
-                    - teamId: UUID of the team (required for team-based routing)
-                    - role: PRIMARY (default), SECONDARY, or MANAGER
-
-                    Returns 200 with body when found, 204 No Content when no active schedule.
-                    """)
-    @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "On-call person found"),
-            @ApiResponse(responseCode = "204", description = "No active on-call for this team/role")
-    })
-    public ResponseEntity<CurrentOncallResponse> getCurrentOncallForTeam(
-            @RequestParam UUID teamId,
-            @RequestParam(defaultValue = "PRIMARY") String role) {
-        final String tenantId = com.incidentplatform.shared.security.TenantContext.get();
-        return service.getCurrentOncallForTeam(tenantId, teamId, role)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.noContent().build());
-    }
-
     @GetMapping(value = "/current/all", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "Get all current on-call for a team (all roles)")
     public ResponseEntity<List<CurrentOncallResponse>> getAllCurrentOncallForTeam(
             @RequestParam UUID teamId) {
-        final String tenantId = com.incidentplatform.shared.security.TenantContext.get();
+        final String tenantId = TenantContext.get();
         return ResponseEntity.ok(
                 service.getAllCurrentOncallForTeam(tenantId, teamId));
     }
-
-
 }

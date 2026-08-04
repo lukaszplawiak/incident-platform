@@ -22,6 +22,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
@@ -71,7 +72,7 @@ class OncallScheduleControllerTest {
                     .willReturn(List.of(ONCALL_RESPONSE));
 
             // when
-            final ResponseEntity<?> response = controller.getCurrentOncall(null);
+            final ResponseEntity<?> response = controller.getCurrentOncall(null, null);
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -87,7 +88,7 @@ class OncallScheduleControllerTest {
                     .willReturn(List.of(ONCALL_RESPONSE));
 
             // when
-            final ResponseEntity<?> response = controller.getCurrentOncall("");
+            final ResponseEntity<?> response = controller.getCurrentOncall(null, "");
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -103,7 +104,7 @@ class OncallScheduleControllerTest {
                     .willReturn(List.of(ONCALL_RESPONSE));
 
             // when
-            final ResponseEntity<?> response = controller.getCurrentOncall("   ");
+            final ResponseEntity<?> response = controller.getCurrentOncall(null, "   ");
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -119,7 +120,7 @@ class OncallScheduleControllerTest {
 
             // when
             final ResponseEntity<?> response =
-                    controller.getCurrentOncall(OncallRole.PRIMARY.name());
+                    controller.getCurrentOncall(null, OncallRole.PRIMARY.name());
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -136,7 +137,7 @@ class OncallScheduleControllerTest {
 
             // when
             final ResponseEntity<?> response =
-                    controller.getCurrentOncall(OncallRole.SECONDARY.name());
+                    controller.getCurrentOncall(null, OncallRole.SECONDARY.name());
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
@@ -149,10 +150,80 @@ class OncallScheduleControllerTest {
             given(service.getAllCurrentOncall(TENANT_ID)).willReturn(List.of());
 
             // when
-            final ResponseEntity<?> response = controller.getCurrentOncall(null);
+            final ResponseEntity<?> response = controller.getCurrentOncall(null, null);
 
             // then
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        }
+    }
+
+    /**
+     * Coverage for the teamId branch merged into getCurrentOncall — see
+     * that method's Javadoc for why it was merged rather than kept as a
+     * separate {@code getCurrentOncallForTeam} method (duplicate
+     * {@code @GetMapping("/current")} route, silently broken routing for
+     * notification-service's non-team-scoped calls to this same path).
+     * The pre-merge method had no dedicated unit tests of its own — only
+     * HTTP-level authorization coverage in
+     * {@code OncallScheduleControllerSecurityTest} — so this is new
+     * coverage, not migrated coverage.
+     */
+    @Nested
+    @DisplayName("teamId parameter — merged from the former getCurrentOncallForTeam")
+    class TeamIdParameterVariants {
+
+        private final UUID TEAM_ID = UUID.randomUUID();
+
+        @Test
+        @DisplayName("teamId present delegates to getCurrentOncallForTeam, defaulting role to PRIMARY")
+        void teamIdPresentDefaultsRoleToPrimary() {
+            given(service.getCurrentOncallForTeam(TENANT_ID, TEAM_ID, "PRIMARY"))
+                    .willReturn(Optional.of(ONCALL_RESPONSE));
+
+            final ResponseEntity<?> response = controller.getCurrentOncall(TEAM_ID, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            then(service).should().getCurrentOncallForTeam(TENANT_ID, TEAM_ID, "PRIMARY");
+            then(service).should(never()).getCurrentOncall(any(), any());
+            then(service).should(never()).getAllCurrentOncall(any());
+        }
+
+        @Test
+        @DisplayName("teamId + explicit role delegates to getCurrentOncallForTeam with that role")
+        void teamIdWithExplicitRole() {
+            given(service.getCurrentOncallForTeam(
+                    TENANT_ID, TEAM_ID, OncallRole.SECONDARY.name()))
+                    .willReturn(Optional.of(ONCALL_RESPONSE));
+
+            final ResponseEntity<?> response =
+                    controller.getCurrentOncall(TEAM_ID, OncallRole.SECONDARY.name());
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+            then(service).should().getCurrentOncallForTeam(
+                    TENANT_ID, TEAM_ID, OncallRole.SECONDARY.name());
+        }
+
+        @Test
+        @DisplayName("teamId with no active schedule returns 204 No Content")
+        void teamIdWithNoScheduleReturns204() {
+            given(service.getCurrentOncallForTeam(TENANT_ID, TEAM_ID, "PRIMARY"))
+                    .willReturn(Optional.empty());
+
+            final ResponseEntity<?> response = controller.getCurrentOncall(TEAM_ID, null);
+
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        }
+
+        @Test
+        @DisplayName("teamId takes precedence — never falls through to the tenant-wide branches")
+        void teamIdTakesPrecedenceOverTenantWideBranches() {
+            given(service.getCurrentOncallForTeam(TENANT_ID, TEAM_ID, "PRIMARY"))
+                    .willReturn(Optional.of(ONCALL_RESPONSE));
+
+            controller.getCurrentOncall(TEAM_ID, null);
+
+            then(service).should(never()).getAllCurrentOncall(any());
+            then(service).should(never()).getCurrentOncall(any(), any());
         }
     }
 
