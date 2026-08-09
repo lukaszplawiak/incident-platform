@@ -12,11 +12,15 @@ import java.time.Duration;
 /**
  * Strongly-typed, validated configuration for the invite email Outbox Pattern.
  *
- * <p>Replaces six scattered {@code @Value} injections across two classes:
+ * <p>Replaces six scattered {@code @Value} injections across two classes
+ * (referenced here by their current names — both were renamed from
+ * {@code InviteEmailService}/{@code InviteEmailScheduler} to
+ * {@code AuthEmail*} when this outbox was extended to also cover
+ * password-reset emails, not just invites):
  * <ul>
- *   <li>{@code InviteEmailService}: {@code invite.email.from},
+ *   <li>{@code AuthEmailService}: {@code invite.email.from},
  *       {@code invite.email.app-base-url}</li>
- *   <li>{@code InviteEmailScheduler}: {@code invite.email.max-retry-attempts},
+ *   <li>{@code AuthEmailScheduler}: {@code invite.email.max-retry-attempts},
  *       {@code invite.email.pending-threshold-seconds},
  *       {@code invite.email.scheduler-interval-ms} (via {@code @Scheduled}),
  *       {@code invite.email.retry-interval-ms} (via {@code @Scheduled})</li>
@@ -75,13 +79,9 @@ public record InviteEmailProperties(
         /**
          * How long after creation a PENDING outbox entry must be before the
          * scheduler picks it up. Prevents racing against a UserService that
-         * just committed within the same scheduler cycle. Default: 30 seconds.
-         */
-        /**
-         * How long after creation a PENDING outbox entry must be before the
-         * scheduler picks it up. Spring Boot maps {@code pending-threshold}
-         * → {@code pendingThreshold} (Duration). ISO-8601 format: PT30S.
-         * Default: PT30S (30 seconds).
+         * just committed within the same scheduler cycle. Spring Boot maps
+         * {@code pending-threshold} → {@code pendingThreshold} (Duration).
+         * ISO-8601 format: PT30S. Default: PT30S (30 seconds).
          */
         @NotNull(message = "invite.email.pending-threshold must not be null")
         Duration pendingThreshold,
