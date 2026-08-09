@@ -12,6 +12,7 @@ import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -77,7 +78,26 @@ public class OncallScheduleService {
                 request.notes()
         );
 
-        repository.save(schedule);
+        // Fixed: existsOverlappingForCreate(...) above is a check-then-act —
+        // two concurrent requests for the same tenant+team+role with
+        // overlapping windows could both pass that check (neither has
+        // committed yet) and both reach save(). The excl_oncall_schedule_overlap
+        // constraint (V4 migration) makes the database itself the real
+        // guarantee: it will reject the second insert regardless of
+        // application-layer timing. Without this catch, that rejection would
+        // have surfaced as a raw, unhandled DataIntegrityViolationException —
+        // effectively a 500 — instead of the same clean 409 Conflict the
+        // (much more commonly hit) application-level check above already
+        // produces for this identical business situation.
+        try {
+            repository.save(schedule);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Schedule overlap caught by DB constraint (race condition " +
+                            "past the application-level check): tenantId={}, " +
+                            "teamId={}, role={}",
+                    tenantId, request.teamId(), request.role());
+            throw BusinessException.scheduleOverlap(tenantId, request.role());
+        }
 
         log.info("OncallSchedule created: tenantId={}, userId={}, " +
                         "role={}, startsAt={}, endsAt={}",

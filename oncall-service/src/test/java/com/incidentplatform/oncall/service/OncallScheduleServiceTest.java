@@ -17,6 +17,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
 import java.util.List;
@@ -131,6 +132,46 @@ class OncallScheduleServiceTest {
 
             then(repository).should(never()).save(any());
         }
+
+        /**
+         * Unit-level coverage for the fix documented in
+         * OncallScheduleService.create's inline comment: the application-
+         * level existsOverlappingForCreate check is check-then-act, not
+         * atomic — a genuine race between two concurrent requests is only
+         * actually prevented by the excl_oncall_schedule_overlap database
+         * constraint (V4 migration). This test cannot exercise that real
+         * constraint (no DB in this test — repository is mocked; see the
+         * new backlog item for adding Testcontainers-based integration
+         * coverage of the actual constraint). What it does verify: IF the
+         * database rejects the insert with a DataIntegrityViolationException
+         * (which is what Spring translates a Postgres exclusion_violation
+         * into), the service correctly converts that into the same
+         * BusinessException.scheduleOverlap the app-level check throws —
+         * a clean 409, not an unhandled 500.
+         */
+        @Test
+        @DisplayName("translates a DB-level exclusion-constraint violation into the same 409 as the app-level check")
+        void translatesDataIntegrityViolationIntoBusinessException() {
+            // given — app-level check finds nothing (simulating the race:
+            // another request committed its overlapping schedule between
+            // this check and this save())
+            final CreateOncallScheduleRequest request =
+                    buildRequest(OncallRole.PRIMARY.name());
+
+            given(repository.existsOverlappingForCreate(
+                    anyString(), any(), anyString(), any(), any()))
+                    .willReturn(false);
+            given(repository.save(any()))
+                    .willThrow(new DataIntegrityViolationException(
+                            "ERROR: conflicting key value violates exclusion " +
+                                    "constraint excl_oncall_schedule_overlap"));
+
+            // when / then
+            assertThatThrownBy(() -> service.create(TENANT_ID, request))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("overlaps");
+        }
+
 
         /**
          * Regression test for the fix documented in
