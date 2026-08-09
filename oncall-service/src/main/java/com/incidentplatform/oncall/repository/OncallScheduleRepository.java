@@ -116,29 +116,49 @@ public interface OncallScheduleRepository
             @Param("tenantId") String tenantId,
             @Param("slackUserId") String slackUserId);
 
+    /**
+     * Fixed: previously did not filter by {@code teamId} at all, only
+     * {@code tenantId} + {@code role} — meaning two different teams in the
+     * same tenant could never both have, say, a PRIMARY on-call at the
+     * same time, even though they're unrelated teams and shouldn't
+     * conflict. Two schedules only genuinely conflict when they're for
+     * the same team (or both tenant-wide, {@code teamId IS NULL} — treated
+     * as its own scope, not a wildcard matching every team).
+     *
+     * <p>{@code teamId} comparison is NULL-safe by necessity: SQL/JPQL
+     * evaluates {@code NULL = NULL} as UNKNOWN, not {@code TRUE}, so a
+     * naive {@code s.teamId = :teamId} would silently exclude every row
+     * whenever {@code :teamId} is null — disabling the overlap check
+     * entirely for tenant-wide schedules rather than scoping it correctly.
+     */
     @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
             AND s.role = :role
+            AND (s.teamId = :teamId OR (s.teamId IS NULL AND :teamId IS NULL))
             AND s.startsAt < :endsAt
             AND s.endsAt > :startsAt
             """)
     boolean existsOverlappingForCreate(
             @Param("tenantId") String tenantId,
+            @Param("teamId") UUID teamId,
             @Param("role") String role,
             @Param("startsAt") Instant startsAt,
             @Param("endsAt") Instant endsAt);
 
+    /** Same teamId-scoping fix as {@link #existsOverlappingForCreate} — see its Javadoc. */
     @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
             AND s.role = :role
+            AND (s.teamId = :teamId OR (s.teamId IS NULL AND :teamId IS NULL))
             AND s.startsAt < :endsAt
             AND s.endsAt > :startsAt
             AND s.id != :excludeId
             """)
     boolean existsOverlapping(
             @Param("tenantId") String tenantId,
+            @Param("teamId") UUID teamId,
             @Param("role") String role,
             @Param("startsAt") Instant startsAt,
             @Param("endsAt") Instant endsAt,

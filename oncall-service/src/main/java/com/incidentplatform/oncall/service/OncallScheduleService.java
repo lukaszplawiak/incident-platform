@@ -40,6 +40,7 @@ public class OncallScheduleService {
                                     CreateOncallScheduleRequest request) {
         final boolean overlapping = repository.existsOverlappingForCreate(
                 tenantId,
+                request.teamId(),
                 request.role(),
                 request.startsAt(),
                 request.endsAt()
