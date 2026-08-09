@@ -87,7 +87,7 @@ class PostmortemRetrySchedulerTest {
 
             scheduler.processGenerating();
 
-            then(geminiClient).should(never()).generate(anyString());
+            then(geminiClient).should(never()).generate(anyString(), anyString());
             then(persistenceService).should(never()).markDraftAndPublish(
                     any(), any(), any(), any(), any(), anyInt());
         }
@@ -98,7 +98,7 @@ class PostmortemRetrySchedulerTest {
             final Postmortem postmortem = buildGeneratingPostmortem();
             given(postmortemRepository.findStuckGenerating(any()))
                     .willReturn(List.of(postmortem));
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willReturn("## Summary\nGenerated content");
 
             scheduler.processGenerating();
@@ -122,7 +122,7 @@ class PostmortemRetrySchedulerTest {
             final Postmortem postmortem = buildGeneratingPostmortem();
             given(postmortemRepository.findStuckGenerating(any()))
                     .willReturn(List.of(postmortem));
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("Timeout"));
 
             scheduler.processGenerating();
@@ -146,7 +146,7 @@ class PostmortemRetrySchedulerTest {
             final Postmortem postmortem = buildGeneratingPostmortem();
             given(postmortemRepository.findStuckGenerating(any()))
                     .willReturn(List.of(postmortem));
-            given(geminiClient.generate(anyString())).willReturn("draft");
+            given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
 
             scheduler.processGenerating();
 
@@ -160,13 +160,13 @@ class PostmortemRetrySchedulerTest {
             final Postmortem p2 = buildGeneratingPostmortem();
             given(postmortemRepository.findStuckGenerating(any()))
                     .willReturn(List.of(p1, p2));
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("Timeout"))
                     .willReturn("## Success");
 
             scheduler.processGenerating();
 
-            then(geminiClient).should(times(2)).generate(anyString());
+            then(geminiClient).should(times(2)).generate(anyString(), anyString());
             then(persistenceService).should()
                     .markFailedAndPublish(eq(p1.getId()), any(), any(), any());
             then(persistenceService).should()
@@ -180,7 +180,7 @@ class PostmortemRetrySchedulerTest {
             final Postmortem postmortem = buildGeneratingPostmortem();
             given(postmortemRepository.findStuckGenerating(any()))
                     .willReturn(List.of(postmortem));
-            given(geminiClient.generate(anyString())).willReturn("draft");
+            given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
 
             scheduler.processGenerating();
 
@@ -202,7 +202,7 @@ class PostmortemRetrySchedulerTest {
 
             scheduler.retryFailedPostmortems();
 
-            then(geminiClient).should(never()).generate(anyString());
+            then(geminiClient).should(never()).generate(anyString(), anyString());
             then(persistenceService).should(never()).incrementRetryCount(any());
         }
 
@@ -214,13 +214,13 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
-            given(geminiClient.generate(anyString())).willReturn("draft");
+            given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
 
             scheduler.retryFailedPostmortems();
 
             final InOrder order = inOrder(persistenceService, geminiClient);
             order.verify(persistenceService).incrementRetryCount(postmortem.getId());
-            order.verify(geminiClient).generate(anyString());
+            order.verify(geminiClient).generate(anyString(), anyString());
         }
 
         @Test
@@ -231,7 +231,7 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willReturn("## Summary\nRetried postmortem content");
 
             scheduler.retryFailedPostmortems();
@@ -257,7 +257,7 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1); // 1 < MAX_RETRY_ATTEMPTS (3)
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("Timeout"));
 
             scheduler.retryFailedPostmortems();
@@ -277,7 +277,7 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(MAX_RETRY_ATTEMPTS);
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("API down"));
 
             scheduler.retryFailedPostmortems();
@@ -297,13 +297,13 @@ class PostmortemRetrySchedulerTest {
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
                     .willReturn(List.of(p1, p2));
             given(persistenceService.incrementRetryCount(any())).willReturn(1);
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("Timeout"))
                     .willReturn("## Summary\nSuccessful retry");
 
             scheduler.retryFailedPostmortems();
 
-            then(geminiClient).should(times(2)).generate(anyString());
+            then(geminiClient).should(times(2)).generate(anyString(), anyString());
             then(persistenceService).should()
                     .markFailedAndPublish(eq(p1.getId()), any(), any(), any());
             then(persistenceService).should()
@@ -326,7 +326,7 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
-            given(geminiClient.generate(anyString())).willReturn("draft");
+            given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
 
             scheduler.retryFailedPostmortems();
 
@@ -341,7 +341,7 @@ class PostmortemRetrySchedulerTest {
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
-            given(geminiClient.generate(anyString()))
+            given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("down"));
 
             scheduler.retryFailedPostmortems();
@@ -359,7 +359,7 @@ class PostmortemRetrySchedulerTest {
             given(persistenceService.incrementRetryCount(any())).willReturn(1);
 
             final List<String> observedTenants = new ArrayList<>();
-            given(geminiClient.generate(anyString())).willAnswer(invocation -> {
+            given(geminiClient.generate(anyString(), anyString())).willAnswer(invocation -> {
                 observedTenants.add(TenantContext.getOrNull());
                 return "draft";
             });

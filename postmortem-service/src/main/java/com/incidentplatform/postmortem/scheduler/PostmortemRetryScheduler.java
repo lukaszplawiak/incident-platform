@@ -179,14 +179,16 @@ public class PostmortemRetryScheduler {
         log.info("Processing GENERATING postmortem: incidentId={}, tenant={}",
                 incidentId, tenantId);
 
-        final String prompt = promptBuilder.build(postmortem);
+        final String systemInstruction = promptBuilder.systemInstruction();
+        final String userContent = promptBuilder.userContent(postmortem);
 
         try {
-            final String content = geminiClient.generate(prompt);
+            final String content = geminiClient.generate(systemInstruction, userContent);
 
             persistenceService.markDraftAndPublish(
                     postmortemId, incidentId, tenantId,
-                    content, prompt, postmortem.getDurationMinutes());
+                    content, auditPromptRecord(systemInstruction, userContent),
+                    postmortem.getDurationMinutes());
 
             log.info("Postmortem generated successfully: incidentId={}, tenant={}, " +
                             "contentLength={}",
@@ -222,14 +224,16 @@ public class PostmortemRetryScheduler {
         log.info("Retrying postmortem generation: incidentId={}, tenant={}, attempt={}/{}",
                 incidentId, tenantId, retryCount, maxRetryAttempts);
 
-        final String prompt = promptBuilder.build(postmortem);
+        final String systemInstruction = promptBuilder.systemInstruction();
+        final String userContent = promptBuilder.userContent(postmortem);
 
         try {
-            final String content = geminiClient.generate(prompt);
+            final String content = geminiClient.generate(systemInstruction, userContent);
 
             persistenceService.markDraftAndPublish(
                     postmortemId, incidentId, tenantId,
-                    content, prompt, postmortem.getDurationMinutes());
+                    content, auditPromptRecord(systemInstruction, userContent),
+                    postmortem.getDurationMinutes());
 
             log.info("Postmortem retry succeeded: incidentId={}, tenant={}, attempt={}",
                     incidentId, tenantId, retryCount);
@@ -254,5 +258,20 @@ public class PostmortemRetryScheduler {
                         incidentId, retryCount, maxRetryAttempts, errorMessage);
             }
         }
+    }
+
+    /**
+     * Combines the system instruction and user content into a single
+     * readable record for {@link Postmortem#getPromptUsed()} — the audit/
+     * debugging field showing exactly what was sent to Gemini. Stored as
+     * two clearly labeled parts rather than just userContent alone, since
+     * the systemInstruction template can change over time (e.g. adjusting
+     * the injection-defense framing) and a stored postmortem's audit trail
+     * should reflect what was actually sent at generation time, not just
+     * today's template.
+     */
+    private static String auditPromptRecord(String systemInstruction, String userContent) {
+        return "[system_instruction]\n" + systemInstruction +
+                "\n\n[user content]\n" + userContent;
     }
 }
