@@ -5,6 +5,7 @@ import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.exception.InviteEmailException;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
+import com.incidentplatform.auth.service.AuthEmailPersistenceService;
 import com.incidentplatform.auth.service.AuthEmailService;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -12,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -41,6 +41,20 @@ import java.util.List;
  * <h2>ShedLock</h2>
  * Both methods are protected by ShedLock to prevent duplicate sends when
  * multiple auth-service instances are running.
+ *
+ * <h2>Fixed: no single transaction spans a whole batch of SMTP sends</h2>
+ * {@link #processPending()}/{@link #retryFailed()} previously carried
+ * {@code @Transactional} on the whole method — including the loop that
+ * called {@code AuthEmailService.sendInviteEmail}/{@code sendPasswordResetEmail},
+ * real blocking SMTP calls — holding a database connection open for the
+ * combined duration of every send in the batch. Fixed by removing
+ * {@code @Transactional} from both scheduled methods entirely: the initial
+ * repository read is already its own short, auto-committing transaction
+ * (Spring Data JPA's default behaviour on repository query methods), and
+ * each outcome is now written via {@link AuthEmailPersistenceService} —
+ * a short, independent transaction per entry, with no transaction open
+ * while waiting on SMTP. Same pattern already established in
+ * {@code postmortem-service}'s {@code PostmortemPersistenceService}.
  */
 @Component
 @EnableConfigurationProperties(InviteEmailProperties.class)
@@ -51,16 +65,19 @@ public class AuthEmailScheduler {
 
     private final AuthEmailOutboxRepository outboxRepository;
     private final AuthEmailService emailService;
+    private final AuthEmailPersistenceService persistenceService;
     private final int maxRetryAttempts;
     private final Duration pendingThreshold;
 
     public AuthEmailScheduler(AuthEmailOutboxRepository outboxRepository,
                               AuthEmailService emailService,
+                              AuthEmailPersistenceService persistenceService,
                               InviteEmailProperties properties) {
-        this.outboxRepository = outboxRepository;
-        this.emailService     = emailService;
-        this.maxRetryAttempts = properties.maxRetryAttempts();
-        this.pendingThreshold = properties.pendingThreshold();
+        this.outboxRepository  = outboxRepository;
+        this.emailService      = emailService;
+        this.persistenceService = persistenceService;
+        this.maxRetryAttempts  = properties.maxRetryAttempts();
+        this.pendingThreshold  = properties.pendingThreshold();
     }
 
     @Scheduled(
@@ -72,7 +89,6 @@ public class AuthEmailScheduler {
             lockAtMostFor = "4m",
             lockAtLeastFor = "10s"
     )
-    @Transactional
     public void processPending() {
         final Instant threshold = Instant.now().minus(pendingThreshold);
         final List<AuthEmailOutbox> pending =
@@ -100,7 +116,6 @@ public class AuthEmailScheduler {
             lockAtMostFor = "4m",
             lockAtLeastFor = "10s"
     )
-    @Transactional
     public void retryFailed() {
         final List<AuthEmailOutbox> failed =
                 outboxRepository.findFailedWithRemainingRetries(
@@ -119,19 +134,21 @@ public class AuthEmailScheduler {
     }
 
     private void processOne(AuthEmailOutbox entry) {
+        final java.util.UUID entryId = entry.getId();
         final String email = entry.getEmail();
 
         if (entry.getRawToken() == null) {
             log.error("Auth email outbox entry has null rawToken — " +
                             "skipping: entryId={}, email={}, type={}, status={}",
-                    entry.getId(), email, entry.getEmailType(), entry.getStatus());
-            entry.markPermanentlyFailed("rawToken is null — cannot send email");
-            outboxRepository.save(entry);
+                    entryId, email, entry.getEmailType(), entry.getStatus());
+            persistenceService.markPermanentlyFailed(
+                    entryId, "rawToken is null — cannot send email");
             return;
         }
 
         try {
-            // Route to correct email template based on type
+            // Route to correct email template based on type — the real,
+            // blocking SMTP call. No transaction is open during this call.
             switch (entry.getEmailType()) {
                 case INVITE ->
                         emailService.sendInviteEmail(email, entry.getRawToken());
@@ -139,8 +156,7 @@ public class AuthEmailScheduler {
                         emailService.sendPasswordResetEmail(email, entry.getRawToken());
             }
 
-            entry.markSent();
-            outboxRepository.save(entry);
+            persistenceService.markSent(entryId);
 
             log.info("Auth email sent: type={}, email={}, userId={}, attempt={}",
                     entry.getEmailType(), email,
@@ -150,15 +166,13 @@ public class AuthEmailScheduler {
             final int newRetryCount = entry.getRetryCount() + 1;
 
             if (newRetryCount >= maxRetryAttempts) {
-                entry.markPermanentlyFailed(e.getMessage());
-                outboxRepository.save(entry);
+                persistenceService.markPermanentlyFailed(entryId, e.getMessage());
                 log.error("Auth email permanently failed after {} attempts: " +
                                 "type={}, email={}, userId={}, error={}",
                         maxRetryAttempts, entry.getEmailType(),
                         email, entry.getUser().getId(), e.getMessage());
             } else {
-                entry.markFailed(e.getMessage());
-                outboxRepository.save(entry);
+                persistenceService.markFailed(entryId, e.getMessage());
                 log.warn("Auth email failed (attempt {}/{}), will retry: " +
                                 "type={}, email={}, error={}",
                         newRetryCount, maxRetryAttempts,
@@ -167,9 +181,9 @@ public class AuthEmailScheduler {
         } catch (Exception e) {
             log.error("Unexpected error processing auth email outbox entry: " +
                             "entryId={}, type={}, email={}, error={}",
-                    entry.getId(), entry.getEmailType(), email, e.getMessage(), e);
-            entry.markFailed("Unexpected error: " + e.getMessage());
-            outboxRepository.save(entry);
+                    entryId, entry.getEmailType(), email, e.getMessage(), e);
+            persistenceService.markFailed(
+                    entryId, "Unexpected error: " + e.getMessage());
         }
     }
 }
