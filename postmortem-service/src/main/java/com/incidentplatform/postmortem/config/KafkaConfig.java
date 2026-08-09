@@ -19,14 +19,22 @@ import org.springframework.kafka.listener.ContainerProperties;
 @EnableKafka
 public class KafkaConfig {
 
-    @Value("${spring.kafka.listener.concurrency:3}")
-    private int listenerConcurrency;
+    private final int listenerConcurrency;
+    private final String postmortemDeadLetterTopic;
+    private final int deadLetterRetentionDays;
 
-    @Value("${kafka.topics.postmortem-dead-letter:postmortem.dead-letter}")
-    private String postmortemDeadLetterTopic;
-
-    @Value("${kafka.dead-letter.retention-days:30}")
-    private int deadLetterRetentionDays;
+    // Constructor injection instead of field-injected @Value — consistent
+    // with the platform's general preference for constructor injection
+    // (testable, allows final fields, dependencies visible in one place).
+    public KafkaConfig(
+            @Value("${spring.kafka.listener.concurrency:3}") int listenerConcurrency,
+            @Value("${kafka.topics.postmortem-dead-letter:postmortem.dead-letter}")
+            String postmortemDeadLetterTopic,
+            @Value("${kafka.dead-letter.retention-days:30}") int deadLetterRetentionDays) {
+        this.listenerConcurrency = listenerConcurrency;
+        this.postmortemDeadLetterTopic = postmortemDeadLetterTopic;
+        this.deadLetterRetentionDays = deadLetterRetentionDays;
+    }
 
     /**
      * Overrides Spring Boot's auto-configured {@code kafkaListenerContainerFactory}
