@@ -1,6 +1,14 @@
 spring:
   application:
     name: postmortem-service
+  # Virtual threads (Project Loom, stable since Java 21) — this service is
+  # I/O-bound (JPA/JDBC for the outbox, Kafka, synchronous HTTP to the
+  # Gemini API), same rationale as incident-service/escalation-service/
+  # notification-service. Verified no `synchronized` blocks anywhere in
+  # this module before enabling (the known virtual-thread pinning risk).
+  threads:
+    virtual:
+      enabled: true
 
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
