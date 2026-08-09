@@ -39,6 +39,7 @@ class ForgotPasswordServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenService authTokenService;
     @Mock private AuthEmailOutboxRepository outboxRepository;
+    @Mock private WorkSimulator workSimulator;
 
     private ForgotPasswordService service;
 
@@ -49,7 +50,7 @@ class ForgotPasswordServiceTest {
     @BeforeEach
     void setUp() {
         service = new ForgotPasswordService(
-                userRepository, authTokenService, outboxRepository);
+                userRepository, authTokenService, outboxRepository, workSimulator);
         TenantContext.set(TENANT_ID);
     }
 
@@ -88,6 +89,26 @@ class ForgotPasswordServiceTest {
 
             then(authTokenService).shouldHaveNoInteractions();
         }
+
+        /**
+         * Regression test for the fix documented in this class's Javadoc:
+         * WorkSimulator was fully built (a calibrated bean in SchedulerConfig)
+         * but never actually injected into or called from this class — the
+         * "user not found" path returned after only a fast DB lookup, with
+         * no timing-equalisation against the "user exists" path below,
+         * leaving user-enumeration-via-timing layer 2 protection effectively
+         * absent despite being documented as implemented.
+         */
+        @Test
+        @DisplayName("calls workSimulator.simulate() when email is not found — timing attack mitigation")
+        void callsWorkSimulatorWhenEmailNotFound() {
+            given(userRepository.findByEmailAndTenantId(
+                    EMAIL, TENANT_ID)).willReturn(Optional.empty());
+
+            service.initiateReset(EMAIL, TENANT_ID);
+
+            then(workSimulator).should().simulate();
+        }
     }
 
     // ── successful reset initiation ───────────────────────────────────────
@@ -95,6 +116,26 @@ class ForgotPasswordServiceTest {
     @Nested
     @DisplayName("initiateReset — success")
     class InitiateResetSuccess {
+
+        @Test
+        @DisplayName("does NOT call workSimulator.simulate() when email is found — " +
+                "that path already does the real work being timed against")
+        void doesNotCallWorkSimulatorWhenEmailFound() {
+            final User user = buildUser();
+            given(userRepository.findByEmailAndTenantId(
+                    EMAIL, TENANT_ID)).willReturn(Optional.of(user));
+            given(outboxRepository.findLatestByUserIdAndType(
+                    USER_ID, AuthEmailType.PASSWORD_RESET))
+                    .willReturn(Optional.empty());
+            given(authTokenService.generatePasswordResetTokenWithEntity(
+                    any(), anyString()))
+                    .willReturn(buildTokenResult(user));
+            given(outboxRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.initiateReset(EMAIL, TENANT_ID);
+
+            then(workSimulator).shouldHaveNoInteractions();
+        }
 
         @Test
         @DisplayName("generates PASSWORD_RESET token and writes PENDING outbox entry")
