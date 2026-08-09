@@ -10,10 +10,6 @@ import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -32,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
@@ -69,7 +66,7 @@ class OncallScheduleServiceTest {
                     buildRequest(OncallRole.PRIMARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    eq(TENANT_ID), eq(OncallRole.PRIMARY.name()), any(), any()))
+                    eq(TENANT_ID), isNull(), eq(OncallRole.PRIMARY.name()), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
@@ -95,7 +92,7 @@ class OncallScheduleServiceTest {
                     buildRequest(OncallRole.SECONDARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    anyString(), anyString(), any(), any()))
+                    anyString(), any(), anyString(), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
@@ -123,7 +120,7 @@ class OncallScheduleServiceTest {
                     buildRequest(OncallRole.PRIMARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    anyString(), anyString(), any(), any()))
+                    anyString(), any(), anyString(), any(), any()))
                     .willReturn(true);
 
             // when / then
@@ -133,6 +130,43 @@ class OncallScheduleServiceTest {
                     .hasMessageContaining("overlaps");
 
             then(repository).should(never()).save(any());
+        }
+
+        /**
+         * Regression test for the fix documented in
+         * OncallScheduleRepository.existsOverlappingForCreate's Javadoc:
+         * the overlap check previously didn't filter by teamId at all, so
+         * two different teams could never both have a PRIMARY on-call at
+         * the same time. This test can't observe the SQL-level teamId
+         * filtering directly (the repository call is mocked), but it does
+         * verify the service layer actually passes teamId through to the
+         * repository — the other half of that fix, in
+         * OncallScheduleService.create. Without this, the SQL fix alone
+         * would be silently ineffective.
+         */
+        @Test
+        @DisplayName("passes request.teamId() through to the overlap check, not just tenantId/role")
+        void passesTeamIdToOverlapCheck() {
+            // given
+            final UUID teamId = UUID.randomUUID();
+            final CreateOncallScheduleRequest request = new CreateOncallScheduleRequest(
+                    teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY.name(),
+                    STARTS_AT, ENDS_AT, "Test schedule"
+            );
+
+            given(repository.existsOverlappingForCreate(
+                    eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY.name()), any(), any()))
+                    .willReturn(false);
+            given(repository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            service.create(TENANT_ID, request);
+
+            // then — specifically verifies teamId (not any()) was the
+            // actual argument passed, not just that some call happened
+            then(repository).should().existsOverlappingForCreate(
+                    eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY.name()), any(), any());
         }
     }
 
@@ -393,7 +427,7 @@ class OncallScheduleServiceTest {
         );
 
         given(repository.existsOverlappingForCreate(
-                eq(TENANT_ID), eq(OncallRole.PRIMARY.name()), any(), any()))
+                eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY.name()), any(), any()))
                 .willReturn(false);
         given(repository.save(any()))
                 .willAnswer(i -> i.getArgument(0));
