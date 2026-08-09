@@ -89,6 +89,13 @@ invite:
     scheduler-interval-ms: ${INVITE_EMAIL_SCHEDULER_INTERVAL_MS:30000}
     retry-interval-ms: ${INVITE_EMAIL_RETRY_INTERVAL_MS:300000}
 
+auth:
+  token-cleanup:
+    # Housekeeping only — expired/used auth_tokens rows are already
+    # correctly excluded by every query that matters. This just controls
+    # how long the now-useless rows stick around before being pruned.
+    interval-ms: ${AUTH_TOKEN_CLEANUP_INTERVAL_MS:86400000}
+
 management:
   metrics:
     tags:
