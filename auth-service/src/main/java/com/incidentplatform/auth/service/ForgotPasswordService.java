@@ -34,12 +34,15 @@ import java.util.Optional;
  * {@code 202 Accepted} in both cases. This prevents attackers from
  * probing which email addresses have accounts by comparing responses.
  *
- * <h2>User Enumeration Protection — Layer 2: timing attack (TODO)</h2>
- * When the user does not exist, this method returns after a fast DB lookup
- * (~2ms). When the user exists, it writes a token and outbox entry (~10ms).
- * An attacker measuring response times at scale could statistically
- * distinguish the two paths. {@code simulateWork()} should be added to the
- * non-existent path to equalise timing.
+ * <h2>User Enumeration Protection — Layer 2: timing attack</h2>
+ * When the user does not exist, this method previously returned after only
+ * a fast DB lookup (~2ms), versus ~10ms for the "user exists" path (token +
+ * two DB writes) — a gap an attacker measuring response times at scale
+ * could use to statistically distinguish the two cases even though both
+ * return an identical {@code 202 Accepted}. {@link WorkSimulator} — already
+ * built and registered as a bean in {@code SchedulerConfig}, calibrated to
+ * roughly match that ~10ms — was never actually wired into this class.
+ * Fixed: injected and called on the "user not found" path below.
  *
  * @see <a href="https://owasp.org/www-project-web-security-testing-guide/">
  *      OWASP Testing Guide — User Enumeration</a>
@@ -53,13 +56,16 @@ public class ForgotPasswordService {
     private final UserRepository userRepository;
     private final AuthTokenService authTokenService;
     private final AuthEmailOutboxRepository outboxRepository;
+    private final WorkSimulator workSimulator;
 
     public ForgotPasswordService(UserRepository userRepository,
                                  AuthTokenService authTokenService,
-                                 AuthEmailOutboxRepository outboxRepository) {
+                                 AuthEmailOutboxRepository outboxRepository,
+                                 WorkSimulator workSimulator) {
         this.userRepository   = userRepository;
         this.authTokenService = authTokenService;
         this.outboxRepository = outboxRepository;
+        this.workSimulator    = workSimulator;
     }
 
     /**
@@ -88,9 +94,9 @@ public class ForgotPasswordService {
             // has no account. Log at DEBUG only (not INFO) so the email
             // address does not appear in centralised log aggregators.
             //
-            // TODO (backlog): add simulateWork() here to equalise response
-            // timing between existing and non-existing users (timing attack
-            // mitigation — user enumeration protection layer 2).
+            // Timing attack mitigation (layer 2) — equalises response time
+            // against the "user exists" path below. See class Javadoc.
+            workSimulator.simulate();
             log.debug("Password reset requested for unknown email — no-op");
             return;
         }
