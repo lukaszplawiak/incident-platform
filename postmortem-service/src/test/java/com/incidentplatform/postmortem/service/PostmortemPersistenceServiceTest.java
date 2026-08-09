@@ -78,6 +78,72 @@ class PostmortemPersistenceServiceTest {
             assertThat(saved.getIncidentId()).isEqualTo(INCIDENT_ID);
             assertThat(resultId).isEqualTo(saved.getId());
         }
+
+        /**
+         * Regression test for the fix documented in this method's Javadoc:
+         * IncidentEventConsumer's own Javadoc always claimed an idempotency
+         * guard existed here, but existsByIncidentId (defined in the
+         * repository) was never actually called before this fix.
+         */
+        @Test
+        @DisplayName("should skip creating a duplicate and return the existing id " +
+                "when a postmortem already exists for this incidentId")
+        void shouldSkipDuplicateWhenAlreadyExists() {
+            // given — simulates a redelivered Kafka event for an incident
+            // that already has a postmortem record
+            final Postmortem existing = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            given(postmortemRepository.existsByIncidentId(INCIDENT_ID))
+                    .willReturn(true);
+            given(postmortemRepository.findByIncidentIdAndTenantId(INCIDENT_ID, TENANT_ID))
+                    .willReturn(java.util.Optional.of(existing));
+
+            // when
+            final UUID resultId = persistenceService.createGeneratingRecord(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
+
+            // then — returns the existing record's id, never attempts a
+            // second insert
+            assertThat(resultId).isEqualTo(existing.getId());
+            then(postmortemRepository).should(org.mockito.Mockito.never()).save(any());
+        }
+
+        /**
+         * The DB-constraint-violation backup path — for the rare case the
+         * existsByIncidentId check above and a near-simultaneous redelivered
+         * insert genuinely race. Mirrors the identical fix pattern just
+         * applied to oncall-service's OncallScheduleService.create.
+         */
+        @Test
+        @DisplayName("should treat a DataIntegrityViolationException from save() " +
+                "as already-created, not as an error")
+        void shouldTreatDataIntegrityViolationAsAlreadyCreated() {
+            // given — app-level check finds nothing (the race window), but
+            // the insert itself hits the DB's unique constraint on incident_id
+            final Postmortem existing = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            given(postmortemRepository.existsByIncidentId(INCIDENT_ID))
+                    .willReturn(false);
+            given(postmortemRepository.save(any()))
+                    .willThrow(new org.springframework.dao.DataIntegrityViolationException(
+                            "ERROR: duplicate key value violates unique constraint"));
+            given(postmortemRepository.findByIncidentIdAndTenantId(INCIDENT_ID, TENANT_ID))
+                    .willReturn(java.util.Optional.of(existing));
+
+            // when
+            final UUID resultId = persistenceService.createGeneratingRecord(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
+
+            // then — no exception propagates; the caller (IncidentEventConsumer)
+            // gets back a valid id and can acknowledge normally, instead of
+            // the event falling into the "transient error, don't acknowledge"
+            // path that previously caused infinite redelivery
+            assertThat(resultId).isEqualTo(existing.getId());
+        }
     }
 
     @Nested

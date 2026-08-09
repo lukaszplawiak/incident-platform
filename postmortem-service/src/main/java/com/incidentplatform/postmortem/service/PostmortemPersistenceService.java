@@ -6,6 +6,9 @@ import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.domain.Severity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,6 +47,9 @@ import java.util.UUID;
 @Service
 public class PostmortemPersistenceService {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(PostmortemPersistenceService.class);
+
     private static final String SERVICE_NAME = "postmortem-service";
 
     private final PostmortemRepository postmortemRepository;
@@ -58,6 +64,32 @@ public class PostmortemPersistenceService {
     /**
      * Creates and persists the initial {@code GENERATING} record.
      * Short transaction — INSERT only, no external calls.
+     * <h2>Fixed: the idempotency guard this method's callers document but
+     * that never actually existed</h2>
+     * {@code IncidentEventConsumer.handleResolved}'s own Javadoc says
+     * "If a postmortem already exists for this incident (idempotency
+     * guard in PostmortemPersistenceService), this is a no-op" — but no
+     * such guard existed anywhere. {@code incident_id} has a DB-level
+     * {@code unique = true} constraint, so a genuinely realistic scenario
+     * under Kafka's at-least-once delivery (consumer crashes after this
+     * INSERT commits but before the offset is acknowledged, so the same
+     * INCIDENT_RESOLVED event is redelivered) would throw
+     * {@link DataIntegrityViolationException} on the redelivery's
+     * {@code save()} call. That exception was never caught here, so it
+     * fell through to {@code IncidentEventConsumer}'s generic
+     * {@code catch (Exception e)}, which treats it as transient and does
+     * NOT acknowledge — Kafka redelivers the same event, hits the same
+     * violation, forever, blocking every other message on that partition
+     * indefinitely.
+     *
+     * <p>Fixed the same way {@code oncall-service}'s equivalent
+     * check-then-act race was just fixed: an app-level check first
+     * ({@code existsByIncidentId} — already defined in the repository,
+     * simply never called), backed by catching the DB constraint
+     * violation for the rare case the check and the redelivered insert
+     * genuinely race. Both paths return the existing record's id rather
+     * than treating a duplicate as an error — this consumer's job for
+     * that incident is already done.
      */
     @Transactional
     public UUID createGeneratingRecord(UUID incidentId,
@@ -67,11 +99,42 @@ public class PostmortemPersistenceService {
                                        Instant incidentOpenedAt,
                                        Instant incidentResolvedAt,
                                        int durationMinutes) {
+        if (postmortemRepository.existsByIncidentId(incidentId)) {
+            log.info("Postmortem already exists for incidentId={} — " +
+                            "skipping duplicate creation (likely a redelivered " +
+                            "Kafka event): tenant={}",
+                    incidentId, tenantId);
+            return existingIdFor(incidentId, tenantId);
+        }
+
         final Postmortem postmortem = Postmortem.createGenerating(
                 incidentId, tenantId, incidentTitle, incidentSeverity,
                 incidentOpenedAt, incidentResolvedAt, durationMinutes);
-        postmortemRepository.save(postmortem);
+
+        try {
+            postmortemRepository.save(postmortem);
+        } catch (DataIntegrityViolationException e) {
+            // Race: another attempt (a near-simultaneous redelivery, or the
+            // window between the existsByIncidentId check above and this
+            // insert) created the record first. The unique constraint on
+            // incident_id is what actually caught it — treat it the same
+            // way as the check above, not as an error.
+            log.info("Postmortem creation raced with an existing record for " +
+                            "incidentId={} — treating as already created: tenant={}",
+                    incidentId, tenantId);
+            return existingIdFor(incidentId, tenantId);
+        }
+
         return postmortem.getId();
+    }
+
+    private UUID existingIdFor(UUID incidentId, String tenantId) {
+        return postmortemRepository.findByIncidentIdAndTenantId(incidentId, tenantId)
+                .map(Postmortem::getId)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Postmortem for incidentId=" + incidentId +
+                                " was reported as existing but could not be " +
+                                "found — this should be unreachable"));
     }
 
     /**
