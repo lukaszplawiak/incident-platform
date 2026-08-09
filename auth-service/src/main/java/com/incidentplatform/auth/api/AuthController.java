@@ -1,6 +1,22 @@
 package com.incidentplatform.auth.api;
 
-import com.incidentplatform.auth.dto.*;
+import com.incidentplatform.auth.dto.AcceptInviteRequest;
+import com.incidentplatform.auth.dto.ForgotPasswordRequest;
+import com.incidentplatform.auth.dto.LoginRequest;
+import com.incidentplatform.auth.dto.LoginResponse;
+import com.incidentplatform.auth.dto.MfaBackupCodesStatusResponse;
+import com.incidentplatform.auth.dto.MfaDisableRequest;
+import com.incidentplatform.auth.dto.MfaEnableRequest;
+import com.incidentplatform.auth.dto.MfaEnableRequiredRequest;
+import com.incidentplatform.auth.dto.MfaEnableResponse;
+import com.incidentplatform.auth.dto.MfaEnableWithLoginResponse;
+import com.incidentplatform.auth.dto.MfaSetupRequiredRequest;
+import com.incidentplatform.auth.dto.MfaSetupResponse;
+import com.incidentplatform.auth.dto.MfaVerifyBackupRequest;
+import com.incidentplatform.auth.dto.MfaVerifyRequest;
+import com.incidentplatform.auth.dto.RefreshRequest;
+import com.incidentplatform.auth.dto.RefreshResponse;
+import com.incidentplatform.auth.dto.ResetPasswordRequest;
 import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.AuthService;
 import com.incidentplatform.auth.service.AuthTokenService;
@@ -21,6 +37,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -333,7 +350,7 @@ public class AuthController {
                 mfaService.verifyWithBackupCode(request.mfaToken(), request.backupCode()));
     }
 
-    @org.springframework.web.bind.annotation.GetMapping(
+    @GetMapping(
             value = "/mfa/backup-codes",
             produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "Get backup codes status — count of remaining unused codes")
