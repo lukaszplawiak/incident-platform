@@ -92,12 +92,6 @@ public class AuthTokenService {
     }
 
     /**
-     * Validates a token and marks it as used atomically.
-     *
-     * @throws BusinessException 401 if the token is invalid, expired, or used
-     */
-    @Transactional
-    /**
      * Generates a short-lived MFA session token (5 minutes).
      *
      * <p>Issued after successful password verification when user has MFA
@@ -107,6 +101,7 @@ public class AuthTokenService {
      * <p>Like all tokens, stored as SHA-256 hash — raw token sent to client
      * once and never persisted in plain text.
      */
+    @Transactional
     public String generateMfaSessionToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.MFA_SESSION,
                 Duration.ofMinutes(MFA_SESSION_MINUTES));
@@ -121,7 +116,14 @@ public class AuthTokenService {
      * access token at this point (login has not completed), so this token
      * is what POST /mfa/setup-required and POST /mfa/enable-required accept
      * instead of a Bearer token.
+     *
+     * <p>Fixed: was missing {@code @Transactional} — same fix and same
+     * reasoning as {@link #consumeToken}. Its one call site
+     * ({@code AuthService.login()}) already has its own {@code @Transactional},
+     * so this was not an active bug, but is now consistent with every other
+     * public write method in this class.
      */
+    @Transactional
     public String generateMfaSetupRequiredToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.MFA_SETUP_REQUIRED,
                 Duration.ofMinutes(MFA_SETUP_REQUIRED_MINUTES));
@@ -156,6 +158,28 @@ public class AuthTokenService {
                 });
     }
 
+    /**
+     * Validates a token and marks it as used atomically.
+     *
+     * <p>Fixed: this Javadoc was previously misplaced above
+     * {@link #generateMfaSessionToken}, describing a method it had nothing
+     * to do with, while this method — the one it actually describes — had
+     * no comment at all. An editing artifact, evidently from a prior change
+     * that inserted a new Javadoc block without first removing the old one
+     * from its original position.
+     *
+     * <p>Also fixed: was missing {@code @Transactional} — every one of its
+     * five call sites already wraps it in their own transaction (verified
+     * directly, not assumed), so this was not an active bug, but it left
+     * this as the only public write method in this class without the
+     * annotation, and correctness would have silently depended on every
+     * future caller remembering to add their own transaction boundary.
+     * Added for consistency with the rest of the class and to remove that
+     * risk going forward.
+     *
+     * @throws BusinessException 401 if the token is invalid, expired, or used
+     */
+    @Transactional
     public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
         final String hash = hash(rawToken);
 
