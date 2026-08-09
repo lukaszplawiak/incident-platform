@@ -1,6 +1,10 @@
 package com.incidentplatform.auth.service;
 
-import com.incidentplatform.auth.domain.*;
+import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailStatus;
+import com.incidentplatform.auth.domain.AuthEmailType;
+import com.incidentplatform.auth.domain.AuthToken;
+import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.UserRepository;

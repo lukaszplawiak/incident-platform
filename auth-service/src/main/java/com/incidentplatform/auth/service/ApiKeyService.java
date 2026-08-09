@@ -261,7 +261,6 @@ public class ApiKeyService {
      */
     @Transactional
     public void revokeAllPersonalKeysForUser(UUID userId, String tenantId) {
-        final int count = 0;
         apiKeyRepository.revokeAllPersonalKeysForUser(userId, Instant.now());
         log.info("All personal API keys revoked for user: userId={}, tenant={}",
                 userId, tenantId);
