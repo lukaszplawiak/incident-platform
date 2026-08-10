@@ -1,5 +1,6 @@
 package com.incidentplatform.auth.repository;
 
+import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -75,4 +76,34 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findAnyByIdAndTenantId(
             @Param("id") UUID id,
             @Param("tenantId") String tenantId);
+
+    /**
+     * Counts active (non-archived, non-anonymized, {@code active=true})
+     * users in a tenant holding the given role, excluding one specific
+     * user.
+     *
+     * <p>Used by {@code UserManagementService}'s "last admin" guard —
+     * checking "if I exclude this user, are there other active admins
+     * left?" is exactly the question that needs answering before removing
+     * ROLE_ADMIN, deactivating, or archiving someone: excluding the
+     * subject of the operation and counting the rest tells you whether
+     * the operation would leave the tenant with zero administrators.
+     * {@code role} is bound as a typed {@link Role} parameter, not a
+     * String — see the type-mismatch bug documented in
+     * {@code OncallScheduleRepository.existsOverlappingForCreate} for why
+     * a raw String parameter for an enum-mapped JPQL comparison is a real
+     * risk, not just a style preference.
+     */
+    @Query("""
+            SELECT COUNT(DISTINCT u) FROM User u
+            JOIN u.roles r
+            WHERE u.tenantId = :tenantId
+            AND r.role = :role
+            AND u.active = true
+            AND u.id != :excludeUserId
+            """)
+    long countActiveUsersWithRoleExcluding(
+            @Param("tenantId") String tenantId,
+            @Param("role") Role role,
+            @Param("excludeUserId") UUID excludeUserId);
 }

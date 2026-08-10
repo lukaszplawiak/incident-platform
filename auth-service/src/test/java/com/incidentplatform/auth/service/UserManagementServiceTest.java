@@ -1,5 +1,6 @@
 package com.incidentplatform.auth.service;
 
+import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
@@ -31,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("UserManagementService")
@@ -89,6 +91,64 @@ class UserManagementServiceTest {
                     USER_ID, new UpdateUserRolesRequest(List.of("ROLE_ADMIN"))))
                     .isInstanceOf(ResourceNotFoundException.class);
         }
+
+        /**
+         * Regression test for the fix documented in
+         * UserManagementService.ensureNotRemovingLastAdmin's Javadoc: this
+         * endpoint previously had no protection at all against removing
+         * ROLE_ADMIN from the sole remaining administrator.
+         */
+        @Test
+        @DisplayName("throws 409 when removing ROLE_ADMIN from the last active admin")
+        void throws409WhenRemovingLastAdmin() {
+            final User user = buildUser("ROLE_ADMIN");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.countActiveUsersWithRoleExcluding(
+                    TENANT_ID, Role.ROLE_ADMIN, USER_ID))
+                    .willReturn(0L);
+
+            assertThatThrownBy(() -> service.updateRoles(
+                    USER_ID, new UpdateUserRolesRequest(List.of("ROLE_RESPONDER"))))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.CONFLICT);
+
+            then(userRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("allows removing ROLE_ADMIN when another active admin exists")
+        void allowsRemovingAdminWhenAnotherExists() {
+            final User user = buildUser("ROLE_ADMIN");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.countActiveUsersWithRoleExcluding(
+                    TENANT_ID, Role.ROLE_ADMIN, USER_ID))
+                    .willReturn(1L);
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            final UserSummaryDto result = service.updateRoles(
+                    USER_ID, new UpdateUserRolesRequest(List.of("ROLE_RESPONDER")));
+
+            assertThat(result.roles()).containsExactly("ROLE_RESPONDER");
+        }
+
+        @Test
+        @DisplayName("allows updating roles that still include ROLE_ADMIN, " +
+                "without checking other admins")
+        void allowsUpdateThatKeepsAdmin() {
+            final User user = buildUser("ROLE_ADMIN");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.updateRoles(USER_ID,
+                    new UpdateUserRolesRequest(List.of("ROLE_ADMIN", "ROLE_RESPONDER")));
+
+            then(userRepository).should(never())
+                    .countActiveUsersWithRoleExcluding(any(), any(), any());
+        }
     }
 
     // ── updateStatus ──────────────────────────────────────────────────────
@@ -120,6 +180,57 @@ class UserManagementServiceTest {
             assertThatThrownBy(() -> service.updateStatus(
                     USER_ID, new UpdateUserStatusRequest(false)))
                     .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("throws 409 when deactivating the last active admin")
+        void throws409WhenDeactivatingLastAdmin() {
+            final User user = buildUser("ROLE_ADMIN");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.countActiveUsersWithRoleExcluding(
+                    TENANT_ID, Role.ROLE_ADMIN, USER_ID))
+                    .willReturn(0L);
+
+            assertThatThrownBy(() -> service.updateStatus(
+                    USER_ID, new UpdateUserStatusRequest(false)))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.CONFLICT);
+
+            then(userRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("allows deactivating an admin when another active admin exists")
+        void allowsDeactivatingAdminWhenAnotherExists() {
+            final User user = buildUser("ROLE_ADMIN");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.countActiveUsersWithRoleExcluding(
+                    TENANT_ID, Role.ROLE_ADMIN, USER_ID))
+                    .willReturn(1L);
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            final UserSummaryDto result = service.updateStatus(
+                    USER_ID, new UpdateUserStatusRequest(false));
+
+            assertThat(result.active()).isFalse();
+        }
+
+        @Test
+        @DisplayName("allows reactivating an admin without checking other admins")
+        void allowsReactivatingAdmin() {
+            final User user = buildUser("ROLE_ADMIN");
+            user.setActive(false);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.updateStatus(USER_ID, new UpdateUserStatusRequest(true));
+
+            then(userRepository).should(never())
+                    .countActiveUsersWithRoleExcluding(any(), any(), any());
         }
     }
 
@@ -165,6 +276,41 @@ class UserManagementServiceTest {
             assertThatThrownBy(() ->
                     service.archiveUser(USER_ID, buildPrincipal(ADMIN_ID)))
                     .isInstanceOf(ResourceNotFoundException.class);
+        }
+
+        @Test
+        @DisplayName("throws 409 when archiving the last other active admin")
+        void throws409WhenArchivingLastOtherAdmin() {
+            final User user = buildUser("ROLE_ADMIN");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.countActiveUsersWithRoleExcluding(
+                    TENANT_ID, Role.ROLE_ADMIN, USER_ID))
+                    .willReturn(0L);
+
+            assertThatThrownBy(() ->
+                    service.archiveUser(USER_ID, buildPrincipal(ADMIN_ID)))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.CONFLICT);
+
+            then(userRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("allows archiving an admin when another active admin exists")
+        void allowsArchivingAdminWhenAnotherExists() {
+            final User user = buildUser("ROLE_ADMIN");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.countActiveUsersWithRoleExcluding(
+                    TENANT_ID, Role.ROLE_ADMIN, USER_ID))
+                    .willReturn(1L);
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.archiveUser(USER_ID, buildPrincipal(ADMIN_ID));
+
+            then(userRepository).should().save(any());
         }
     }
 
