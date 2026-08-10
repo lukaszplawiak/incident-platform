@@ -36,21 +36,23 @@ public class OncallScheduleService {
         this.repository = repository;
     }
 
+    /**
+     * Fixed: role conversion/validation ({@code OncallRole.valueOf(...)})
+     * previously happened AFTER calling {@link
+     * OncallScheduleRepository#existsOverlappingForCreate}, which itself
+     * was called with the raw {@code String} from the request. That
+     * repository method's {@code role} parameter needs an
+     * {@code OncallRole} (see its own Javadoc for the full account of why
+     * this was a genuine, live production bug — every call to this method
+     * would have thrown). Moved the conversion above the overlap check so
+     * the repository is always called with a real {@code OncallRole}, and
+     * so an invalid role string is rejected with the existing clean
+     * {@code VALIDATION_FAILED} response before any database work happens
+     * at all — the more correct order regardless of the type-mismatch fix.
+     */
     @Transactional
     public OncallScheduleDto create(String tenantId,
                                     CreateOncallScheduleRequest request) {
-        final boolean overlapping = repository.existsOverlappingForCreate(
-                tenantId,
-                request.teamId(),
-                request.role(),
-                request.startsAt(),
-                request.endsAt()
-        );
-
-        if (overlapping) {
-            throw BusinessException.scheduleOverlap(tenantId, request.role());
-        }
-
         final OncallRole role;
         try {
             role = OncallRole.valueOf(request.role());
@@ -62,6 +64,18 @@ public class OncallScheduleService {
                             request.role()),
                     HttpStatus.BAD_REQUEST
             );
+        }
+
+        final boolean overlapping = repository.existsOverlappingForCreate(
+                tenantId,
+                request.teamId(),
+                role,
+                request.startsAt(),
+                request.endsAt()
+        );
+
+        if (overlapping) {
+            throw BusinessException.scheduleOverlap(tenantId, request.role());
         }
 
         final OncallSchedule schedule = OncallSchedule.create(
@@ -107,10 +121,30 @@ public class OncallScheduleService {
         return OncallScheduleDto.from(schedule);
     }
 
+    /**
+     * Fixed: previously passed the raw {@code role} String straight to
+     * {@link OncallScheduleRepository#findCurrentOncallByRole}, which
+     * needs an {@code OncallRole} (see that method's Javadoc for the full
+     * account — this was a live production bug affecting one of the two
+     * most-used endpoints in this service).
+     *
+     * <p>An unparseable {@code role} is treated the same as "no schedule
+     * found" ({@code Optional.empty()}) rather than thrown as a validation
+     * error: this is a read/lookup path, called by notification-service
+     * and escalation-service behind their own circuit breakers — those
+     * callers always pass a fixed, valid role string in practice, so a
+     * malformed value reaching here is a defensive edge case, not a
+     * realistic normal-operation one, and failing softly (no on-call
+     * found) is safer than surfacing a new 5xx failure mode to
+     * circuit-breaker-wrapped callers that don't distinguish "bad input"
+     * from "service unavailable".
+     */
     @Transactional(readOnly = true)
     public Optional<CurrentOncallResponse> getCurrentOncall(
             String tenantId, String role) {
-        return repository.findCurrentOncallByRole(tenantId, role, Instant.now())
+        return parseRole(role)
+                .flatMap(parsedRole -> repository.findCurrentOncallByRole(
+                        tenantId, parsedRole, Instant.now()))
                 .map(CurrentOncallResponse::from);
     }
 
@@ -118,14 +152,27 @@ public class OncallScheduleService {
      * Returns the current on-call person for a specific team and role.
      * Primary query used by EscalationScheduler via HTTP.
      *
+     * <p>Fixed: same {@code String}-to-{@code OncallRole} conversion fix
+     * and same "unparseable role treated as not-found" reasoning as
+     * {@link #getCurrentOncall} — see its Javadoc.
+     *
      * @return empty when no active schedule found for this team/role
      */
     @Transactional(readOnly = true)
     public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
             String tenantId, UUID teamId, String role) {
-        return repository.findCurrentOncallByTeamAndRole(
-                        tenantId, teamId, role, Instant.now())
+        return parseRole(role)
+                .flatMap(parsedRole -> repository.findCurrentOncallByTeamAndRole(
+                        tenantId, teamId, parsedRole, Instant.now()))
                 .map(CurrentOncallResponse::from);
+    }
+
+    private static Optional<OncallRole> parseRole(String role) {
+        try {
+            return Optional.of(OncallRole.valueOf(role));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            return Optional.empty();
+        }
     }
 
     @Transactional(readOnly = true)

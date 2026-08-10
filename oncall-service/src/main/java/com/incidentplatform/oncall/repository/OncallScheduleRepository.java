@@ -1,5 +1,6 @@
 package com.incidentplatform.oncall.repository;
 
+import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.domain.OncallSchedule;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -17,6 +18,18 @@ import java.util.UUID;
 public interface OncallScheduleRepository
         extends JpaRepository<OncallSchedule, UUID> {
 
+    /**
+     * Fixed: {@code role} was declared {@code String} here, but
+     * {@code OncallSchedule.role} is mapped as the {@code OncallRole}
+     * enum. Same class of bug, same fix, as documented in detail on
+     * {@link #existsOverlappingForCreate} — this method has the identical
+     * {@code s.role = :role} JPQL pattern, so it was equally broken: every
+     * call to {@code OncallScheduleService.getCurrentOncall} (i.e. every
+     * {@code GET /current?role=...} request without a {@code teamId} —
+     * one of the two most-used endpoints in this service, called by both
+     * notification-service and escalation-service) would have thrown
+     * {@code InvalidDataAccessApiUsageException}.
+     */
     @Query("""
             SELECT s FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
@@ -27,7 +40,7 @@ public interface OncallScheduleRepository
             """)
     Optional<OncallSchedule> findCurrentOncallByRole(
             @Param("tenantId") String tenantId,
-            @Param("role") String role,
+            @Param("role") OncallRole role,
             @Param("now") Instant now);
 
     /**
@@ -38,6 +51,9 @@ public interface OncallScheduleRepository
      *
      * <p>Called via HTTP from escalation-service with circuit breaker.
      * Covered by index: idx_oncall_schedules_team_role_time.
+     *
+     * <p>Fixed: same {@code role} type bug as {@link #findCurrentOncallByRole}
+     * — see its Javadoc.
      */
     @Query("""
             SELECT s FROM OncallSchedule s
@@ -51,7 +67,7 @@ public interface OncallScheduleRepository
     Optional<OncallSchedule> findCurrentOncallByTeamAndRole(
             @Param("tenantId") String tenantId,
             @Param("teamId") UUID teamId,
-            @Param("role") String role,
+            @Param("role") OncallRole role,
             @Param("now") Instant now);
 
     /**
@@ -130,6 +146,24 @@ public interface OncallScheduleRepository
      * naive {@code s.teamId = :teamId} would silently exclude every row
      * whenever {@code :teamId} is null — disabling the overlap check
      * entirely for tenant-wide schedules rather than scoping it correctly.
+     *
+     * <p>Fixed separately: {@code role} was declared {@code String} here,
+     * but {@code OncallSchedule.role} is mapped as the {@code OncallRole}
+     * enum — Hibernate infers a JPQL parameter's expected type from its
+     * usage in the query ({@code s.role = :role}), and strictly rejects a
+     * {@code String} bound to a slot it resolved as {@code OncallRole}.
+     * This was a genuine, live production bug: {@code
+     * OncallScheduleService.create()} called this method with the raw
+     * {@code String} from the request, before converting it to
+     * {@code OncallRole} — meaning every real call to this method (i.e.
+     * every attempt to create an on-call schedule) would have thrown
+     * {@code InvalidDataAccessApiUsageException}. Never caught before
+     * because every existing test mocked this repository — Mockito
+     * doesn't perform Hibernate's runtime JPQL type checking, so the
+     * mismatch was invisible until backlog item #22's real-Postgres
+     * integration test exercised this method for the first time. See
+     * {@code OncallScheduleOverlapIntegrationTest} and
+     * {@code OncallScheduleService.create}'s reordered validation.
      */
     @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s
@@ -142,11 +176,14 @@ public interface OncallScheduleRepository
     boolean existsOverlappingForCreate(
             @Param("tenantId") String tenantId,
             @Param("teamId") UUID teamId,
-            @Param("role") String role,
+            @Param("role") OncallRole role,
             @Param("startsAt") Instant startsAt,
             @Param("endsAt") Instant endsAt);
 
-    /** Same teamId-scoping fix as {@link #existsOverlappingForCreate} — see its Javadoc. */
+    /**
+     * Same teamId-scoping fix and same {@code role} type fix as
+     * {@link #existsOverlappingForCreate} — see its Javadoc for both.
+     */
     @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
@@ -159,7 +196,7 @@ public interface OncallScheduleRepository
     boolean existsOverlapping(
             @Param("tenantId") String tenantId,
             @Param("teamId") UUID teamId,
-            @Param("role") String role,
+            @Param("role") OncallRole role,
             @Param("startsAt") Instant startsAt,
             @Param("endsAt") Instant endsAt,
             @Param("excludeId") UUID excludeId);
