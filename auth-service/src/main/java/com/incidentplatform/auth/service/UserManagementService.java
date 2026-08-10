@@ -1,5 +1,6 @@
 package com.incidentplatform.auth.service;
 
+import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
@@ -51,6 +52,9 @@ public class UserManagementService {
         final String tenantId = TenantContext.get();
         final User user = requireActiveUser(userId, tenantId);
 
+        final boolean willStillBeAdmin = request.roles().contains(Role.ROLE_ADMIN.name());
+        ensureNotRemovingLastAdmin(user, tenantId, willStillBeAdmin);
+
         user.updateRoles(request.roles(), tenantId);
         userRepository.save(user);
 
@@ -74,6 +78,10 @@ public class UserManagementService {
     public UserSummaryDto updateStatus(UUID userId, UpdateUserStatusRequest request) {
         final String tenantId = TenantContext.get();
         final User user = requireActiveUser(userId, tenantId);
+
+        final boolean willStillBeActiveAdmin =
+                request.active() && user.getRoleNames().contains(Role.ROLE_ADMIN.name());
+        ensureNotRemovingLastAdmin(user, tenantId, willStillBeActiveAdmin);
 
         user.setActive(request.active());
         userRepository.save(user);
@@ -102,6 +110,9 @@ public class UserManagementService {
      * anonymized for GDPR via {@link #anonymizeUser}.
      *
      * @throws BusinessException         403 if admin tries to archive themselves
+     * @throws BusinessException         409 if archiving would leave the tenant
+     *                                   with zero active administrators — see
+     *                                   {@link #ensureNotRemovingLastAdmin}
      * @throws ResourceNotFoundException if the user does not exist or is already
      *                                   archived/anonymized
      */
@@ -117,6 +128,10 @@ public class UserManagementService {
         }
 
         final User user = requireActiveUser(userId, tenantId);
+
+        // Archiving always removes active status — never "still active" after.
+        ensureNotRemovingLastAdmin(user, tenantId, false);
+
         user.archive();
         userRepository.save(user);
 
@@ -260,6 +275,61 @@ public class UserManagementService {
     }
 
     // ── private ───────────────────────────────────────────────────────────
+
+    /**
+     * Guards against a tenant ending up with zero active administrators —
+     * a real, previously unprotected risk: {@code updateRoles} and
+     * {@code updateStatus} had no self-check at all (a sole admin could
+     * demote or deactivate themselves, or another admin, with nothing
+     * stopping it), and {@code archiveUser}'s existing self-archive block
+     * only covered the self-archive path specifically, not "archive the
+     * only other admin" or the roles/status paths.
+     *
+     * <p>Deliberately not a new "Account Owner" role — that would solve a
+     * bigger problem (billing ownership, account transfer) this platform
+     * doesn't have yet (no self-service multi-tenant billing model). This
+     * is the narrower, surgical fix for the concrete risk that actually
+     * exists today: {@code ROLE_ADMIN} reaching zero active holders in a
+     * tenant, which would require manual database intervention to recover
+     * from — no in-app path exists to grant ROLE_ADMIN back once nobody
+     * holds it.
+     *
+     * @param user                 the user the operation targets
+     * @param tenantId             the tenant to check other admins within
+     * @param willStillBeActiveAdmin whether, after the operation being
+     *                             guarded completes, this user will still
+     *                             be both {@code active} and hold
+     *                             {@code ROLE_ADMIN}. If {@code true}, the
+     *                             operation isn't removing admin status
+     *                             from anyone and this method does nothing.
+     * @throws BusinessException 409 if {@code user} is currently an active
+     *                           administrator, the operation would change
+     *                           that, and no other active administrator
+     *                           exists in the tenant
+     */
+    private void ensureNotRemovingLastAdmin(User user, String tenantId,
+                                            boolean willStillBeActiveAdmin) {
+        final boolean isCurrentlyActiveAdmin =
+                user.isActive() && user.getRoleNames().contains(Role.ROLE_ADMIN.name());
+
+        if (!isCurrentlyActiveAdmin || willStillBeActiveAdmin) {
+            // Either this user isn't an active admin to begin with (nothing
+            // to protect), or they'll remain one after this operation
+            // (nothing being removed) — no need to check further.
+            return;
+        }
+
+        final long otherActiveAdmins = userRepository.countActiveUsersWithRoleExcluding(
+                tenantId, Role.ROLE_ADMIN, user.getId());
+
+        if (otherActiveAdmins == 0) {
+            throw new BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "Cannot remove the last active administrator from this " +
+                            "tenant. Promote another user to ROLE_ADMIN first.",
+                    HttpStatus.CONFLICT);
+        }
+    }
 
     /**
      * Finds an active (non-archived, non-anonymized) user.
