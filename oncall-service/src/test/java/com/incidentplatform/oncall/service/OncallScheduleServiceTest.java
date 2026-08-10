@@ -67,7 +67,7 @@ class OncallScheduleServiceTest {
                     buildRequest(OncallRole.PRIMARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    eq(TENANT_ID), isNull(), eq(OncallRole.PRIMARY.name()), any(), any()))
+                    eq(TENANT_ID), isNull(), eq(OncallRole.PRIMARY), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
@@ -93,7 +93,7 @@ class OncallScheduleServiceTest {
                     buildRequest(OncallRole.SECONDARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    anyString(), any(), anyString(), any(), any()))
+                    anyString(), any(), any(), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willAnswer(i -> i.getArgument(0));
@@ -121,7 +121,7 @@ class OncallScheduleServiceTest {
                     buildRequest(OncallRole.PRIMARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    anyString(), any(), anyString(), any(), any()))
+                    anyString(), any(), any(), any(), any()))
                     .willReturn(true);
 
             // when / then
@@ -159,7 +159,7 @@ class OncallScheduleServiceTest {
                     buildRequest(OncallRole.PRIMARY.name());
 
             given(repository.existsOverlappingForCreate(
-                    anyString(), any(), anyString(), any(), any()))
+                    anyString(), any(), any(), any(), any()))
                     .willReturn(false);
             given(repository.save(any()))
                     .willThrow(new DataIntegrityViolationException(
@@ -197,7 +197,7 @@ class OncallScheduleServiceTest {
             );
 
             given(repository.existsOverlappingForCreate(
-                    eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY.name()), any(), any()))
+                    eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY), any(), any()))
                     .willReturn(false);
             given(repository.save(any())).willAnswer(i -> i.getArgument(0));
 
@@ -207,7 +207,7 @@ class OncallScheduleServiceTest {
             // then — specifically verifies teamId (not any()) was the
             // actual argument passed, not just that some call happened
             then(repository).should().existsOverlappingForCreate(
-                    eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY.name()), any(), any());
+                    eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY), any(), any());
         }
     }
 
@@ -221,7 +221,7 @@ class OncallScheduleServiceTest {
             // given
             final OncallSchedule schedule = buildSchedule(OncallRole.PRIMARY);
             given(repository.findCurrentOncallByRole(
-                    eq(TENANT_ID), eq(OncallRole.PRIMARY.name()), any()))
+                    eq(TENANT_ID), eq(OncallRole.PRIMARY), any()))
                     .willReturn(Optional.of(schedule));
 
             // when
@@ -240,7 +240,7 @@ class OncallScheduleServiceTest {
         void shouldReturnEmptyWhenNoOncall() {
             // given
             given(repository.findCurrentOncallByRole(
-                    anyString(), anyString(), any()))
+                    anyString(), any(), any()))
                     .willReturn(Optional.empty());
 
             // when
@@ -249,6 +249,27 @@ class OncallScheduleServiceTest {
 
             // then
             assertThat(result).isEmpty();
+        }
+
+        /**
+         * Regression test for the fix documented in this method's Javadoc:
+         * an unparseable role string is treated as "not found" without
+         * ever reaching the repository — previously the raw String would
+         * have been passed straight through, which (before the
+         * findCurrentOncallByRole fix) would have thrown regardless of
+         * whether the string was a valid role name or garbage.
+         */
+        @Test
+        @DisplayName("should return empty (not throw) for an unparseable role, " +
+                "without calling the repository")
+        void shouldReturnEmptyForUnparseableRoleWithoutCallingRepository() {
+            // when
+            final Optional<CurrentOncallResponse> result =
+                    service.getCurrentOncall(TENANT_ID, "NOT_A_REAL_ROLE");
+
+            // then
+            assertThat(result).isEmpty();
+            then(repository).shouldHaveNoInteractions();
         }
     }
 
@@ -468,7 +489,7 @@ class OncallScheduleServiceTest {
         );
 
         given(repository.existsOverlappingForCreate(
-                eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY.name()), any(), any()))
+                eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY), any(), any()))
                 .willReturn(false);
         given(repository.save(any()))
                 .willAnswer(i -> i.getArgument(0));
