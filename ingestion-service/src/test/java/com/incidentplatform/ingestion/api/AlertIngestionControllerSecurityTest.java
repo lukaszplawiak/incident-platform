@@ -6,12 +6,7 @@ import com.incidentplatform.ingestion.ratelimit.RateLimitResult;
 import com.incidentplatform.ingestion.ratelimit.RateLimitingService;
 import com.incidentplatform.ingestion.service.AlertIngestionService;
 import com.incidentplatform.ingestion.service.IngestionSummary;
-import com.incidentplatform.shared.security.JwtAuthFilter;
-import com.incidentplatform.shared.security.JwtUtils;
-import com.incidentplatform.shared.security.ServiceTokenProvider;
-import com.incidentplatform.shared.security.TenantContext;
-import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
-import com.incidentplatform.shared.security.UserPrincipal;
+import com.incidentplatform.shared.security.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -269,7 +264,7 @@ class AlertIngestionControllerSecurityTest {
                     .willReturn(buildSummary());
 
             mockMvc.perform(post("/api/v1/alerts/prometheus")
-                            .with(apiKeyPrincipal("alerts:ingest"))
+                            .with(apiKeyPrincipal(ApiScopes.ALERTS_INGEST))
                             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                             .content(PROMETHEUS_PAYLOAD))
                     .andExpect(status().isOk());
