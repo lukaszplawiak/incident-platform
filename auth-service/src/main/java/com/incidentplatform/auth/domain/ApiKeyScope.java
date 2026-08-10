@@ -1,5 +1,7 @@
 package com.incidentplatform.auth.domain;
 
+import com.incidentplatform.shared.security.ApiScopes;
+
 /**
  * Granular permissions that can be granted to an {@link ApiKey}.
  *
@@ -18,6 +20,11 @@ package com.incidentplatform.auth.domain;
  *   <li>Add the enum value here.</li>
  *   <li>Update {@link #allowedForRole} if the scope should be restricted.</li>
  *   <li>Add the corresponding {@code hasScope()} check in the service layer.</li>
+ *   <li>If another service needs to check this scope by name (like
+ *       ingestion-service does for {@link #ALERTS_INGEST}), add a constant
+ *       to {@link ApiScopes} in the shared module and construct the enum
+ *       value from it — see {@link #ALERTS_INGEST} for the pattern — rather
+ *       than letting a second, independent string literal exist anywhere.</li>
  * </ol>
  *
  * <h2>Stored as</h2>
@@ -36,8 +43,17 @@ public enum ApiKeyScope {
 
     // ── Alerts ────────────────────────────────────────────────────────────
 
-    /** Ingest alerts via POST /api/v1/alerts (ingestion-service). Available to RESPONDER+. */
-    ALERTS_INGEST("alerts:ingest"),
+    /**
+     * Ingest alerts via POST /api/v1/alerts (ingestion-service). Available
+     * to RESPONDER+.
+     *
+     * <p>Constructed from {@link ApiScopes#ALERTS_INGEST} rather than a
+     * separate string literal — this is the one scope another service
+     * (ingestion-service, via a {@code @PreAuthorize} SpEL expression)
+     * checks by name outside auth-service. See {@link ApiScopes}'s Javadoc
+     * for the full rationale.
+     */
+    ALERTS_INGEST(ApiScopes.ALERTS_INGEST),
 
     // ── Postmortems ───────────────────────────────────────────────────────
 

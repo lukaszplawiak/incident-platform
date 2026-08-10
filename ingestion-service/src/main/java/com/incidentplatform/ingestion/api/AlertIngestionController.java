@@ -59,6 +59,18 @@ public class AlertIngestionController {
         this.rateLimitingService = rateLimitingService;
     }
 
+    /**
+     * Fixed: the scope check below previously used a bare string literal
+     * ({@code 'alerts:ingest'}), independently duplicating the value
+     * auth-service's {@code ApiKeyScope.ALERTS_INGEST} enum defines —
+     * an unwrapped contract between two services with nothing to detect
+     * a rename or typo in either place. Now references
+     * {@code ApiScopes.ALERTS_INGEST} (shared module) via SpEL's
+     * {@code T(FullyQualifiedClassName).CONSTANT} syntax — the same
+     * single constant auth-service's enum is constructed from. See
+     * {@code com.incidentplatform.shared.security.ApiScopes}'s Javadoc
+     * for the full rationale.
+     */
     @PostMapping(
             value = "/{source}",
             consumes = MediaType.APPLICATION_JSON_VALUE,
@@ -67,7 +79,7 @@ public class AlertIngestionController {
     @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN') "
             + "or hasRole('ROLE_SERVICE')"
             + "or (principal instanceof T(com.incidentplatform.shared.security.UserPrincipal) "
-            + "and principal.hasScope('alerts:ingest'))")
+            + "and principal.hasScope(T(com.incidentplatform.shared.security.ApiScopes).ALERTS_INGEST))")
     @Operation(
             summary = "Ingest alerts from external source",
             description = "Accepts alert payload from monitoring system, " +
