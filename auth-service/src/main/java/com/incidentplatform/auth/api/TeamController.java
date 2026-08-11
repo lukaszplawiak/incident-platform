@@ -30,6 +30,21 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * <h2>TeamRole.MANAGER authorization</h2>
+ * Membership endpoints ({@code addMember}, {@code updateMemberRole},
+ * {@code removeMember}) accept {@code ROLE_ADMIN} (tenant-wide) OR a user
+ * holding {@code TeamRole.MANAGER} for the specific {@code teamId} in the
+ * path — checked via {@code principal.isManagerOf(#teamId)}, backed by
+ * the {@code managedTeamIds} JWT claim.
+ *
+ * <p>Deliberately no additional guardrail here (e.g. preventing a Manager
+ * from removing themselves or the last Manager on a team, leaving it
+ * unmanaged) — an explicit product decision to keep "Manager always also
+ * has ROLE_RESPONDER" as a soft operational assumption rather than a
+ * hard-validated invariant, consistent with how the Manager role itself
+ * was scoped.
+ */
 @RestController
 @RequestMapping("/api/v1/teams")
 @Tag(name = "Teams", description = "Team management — groups of users within a tenant.")
@@ -106,10 +121,11 @@ public class TeamController {
     @PostMapping(value = "/{teamId}/members",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "Add a member to a team")
+    @Operation(summary = "Add a member to a team",
+            description = "ROLE_ADMIN, or a user holding TeamRole.MANAGER for this team.")
     @ApiResponses({@ApiResponse(responseCode = "201", description = "Member added"),
             @ApiResponse(responseCode = "409", description = "Already a member")})
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasRole('ADMIN') or principal.isManagerOf(#teamId)")
     public ResponseEntity<TeamMemberDto> addMember(
             @PathVariable UUID teamId,
             @Valid @RequestBody AddTeamMemberRequest request,
@@ -126,8 +142,9 @@ public class TeamController {
 
     @PatchMapping(value = "/{teamId}/members/{userId}/role",
             produces = MediaType.APPLICATION_JSON_VALUE)
-    @Operation(summary = "Update a member's team role")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Update a member's team role",
+            description = "ROLE_ADMIN, or a user holding TeamRole.MANAGER for this team.")
+    @PreAuthorize("hasRole('ADMIN') or principal.isManagerOf(#teamId)")
     public ResponseEntity<TeamMemberDto> updateMemberRole(
             @PathVariable UUID teamId,
             @PathVariable UUID userId,
@@ -138,8 +155,9 @@ public class TeamController {
     }
 
     @DeleteMapping("/{teamId}/members/{userId}")
-    @Operation(summary = "Remove a member from a team")
-    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(summary = "Remove a member from a team",
+            description = "ROLE_ADMIN, or a user holding TeamRole.MANAGER for this team.")
+    @PreAuthorize("hasRole('ADMIN') or principal.isManagerOf(#teamId)")
     public ResponseEntity<Void> removeMember(
             @PathVariable UUID teamId,
             @PathVariable UUID userId,

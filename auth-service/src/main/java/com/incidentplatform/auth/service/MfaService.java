@@ -409,10 +409,13 @@ public class MfaService {
         final List<UUID> teamIds =
                 teamMemberRepository.findTeamIdsByUserIdAndTenantId(
                         user.getId(), tenantId);
+        final List<UUID> managedTeamIds =
+                teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
+                        user.getId(), tenantId);
 
         final String accessToken = jwtUtils.generateToken(
                 user.getId(), tenantId,
-                user.getEmail(), user.getRoleNames(), teamIds);
+                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds);
 
         final Instant accessExpiresAt  = Instant.now().plus(jwtUtils.getAccessTokenTtl());
         final String rawRefreshToken   = authTokenService.generateRefreshToken(user, tenantId);

@@ -71,6 +71,7 @@ class OncallScheduleControllerSecurityTest {
     @SpringBootApplication(scanBasePackages = {
             "com.incidentplatform.oncall.api",
             "com.incidentplatform.oncall.config",
+            "com.incidentplatform.oncall.config",
             "com.incidentplatform.shared.security",
             "com.incidentplatform.shared.exception",
             "com.incidentplatform.shared.observability"
@@ -198,10 +199,36 @@ class OncallScheduleControllerSecurityTest {
         }
     }
 
-    // ── ROLE_RESPONDER — read allowed, write forbidden ────────────────────
+    // ── ROLE_RESPONDER — read allowed, write reaches the service ──────────
 
+    /**
+     * <h2>Fixed: write tests here previously asserted 403 for RESPONDER</h2>
+     * Before the Manager role feature, {@code POST}/{@code DELETE
+     * /schedules} were {@code ROLE_ADMIN}-only at the URL level, so any
+     * RESPONDER correctly got 403 before ever reaching the controller
+     * method. That URL-level gate was deliberately relaxed to
+     * {@code hasRole('ADMIN') or hasRole('RESPONDER')} as part of that
+     * feature — every {@code TeamRole.MANAGER} also holds
+     * {@code ROLE_RESPONDER} (see {@code OncallScheduleController.create}'s
+     * Javadoc), so Managers need to reach the controller at all before the
+     * real, fine-grained decision (ADMIN, or a Manager of the specific
+     * team) can be made.
+     *
+     * <p>That fine-grained decision lives in
+     * {@code OncallScheduleService.requireAdminOrTeamManager} — which
+     * this controller-level test cannot exercise, because {@code service}
+     * is a {@code @MockitoBean} here: whatever it's stubbed to return, it
+     * returns, regardless of which principal the controller actually
+     * passed it. The real Manager-vs-plain-Responder distinction is
+     * covered thoroughly at the service layer instead — see
+     * {@code OncallScheduleServiceTest.TeamManagerAuthorization}.
+     * What THIS test class can still correctly verify: a plain RESPONDER
+     * now reaches the service at all (previously it couldn't), and the
+     * controller correctly returns whatever the (mocked) service decides.
+     */
     @Nested
-    @DisplayName("ROLE_RESPONDER — read allowed, write forbidden")
+    @DisplayName("ROLE_RESPONDER — read allowed, write reaches the service " +
+            "(fine-grained Manager check happens there — see OncallScheduleServiceTest)")
     class ResponderRole {
 
         @Test
@@ -228,20 +255,26 @@ class OncallScheduleControllerSecurityTest {
 
         @Test
         @WithMockUser(roles = "RESPONDER")
-        @DisplayName("POST /schedules — 403 for RESPONDER (admin-only)")
-        void create_returns403() throws Exception {
+        @DisplayName("POST /schedules — reaches the service for RESPONDER " +
+                "(URL-level gate no longer blocks it; fine-grained Manager " +
+                "check happens in the service, not tested here)")
+        void create_reachesServiceForResponder() throws Exception {
+            given(service.create(any(), any(), any()))
+                    .willReturn(buildScheduleDto());
+
             mockMvc.perform(post("/api/v1/oncall/schedules")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isCreated());
         }
 
         @Test
         @WithMockUser(roles = "RESPONDER")
-        @DisplayName("DELETE /schedules/{id} — 403 for RESPONDER (admin-only)")
-        void delete_returns403() throws Exception {
+        @DisplayName("DELETE /schedules/{id} — reaches the service for RESPONDER " +
+                "(same reasoning as the create test above)")
+        void delete_reachesServiceForResponder() throws Exception {
             mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
-                    .andExpect(status().isForbidden());
+                    .andExpect(status().isNoContent());
         }
     }
 
@@ -266,7 +299,7 @@ class OncallScheduleControllerSecurityTest {
         @WithMockUser(roles = "ADMIN")
         @DisplayName("POST /schedules — 201 for ADMIN")
         void create_returns201() throws Exception {
-            given(service.create(any(), any()))
+            given(service.create(any(), any(), any()))
                     .willReturn(buildScheduleDto());
 
             mockMvc.perform(post("/api/v1/oncall/schedules")

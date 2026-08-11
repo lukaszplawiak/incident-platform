@@ -97,7 +97,7 @@ public class DevTokenController {
         // needs no query param — but ?roles=ROLE_RESPONDER now genuinely
         // grants only that role, for testing role restrictions.
         final String token = jwtUtils.generateToken(
-                userId, tenantId, email, roles, java.util.List.of());
+                userId, tenantId, email, roles, java.util.List.of(), java.util.List.of());
 
         log.warn("DEV TOKEN generated: userId={}, tenantId={}, roles={} — NOT FOR PRODUCTION",
                 userId, tenantId, roles);

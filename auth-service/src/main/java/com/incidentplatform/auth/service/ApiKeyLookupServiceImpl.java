@@ -110,6 +110,8 @@ public class ApiKeyLookupServiceImpl
                         : apiKey.getOwnerUser().getEmail(),
                 roles,
                 teamIds,
+                List.of(), // managedTeamIds — not applicable to API key principals,
+                // same reasoning as teamIds/scopes for machine-to-machine calls
                 true,
                 apiKey.getScopes()
         );

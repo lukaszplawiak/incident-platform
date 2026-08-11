@@ -43,6 +43,23 @@ public record UserPrincipal(
         List<UUID> teamIds,
 
         /**
+         * UUIDs of teams where the user holds {@code TeamRole.MANAGER}
+         * (auth-service's domain — this module doesn't depend on
+         * auth-service, so the role name itself isn't referenced here,
+         * just its effect: which teams this user manages).
+         *
+         * <p>Populated from JWT {@code managedTeamIds} claim — a subset of
+         * {@link #teamIds}. Empty for API key principals, same reasoning
+         * as {@link #teamIds}.
+         *
+         * <p>Added for the Manager role feature: a Manager needs full
+         * access to create/update/delete on-call schedules and manage
+         * membership for teams they manage, without needing the
+         * tenant-wide {@code ROLE_ADMIN} role — see {@link #isManagerOf}.
+         */
+        List<UUID> managedTeamIds,
+
+        /**
          * True when this principal was authenticated via an API key.
          * False for JWT-authenticated requests.
          *
@@ -63,9 +80,10 @@ public record UserPrincipal(
 ) {
 
     public UserPrincipal {
-        roles   = roles   != null ? List.copyOf(roles)   : List.of();
-        teamIds = teamIds != null ? List.copyOf(teamIds) : List.of();
-        scopes  = scopes  != null ? List.copyOf(scopes)  : List.of();
+        roles          = roles          != null ? List.copyOf(roles)          : List.of();
+        teamIds        = teamIds        != null ? List.copyOf(teamIds)        : List.of();
+        managedTeamIds = managedTeamIds != null ? List.copyOf(managedTeamIds) : List.of();
+        scopes         = scopes         != null ? List.copyOf(scopes)         : List.of();
     }
 
     /**
@@ -74,7 +92,17 @@ public record UserPrincipal(
      */
     public UserPrincipal(UUID userId, String tenantId, String email,
                          List<String> roles, List<UUID> teamIds) {
-        this(userId, tenantId, email, roles, teamIds, false, List.of());
+        this(userId, tenantId, email, roles, teamIds, List.of(), false, List.of());
+    }
+
+    /**
+     * Convenience constructor for JWT-authenticated principals that also
+     * carries {@link #managedTeamIds}.
+     */
+    public UserPrincipal(UUID userId, String tenantId, String email,
+                         List<String> roles, List<UUID> teamIds,
+                         List<UUID> managedTeamIds) {
+        this(userId, tenantId, email, roles, teamIds, managedTeamIds, false, List.of());
     }
 
     public Collection<? extends GrantedAuthority> getAuthorities() {
@@ -89,6 +117,21 @@ public record UserPrincipal(
 
     public boolean isMemberOf(UUID teamId) {
         return teamIds.contains(teamId);
+    }
+
+    /**
+     * Returns true if this principal holds {@code TeamRole.MANAGER} for
+     * the given team. {@code teamId == null} always returns false — a
+     * tenant-wide (no-team) resource is not something any team Manager
+     * has authority over; only {@code ROLE_ADMIN} does.
+     *
+     * <p>Used by services in oncall-service (on-call schedule
+     * create/delete) and auth-service (team membership management) to
+     * grant Managers full access to their own team's resources without
+     * needing tenant-wide {@code ROLE_ADMIN}.
+     */
+    public boolean isManagerOf(UUID teamId) {
+        return teamId != null && managedTeamIds.contains(teamId);
     }
 
     /**

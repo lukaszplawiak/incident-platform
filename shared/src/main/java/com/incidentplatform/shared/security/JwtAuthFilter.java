@@ -128,6 +128,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         final Optional<String> emailOpt = jwtUtils.extractEmail(claims);
         final List<String> roles   = jwtUtils.extractRoles(claims);
         final List<java.util.UUID> teamIds = jwtUtils.extractTeamIds(claims);
+        final List<java.util.UUID> managedTeamIds = jwtUtils.extractManagedTeamIds(claims);
 
         if (userIdOpt.isEmpty() || tenantIdOpt.isEmpty() || emailOpt.isEmpty()) {
             log.warn("JWT token missing required claims (userId/tenantId/email), " +
@@ -146,7 +147,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 TenantContext.REQUEST_ATTRIBUTE_TENANT_ID, tenantId);
 
         final UserPrincipal principal =
-                new UserPrincipal(userId, tenantId, email, roles, teamIds);
+                new UserPrincipal(userId, tenantId, email, roles, teamIds, managedTeamIds);
         final UsernamePasswordAuthenticationToken authentication =
                 new UsernamePasswordAuthenticationToken(
                         principal, null, principal.getAuthorities());

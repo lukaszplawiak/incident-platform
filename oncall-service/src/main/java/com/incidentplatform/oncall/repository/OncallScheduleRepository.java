@@ -160,10 +160,8 @@ public interface OncallScheduleRepository
      * {@code InvalidDataAccessApiUsageException}. Never caught before
      * because every existing test mocked this repository — Mockito
      * doesn't perform Hibernate's runtime JPQL type checking, so the
-     * mismatch was invisible until backlog item #22's real-Postgres
-     * integration test exercised this method for the first time. See
-     * {@code OncallScheduleOverlapIntegrationTest} and
-     * {@code OncallScheduleService.create}'s reordered validation.
+     * mismatch was invisible until a real-Postgres integration test
+     * exercised this method for the first time.
      */
     @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s

@@ -59,7 +59,7 @@ class JwtUtilsTest {
     @DisplayName("should generate non-null token")
     void shouldGenerateNonNullToken() {
         final String token = jwtUtils.generateToken(
-                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(SecurityRoles.ROLE_ADMIN), List.of());
+                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(SecurityRoles.ROLE_ADMIN), List.of(), List.of());
 
         assertThat(token).isNotNull().isNotBlank();
     }
@@ -68,9 +68,9 @@ class JwtUtilsTest {
     @DisplayName("should generate different tokens for different users")
     void shouldGenerateDifferentTokensForDifferentUsers() {
         final String token1 = jwtUtils.generateToken(
-                UUID.randomUUID(), "tenant1", "user1@test.com", List.of(SecurityRoles.ROLE_ADMIN), List.of());
+                UUID.randomUUID(), "tenant1", "user1@test.com", List.of(SecurityRoles.ROLE_ADMIN), List.of(), List.of());
         final String token2 = jwtUtils.generateToken(
-                UUID.randomUUID(), "tenant2", "user2@test.com", List.of(SecurityRoles.ROLE_RESPONDER), List.of());
+                UUID.randomUUID(), "tenant2", "user2@test.com", List.of(SecurityRoles.ROLE_RESPONDER), List.of(), List.of());
 
         assertThat(token1).isNotEqualTo(token2);
     }
@@ -79,7 +79,7 @@ class JwtUtilsTest {
     @DisplayName("should return claims for valid token")
     void shouldReturnClaimsForValidToken() {
         final String token = jwtUtils.generateToken(
-                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(SecurityRoles.ROLE_ADMIN), List.of());
+                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(SecurityRoles.ROLE_ADMIN), List.of(), List.of());
 
         assertThat(jwtUtils.validateAndGetClaims(token)).isPresent();
     }
@@ -97,7 +97,7 @@ class JwtUtilsTest {
                 "other-secret-key-minimum-64-characters-long-for-hs512-absolutely-not-prod",
                 ACCESS_TOKEN_TTL, SERVICE_TOKEN_TTL);
         final String wrongToken = other.generateToken(
-                UUID.randomUUID(), "acme", "user@acme.com", List.of(), List.of());
+                UUID.randomUUID(), "acme", "user@acme.com", List.of(), List.of(), List.of());
 
         assertThat(jwtUtils.validateAndGetClaims(wrongToken)).isEmpty();
     }
@@ -109,7 +109,7 @@ class JwtUtilsTest {
         final JwtUtils expiredUtils = buildJwtUtils(
                 TEST_SECRET, Duration.ZERO, SERVICE_TOKEN_TTL);
         final String expiredToken = expiredUtils.generateToken(
-                UUID.randomUUID(), "acme", "user@acme.com", List.of(), List.of());
+                UUID.randomUUID(), "acme", "user@acme.com", List.of(), List.of(), List.of());
 
         assertThat(jwtUtils.validateAndGetClaims(expiredToken)).isEmpty();
     }
@@ -135,7 +135,7 @@ class JwtUtilsTest {
     void shouldExtractUserId() {
         final UUID userId = UUID.randomUUID();
         final String token = jwtUtils.generateToken(
-                userId, "acme-corp", "user@acme.com", List.of(), List.of());
+                userId, "acme-corp", "user@acme.com", List.of(), List.of(), List.of());
         final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
 
         assertThat(jwtUtils.extractUserId(claims)).isPresent().contains(userId);
@@ -145,7 +145,7 @@ class JwtUtilsTest {
     @DisplayName("should extract tenantId from claims")
     void shouldExtractTenantId() {
         final String token = jwtUtils.generateToken(
-                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of());
+                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of(), List.of());
         final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
 
         assertThat(jwtUtils.extractTenantId(claims)).isPresent().contains("acme-corp");
@@ -155,7 +155,7 @@ class JwtUtilsTest {
     @DisplayName("should extract email from claims")
     void shouldExtractEmail() {
         final String token = jwtUtils.generateToken(
-                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of());
+                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of(), List.of());
         final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
 
         assertThat(jwtUtils.extractEmail(claims)).isPresent().contains("user@acme.com");
@@ -167,7 +167,7 @@ class JwtUtilsTest {
         final List<String> roles =
                 List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_RESPONDER);
         final String token = jwtUtils.generateToken(
-                UUID.randomUUID(), "acme-corp", "user@acme.com", roles, List.of());
+                UUID.randomUUID(), "acme-corp", "user@acme.com", roles, List.of(), List.of());
         final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
 
         assertThat(jwtUtils.extractRoles(claims))
@@ -180,10 +180,55 @@ class JwtUtilsTest {
     @DisplayName("should return empty list when no roles in claims")
     void shouldReturnEmptyRolesWhenNone() {
         final String token = jwtUtils.generateToken(
-                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of());
+                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of(), List.of());
         final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
 
         assertThat(jwtUtils.extractRoles(claims)).isEmpty();
+    }
+
+    // ── managedTeamIds claim (Manager role feature) ─────────────────────────
+
+    @Test
+    @DisplayName("should extract managedTeamIds from claims")
+    void shouldExtractManagedTeamIds() {
+        final UUID teamA = UUID.randomUUID();
+        final UUID teamB = UUID.randomUUID();
+        final String token = jwtUtils.generateToken(
+                UUID.randomUUID(), "acme-corp", "user@acme.com",
+                List.of(SecurityRoles.ROLE_RESPONDER),
+                List.of(teamA, teamB), List.of(teamB));
+        final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
+
+        assertThat(jwtUtils.extractManagedTeamIds(claims))
+                .containsExactly(teamB);
+    }
+
+    @Test
+    @DisplayName("should return empty list when no managedTeamIds in claims")
+    void shouldReturnEmptyManagedTeamIdsWhenNone() {
+        final String token = jwtUtils.generateToken(
+                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of(), List.of());
+        final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
+
+        assertThat(jwtUtils.extractManagedTeamIds(claims)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("managedTeamIds is independent of teamIds — not every team membership is a Manager role")
+    void managedTeamIdsIsIndependentOfTeamIds() {
+        final UUID memberOnlyTeam  = UUID.randomUUID();
+        final UUID managedTeam     = UUID.randomUUID();
+        final String token = jwtUtils.generateToken(
+                UUID.randomUUID(), "acme-corp", "user@acme.com",
+                List.of(SecurityRoles.ROLE_RESPONDER),
+                List.of(memberOnlyTeam, managedTeam), List.of(managedTeam));
+        final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
+
+        assertThat(jwtUtils.extractTeamIds(claims))
+                .containsExactlyInAnyOrder(memberOnlyTeam, managedTeam);
+        assertThat(jwtUtils.extractManagedTeamIds(claims))
+                .containsExactly(managedTeam)
+                .doesNotContain(memberOnlyTeam);
     }
 
     @Test
@@ -195,7 +240,7 @@ class JwtUtilsTest {
         final List<String> roles =
                 List.of(SecurityRoles.ROLE_ADMIN, SecurityRoles.ROLE_INGESTOR);
 
-        final String token  = jwtUtils.generateToken(userId, tenant, email, roles, List.of());
+        final String token  = jwtUtils.generateToken(userId, tenant, email, roles, List.of(), List.of());
         final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
 
         assertThat(jwtUtils.extractUserId(claims)).contains(userId);

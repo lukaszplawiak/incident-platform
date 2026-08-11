@@ -56,6 +56,7 @@ public class JwtUtils {
     public static final String CLAIM_EMAIL        = "email";
     public static final String CLAIM_SERVICE_NAME = "serviceName";
     public static final String CLAIM_TEAM_IDS     = "teamIds";
+    public static final String CLAIM_MANAGED_TEAM_IDS = "managedTeamIds";
 
     private static final int MIN_SECRET_BYTES = 64;
 
@@ -128,10 +129,17 @@ public class JwtUtils {
     /**
      * Generates an access token for a human operator.
      * TTL controlled by {@code jwt.access-token-ttl} (default PT15M).
+     *
+     * @param managedTeamIds subset of {@code teamIds} where the user holds
+     *                       {@code TeamRole.MANAGER} — added for the Manager
+     *                       role feature, embedded as its own claim so
+     *                       {@code oncall-service}/{@code auth-service} can
+     *                       authorize team-scoped actions without a
+     *                       cross-service call back to auth-service's DB.
      */
     public String generateToken(UUID userId, String tenantId,
                                 String email, List<String> roles,
-                                List<UUID> teamIds) {
+                                List<UUID> teamIds, List<UUID> managedTeamIds) {
         final Instant now        = Instant.now();
         final Instant expiration = now.plus(properties.accessTokenTtl());
 
@@ -142,6 +150,9 @@ public class JwtUtils {
                 .claim(CLAIM_EMAIL, email)
                 .claim(CLAIM_ROLES, roles)
                 .claim(CLAIM_TEAM_IDS, teamIds.stream()
+                        .map(java.util.UUID::toString)
+                        .toList())
+                .claim(CLAIM_MANAGED_TEAM_IDS, managedTeamIds.stream()
                         .map(java.util.UUID::toString)
                         .toList())
                 .issuedAt(Date.from(now))
@@ -255,6 +266,21 @@ public class JwtUtils {
     @SuppressWarnings("unchecked")
     public List<java.util.UUID> extractTeamIds(Claims claims) {
         final List<String> raw = claims.get(CLAIM_TEAM_IDS, List.class);
+        if (raw == null) return List.of();
+        return raw.stream()
+                .map(java.util.UUID::fromString)
+                .toList();
+    }
+
+    /**
+     * Extracts team UUIDs from the {@code managedTeamIds} JWT claim — teams
+     * where this user holds {@code TeamRole.MANAGER}. Returns an empty list
+     * if the claim is absent (e.g. tokens issued before the Manager role
+     * feature was added, or service tokens which never carry this claim).
+     */
+    @SuppressWarnings("unchecked")
+    public List<java.util.UUID> extractManagedTeamIds(Claims claims) {
+        final List<String> raw = claims.get(CLAIM_MANAGED_TEAM_IDS, List.class);
         if (raw == null) return List.of();
         return raw.stream()
                 .map(java.util.UUID::fromString)
