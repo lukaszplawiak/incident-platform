@@ -10,6 +10,7 @@ import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
+import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -49,10 +50,18 @@ public class OncallScheduleService {
      * so an invalid role string is rejected with the existing clean
      * {@code VALIDATION_FAILED} response before any database work happens
      * at all — the more correct order regardless of the type-mismatch fix.
+     *
+     * <h2>TeamRole.MANAGER authorization</h2>
+     * {@code principal} added for the Manager role feature — see
+     * {@link #requireAdminOrTeamManager}. A {@code null}
+     * {@code request.teamId()} (tenant-wide schedule) is only creatable by
+     * {@code ROLE_ADMIN}: a team Manager's authority doesn't extend
+     * beyond their own team.
      */
     @Transactional
     public OncallScheduleDto create(String tenantId,
-                                    CreateOncallScheduleRequest request) {
+                                    CreateOncallScheduleRequest request,
+                                    UserPrincipal principal) {
         final OncallRole role;
         try {
             role = OncallRole.valueOf(request.role());
@@ -65,6 +74,8 @@ public class OncallScheduleService {
                     HttpStatus.BAD_REQUEST
             );
         }
+
+        requireAdminOrTeamManager(principal, request.teamId());
 
         final boolean overlapping = repository.existsOverlappingForCreate(
                 tenantId,
@@ -237,15 +248,53 @@ public class OncallScheduleService {
                 ));
     }
 
+    /**
+     * <h2>TeamRole.MANAGER authorization</h2>
+     * {@code principal} added for the Manager role feature. The schedule
+     * is loaded first regardless (needed for the 404 case anyway), so its
+     * real {@code teamId} is used for the check — see
+     * {@link #requireAdminOrTeamManager}.
+     */
     @Transactional
-    public void delete(UUID id, String tenantId) {
+    public void delete(UUID id, String tenantId, UserPrincipal principal) {
         final OncallSchedule schedule = repository
                 .findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "OncallSchedule", id));
 
+        requireAdminOrTeamManager(principal, schedule.getTeamId());
+
         repository.delete(schedule);
 
         log.info("OncallSchedule deleted: id={}, tenantId={}", id, tenantId);
+    }
+
+    /**
+     * Authorizes a team-scoped write (create/delete an on-call schedule):
+     * allowed for {@code ROLE_ADMIN} (any team, and tenant-wide schedules
+     * where {@code teamId} is {@code null}), or a user holding
+     * {@code TeamRole.MANAGER} for the specific {@code teamId} — checked
+     * via {@link UserPrincipal#isManagerOf}, backed by the
+     * {@code managedTeamIds} JWT claim (populated by auth-service's
+     * TeamMemberRepository at login/token-refresh time — no cross-service
+     * call needed here).
+     *
+     * <p>No additional guardrail beyond this — e.g. no check that the
+     * Manager also holds {@code ROLE_RESPONDER} — matching the same
+     * "soft operational assumption, not hard-validated" product decision
+     * documented on {@code TeamController}.
+     */
+    private void requireAdminOrTeamManager(UserPrincipal principal, UUID teamId) {
+        if (principal.hasRole("ROLE_ADMIN")) {
+            return;
+        }
+        if (principal.isManagerOf(teamId)) {
+            return;
+        }
+        throw new BusinessException(
+                ErrorCodes.FORBIDDEN,
+                "Requires ROLE_ADMIN, or TeamRole.MANAGER for this schedule's team",
+                HttpStatus.FORBIDDEN
+        );
     }
 }

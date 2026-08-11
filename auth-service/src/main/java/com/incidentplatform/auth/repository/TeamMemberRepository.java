@@ -33,6 +33,24 @@ public interface TeamMemberRepository
             @Param("userId") UUID userId,
             @Param("tenantId") String tenantId);
 
+    /**
+     * Returns team UUIDs where the user holds {@code TeamRole.MANAGER},
+     * within a tenant — a subset of {@link #findTeamIdsByUserIdAndTenantId}.
+     * Used by AuthService.login() (and the other token-generation call
+     * sites — AuthTokenService.rotateRefreshToken, MfaService) to populate
+     * the {@code managedTeamIds} JWT claim, which oncall-service and this
+     * service's own TeamController/TeamService use to authorize
+     * team-scoped actions (on-call schedule create/delete, team membership
+     * management) for Managers without requiring tenant-wide ROLE_ADMIN.
+     */
+    @Query("SELECT tm.team.id FROM TeamMember tm " +
+            "WHERE tm.user.id = :userId " +
+            "AND tm.team.tenantId = :tenantId " +
+            "AND tm.role = com.incidentplatform.auth.domain.TeamRole.MANAGER")
+    List<UUID> findManagedTeamIdsByUserIdAndTenantId(
+            @Param("userId") UUID userId,
+            @Param("tenantId") String tenantId);
+
     void deleteByTeamIdAndUserId(UUID teamId, UUID userId);
 
     /**

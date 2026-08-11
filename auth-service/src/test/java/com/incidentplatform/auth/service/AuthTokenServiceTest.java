@@ -177,11 +177,13 @@ class AuthTokenServiceTest {
                     any(), eq(AuthToken.Type.REFRESH), any()))
                     .willReturn(Optional.of(stored));
             given(jwtUtils.generateToken(any(), anyString(),
-                    anyString(), any(), any()))
+                    anyString(), any(), any(), any()))
                     .willReturn("new-access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
             given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                    any(), anyString())).willReturn(List.of());
+            given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                     any(), anyString())).willReturn(List.of());
 
             final AuthTokenService.RotationResult result =
@@ -205,11 +207,13 @@ class AuthTokenServiceTest {
                     any(), eq(AuthToken.Type.REFRESH), any()))
                     .willReturn(Optional.of(stored));
             given(jwtUtils.generateToken(any(), anyString(),
-                    anyString(), any(), any()))
+                    anyString(), any(), any(), any()))
                     .willReturn("new-access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
             given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
+                    any(), anyString())).willReturn(List.of());
+            given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                     any(), anyString())).willReturn(List.of());
 
             service.rotateRefreshToken("raw-refresh-token");

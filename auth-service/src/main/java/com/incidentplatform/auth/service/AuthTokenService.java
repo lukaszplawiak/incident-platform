@@ -116,12 +116,6 @@ public class AuthTokenService {
      * access token at this point (login has not completed), so this token
      * is what POST /mfa/setup-required and POST /mfa/enable-required accept
      * instead of a Bearer token.
-     *
-     * <p>Fixed: was missing {@code @Transactional} — same fix and same
-     * reasoning as {@link #consumeToken}. Its one call site
-     * ({@code AuthService.login()}) already has its own {@code @Transactional},
-     * so this was not an active bug, but is now consistent with every other
-     * public write method in this class.
      */
     @Transactional
     public String generateMfaSetupRequiredToken(User user, String tenantId) {
@@ -160,22 +154,6 @@ public class AuthTokenService {
 
     /**
      * Validates a token and marks it as used atomically.
-     *
-     * <p>Fixed: this Javadoc was previously misplaced above
-     * {@link #generateMfaSessionToken}, describing a method it had nothing
-     * to do with, while this method — the one it actually describes — had
-     * no comment at all. An editing artifact, evidently from a prior change
-     * that inserted a new Javadoc block without first removing the old one
-     * from its original position.
-     *
-     * <p>Also fixed: was missing {@code @Transactional} — every one of its
-     * five call sites already wraps it in their own transaction (verified
-     * directly, not assumed), so this was not an active bug, but it left
-     * this as the only public write method in this class without the
-     * annotation, and correctness would have silently depended on every
-     * future caller remembering to add their own transaction boundary.
-     * Added for consistency with the rest of the class and to remove that
-     * risk going forward.
      *
      * @throws BusinessException 401 if the token is invalid, expired, or used
      */
@@ -321,11 +299,14 @@ public class AuthTokenService {
         final java.util.List<java.util.UUID> teamIds =
                 teamMemberRepository.findTeamIdsByUserIdAndTenantId(
                         user.getId(), tenantId);
+        final java.util.List<java.util.UUID> managedTeamIds =
+                teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
+                        user.getId(), tenantId);
 
         // Generate new access token
         final String newAccessToken = jwtUtils.generateToken(
                 user.getId(), tenantId,
-                user.getEmail(), user.getRoleNames(), teamIds);
+                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds);
 
         final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());

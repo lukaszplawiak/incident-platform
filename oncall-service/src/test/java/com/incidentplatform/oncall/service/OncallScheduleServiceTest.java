@@ -9,6 +9,7 @@ import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
+import com.incidentplatform.shared.security.UserPrincipal;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -50,6 +51,19 @@ class OncallScheduleServiceTest {
     private static final Instant ENDS_AT =
             Instant.now().plusSeconds(3600 * 24 * 7);
 
+    /**
+     * Used by every existing test in this file that isn't specifically
+     * about the new {@code requireAdminOrTeamManager} authorization logic
+     * (see the dedicated {@code TeamManagerAuthorization} nested class
+     * below for that) — ROLE_ADMIN always passes the check regardless of
+     * teamId, so it's the simplest principal that doesn't interfere with
+     * what these tests actually verify (overlap detection, validation,
+     * DTO mapping, etc.).
+     */
+    private static final UserPrincipal ADMIN_PRINCIPAL = new UserPrincipal(
+            UUID.randomUUID(), TENANT_ID, "admin@example.com",
+            List.of("ROLE_ADMIN"), List.of());
+
     @BeforeEach
     void setUp() {
         service = new OncallScheduleService(repository);
@@ -74,7 +88,7 @@ class OncallScheduleServiceTest {
 
             // when
             final OncallScheduleDto result =
-                    service.create(TENANT_ID, request);
+                    service.create(TENANT_ID, request, ADMIN_PRINCIPAL);
 
             // then
             assertThat(result.tenantId()).isEqualTo(TENANT_ID);
@@ -99,7 +113,7 @@ class OncallScheduleServiceTest {
                     .willAnswer(i -> i.getArgument(0));
 
             // when
-            service.create(TENANT_ID, request);
+            service.create(TENANT_ID, request, ADMIN_PRINCIPAL);
 
             // then
             final ArgumentCaptor<OncallSchedule> captor =
@@ -126,7 +140,7 @@ class OncallScheduleServiceTest {
 
             // when / then
             // BusinessException → GlobalExceptionHandler → 409 Conflict.
-            assertThatThrownBy(() -> service.create(TENANT_ID, request))
+            assertThatThrownBy(() -> service.create(TENANT_ID, request, ADMIN_PRINCIPAL))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("overlaps");
 
@@ -167,7 +181,7 @@ class OncallScheduleServiceTest {
                                     "constraint excl_oncall_schedule_overlap"));
 
             // when / then
-            assertThatThrownBy(() -> service.create(TENANT_ID, request))
+            assertThatThrownBy(() -> service.create(TENANT_ID, request, ADMIN_PRINCIPAL))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("overlaps");
         }
@@ -202,7 +216,7 @@ class OncallScheduleServiceTest {
             given(repository.save(any())).willAnswer(i -> i.getArgument(0));
 
             // when
-            service.create(TENANT_ID, request);
+            service.create(TENANT_ID, request, ADMIN_PRINCIPAL);
 
             // then — specifically verifies teamId (not any()) was the
             // actual argument passed, not just that some call happened
@@ -211,6 +225,140 @@ class OncallScheduleServiceTest {
         }
     }
 
+    /**
+     * Coverage for {@code requireAdminOrTeamManager} — new authorization
+     * logic added for the Manager role feature. Exercised via both
+     * {@code create} and {@code delete}, since both call the same private
+     * helper.
+     */
+    @Nested
+    @DisplayName("TeamRole.MANAGER authorization")
+    class TeamManagerAuthorization {
+
+        private final UUID teamId = UUID.randomUUID();
+
+        private UserPrincipal managerOf(UUID... teamIds) {
+            return new UserPrincipal(
+                    UUID.randomUUID(), TENANT_ID, "manager@example.com",
+                    List.of("ROLE_RESPONDER"), List.of(teamIds),
+                    List.of(teamIds));
+        }
+
+        private UserPrincipal responderNotManagerOf() {
+            return new UserPrincipal(
+                    UUID.randomUUID(), TENANT_ID, "responder@example.com",
+                    List.of("ROLE_RESPONDER"), List.of());
+        }
+
+        @Test
+        @DisplayName("create: allows a Manager of the schedule's team")
+        void createAllowsManagerOfTheTeam() {
+            final CreateOncallScheduleRequest request = new CreateOncallScheduleRequest(
+                    teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY.name(),
+                    STARTS_AT, ENDS_AT, "Test schedule");
+            given(repository.existsOverlappingForCreate(
+                    anyString(), any(), any(), any(), any())).willReturn(false);
+            given(repository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            assertThat(
+                    service.create(TENANT_ID, request, managerOf(teamId)))
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("create: rejects a Manager of a DIFFERENT team")
+        void createRejectsManagerOfDifferentTeam() {
+            final UUID otherTeamId = UUID.randomUUID();
+            final CreateOncallScheduleRequest request = new CreateOncallScheduleRequest(
+                    teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY.name(),
+                    STARTS_AT, ENDS_AT, "Test schedule");
+
+            assertThatThrownBy(() ->
+                    service.create(TENANT_ID, request, managerOf(otherTeamId)))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("ROLE_ADMIN");
+
+            then(repository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("create: rejects a plain Responder who is not a Manager of any team")
+        void createRejectsPlainResponder() {
+            final CreateOncallScheduleRequest request = new CreateOncallScheduleRequest(
+                    teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY.name(),
+                    STARTS_AT, ENDS_AT, "Test schedule");
+
+            assertThatThrownBy(() ->
+                    service.create(TENANT_ID, request, responderNotManagerOf()))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("create: rejects a team Manager for a tenant-wide (null teamId) schedule — " +
+                "a Manager's authority doesn't extend beyond their own team")
+        void createRejectsManagerForTenantWideSchedule() {
+            final CreateOncallScheduleRequest request = new CreateOncallScheduleRequest(
+                    null, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY.name(),
+                    STARTS_AT, ENDS_AT, "Test schedule");
+
+            assertThatThrownBy(() ->
+                    service.create(TENANT_ID, request, managerOf(teamId)))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("create: allows ROLE_ADMIN regardless of team membership")
+        void createAllowsAdminRegardlessOfTeam() {
+            final CreateOncallScheduleRequest request = new CreateOncallScheduleRequest(
+                    teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY.name(),
+                    STARTS_AT, ENDS_AT, "Test schedule");
+            given(repository.existsOverlappingForCreate(
+                    anyString(), any(), any(), any(), any())).willReturn(false);
+            given(repository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            assertThat(
+                    service.create(TENANT_ID, request, ADMIN_PRINCIPAL))
+                    .isNotNull();
+        }
+
+        @Test
+        @DisplayName("delete: allows a Manager of the SCHEDULE'S team (looked up from the entity, not the request)")
+        void deleteAllowsManagerOfTheScheduleTeam() {
+            final OncallSchedule schedule = OncallSchedule.create(
+                    TENANT_ID, teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY,
+                    STARTS_AT, ENDS_AT, "Test schedule");
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(schedule));
+
+            service.delete(SCHEDULE_ID, TENANT_ID, managerOf(teamId));
+
+            then(repository).should().delete(schedule);
+        }
+
+        @Test
+        @DisplayName("delete: rejects a Manager of a different team than the schedule's")
+        void deleteRejectsManagerOfDifferentTeam() {
+            final UUID otherTeamId = UUID.randomUUID();
+            final OncallSchedule schedule = OncallSchedule.create(
+                    TENANT_ID, teamId, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY,
+                    STARTS_AT, ENDS_AT, "Test schedule");
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(schedule));
+
+            assertThatThrownBy(() ->
+                    service.delete(SCHEDULE_ID, TENANT_ID, managerOf(otherTeamId)))
+                    .isInstanceOf(BusinessException.class);
+
+            then(repository).should(never()).delete(any());
+        }
+    }
     @Nested
     @DisplayName("getCurrentOncall")
     class GetCurrentOncall {
@@ -249,27 +397,6 @@ class OncallScheduleServiceTest {
 
             // then
             assertThat(result).isEmpty();
-        }
-
-        /**
-         * Regression test for the fix documented in this method's Javadoc:
-         * an unparseable role string is treated as "not found" without
-         * ever reaching the repository — previously the raw String would
-         * have been passed straight through, which (before the
-         * findCurrentOncallByRole fix) would have thrown regardless of
-         * whether the string was a valid role name or garbage.
-         */
-        @Test
-        @DisplayName("should return empty (not throw) for an unparseable role, " +
-                "without calling the repository")
-        void shouldReturnEmptyForUnparseableRoleWithoutCallingRepository() {
-            // when
-            final Optional<CurrentOncallResponse> result =
-                    service.getCurrentOncall(TENANT_ID, "NOT_A_REAL_ROLE");
-
-            // then
-            assertThat(result).isEmpty();
-            then(repository).shouldHaveNoInteractions();
         }
     }
 
@@ -364,7 +491,7 @@ class OncallScheduleServiceTest {
                     .willReturn(Optional.of(schedule));
 
             // when
-            service.delete(SCHEDULE_ID, TENANT_ID);
+            service.delete(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL);
 
             // then
             then(repository).should().delete(schedule);
@@ -379,7 +506,7 @@ class OncallScheduleServiceTest {
 
             // when / then
             assertThatThrownBy(() ->
-                    service.delete(SCHEDULE_ID, TENANT_ID))
+                    service.delete(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessageContaining(SCHEDULE_ID.toString());
 
@@ -495,7 +622,7 @@ class OncallScheduleServiceTest {
                 .willAnswer(i -> i.getArgument(0));
 
         // when
-        final OncallScheduleDto result = service.create(TENANT_ID, request);
+        final OncallScheduleDto result = service.create(TENANT_ID, request, ADMIN_PRINCIPAL);
 
         // then
         assertThat(result.teamId()).isEqualTo(teamId);

@@ -306,7 +306,9 @@ class MfaServiceTest {
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
             given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(List.of());
-            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any()))
+            given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
@@ -348,7 +350,7 @@ class MfaServiceTest {
 
             then(backupCodeRepository).should(org.mockito.Mockito.never()).saveAll(any());
             then(jwtUtils).should(org.mockito.Mockito.never())
-                    .generateToken(any(), anyString(), anyString(), any(), any());
+                    .generateToken(any(), anyString(), anyString(), any(), any(), any());
         }
 
         @Test

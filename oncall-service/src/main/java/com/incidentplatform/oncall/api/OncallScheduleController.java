@@ -7,6 +7,7 @@ import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -22,6 +23,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -179,13 +181,31 @@ public class OncallScheduleController {
         return ResponseEntity.ok(service.getById(id, tenantId));
     }
 
+    /**
+     * <h2>TeamRole.MANAGER authorization</h2>
+     * URL-level gate relaxed from ROLE_ADMIN-only to also admit
+     * ROLE_RESPONDER — every {@code TeamRole.MANAGER} also holds
+     * ROLE_RESPONDER (a soft operational assumption, not hard-validated;
+     * see {@code TeamController}'s class Javadoc for the same decision
+     * made the same way). The actual fine-grained check — ADMIN, or a
+     * Manager of the schedule's specific team — happens in
+     * {@link OncallScheduleService#create}, since it needs
+     * {@code request.teamId()} from the body, which {@code @PreAuthorize}
+     * can still reach via {@code #request.teamId()} SpEL, but the
+     * equivalent check for {@link #delete} below cannot (needs the
+     * existing schedule's teamId, only known after a DB lookup) — kept
+     * both checks in the service layer for one consistent pattern rather
+     * than splitting the logic across two different mechanisms.
+     */
     @PostMapping(
             value = "/schedules",
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ADMIN')")
-    @Operation(summary = "Create a new on-call schedule entry")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('RESPONDER')")
+    @Operation(summary = "Create a new on-call schedule entry",
+            description = "ROLE_ADMIN, or a user holding TeamRole.MANAGER " +
+                    "for the schedule's team.")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Schedule created"),
             @ApiResponse(responseCode = "400", description = "Validation failed"),
@@ -193,32 +213,47 @@ public class OncallScheduleController {
                     description = "Schedule overlaps with an existing entry"),
             @ApiResponse(responseCode = "401", description = "Missing or invalid JWT token"),
             @ApiResponse(responseCode = "403",
-                    description = "Insufficient permissions — ROLE_ADMIN required")
+                    description = "Insufficient permissions — ROLE_ADMIN or " +
+                            "TeamRole.MANAGER for this team required")
     })
     public ResponseEntity<OncallScheduleDto> create(
-            @Valid @RequestBody CreateOncallScheduleRequest request) {
+            @Valid @RequestBody CreateOncallScheduleRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
         final String tenantId = TenantContext.get();
         log.debug("POST /api/v1/oncall/schedules, tenant={}, role={}",
                 tenantId, request.role());
 
-        final OncallScheduleDto created = service.create(tenantId, request);
+        final OncallScheduleDto created = service.create(tenantId, request, principal);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
     }
 
+    /**
+     * <h2>TeamRole.MANAGER authorization</h2>
+     * Same relaxation and same reasoning as {@link #create} — see its
+     * Javadoc. The fine-grained check happens in
+     * {@link OncallScheduleService#delete}, which loads the schedule
+     * first (needed anyway, for the 404 case) and checks the caller
+     * against that schedule's actual {@code teamId}.
+     */
     @DeleteMapping("/schedules/{id}")
-    @PreAuthorize("hasRole('ADMIN')")
-    @Operation(summary = "Delete an on-call schedule entry")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('RESPONDER')")
+    @Operation(summary = "Delete an on-call schedule entry",
+            description = "ROLE_ADMIN, or a user holding TeamRole.MANAGER " +
+                    "for the schedule's team.")
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "Schedule deleted"),
             @ApiResponse(responseCode = "404", description = "Schedule not found"),
             @ApiResponse(responseCode = "401", description = "Missing or invalid JWT token"),
             @ApiResponse(responseCode = "403",
-                    description = "Insufficient permissions — ROLE_ADMIN required")
+                    description = "Insufficient permissions — ROLE_ADMIN or " +
+                            "TeamRole.MANAGER for this team required")
     })
-    public ResponseEntity<Void> delete(@PathVariable UUID id) {
+    public ResponseEntity<Void> delete(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal principal) {
         final String tenantId = TenantContext.get();
         log.debug("DELETE /api/v1/oncall/schedules/{}, tenant={}", id, tenantId);
-        service.delete(id, tenantId);
+        service.delete(id, tenantId, principal);
         return ResponseEntity.noContent().build();
     }
 
