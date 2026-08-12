@@ -160,6 +160,29 @@ class ServiceTokenProviderTest {
             then(jwtUtils).should(times(1)).generateServiceToken(SERVICE_NAME);
         }
 
+        /**
+         * Fixed: previously used a plain {@code new ArrayList<>()} as
+         * {@code results}, written to concurrently by 10 threads via
+         * {@code results.add(...)} with no synchronization —
+         * {@code ArrayList} is not thread-safe, and concurrent unsynchronized
+         * {@code add()} calls race on its internal size field and
+         * array-resize logic, silently dropping elements (a classic Java
+         * concurrency pitfall). This was a bug in the test harness itself,
+         * not in {@code ServiceTokenProvider} (which is correctly
+         * thread-safe — see its own Javadoc on {@code AtomicReference} +
+         * double-checked {@code synchronized refreshAndGet()}) — but it
+         * made this test flaky: non-deterministic, timing-dependent element
+         * loss that may not reproduce locally but did on CI (observed:
+         * "expected size 10 but was 9"). Fixed by using
+         * {@code Collections.synchronizedList(...)}, matching the
+         * thread-safe collection already correctly used in the sibling test
+         * {@link #generatesTokenOnlyOnceUnderConcurrentLoad} just above
+         * (which used {@code ConcurrentHashMap.newKeySet()}) — this test
+         * needed an ordered/duplicate-preserving collection instead (it
+         * asserts {@code hasSize(threadCount)} before collapsing to a Set),
+         * so a synchronized {@code List} is the closer match here rather
+         * than reusing the exact same {@code Set} approach.
+         */
         @Test
         @DisplayName("all threads receive the same valid token")
         void allThreadsReceiveSameToken() throws InterruptedException {
@@ -167,7 +190,8 @@ class ServiceTokenProviderTest {
             given(jwtUtils.generateServiceToken(SERVICE_NAME)).willReturn(FAKE_TOKEN);
 
             final int threadCount = 10;
-            final List<String> results = new ArrayList<>();
+            final List<String> results =
+                    java.util.Collections.synchronizedList(new ArrayList<>());
             final CountDownLatch latch = new CountDownLatch(threadCount);
             final ExecutorService executor =
                     Executors.newFixedThreadPool(threadCount);
