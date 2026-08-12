@@ -101,6 +101,44 @@ public class DeduplicationService {
     }
 
     /**
+     * Undoes the "seen" mark {@link #isDuplicate} set for an alert.
+     *
+     * <h2>Fixed: a failed Kafka publish left the dedup key in place</h2>
+     * {@code isDuplicate}'s {@code SETNX} marks the alert as seen
+     * atomically with the check — no race between checking and marking.
+     * The problem is what happens after: {@code AlertKafkaProducer
+     * .publishFiring} is deliberately fire-and-forget (see its own
+     * Javadoc), so by the time a real send failure is known — Kafka
+     * broker unreachable, logged asynchronously in
+     * {@code .whenComplete} — the dedup key is already set. If the same
+     * alert is resent within the TTL window (e.g. Alertmanager's own
+     * retry behavior, which is exactly the scenario a broker outage
+     * would trigger), {@code isDuplicate} would wrongly reject that
+     * retry — the platform never actually received the alert, but
+     * treats the legitimate resend as a no-op duplicate. A transient
+     * Kafka outage would silently compound: not just the alerts sent
+     * during the outage, but every retry of them for the rest of the
+     * TTL window too.
+     *
+     * <p>Called by {@code AlertIngestionService} from the Kafka send's
+     * own failure callback — see {@code AlertKafkaProducer.publishFiring}'s
+     * updated return type. Deleting a key that was never set (e.g. this
+     * being called after the TTL already expired naturally) is a no-op
+     * in Redis, not an error — safe to call without checking first.
+     */
+    @CircuitBreaker(name = "redis-dedup", fallbackMethod = "releaseDedupKeyFallback")
+    public void releaseDedupKey(UnifiedAlertDto alert) {
+        final String key = KEY_PREFIX + alert.tenantId() + ":" + alert.fingerprint();
+
+        redisTemplate.delete(key);
+
+        log.debug("Dedup key released after Kafka publish failure — " +
+                        "a retry of this alert will no longer be wrongly " +
+                        "rejected as a duplicate: fingerprint={}, tenant={}",
+                alert.fingerprint(), alert.tenantId());
+    }
+
+    /**
      * Called by the Resilience4j proxy — either when {@link #isDuplicate}
      * throws a matching exception, or when the circuit is already OPEN
      * (in which case {@code ex} is a
@@ -115,5 +153,25 @@ public class DeduplicationService {
                         "to avoid data loss: fingerprint={}, tenant={}, error={}",
                 alert.fingerprint(), alert.tenantId(), ex.getMessage(), ex);
         return false;
+    }
+
+    /**
+     * Called by the Resilience4j proxy when {@link #releaseDedupKey} itself
+     * can't reach Redis. There is no further fallback action available —
+     * if Redis is unreachable for the release, it was almost certainly
+     * also unreachable moments earlier when the key was set, meaning
+     * {@link #isDuplicate} would already have failed open via its own
+     * fallback (returning false, allowing the alert through) rather than
+     * successfully setting a key that now needs releasing. Logged as a
+     * clearly-labelled edge case for visibility, not silently swallowed.
+     */
+    void releaseDedupKeyFallback(UnifiedAlertDto alert, Exception ex) {
+        redisErrorCounter.increment();
+        log.error("Redis unavailable while releasing dedup key after a Kafka " +
+                        "publish failure — the alert will remain marked as seen " +
+                        "until TTL expiry, meaning a legitimate retry within that " +
+                        "window would be wrongly rejected as a duplicate: " +
+                        "fingerprint={}, tenant={}, error={}",
+                alert.fingerprint(), alert.tenantId(), ex.getMessage(), ex);
     }
 }

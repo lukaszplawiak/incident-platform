@@ -190,6 +190,40 @@ class AlertKafkaProducerTest {
             assertThat(new String(header.value(), StandardCharsets.UTF_8))
                     .isEqualTo(TENANT_ID);
         }
+
+        /**
+         * Regression test for backlog #24's fix: publishFiring's return
+         * type changed from void to the underlying CompletableFuture, so
+         * AlertIngestionService can chain a compensating action (releasing
+         * the dedup key) when the send fails — see
+         * DeduplicationService.releaseDedupKey's Javadoc for the full
+         * account. This test verifies the future returned really is the
+         * same one produced by kafkaTemplate.send(...), not a disconnected
+         * copy — completing with the same result/exception.
+         */
+        @Test
+        @DisplayName("returns the underlying send future — completes with the real result")
+        void returnsUnderlyingSendFuture() throws Exception {
+            final var future = producer.publishFiring(buildAlert());
+
+            assertThat(future).isNotNull();
+            assertThat(future.get(1, java.util.concurrent.TimeUnit.SECONDS))
+                    .isSameAs(sendResult);
+        }
+
+        @Test
+        @DisplayName("returns a future that completes exceptionally when the send fails — " +
+                "callers can observe the failure, not just this class's own logging")
+        void returnedFutureCompletesExceptionallyOnSendFailure() {
+            final RuntimeException sendFailure =
+                    new org.apache.kafka.common.errors.TimeoutException("Broker unreachable");
+            given(kafkaTemplate.send(any(ProducerRecord.class)))
+                    .willReturn(CompletableFuture.failedFuture(sendFailure));
+
+            final var future = producer.publishFiring(buildAlert());
+
+            assertThat(future.isCompletedExceptionally()).isTrue();
+        }
     }
 
     // ─── publishResolved ─────────────────────────────────────────────────────
