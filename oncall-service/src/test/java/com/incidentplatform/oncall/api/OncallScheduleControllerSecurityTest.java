@@ -10,6 +10,7 @@ import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
+import com.incidentplatform.shared.security.UserPrincipal;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,10 +23,13 @@ import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
-import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 import java.time.Instant;
 import java.util.List;
@@ -35,6 +39,8 @@ import java.util.UUID;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -48,14 +54,49 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Endpoint                        RESPONDER   ADMIN   INGESTOR   SERVICE
  * GET  /schedules                    ✅         ✅       ❌         ❌
  * GET  /schedules/{id}               ✅         ✅       ❌         ❌
- * POST /schedules                    ❌         ✅       ❌         ❌
- * DELETE /schedules/{id}             ❌         ✅       ❌         ❌
+ * POST /schedules                  reaches      ✅       ❌         ❌
+ *                                  service*
+ * DELETE /schedules/{id}           reaches      ✅       ❌         ❌
+ *                                  service*
  * GET  /by-slack/{id}    authenticated only (ROLE_SERVICE allowed)
+ * GET  /current                      ❌         ✅       ❌         ✅
+ * GET  /current/all                  ✅         ✅       ❌         ❌
  * </pre>
+ *
+ * <p>*POST/DELETE /schedules: URL-level gate admits RESPONDER (every
+ * {@code TeamRole.MANAGER} also holds {@code ROLE_RESPONDER} — see
+ * {@link OncallScheduleController#create}'s Javadoc), but the real
+ * fine-grained decision (ADMIN, or a Manager of the specific team) is
+ * made in {@code OncallScheduleService.requireAdminOrTeamManager}, not
+ * testable here since {@code service} is mocked — see
+ * {@code OncallScheduleServiceTest.TeamManagerAuthorization} for that
+ * coverage. Fixed: this table previously still showed RESPONDER as ❌ for
+ * both, left over from before the Manager role feature relaxed the
+ * URL-level gate — a stale table, not just stale tests (see below).
  *
  * <p>Unauthenticated requests return {@code 401 Unauthorized} via
  * {@link UnauthorizedEntryPoint} registered in
  * {@link com.incidentplatform.shared.security.SharedSecurityAutoConfiguration#buildCommonSecurity}.
+ *
+ * <h2>Fixed: previously used @WithMockUser throughout</h2>
+ * All 21 {@code @WithMockUser}-based test methods in the previous version
+ * of this file authenticated as a generic Spring Security {@code User},
+ * not this app's {@link UserPrincipal} record —
+ * {@code @AuthenticationPrincipal UserPrincipal principal} silently
+ * resolves to {@code null} on that type mismatch (Spring's default
+ * {@code errorOnInvalidType=false}). Of this controller's methods, only
+ * {@code create} and {@code delete} actually take
+ * {@code @AuthenticationPrincipal UserPrincipal principal} and forward it
+ * to the (mocked) service — so the null value never crashed those four
+ * tests ({@code ResponderRole.create/delete},
+ * {@code AdminRole.create/delete}), it just meant any assertion on that
+ * argument could only ever use {@code any()}, never proving the correct
+ * principal actually reached the service. Fixed using the same
+ * {@code principal(String... roles)} pattern already established in
+ * {@code IncidentControllerSecurityTest}/{@code AuthControllerSecurityTest}/
+ * {@code UserControllerSecurityTest} — a real {@link UserPrincipal}-typed
+ * {@code Authentication} — applied throughout this file for consistency,
+ * not just in the four tests where it was strictly necessary.
  */
 @WebMvcTest(OncallScheduleController.class)
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
@@ -104,6 +145,7 @@ class OncallScheduleControllerSecurityTest {
 
     private static final String TENANT_ID = "test-tenant";
     private static final UUID SCHEDULE_ID = UUID.randomUUID();
+    private static final UUID PRINCIPAL_USER_ID = UUID.randomUUID();
 
     private static final String VALID_CREATE_REQUEST = """
             {
@@ -127,6 +169,27 @@ class OncallScheduleControllerSecurityTest {
     @AfterEach
     void tearDown() {
         TenantContext.clear();
+    }
+
+    /**
+     * Builds a real {@link UserPrincipal}-typed authentication for one or
+     * more roles, applied to a single {@code mockMvc.perform(...)} call via
+     * {@code .with(principal("ROLE_RESPONDER"))}. See this class's Javadoc
+     * for why this replaces {@code @WithMockUser} throughout this file.
+     */
+    private static RequestPostProcessor principal(String... roles) {
+        final UserPrincipal userPrincipal = buildPrincipal(roles);
+        final List<GrantedAuthority> authorities = List.of(roles).stream()
+                .map(SimpleGrantedAuthority::new)
+                .map(GrantedAuthority.class::cast)
+                .toList();
+        return authentication(new UsernamePasswordAuthenticationToken(
+                userPrincipal, null, authorities));
+    }
+
+    private static UserPrincipal buildPrincipal(String... roles) {
+        return new UserPrincipal(
+                PRINCIPAL_USER_ID, TENANT_ID, "user@example.com", List.of(roles), List.of());
     }
 
     // ── Unauthenticated — 401 ─────────────────────────────────────────────
@@ -173,28 +236,28 @@ class OncallScheduleControllerSecurityTest {
     class IngestorRole {
 
         @Test
-        @WithMockUser(roles = "INGESTOR")
         @DisplayName("GET /schedules — 403 for INGESTOR")
         void getSchedules_returns403() throws Exception {
-            mockMvc.perform(get("/api/v1/oncall/schedules"))
+            mockMvc.perform(get("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_INGESTOR")))
                     .andExpect(status().isForbidden());
         }
 
         @Test
-        @WithMockUser(roles = "INGESTOR")
         @DisplayName("POST /schedules — 403 for INGESTOR")
         void create_returns403() throws Exception {
             mockMvc.perform(post("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_INGESTOR"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
                     .andExpect(status().isForbidden());
         }
 
         @Test
-        @WithMockUser(roles = "INGESTOR")
         @DisplayName("DELETE /schedules/{id} — 403 for INGESTOR")
         void delete_returns403() throws Exception {
-            mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
+            mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID)
+                            .with(principal("ROLE_INGESTOR")))
                     .andExpect(status().isForbidden());
         }
     }
@@ -221,10 +284,12 @@ class OncallScheduleControllerSecurityTest {
      * returns, regardless of which principal the controller actually
      * passed it. The real Manager-vs-plain-Responder distinction is
      * covered thoroughly at the service layer instead — see
-     * {@code OncallScheduleServiceTest.TeamManagerAuthorization}.
-     * What THIS test class can still correctly verify: a plain RESPONDER
-     * now reaches the service at all (previously it couldn't), and the
-     * controller correctly returns whatever the (mocked) service decides.
+     * {@code OncallScheduleServiceTest.TeamManagerAuthorization}. What
+     * THIS test class can still correctly verify, now that it uses a real
+     * {@code UserPrincipal} instead of {@code @WithMockUser}: a plain
+     * RESPONDER reaches the service at all (previously it couldn't), AND
+     * that the exact, correct principal is what the controller actually
+     * forwards to it — not just {@code any()}.
      */
     @Nested
     @DisplayName("ROLE_RESPONDER — read allowed, write reaches the service " +
@@ -232,49 +297,54 @@ class OncallScheduleControllerSecurityTest {
     class ResponderRole {
 
         @Test
-        @WithMockUser(roles = "RESPONDER")
         @DisplayName("GET /schedules — 200 for RESPONDER")
         void getSchedules_returns200() throws Exception {
             given(service.getSchedules(any(), any(Pageable.class)))
                     .willReturn(Page.empty());
 
-            mockMvc.perform(get("/api/v1/oncall/schedules"))
+            mockMvc.perform(get("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_RESPONDER")))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @WithMockUser(roles = "RESPONDER")
         @DisplayName("GET /schedules/{id} — 200 for RESPONDER")
         void getById_returns200() throws Exception {
             given(service.getById(eq(SCHEDULE_ID), any()))
                     .willReturn(buildScheduleDto());
 
-            mockMvc.perform(get("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
+            mockMvc.perform(get("/api/v1/oncall/schedules/{id}", SCHEDULE_ID)
+                            .with(principal("ROLE_RESPONDER")))
                     .andExpect(status().isOk());
         }
-
         @Test
-        @WithMockUser(roles = "RESPONDER")
-        @DisplayName("POST /schedules — reaches the service for RESPONDER " +
-                "(URL-level gate no longer blocks it; fine-grained Manager " +
-                "check happens in the service, not tested here)")
+        @DisplayName("POST /schedules — reaches the service for RESPONDER with the " +
+                "correct principal (URL-level gate no longer blocks it; fine-grained " +
+                "Manager check happens in the service, not tested here)")
         void create_reachesServiceForResponder() throws Exception {
-            given(service.create(any(), any(), any()))
+            given(service.create(any(), any(), eq(buildPrincipal("ROLE_RESPONDER"))))
                     .willReturn(buildScheduleDto());
 
             mockMvc.perform(post("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_RESPONDER"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
                     .andExpect(status().isCreated());
+
+            then(service).should().create(
+                    any(), any(), eq(buildPrincipal("ROLE_RESPONDER")));
         }
 
         @Test
-        @WithMockUser(roles = "RESPONDER")
-        @DisplayName("DELETE /schedules/{id} — reaches the service for RESPONDER " +
-                "(same reasoning as the create test above)")
+        @DisplayName("DELETE /schedules/{id} — reaches the service for RESPONDER with the " +
+                "correct principal (same reasoning as the create test above)")
         void delete_reachesServiceForResponder() throws Exception {
-            mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
+            mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID)
+                            .with(principal("ROLE_RESPONDER")))
                     .andExpect(status().isNoContent());
+
+            then(service).should().delete(
+                    eq(SCHEDULE_ID), any(), eq(buildPrincipal("ROLE_RESPONDER")));
         }
     }
 
@@ -285,35 +355,41 @@ class OncallScheduleControllerSecurityTest {
     class AdminRole {
 
         @Test
-        @WithMockUser(roles = "ADMIN")
         @DisplayName("GET /schedules — 200 for ADMIN")
         void getSchedules_returns200() throws Exception {
             given(service.getSchedules(any(), any(Pageable.class)))
                     .willReturn(Page.empty());
 
-            mockMvc.perform(get("/api/v1/oncall/schedules"))
+            mockMvc.perform(get("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @WithMockUser(roles = "ADMIN")
-        @DisplayName("POST /schedules — 201 for ADMIN")
+        @DisplayName("POST /schedules — 201 for ADMIN with the correct principal")
         void create_returns201() throws Exception {
-            given(service.create(any(), any(), any()))
+            given(service.create(any(), any(), eq(buildPrincipal("ROLE_ADMIN"))))
                     .willReturn(buildScheduleDto());
 
             mockMvc.perform(post("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_ADMIN"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
                     .andExpect(status().isCreated());
+
+            then(service).should().create(
+                    any(), any(), eq(buildPrincipal("ROLE_ADMIN")));
         }
 
         @Test
-        @WithMockUser(roles = "ADMIN")
-        @DisplayName("DELETE /schedules/{id} — 204 for ADMIN")
+        @DisplayName("DELETE /schedules/{id} — 204 for ADMIN with the correct principal")
         void delete_returns204() throws Exception {
-            mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
+            mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID)
+                            .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isNoContent());
+
+            then(service).should().delete(
+                    eq(SCHEDULE_ID), any(), eq(buildPrincipal("ROLE_ADMIN")));
         }
     }
 
@@ -324,29 +400,29 @@ class OncallScheduleControllerSecurityTest {
     class ServiceRole {
 
         @Test
-        @WithMockUser(roles = "SERVICE")
         @DisplayName("GET /by-slack/{id} — 204 for SERVICE (authenticated-only endpoint)")
         void findBySlackUserId_returns204ForService() throws Exception {
             given(service.findBySlackUserId(any(), any()))
                     .willReturn(Optional.empty());
 
-            mockMvc.perform(get("/api/v1/oncall/by-slack/{id}", "U0123456789"))
+            mockMvc.perform(get("/api/v1/oncall/by-slack/{id}", "U0123456789")
+                            .with(principal("ROLE_SERVICE")))
                     .andExpect(status().isNoContent());
         }
 
         @Test
-        @WithMockUser(roles = "SERVICE")
         @DisplayName("GET /schedules — 403 for SERVICE")
         void getSchedules_returns403ForService() throws Exception {
-            mockMvc.perform(get("/api/v1/oncall/schedules"))
+            mockMvc.perform(get("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_SERVICE")))
                     .andExpect(status().isForbidden());
         }
 
         @Test
-        @WithMockUser(roles = "SERVICE")
         @DisplayName("POST /schedules — 403 for SERVICE")
         void create_returns403ForService() throws Exception {
             mockMvc.perform(post("/api/v1/oncall/schedules")
+                            .with(principal("ROLE_SERVICE"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
                     .andExpect(status().isForbidden());
@@ -365,38 +441,38 @@ class OncallScheduleControllerSecurityTest {
     class CurrentOncallEndpoint {
 
         @Test
-        @WithMockUser(roles = "SERVICE")
         @DisplayName("204 for SERVICE")
         void returns204ForService() throws Exception {
             given(service.getAllCurrentOncall(any())).willReturn(List.of());
 
-            mockMvc.perform(get("/api/v1/oncall/current"))
+            mockMvc.perform(get("/api/v1/oncall/current")
+                            .with(principal("ROLE_SERVICE")))
                     .andExpect(status().isNoContent());
         }
 
         @Test
-        @WithMockUser(roles = "ADMIN")
         @DisplayName("204 for ADMIN")
         void returns204ForAdmin() throws Exception {
             given(service.getAllCurrentOncall(any())).willReturn(List.of());
 
-            mockMvc.perform(get("/api/v1/oncall/current"))
+            mockMvc.perform(get("/api/v1/oncall/current")
+                            .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isNoContent());
         }
 
         @Test
-        @WithMockUser(roles = "RESPONDER")
         @DisplayName("403 for RESPONDER — internal service-to-service endpoint, not for end users")
         void returns403ForResponder() throws Exception {
-            mockMvc.perform(get("/api/v1/oncall/current"))
+            mockMvc.perform(get("/api/v1/oncall/current")
+                            .with(principal("ROLE_RESPONDER")))
                     .andExpect(status().isForbidden());
         }
 
         @Test
-        @WithMockUser(roles = "INGESTOR")
         @DisplayName("403 for INGESTOR")
         void returns403ForIngestor() throws Exception {
-            mockMvc.perform(get("/api/v1/oncall/current"))
+            mockMvc.perform(get("/api/v1/oncall/current")
+                            .with(principal("ROLE_INGESTOR")))
                     .andExpect(status().isForbidden());
         }
 
@@ -419,41 +495,41 @@ class OncallScheduleControllerSecurityTest {
     class CurrentOncallAllEndpoint {
 
         @Test
-        @WithMockUser(roles = "RESPONDER")
         @DisplayName("200 for RESPONDER")
         void returns200ForResponder() throws Exception {
             given(service.getAllCurrentOncallForTeam(any(), any())).willReturn(List.of());
 
             mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .with(principal("ROLE_RESPONDER"))
                             .param("teamId", UUID.randomUUID().toString()))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @WithMockUser(roles = "ADMIN")
         @DisplayName("200 for ADMIN")
         void returns200ForAdmin() throws Exception {
             given(service.getAllCurrentOncallForTeam(any(), any())).willReturn(List.of());
 
             mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .with(principal("ROLE_ADMIN"))
                             .param("teamId", UUID.randomUUID().toString()))
                     .andExpect(status().isOk());
         }
 
         @Test
-        @WithMockUser(roles = "SERVICE")
         @DisplayName("403 for SERVICE — no known internal caller needs this, only the frontend does")
         void returns403ForService() throws Exception {
             mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .with(principal("ROLE_SERVICE"))
                             .param("teamId", UUID.randomUUID().toString()))
                     .andExpect(status().isForbidden());
         }
 
         @Test
-        @WithMockUser(roles = "INGESTOR")
         @DisplayName("403 for INGESTOR")
         void returns403ForIngestor() throws Exception {
             mockMvc.perform(get("/api/v1/oncall/current/all")
+                            .with(principal("ROLE_INGESTOR"))
                             .param("teamId", UUID.randomUUID().toString()))
                     .andExpect(status().isForbidden());
         }

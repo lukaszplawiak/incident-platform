@@ -153,7 +153,7 @@ class AlertIngestionControllerSecurityTest {
     private static RequestPostProcessor apiKeyPrincipal(String... scopes) {
         final UserPrincipal userPrincipal = new UserPrincipal(
                 USER_ID, TENANT_ID, "api-key:prometheus-integration",
-                List.of("ROLE_RESPONDER"), List.of(), true, List.of(scopes));
+                List.of("ROLE_RESPONDER"), List.of(), List.of(), true, List.of(scopes));
         return authenticationFor(userPrincipal, "ROLE_RESPONDER");
     }
 
