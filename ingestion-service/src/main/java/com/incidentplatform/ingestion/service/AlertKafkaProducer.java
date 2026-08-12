@@ -13,9 +13,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Fire-and-forget Kafka producer for ingested alerts.
@@ -56,6 +58,17 @@ import java.nio.charset.StandardCharsets;
  * the failure observable and the code's own behavior honestly
  * documented, not silently misleading about a safety net that doesn't
  * structurally exist.
+ * <p>Fixed separately (backlog #24): {@link #publishFiring} now returns
+ * the underlying {@link java.util.concurrent.CompletableFuture} instead
+ * of {@code void}, so {@code AlertIngestionService} can chain its own
+ * compensating action on send failure — releasing the dedup key that
+ * {@code DeduplicationService.isDuplicate} already set for this alert,
+ * so a legitimate retry isn't wrongly rejected as a duplicate for the
+ * rest of the TTL window. See {@code DeduplicationService
+ * .releaseDedupKey}'s Javadoc for the full account. This class's own
+ * {@code .whenComplete} below (metrics + logging) is unchanged and still
+ * runs independently — the two concerns are chained separately by
+ * design, not merged into one handler.
  */
 @Component
 public class AlertKafkaProducer {
@@ -88,14 +101,23 @@ public class AlertKafkaProducer {
                 .register(meterRegistry);
     }
 
-    // Fire-and-forget: Kafka errors are logged but not propagated to the caller.
-    // Blocking on broker availability would cause HTTP 5xx during Kafka outages —
-    // Alertmanager would retry aggressively, creating alert floods.
-    // Trade-off: occasional alert loss vs. endpoint availability under pressure.
-    // Send failures are counted (kafkaPublishErrorCounter) and logged, but not
-    // retried or dead-lettered — see this class's Javadoc for why a Kafka-based
-    // DLQ can't help when Kafka itself is the thing that's unreachable.
-    public void publishFiring(UnifiedAlertDto alert) {
+    // Fire-and-forget: Kafka errors are logged but not propagated to the caller
+    // synchronously — this method itself never blocks on or throws for a send
+    // failure. Blocking on broker availability would cause HTTP 5xx during
+    // Kafka outages — Alertmanager would retry aggressively, creating alert
+    // floods. Trade-off: occasional alert loss vs. endpoint availability
+    // under pressure. Send failures are counted (kafkaPublishErrorCounter)
+    // and logged, but not retried or dead-lettered — see this class's
+    // Javadoc for why a Kafka-based DLQ can't help when Kafka itself is the
+    // thing that's unreachable.
+    //
+    // Returning the CompletableFuture below does NOT change any of this —
+    // the HTTP request thread that called this method has already moved on
+    // by the time the future completes; nothing here blocks it. It exists
+    // solely so AlertIngestionService can attach its own additional
+    // .whenComplete for the dedup-key release (backlog #24) without
+    // duplicating this method's own send call.
+    public CompletableFuture<SendResult<String, String>> publishFiring(UnifiedAlertDto alert) {
         try {
             final String payload = objectMapper.writeValueAsString(alert);
 
@@ -123,26 +145,29 @@ public class AlertKafkaProducer {
                     alert.tenantId().getBytes(StandardCharsets.UTF_8)
             ));
 
-            kafkaTemplate.send(record)
-                    .whenComplete((result, ex) -> {
-                        if (ex != null) {
-                            kafkaPublishErrorCounter.increment();
-                            log.error("Failed to publish firing alert to Kafka — " +
-                                            "ALERT LOST (fire-and-forget, no retry): " +
-                                            "topic={}, alertId={}, source={}, tenant={}",
-                                    alertsRawTopic, alert.alertId(),
-                                    alert.source(), alert.tenantId(), ex);
-                        } else {
-                            log.debug("Firing alert published: topic={}, " +
-                                            "partition={}, offset={}, alertId={}, " +
-                                            "source={}, tenant={}",
-                                    alertsRawTopic,
-                                    result.getRecordMetadata().partition(),
-                                    result.getRecordMetadata().offset(),
-                                    alert.alertId(), alert.source(),
-                                    alert.tenantId());
-                        }
-                    });
+            final var future = kafkaTemplate.send(record);
+
+            future.whenComplete((result, ex) -> {
+                if (ex != null) {
+                    kafkaPublishErrorCounter.increment();
+                    log.error("Failed to publish firing alert to Kafka — " +
+                                    "ALERT LOST (fire-and-forget, no retry): " +
+                                    "topic={}, alertId={}, source={}, tenant={}",
+                            alertsRawTopic, alert.alertId(),
+                            alert.source(), alert.tenantId(), ex);
+                } else {
+                    log.debug("Firing alert published: topic={}, " +
+                                    "partition={}, offset={}, alertId={}, " +
+                                    "source={}, tenant={}",
+                            alertsRawTopic,
+                            result.getRecordMetadata().partition(),
+                            result.getRecordMetadata().offset(),
+                            alert.alertId(), alert.source(),
+                            alert.tenantId());
+                }
+            });
+
+            return future;
 
         } catch (JsonProcessingException e) {
             throw new AlertPublishException(

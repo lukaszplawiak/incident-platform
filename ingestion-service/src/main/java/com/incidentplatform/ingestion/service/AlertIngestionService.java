@@ -91,7 +91,26 @@ public class AlertIngestionService {
                     duplicates++;
                     continue;
                 }
-                kafkaProducer.publishFiring(alert);
+                // Fixed (backlog #24): if the send subsequently fails
+                // (broker unreachable — logged/counted inside
+                // AlertKafkaProducer's own .whenComplete), release the
+                // dedup key isDuplicate just set above. Without this, a
+                // Kafka outage doesn't just lose the current alert — it
+                // also silently rejects every retry of it as a "duplicate"
+                // for the rest of the dedup TTL, since the key stays set
+                // even though the alert was never actually delivered. See
+                // DeduplicationService.releaseDedupKey's Javadoc for the
+                // full account. This is a separate .whenComplete from
+                // AlertKafkaProducer's own — that one handles metrics and
+                // logging, this one handles the dedup-key compensation;
+                // kept apart deliberately rather than merged into one
+                // handler, so each class owns only its own concern.
+                kafkaProducer.publishFiring(alert)
+                        .whenComplete((sendResult, ex) -> {
+                            if (ex != null) {
+                                deduplicationService.releaseDedupKey(alert);
+                            }
+                        });
                 processed++;
             } catch (AlertKafkaProducer.AlertPublishException e) {
                 // Despite the class name, this can only be thrown from a JSON
