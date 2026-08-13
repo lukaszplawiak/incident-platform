@@ -45,6 +45,13 @@ spring:
     properties:
       mail:
         smtp:
+          # Note: unconditionally true, correct for the real default host
+          # (Mailtrap) but mismatched with docker-compose's mailhog
+          # override, which doesn't require auth — this is exactly what
+          # was breaking the /actuator/health check before
+          # management.health.mail.enabled: false was added below.
+          # Not changed here since making auth conditional per-environment
+          # isn't necessary once mail no longer gates reported health.
           auth: true
           starttls:
             enable: true
@@ -161,6 +168,28 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+  health:
+    # Fixed: MailHealthIndicator (auto-enabled by Actuator whenever
+    # JavaMailSender is on the classpath) was actively test-connecting to
+    # the SMTP server as part of /actuator/health — which the Docker
+    # Compose healthcheck for this service directly polls. Spring Boot
+    # Actuator's default aggregation marks the WHOLE /actuator/health
+    # response DOWN if any one contributing indicator is DOWN, so any
+    # SMTP hiccup (or, in docker-compose specifically: mail.properties
+    # .mail.smtp.auth=true below being unconditionally true even when
+    # MAIL_HOST is overridden to mailhog, a test server that doesn't
+    # require auth — surfaced as jakarta.mail.AuthenticationFailedException,
+    # "no password specified") flipped this service's reported health to
+    # DOWN and its container to "unhealthy", even though Kafka consumption,
+    # the database, and Slack notification routing were all working fine.
+    # Email is one of three notification channels this service supports
+    # (see notification.channels below) — connectivity to it shouldn't
+    # gate whether the whole service is considered healthy, in CI or in
+    # production; a transient SMTP outage shouldn't look like an outage
+    # of notification-service itself, and restarting the pod wouldn't fix
+    # an unreachable mail relay anyway.
+    mail:
+      enabled: false
   server:
     port: ${MANAGEMENT_PORT:8093}
 

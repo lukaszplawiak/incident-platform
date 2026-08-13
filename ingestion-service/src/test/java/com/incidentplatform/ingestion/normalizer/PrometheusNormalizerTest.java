@@ -19,11 +19,12 @@ class PrometheusNormalizerTest {
     private PrometheusNormalizer normalizer;
     private ObjectMapper objectMapper;
     private static final String TENANT_ID = "test-tenant";
+    private static final int MAX_PAYLOAD_BYTES = 1048576;
 
     @BeforeEach
     void setUp() {
         normalizer = new PrometheusNormalizer(
-                new IngestionProperties(new IngestionProperties.Prometheus(500)));
+                new IngestionProperties(new IngestionProperties.Prometheus(500), MAX_PAYLOAD_BYTES));
         objectMapper = new ObjectMapper();
     }
 
@@ -332,7 +333,7 @@ class PrometheusNormalizerTest {
         @DisplayName("should limit batch to maxBatchSize")
         void shouldLimitBatchSize() throws Exception {
             final PrometheusNormalizer smallBatchNormalizer = new PrometheusNormalizer(
-                    new IngestionProperties(new IngestionProperties.Prometheus(2)));
+                    new IngestionProperties(new IngestionProperties.Prometheus(2), MAX_PAYLOAD_BYTES));
 
             final JsonNode payload = objectMapper.readTree("""
                     {

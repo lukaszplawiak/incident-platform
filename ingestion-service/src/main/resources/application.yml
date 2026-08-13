@@ -88,6 +88,7 @@ kafka:
     retention-days: ${DEAD_LETTER_RETENTION_DAYS:30}
 
 ingestion:
+  max-payload-bytes: ${INGESTION_MAX_PAYLOAD_BYTES:1048576}
   prometheus:
     max-batch-size: ${PROMETHEUS_MAX_BATCH_SIZE:500}
 
