@@ -48,7 +48,11 @@ public class AlertIngestionController {
     private static final Logger log =
             LoggerFactory.getLogger(AlertIngestionController.class);
 
-    private static final int MAX_PAYLOAD_BYTES = 1024 * 1024; // 1MB
+    // Payload size limit is enforced by PayloadSizeLimitFilter (config
+    // package) before the request reaches this controller at all — see
+    // that class's Javadoc for why the check used to live here, too late
+    // to matter, and IngestionProperties.maxPayloadBytes for the
+    // configured limit itself.
 
     private final AlertIngestionService alertIngestionService;
     private final RateLimitingService rateLimitingService;
@@ -156,13 +160,6 @@ public class AlertIngestionController {
 
         log.info("Alert ingestion request: source={}, tenant={}, ip={}",
                 source, tenantId, clientIp);
-
-        final String payloadString = rawPayload.toString();
-        if (payloadString.length() > MAX_PAYLOAD_BYTES) {
-            log.warn("Alert payload too large: source={}, tenant={}, size={}",
-                    source, tenantId, payloadString.length());
-            return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
-        }
 
         final RateLimitResult rateLimitResult =
                 rateLimitingService.tryConsume(tenantId, clientIp);
