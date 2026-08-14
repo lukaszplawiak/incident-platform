@@ -329,8 +329,18 @@ class PrometheusNormalizerTest {
             assertThat(result.isEmpty()).isFalse();
         }
 
+        /**
+         * Extended for backlog #26: previously only checked that
+         * firingAlerts() was correctly capped at maxBatchSize — didn't
+         * verify the normalizer honestly reports the true, pre-truncation
+         * count anywhere, which is exactly what NormalizationResult
+         * .totalReceived/.isTruncated exist for. See that record's
+         * Javadoc for the full account of the silent-data-loss bug this
+         * closes.
+         */
         @Test
-        @DisplayName("should limit batch to maxBatchSize")
+        @DisplayName("should limit batch to maxBatchSize, while still reporting " +
+                "the true original count as totalReceived")
         void shouldLimitBatchSize() throws Exception {
             final PrometheusNormalizer smallBatchNormalizer = new PrometheusNormalizer(
                     new IngestionProperties(new IngestionProperties.Prometheus(2), MAX_PAYLOAD_BYTES));
@@ -353,7 +363,38 @@ class PrometheusNormalizerTest {
                       ]
                     }
                     """);
-            assertThat(smallBatchNormalizer.normalize(payload, TENANT_ID, null).firingAlerts()).hasSize(2);
+            final NormalizationResult result =
+                    smallBatchNormalizer.normalize(payload, TENANT_ID, null);
+
+            assertThat(result.firingAlerts()).hasSize(2);
+            assertThat(result.totalReceived())
+                    .as("totalReceived must reflect the true payload size (3), " +
+                            "not the capped result size (2)")
+                    .isEqualTo(3);
+            assertThat(result.isTruncated()).isTrue();
+        }
+
+        @Test
+        @DisplayName("should report isTruncated=false when the batch is within maxBatchSize")
+        void shouldNotReportTruncatedWhenWithinLimit() throws Exception {
+            final PrometheusNormalizer normalizerWithRoom = new PrometheusNormalizer(
+                    new IngestionProperties(new IngestionProperties.Prometheus(10), MAX_PAYLOAD_BYTES));
+
+            final JsonNode payload = objectMapper.readTree("""
+                    {
+                      "alerts": [
+                        {
+                          "status": "firing",
+                          "labels": { "alertname": "Alert1", "severity": "critical", "instance": "server-1" }
+                        }
+                      ]
+                    }
+                    """);
+            final NormalizationResult result =
+                    normalizerWithRoom.normalize(payload, TENANT_ID, null);
+
+            assertThat(result.totalReceived()).isEqualTo(1);
+            assertThat(result.isTruncated()).isFalse();
         }
     }
 

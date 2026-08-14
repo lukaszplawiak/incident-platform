@@ -79,11 +79,17 @@ public class AlertIngestionService {
             log.error("Normalization failed for entire payload: source={}, " +
                     "tenant={}, reason={}", source, tenantId, e.getReason());
             deadLetterPublisher.publish(rawPayload, source, tenantId, e.getReason());
-            return IngestionSummary.of(1, 0, 0, 0, 1);
+            return IngestionSummary.of(1, 0, 0, 0, 1, false);
         }
 
-        final int received = result.firingAlerts().size()
-                + result.resolvedAlerts().size();
+        // Fixed: previously computed as result.firingAlerts().size() +
+        // result.resolvedAlerts().size() — but those two lists are already
+        // truncated by the time they reach here (see
+        // NormalizationResult.totalReceived's Javadoc for the full
+        // account). Using totalReceived reports the true, pre-truncation
+        // count instead of silently reporting the smaller, already-capped
+        // number as if it were the whole payload.
+        final int received = result.totalReceived();
 
         for (UnifiedAlertDto alert : result.firingAlerts()) {
             try {
@@ -151,7 +157,22 @@ public class AlertIngestionService {
         }
 
         final IngestionSummary summary = IngestionSummary.of(
-                received, processed, duplicates, resolved, deadLetter);
+                received, processed, duplicates, resolved, deadLetter,
+                result.isTruncated());
+
+        if (result.isTruncated()) {
+            // Distinct from the dead-letter WARN below — truncation means
+            // some alerts in the payload never even got a chance to be
+            // processed, duplicated, or dead-lettered; they were dropped
+            // before any of that logic ran at all. Logged here (not just
+            // inside PrometheusNormalizer, which already logs its own WARN
+            // at truncation time) so a search over AlertIngestionService's
+            // own logs surfaces this, not just the normalizer's.
+            log.warn("Ingestion payload was truncated — some alerts were " +
+                            "never processed: source={}, tenant={}, " +
+                            "totalReceived={}, actuallyHandled={}",
+                    source, tenantId, received, result.totalProcessed());
+        }
 
         if (summary.hasDeadLetterAlerts()) {
             log.warn("Ingestion completed with DLQ alerts: source={}, tenant={}, " +
