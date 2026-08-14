@@ -131,7 +131,7 @@ class AlertIngestionControllerSecurityTest {
             }""";
 
     private IngestionSummary buildSummary() {
-        return IngestionSummary.of(0, 0, 0, 0, 0);
+        return IngestionSummary.of(0, 0, 0, 0, 0, false);
     }
 
     /**

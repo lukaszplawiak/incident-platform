@@ -75,7 +75,14 @@ public class PrometheusNormalizer extends BaseNormalizer {
                 totalAlerts - firingAlerts.size() - resolvedAlerts.size(),
                 tenantId);
 
-        return new NormalizationResult(firingAlerts, resolvedAlerts);
+        // Fixed: totalAlerts (the true count from the raw payload, before
+        // this method's own limit-truncation above) is passed explicitly
+        // here rather than letting NormalizationResult infer it from
+        // firingAlerts.size() + resolvedAlerts.size() — those two are
+        // already capped by `limit` above when totalAlerts > maxBatchSize.
+        // See NormalizationResult's own Javadoc for the full account of
+        // why this distinction matters.
+        return new NormalizationResult(firingAlerts, resolvedAlerts, totalAlerts);
     }
 
     @Override

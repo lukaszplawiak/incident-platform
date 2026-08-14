@@ -107,6 +107,61 @@ class AlertIngestionServiceTest {
         }
 
         @Test
+        @DisplayName("reports truncated=false and received matching processed " +
+                "when nothing was truncated")
+        void reportsNotTruncatedInTheNormalCase() {
+            final UnifiedAlertDto alert = buildAlert();
+            final JsonNode rawPayload = buildRawPayload();
+            given(normalizer.normalize(rawPayload, TENANT_ID, null))
+                    .willReturn(NormalizationResult.firingOnly(List.of(alert)));
+            given(deduplicationService.isDuplicate(alert)).willReturn(false);
+            given(kafkaProducer.publishFiring(alert))
+                    .willReturn(CompletableFuture.completedFuture(sendResult));
+
+            final IngestionSummary summary =
+                    service.ingest(SOURCE, rawPayload, TENANT_ID, null);
+
+            assertThat(summary.truncated()).isFalse();
+            assertThat(summary.received()).isEqualTo(1);
+            assertThat(summary.isFullySuccessful()).isTrue();
+        }
+
+        /**
+         * The actual regression test for backlog #26. Simulates what
+         * PrometheusNormalizer does when a batch exceeds
+         * ingestion.prometheus.max-batch-size: NormalizationResult's
+         * firingAlerts/resolvedAlerts are already capped (only 1 alert
+         * here), but totalReceived reports the true, larger original
+         * count (5) — verifies AlertIngestionService surfaces this
+         * honestly via IngestionSummary.received and .truncated, rather
+         * than silently reporting received=1 as if the payload only ever
+         * had 1 alert. See NormalizationResult's own Javadoc for the full
+         * account of the bug being fixed.
+         */
+        @Test
+        @DisplayName("reports truncated=true and the true original received count " +
+                "when the normalizer capped the batch")
+        void reportsTruncationWhenNormalizerCappedTheBatch() {
+            final UnifiedAlertDto alert = buildAlert();
+            final JsonNode rawPayload = buildRawPayload();
+            given(normalizer.normalize(rawPayload, TENANT_ID, null))
+                    .willReturn(new NormalizationResult(List.of(alert), List.of(), 5));
+            given(deduplicationService.isDuplicate(alert)).willReturn(false);
+            given(kafkaProducer.publishFiring(alert))
+                    .willReturn(CompletableFuture.completedFuture(sendResult));
+
+            final IngestionSummary summary =
+                    service.ingest(SOURCE, rawPayload, TENANT_ID, null);
+
+            assertThat(summary.received()).isEqualTo(5);
+            assertThat(summary.processed()).isEqualTo(1);
+            assertThat(summary.truncated()).isTrue();
+            assertThat(summary.isFullySuccessful())
+                    .as("a truncated batch must never report as fully successful")
+                    .isFalse();
+        }
+
+        @Test
         @DisplayName("does not publish a duplicate alert, counts it as a duplicate")
         void doesNotPublishDuplicateAlert() {
             final UnifiedAlertDto alert = buildAlert();
@@ -199,7 +254,7 @@ class AlertIngestionServiceTest {
                     TENANT_ID, SOURCE, "prometheus:highcpu:server-1", Instant.now());
             final JsonNode rawPayload = buildRawPayload();
             given(normalizer.normalize(rawPayload, TENANT_ID, null))
-                    .willReturn(new NormalizationResult(List.of(), List.of(notification)));
+                    .willReturn(new NormalizationResult(List.of(), List.of(notification), 1));
 
             final IngestionSummary summary =
                     service.ingest(SOURCE, rawPayload, TENANT_ID, null);
