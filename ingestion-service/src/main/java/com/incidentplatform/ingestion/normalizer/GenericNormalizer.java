@@ -12,6 +12,37 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * <h2>Fixed: fingerprint was built from {@code title} alone</h2>
+ * Unlike {@link PrometheusNormalizer} ({@code alertName + instance}) and
+ * {@link WazuhNormalizer} ({@code ruleId + agentId}), this normalizer's
+ * fingerprint used to be {@code buildFingerprint(title)} — nothing else.
+ * Two genuinely unrelated alerts sharing an identical title (e.g. "Disk
+ * full" fired independently for two different hosts, sent by the same
+ * tenant through the generic webhook) got the exact same fingerprint,
+ * and {@code DeduplicationService} would wrongly treat the second as a
+ * duplicate of the first and drop it.
+ *
+ * <p>Fixed by accepting an optional {@code resource} field in the
+ * payload — the generic format's equivalent of Prometheus's
+ * {@code instance} or Wazuh's {@code agentId}: whatever identifies
+ * <em>which specific thing</em> this alert is about (hostname, service
+ * name, container ID, etc.). When present, it's included in the
+ * fingerprint, giving the same disambiguation the other two normalizers
+ * already have. When absent, the fingerprint falls back to
+ * {@code title} alone — deliberately unchanged from before, rather than
+ * e.g. substituting a literal {@code "unknown"} placeholder, which would
+ * have altered the fingerprint format (and therefore silently reset
+ * in-flight deduplication state) for every existing generic integration
+ * that doesn't send {@code resource}, on the very next deploy. Since the
+ * generic format has no schema-guaranteed identity field the platform
+ * can rely on unconditionally (unlike Prometheus/Wazuh, whose vendor
+ * formats define one), correctly disambiguating same-titled alerts is
+ * opt-in: integrators who send multiple distinct alerts under
+ * potentially identical titles should supply {@code resource} to get
+ * correct deduplication; those who don't get today's exact,
+ * already-relied-upon behavior.
+ */
 @Component
 public class GenericNormalizer extends BaseNormalizer {
 
@@ -39,7 +70,15 @@ public class GenericNormalizer extends BaseNormalizer {
         log.info("Generic alert normalized: source={}, severity={}, tenant={}",
                 source, severity, tenantId);
 
-        final String fingerprint = buildFingerprint(title);
+        // Fixed: see this class's Javadoc. resource is optional — when a
+        // caller supplies it, the fingerprint correctly disambiguates
+        // between distinct alerts that happen to share a title; when
+        // absent, this preserves the exact pre-existing single-component
+        // fingerprint rather than changing the format for everyone.
+        final String resource = getText(rawPayload, "resource", null);
+        final String fingerprint = resource != null
+                ? buildFingerprint(title, resource)
+                : buildFingerprint(title);
 
         return NormalizationResult.firingOnly(List.of(new UnifiedAlertDto(
                 UUID.randomUUID(),

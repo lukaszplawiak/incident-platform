@@ -139,6 +139,31 @@ public class AlertIngestionController {
                                                         "startsAt": "2024-01-15T10:30:00Z"
                                                       }]
                                                     }"""
+                                    ),
+                                    @ExampleObject(
+                                            name = "Generic payload",
+                                            description = "resource is optional but strongly " +
+                                                    "recommended whenever your integration can " +
+                                                    "send multiple distinct alerts that might " +
+                                                    "share an identical title (e.g. the same " +
+                                                    "alert type firing for different hosts) — " +
+                                                    "without it, such alerts are indistinguishable " +
+                                                    "for deduplication purposes and the platform " +
+                                                    "may wrongly treat a genuinely new alert as a " +
+                                                    "duplicate of an unrelated one.",
+                                            value = """
+                                                    {
+                                                      "title": "Disk usage above 90%",
+                                                      "severity": "HIGH",
+                                                      "resource": "prod-server-1",
+                                                      "description": "Disk /var is at 93% capacity",
+                                                      "source": "my-monitoring-tool",
+                                                      "sourceType": "OPS",
+                                                      "firedAt": "2024-01-15T10:30:00Z",
+                                                      "metadata": {
+                                                        "environment": "production"
+                                                      }
+                                                    }"""
                                     )
                             }
                     )
