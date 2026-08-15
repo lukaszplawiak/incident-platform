@@ -263,6 +263,61 @@ class GenericNormalizerTest {
         assertThat(fingerprint).isEqualTo("generic:database connection pool exhausted");
     }
 
+    /**
+     * The actual regression test for backlog #27. Without `resource`,
+     * two unrelated alerts sharing an identical title got the exact same
+     * fingerprint, and DeduplicationService would wrongly reject the
+     * second as a duplicate of the first. See GenericNormalizer's own
+     * Javadoc for the full account, including why the no-resource case
+     * (tested above) deliberately keeps its exact pre-existing
+     * fingerprint format rather than changing for everyone.
+     */
+    @Test
+    @DisplayName("fingerprint should include resource when provided, " +
+            "disambiguating alerts that share a title")
+    void fingerprintShouldIncludeResourceWhenProvided() throws Exception {
+        final JsonNode payloadServer1 = objectMapper.readTree("""
+                {
+                  "severity": "HIGH",
+                  "title": "Disk usage above 90%",
+                  "resource": "prod-server-1"
+                }
+                """);
+        final JsonNode payloadServer2 = objectMapper.readTree("""
+                {
+                  "severity": "HIGH",
+                  "title": "Disk usage above 90%",
+                  "resource": "prod-server-2"
+                }
+                """);
+
+        final String fingerprint1 = normalizer.normalize(payloadServer1, TENANT_ID, null)
+                .firingAlerts().get(0).fingerprint();
+        final String fingerprint2 = normalizer.normalize(payloadServer2, TENANT_ID, null)
+                .firingAlerts().get(0).fingerprint();
+
+        assertThat(fingerprint1).isEqualTo("generic:disk usage above 90%:prod-server-1");
+        assertThat(fingerprint2).isEqualTo("generic:disk usage above 90%:prod-server-2");
+        assertThat(fingerprint1)
+                .as("two alerts about different resources must not collide, " +
+                        "even with an identical title")
+                .isNotEqualTo(fingerprint2);
+    }
+
+    @Test
+    @DisplayName("two alerts with the same title but no resource still collide — " +
+            "documents the known limitation when the caller doesn't opt in")
+    void alertsWithSameTitleAndNoResourceStillCollide() throws Exception {
+        final JsonNode payload = buildPayload("HIGH", "Disk usage above 90%", "OPS");
+
+        final String fingerprint1 = normalizer.normalize(payload, TENANT_ID, null)
+                .firingAlerts().get(0).fingerprint();
+        final String fingerprint2 = normalizer.normalize(payload, TENANT_ID, null)
+                .firingAlerts().get(0).fingerprint();
+
+        assertThat(fingerprint1).isEqualTo(fingerprint2);
+    }
+
     @Test
     @DisplayName("getSourceName should return generic")
     void shouldReturnSourceName() {
