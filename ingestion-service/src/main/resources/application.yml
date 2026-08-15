@@ -89,6 +89,17 @@ kafka:
 
 ingestion:
   max-payload-bytes: ${INGESTION_MAX_PAYLOAD_BYTES:1048576}
+  # Empty by default — see IngestionProperties.trustedProxies's Javadoc for
+  # why (fail-closed: X-Forwarded-For/X-Real-IP are never trusted unless
+  # explicitly configured). Override via the INGESTION_TRUSTED_PROXIES
+  # environment variable (comma-separated, e.g. "10.0.0.5,172.20.0.0/16") —
+  # Spring Boot's relaxed binding picks this up automatically without
+  # needing a placeholder here; deliberately not using
+  # ${INGESTION_TRUSTED_PROXIES:} for this because Spring Boot's binding of
+  # an empty-string environment variable to a List<String> property has
+  # inconsistent, version-dependent behavior (a documented, open Spring
+  # Boot issue) — a plain empty-list literal avoids that risk entirely.
+  trusted-proxies: []
   prometheus:
     max-batch-size: ${PROMETHEUS_MAX_BATCH_SIZE:500}
 

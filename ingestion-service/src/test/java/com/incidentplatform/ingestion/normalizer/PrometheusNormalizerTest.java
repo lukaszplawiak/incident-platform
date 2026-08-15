@@ -10,6 +10,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -24,7 +26,7 @@ class PrometheusNormalizerTest {
     @BeforeEach
     void setUp() {
         normalizer = new PrometheusNormalizer(
-                new IngestionProperties(new IngestionProperties.Prometheus(500), MAX_PAYLOAD_BYTES));
+                new IngestionProperties(new IngestionProperties.Prometheus(500), MAX_PAYLOAD_BYTES, java.util.List.of()));
         objectMapper = new ObjectMapper();
     }
 
@@ -343,7 +345,7 @@ class PrometheusNormalizerTest {
                 "the true original count as totalReceived")
         void shouldLimitBatchSize() throws Exception {
             final PrometheusNormalizer smallBatchNormalizer = new PrometheusNormalizer(
-                    new IngestionProperties(new IngestionProperties.Prometheus(2), MAX_PAYLOAD_BYTES));
+                    new IngestionProperties(new IngestionProperties.Prometheus(2), MAX_PAYLOAD_BYTES, java.util.List.of()));
 
             final JsonNode payload = objectMapper.readTree("""
                     {
@@ -378,7 +380,7 @@ class PrometheusNormalizerTest {
         @DisplayName("should report isTruncated=false when the batch is within maxBatchSize")
         void shouldNotReportTruncatedWhenWithinLimit() throws Exception {
             final PrometheusNormalizer normalizerWithRoom = new PrometheusNormalizer(
-                    new IngestionProperties(new IngestionProperties.Prometheus(10), MAX_PAYLOAD_BYTES));
+                    new IngestionProperties(new IngestionProperties.Prometheus(10), MAX_PAYLOAD_BYTES, List.of()));
 
             final JsonNode payload = objectMapper.readTree("""
                     {
