@@ -56,11 +56,14 @@ public class AlertIngestionController {
 
     private final AlertIngestionService alertIngestionService;
     private final RateLimitingService rateLimitingService;
+    private final ClientIpResolver clientIpResolver;
 
     public AlertIngestionController(AlertIngestionService alertIngestionService,
-                                    RateLimitingService rateLimitingService) {
+                                    RateLimitingService rateLimitingService,
+                                    ClientIpResolver clientIpResolver) {
         this.alertIngestionService = alertIngestionService;
         this.rateLimitingService = rateLimitingService;
+        this.clientIpResolver = clientIpResolver;
     }
 
     /**
@@ -174,7 +177,7 @@ public class AlertIngestionController {
             @AuthenticationPrincipal UserPrincipal principal) {
 
         final String tenantId = TenantContext.get();
-        final String clientIp = resolveClientIp(httpRequest);
+        final String clientIp = clientIpResolver.resolve(httpRequest);
 
         // Resolve teamId from Integration ApiKey
         // principal.teamIds() has exactly one entry when authenticated via
@@ -222,18 +225,5 @@ public class AlertIngestionController {
         final List<String> sources = alertIngestionService.getAvailableSources();
         log.debug("Available alert sources requested: {}", sources);
         return ResponseEntity.ok(sources);
-    }
-
-    private String resolveClientIp(
-            HttpServletRequest request) {
-        final String xForwardedFor = request.getHeader("X-Forwarded-For");
-        if (xForwardedFor != null && !xForwardedFor.isBlank()) {
-            return xForwardedFor.split(",")[0].trim();
-        }
-        final String xRealIp = request.getHeader("X-Real-IP");
-        if (xRealIp != null && !xRealIp.isBlank()) {
-            return xRealIp.trim();
-        }
-        return request.getRemoteAddr();
     }
 }

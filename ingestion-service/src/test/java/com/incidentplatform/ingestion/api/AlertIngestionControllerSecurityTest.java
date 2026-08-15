@@ -99,6 +99,9 @@ class AlertIngestionControllerSecurityTest {
     private RateLimitingService rateLimitingService;
 
     @MockitoBean
+    private ClientIpResolver clientIpResolver;
+
+    @MockitoBean
     private JwtUtils jwtUtils;
 
     @MockitoBean
@@ -116,6 +119,10 @@ class AlertIngestionControllerSecurityTest {
         // done here, out of scope for a security test).
         given(rateLimitingService.tryConsume(anyString(), anyString()))
                 .willReturn(RateLimitResult.permit());
+        // ClientIpResolver is now a separate, mocked component (backlog
+        // #28) — default to a plausible IP so tests reaching the rate
+        // limiter get a realistic argument, not null.
+        given(clientIpResolver.resolve(any())).willReturn("203.0.113.1");
     }
 
     @AfterEach
