@@ -8,11 +8,25 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import jakarta.validation.constraints.NotNull;
 
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * <h2>Fixed: no optimistic locking (backlog #38)</h2>
+ * See migration V5's comment for the full account. In short:
+ * {@code EscalationScheduler.checkAndEscalate()} (its own scheduled
+ * thread) and {@code EscalationService.cancelEscalation()} (the Kafka
+ * listener thread, on an incoming ack event) could both read and write
+ * the same row concurrently with no conflict detection — ShedLock only
+ * protects against multiple *instances* of the scheduler, not against
+ * the Kafka consumer thread racing it within the same instance. The new
+ * {@link #version} field, combined with JPA's standard optimistic
+ * locking, makes that race detectable instead of silently resolving to
+ * whichever write happens to commit last.
+ */
 @Entity
 @Table(
         name = "escalation_tasks",
@@ -84,6 +98,10 @@ public class EscalationTask {
     @NotNull
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
 
     protected EscalationTask() {}
 
@@ -176,4 +194,5 @@ public class EscalationTask {
     public int getEscalationLevel()           { return escalationLevel; }
     public Instant getCreatedAt()             { return createdAt; }
     public Instant getUpdatedAt()             { return updatedAt; }
+    public long getVersion()                  { return version; }
 }

@@ -21,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -87,7 +88,7 @@ class EscalationSchedulerTest {
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -110,7 +111,7 @@ class EscalationSchedulerTest {
             final EscalationTask task = buildOverdueTask(2);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -137,7 +138,7 @@ class EscalationSchedulerTest {
 
             // then
             then(kafkaSender).should(never()).send(any(), any());
-            then(taskRepository).should(never()).save(any());
+            then(taskRepository).should(never()).saveAndFlush(any());
         }
 
         @Test
@@ -147,18 +148,18 @@ class EscalationSchedulerTest {
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
 
             // then — save() must happen strictly before kafkaSender.send().
-            // If this order were reversed and taskRepository.save() threw after
+            // If this order were reversed and taskRepository.saveAndFlush() threw after
             // kafkaSender.send(), @Transactional would roll back the DB state but
             // the Kafka event would already be in-flight — causing duplicate
             // on-call notifications on the next scheduler tick.
             final InOrder order = inOrder(taskRepository, kafkaSender);
-            order.verify(taskRepository).save(any(EscalationTask.class));
+            order.verify(taskRepository).saveAndFlush(any(EscalationTask.class));
             order.verify(kafkaSender).send(
                     any(IncidentEscalatedEvent.class),
                     eq(IncidentEventTypes.INCIDENT_ESCALATED));
@@ -173,7 +174,7 @@ class EscalationSchedulerTest {
 
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task1, task2));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // First kafkaSender.send() (task1) throws after the DB state has
             // already been persisted. Second call (task2) succeeds.
@@ -191,7 +192,7 @@ class EscalationSchedulerTest {
             // then — both tasks attempted despite task1's Kafka failure
             then(kafkaSender).should(times(2)).send(any(), any());
             // task2 was also saved
-            then(taskRepository).should(times(2)).save(any());
+            then(taskRepository).should(times(2)).saveAndFlush(any());
         }
 
         @Test
@@ -204,9 +205,9 @@ class EscalationSchedulerTest {
 
             // DB save throws — simulates connection pool exhaustion or timeout
             willThrow(new RuntimeException("DB connection lost"))
-                    .given(taskRepository).save(any());
+                    .given(taskRepository).saveAndFlush(any());
 
-            // when
+// when
             scheduler.checkAndEscalate();
 
             // then — kafkaSender.send() must NOT be called.
@@ -216,6 +217,63 @@ class EscalationSchedulerTest {
             then(kafkaSender).should(never()).send(any(), any());
         }
 
+        /**
+         * The actual regression test for backlog #38. Simulates the race
+         * this fix targets: EscalationService.cancelEscalation() (a
+         * different thread — the Kafka listener, reacting to an
+         * IncidentAcknowledgedEvent) concurrently modified this task
+         * between findDueForEscalation() reading it and this scheduler
+         * tick trying to save it — surfacing as
+         * OptimisticLockingFailureException from saveAndFlush(). Unlike
+         * a generic DB failure (shouldNotSendKafkaEventWhenDbSaveFails
+         * above), this must be recognized specifically: no error should
+         * be logged as if something went wrong (the cancellation is the
+         * expected, correct outcome), and — critically — no Kafka event
+         * should be sent for a task that was just cancelled.
+         */
+        @Test
+        @DisplayName("should skip the task (no Kafka event, no error) when " +
+                "saveAndFlush hits an optimistic lock conflict — " +
+                "concurrently cancelled by an ACK")
+        void shouldSkipTaskOnOptimisticLockConflict() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(task));
+
+            willThrow(new OptimisticLockingFailureException(
+                    "Row was updated or deleted by another transaction"))
+                    .given(taskRepository).saveAndFlush(any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — no notification sent for a task that was just cancelled
+            then(kafkaSender).should(never()).send(any(), any());
+        }
+
+        @Test
+        @DisplayName("should continue processing other tasks after one hits " +
+                "an optimistic lock conflict")
+        void shouldContinueProcessingAfterOneOptimisticLockConflict() {
+            // given
+            final EscalationTask conflicted = buildOverdueTask(1);
+            final EscalationTask normal = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any()))
+                    .willReturn(List.of(conflicted, normal));
+
+            willThrow(new OptimisticLockingFailureException(
+                    "Row was updated or deleted by another transaction"))
+                    .willAnswer(i -> i.getArgument(0))
+                    .given(taskRepository).saveAndFlush(any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — the second (unaffected) task still gets escalated normally
+            then(kafkaSender).should(times(1)).send(any(), any());
+        }
+
         @Test
         @DisplayName("should send IncidentEscalatedEvent with correct fields")
         void shouldSendEventWithCorrectFields() {
@@ -223,7 +281,7 @@ class EscalationSchedulerTest {
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -248,7 +306,7 @@ class EscalationSchedulerTest {
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -274,7 +332,7 @@ class EscalationSchedulerTest {
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -290,7 +348,7 @@ class EscalationSchedulerTest {
             final EscalationTask task = buildOverdueTask(1);
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(task));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
             willThrow(new RuntimeException("Kafka unavailable"))
                     .given(kafkaSender).send(any(), any());
 
@@ -311,7 +369,7 @@ class EscalationSchedulerTest {
 
             given(taskRepository.findDueForEscalation(any()))
                     .willReturn(List.of(taskTenantA, taskTenantB));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // Capture TenantContext at the moment each Kafka send happens — the
             // most direct way to verify the context was correctly scoped to

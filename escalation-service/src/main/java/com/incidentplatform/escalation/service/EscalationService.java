@@ -75,6 +75,21 @@ public class EscalationService {
                 task.getScheduledEscalationAt());
     }
 
+    /**
+     * <h2>Fixed (backlog #38): saveAndFlush(), not save()</h2>
+     * See {@link EscalationTask}'s own Javadoc for the full account of the
+     * race this guards against — this is the other side of it. If
+     * {@code EscalationScheduler.checkAndEscalate()} concurrently
+     * escalated one of these tasks (its own scheduled thread, running
+     * independently of this Kafka-listener-thread call), that task's
+     * version will have changed since it was read here, and
+     * {@code saveAndFlush} surfaces that as an
+     * {@link org.springframework.dao.OptimisticLockingFailureException}
+     * immediately — letting this method's caller
+     * ({@code IncidentEventConsumer}) treat it as a transient error and
+     * retry via Kafka redelivery, rather than silently overwriting
+     * whatever the scheduler already committed.
+     */
     @Transactional
     public void cancelEscalation(UUID incidentId, String tenantId) {
         final var tasks = taskRepository.findAllByIncidentId(incidentId);
@@ -89,7 +104,7 @@ public class EscalationService {
         for (final var task : tasks) {
             if (task.isPending()) {
                 task.cancel();
-                taskRepository.save(task);
+                taskRepository.saveAndFlush(task);
                 cancelled++;
             }
         }
