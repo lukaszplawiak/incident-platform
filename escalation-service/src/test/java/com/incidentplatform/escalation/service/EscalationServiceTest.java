@@ -12,15 +12,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
@@ -212,7 +215,7 @@ class EscalationServiceTest {
 
             given(taskRepository.findAllByIncidentId(INCIDENT_ID))
                     .willReturn(List.of(task1, task2));
-            given(taskRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID);
@@ -233,7 +236,7 @@ class EscalationServiceTest {
             escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID);
 
             // then
-            then(taskRepository).should(never()).save(any());
+            then(taskRepository).should(never()).saveAndFlush(any());
         }
 
         @Test
@@ -253,7 +256,39 @@ class EscalationServiceTest {
 
             // then
             assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
-            then(taskRepository).should(never()).save(any());
+            then(taskRepository).should(never()).saveAndFlush(any());
+        }
+
+        /**
+         * Regression test for backlog #38's other side: if
+         * EscalationScheduler concurrently escalated this task (its own
+         * thread) between findAllByIncidentId() reading it here and this
+         * method trying to save the cancellation, saveAndFlush() surfaces
+         * that as OptimisticLockingFailureException. This must propagate
+         * out of cancelEscalation() (not be silently swallowed) so
+         * IncidentEventConsumer's existing generic catch treats it as a
+         * transient error and lets Kafka redeliver the ack event — see
+         * this method's own Javadoc for the full account.
+         */
+        @Test
+        @DisplayName("propagates OptimisticLockingFailureException when a task " +
+                "was concurrently escalated, rather than swallowing it")
+        void propagatesOptimisticLockConflict() {
+            // given
+            final EscalationTask task = EscalationTask.createLevel1(
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Instant.now(),
+                    Severity.CRITICAL, "High CPU");
+
+            given(taskRepository.findAllByIncidentId(INCIDENT_ID))
+                    .willReturn(List.of(task));
+            willThrow(new OptimisticLockingFailureException(
+                    "Row was updated or deleted by another transaction"))
+                    .given(taskRepository).saveAndFlush(any());
+
+            // when / then
+            assertThatThrownBy(() ->
+                    escalationService.cancelEscalation(INCIDENT_ID, TENANT_ID))
+                    .isInstanceOf(OptimisticLockingFailureException.class);
         }
     }
 }

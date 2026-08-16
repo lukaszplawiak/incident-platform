@@ -14,6 +14,7 @@ import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -186,9 +187,37 @@ public class EscalationScheduler {
         //  Justified when running multiple instances (Kubernetes HPA) or when
         //  duplicate on-call notifications have business/regulatory consequences.
         // ────────────────────────────────────────────────────────────────────
-
+        //
+        // Fixed (backlog #38): saveAndFlush(), not save() — a plain save()
+        // only queues the UPDATE; without an explicit flush, Hibernate may
+        // defer actually executing it (and therefore checking the @Version
+        // column below) until checkAndEscalate()'s transaction commits, at
+        // the very end of the whole batch — by which point kafkaSender.send()
+        // below would have already fired. Flushing here forces the version
+        // check to happen NOW, synchronously, so a task that
+        // EscalationService.cancelEscalation() concurrently modified (on the
+        // Kafka listener thread, independent of and unprotected by this
+        // method's ShedLock — see EscalationTask's own Javadoc for the full
+        // account) is caught and skipped BEFORE any notification is sent for
+        // it, not after.
         task.markEscalated();
-        taskRepository.save(task);
+        try {
+            taskRepository.saveAndFlush(task);
+        } catch (OptimisticLockingFailureException e) {
+            // Not an error — this task was concurrently modified since
+            // findDueForEscalation() read it, almost certainly cancelled by
+            // EscalationService.cancelEscalation() reacting to an
+            // IncidentAcknowledgedEvent that arrived in the same narrow
+            // window. Skip this task entirely: no Kafka event, no audit
+            // entry, no level-2 scheduling — the cancellation is what
+            // should win, and it already did, in the database.
+            log.info("Escalation task was concurrently modified (likely " +
+                            "cancelled after ACK) — skipping: incidentId={}, " +
+                            "tenant={}, escalationLevel={}",
+                    task.getIncidentId(), task.getTenantId(),
+                    task.getEscalationLevel());
+            return;
+        }
 
         // Publishes to incidents-lifecycle with X-Event-Type header so that
         // notification-service routes this event to EMAIL/SLACK/SMS.
