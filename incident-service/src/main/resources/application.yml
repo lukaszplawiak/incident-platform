@@ -110,6 +110,24 @@ kafka:
     # Override per environment: dev=1, staging=7, prod=30.
     retention-days: ${DEAD_LETTER_RETENTION_DAYS:30}
 
+# Backlog #36 — Transactional Outbox for incidents.lifecycle publishing.
+# See IncidentEventOutbox/IncidentEventOutboxScheduler's Javadoc for the
+# full account of the phantom-event bug this replaces.
+incident:
+  event-outbox:
+    # Kept short relative to auth-service's 30s email-outbox interval —
+    # incident lifecycle events drive real-time escalation timers and
+    # notification paging downstream; this interval is the only added
+    # latency versus the old direct-publish behavior.
+    poll-interval-ms: ${INCIDENT_EVENT_OUTBOX_POLL_INTERVAL_MS:2000}
+    # Caps how many PENDING entries one poll cycle processes — bounds
+    # worst-case cycle duration if a backlog accumulates (e.g. after a
+    # Kafka outage); the next cycle continues where this one left off.
+    batch-size: ${INCIDENT_EVENT_OUTBOX_BATCH_SIZE:50}
+    # How long sendRawSync blocks waiting for the broker's ack per entry
+    # before treating the send as failed (left PENDING, retried next cycle).
+    send-timeout: ${INCIDENT_EVENT_OUTBOX_SEND_TIMEOUT:PT5S}
+
 server:
   port: ${SERVER_PORT:8082}
   server-header: ""

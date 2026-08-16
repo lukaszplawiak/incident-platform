@@ -30,6 +30,19 @@ import java.nio.charset.StandardCharsets;
  * Consolidating to one class makes that class of bug structurally impossible:
  * the header is part of {@link #send}, not something every producer must
  * remember to add.
+ *
+ * <h2>Added for backlog #36: {@link #sendRawSync}</h2>
+ * incident-service's {@code IncidentEventOutboxScheduler} needs to block
+ * until the broker actually confirms the send (or definitively fails)
+ * before deciding whether to mark an outbox entry PUBLISHED — unlike
+ * {@link #send}'s async, fire-and-forget behavior, appropriate for its
+ * direct in-transaction callers where blocking on the broker would add
+ * request latency for no correctness benefit. {@link #send}'s existing
+ * signature and async behavior are unchanged — escalation-service's
+ * {@code EscalationScheduler} still calls it exactly as before; the new
+ * method is purely additive. Both share {@link #buildRecord} so the
+ * actual {@code ProducerRecord} construction (topic, key, header) has
+ * exactly one implementation regardless of which send path is used.
  */
 @Component
 @ConditionalOnProperty(name = "kafka.topics.incidents-lifecycle")
@@ -63,17 +76,8 @@ public class IncidentEventKafkaSender {
     public void send(IncidentEvent event, String eventType) {
         try {
             final String payload = objectMapper.writeValueAsString(event);
-
-            final ProducerRecord<String, String> record = new ProducerRecord<>(
-                    incidentsLifecycleTopic,
-                    null,
-                    event.incidentId().toString(),
-                    payload
-            );
-            record.headers().add(new RecordHeader(
-                    IncidentEventTypes.HEADER_NAME,
-                    eventType.getBytes(StandardCharsets.UTF_8)
-            ));
+            final ProducerRecord<String, String> record =
+                    buildRecord(event.incidentId().toString(), eventType, payload);
 
             kafkaTemplate.send(record)
                     .whenComplete((result, ex) -> {
@@ -96,5 +100,57 @@ public class IncidentEventKafkaSender {
             log.error("Failed to serialize {}: incidentId={}",
                     eventType, event.incidentId(), e);
         }
+    }
+
+    /**
+     * Synchronous variant for {@code incident-service}'s
+     * {@code IncidentEventOutboxScheduler} — blocks until the broker
+     * acknowledges the send (or {@code timeout} elapses / the send fails),
+     * so the caller can definitively know whether to mark its outbox entry
+     * PUBLISHED or leave it PENDING for the next poll. Safe to block here:
+     * the outbox scheduler runs on its own dedicated scheduled thread, not
+     * an HTTP request thread — there is no user-facing latency to protect,
+     * unlike {@link #send}'s direct in-transaction callers.
+     *
+     * <p>Unlike {@link #send}, this method takes an already-serialized
+     * JSON {@code payload} rather than a typed {@link IncidentEvent} —
+     * the outbox scheduler reads that JSON back from the
+     * {@code incident_event_outbox} table exactly as it was written at
+     * outbox-entry-creation time, rather than deserializing and
+     * re-serializing it (which would risk the payload subtly changing
+     * shape if the event's Java record definition evolves between write
+     * and publish).
+     *
+     * @throws java.util.concurrent.ExecutionException if the send itself failed
+     * @throws InterruptedException if the calling thread was interrupted while waiting
+     * @throws java.util.concurrent.TimeoutException if the broker didn't acknowledge within {@code timeout}
+     */
+    public void sendRawSync(String incidentId, String eventType, String jsonPayload,
+                            java.time.Duration timeout)
+            throws java.util.concurrent.ExecutionException, InterruptedException,
+            java.util.concurrent.TimeoutException {
+        final ProducerRecord<String, String> record =
+                buildRecord(incidentId, eventType, jsonPayload);
+
+        kafkaTemplate.send(record)
+                .get(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
+
+        log.debug("{} published synchronously: topic={}, incidentId={}",
+                eventType, incidentsLifecycleTopic, incidentId);
+    }
+
+    private ProducerRecord<String, String> buildRecord(
+            String incidentId, String eventType, String payload) {
+        final ProducerRecord<String, String> record = new ProducerRecord<>(
+                incidentsLifecycleTopic,
+                null,
+                incidentId,
+                payload
+        );
+        record.headers().add(new RecordHeader(
+                IncidentEventTypes.HEADER_NAME,
+                eventType.getBytes(StandardCharsets.UTF_8)
+        ));
+        return record;
     }
 }
