@@ -16,15 +16,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.support.Acknowledgment;
 
-import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
@@ -155,6 +154,73 @@ class AuditEventConsumerTest {
             // then
             then(auditEventRepository).should().save(captor.capture());
             assertThat(captor.getValue().getActorType()).isEqualTo(ActorType.USER);
+        }
+
+        /**
+         * Regression coverage for backlog #37's fix: the built entity must
+         * carry the record's real (partition, offset) — the idempotency
+         * key migration V10's unique constraint enforces. Uses a non-zero
+         * partition/offset specifically so this test can't accidentally
+         * pass due to unset/default int fields both happening to be 0.
+         */
+        @Test
+        @DisplayName("should populate kafkaPartition/kafkaOffset from the ConsumerRecord")
+        void shouldPopulateKafkaIdempotencyKeyFromRecord() throws Exception {
+            // given
+            final ConsumerRecord<String, String> record = new ConsumerRecord<>(
+                    TOPIC, 3, 42L, TENANT_ID, buildAuditEventJson());
+
+            final ArgumentCaptor<AuditEvent> captor =
+                    ArgumentCaptor.forClass(AuditEvent.class);
+
+            // when
+            consumer.consume(record, acknowledgment);
+
+            // then
+            then(auditEventRepository).should().save(captor.capture());
+            assertThat(captor.getValue().getKafkaPartition()).isEqualTo(3);
+            assertThat(captor.getValue().getKafkaOffset()).isEqualTo(42L);
+        }
+    }
+
+    // ─── idempotent redelivery (backlog #37) ───────────────────────────────
+
+    @Nested
+    @DisplayName("idempotent redelivery handling")
+    class IdempotentRedeliveryHandling {
+
+        /**
+         * The actual regression test for backlog #37. Simulates exactly
+         * the scenario the fix targets: the consumer crashed after a
+         * successful save() but before acknowledge() last time, so Kafka
+         * redelivers the identical message. The second save() attempt now
+         * hits uq_audit_events_kafka_partition_offset and Spring Data
+         * translates the resulting SQL constraint violation into
+         * DataIntegrityViolationException — this must be treated as
+         * "already processed" (acknowledge, no error), not as a transient
+         * failure (which would leave it unacknowledged and cause Kafka to
+         * redeliver the same message again, forever, against the same
+         * unresolvable conflict).
+         */
+        @Test
+        @DisplayName("acknowledges (does not error) when save fails on the " +
+                "unique (partition, offset) constraint — a Kafka redelivery")
+        void acknowledgesOnDuplicateKeyConstraintViolation() throws Exception {
+            // given
+            final ConsumerRecord<String, String> record =
+                    buildRecord(buildAuditEventJson());
+
+            willThrow(new DataIntegrityViolationException(
+                    "duplicate key value violates unique constraint " +
+                            "\"uq_audit_events_kafka_partition_offset\""))
+                    .given(auditEventRepository).save(any());
+
+            // when
+            consumer.consume(record, acknowledgment);
+
+            // then — acknowledged, exactly as a successful save would be,
+            // NOT treated as a transient error
+            then(acknowledgment).should().acknowledge();
         }
     }
 
