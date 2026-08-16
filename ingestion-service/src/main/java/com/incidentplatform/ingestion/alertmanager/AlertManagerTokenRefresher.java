@@ -57,6 +57,25 @@ public class AlertManagerTokenRefresher {
     // Rotates the token file at 80% of the token lifetime.
     // The initial token is created by scripts/generate-alertmanager-token.sh —
     // this method only refreshes it to prevent expiry during long-running deployments.
+    //
+    // Fixed (backlog #32, documentation only — no behavior change): if
+    // ingestion-service is horizontally scaled to multiple replicas
+    // (this module's HPA supports up to 3 — see RateLimitingService's own
+    // Javadoc for that context), every replica runs this exact same
+    // @Scheduled method independently, all writing to the same
+    // tokenFilePath — presumed to live on a volume shared with
+    // Alertmanager, since Alertmanager is the one that actually needs to
+    // read it. This is a genuine, unsynchronized multi-writer race, but a
+    // harmless one: every replica independently generates its own fresh,
+    // fully valid service token (jwtUtils.generateServiceToken is
+    // stateless — there's no shared counter or sequence to race on), so
+    // whichever replica's write lands last simply "wins," and the result
+    // is still a correct, currently-valid token either way. Worth noting
+    // explicitly rather than adding real coordination (e.g. a distributed
+    // lock, or electing a single replica to own this responsibility) —
+    // that complexity would guard against a problem that doesn't actually
+    // exist here, unlike e.g. ShedLock's genuine necessity for scheduled
+    // jobs elsewhere in this codebase that perform non-idempotent writes.
     @Scheduled(fixedDelayString =
             "${alertmanager.token-refresh-delay-ms:"
                     + "#{@jwtUtils.getServiceTokenTtl().toMillis() * 8 / 10}}")
