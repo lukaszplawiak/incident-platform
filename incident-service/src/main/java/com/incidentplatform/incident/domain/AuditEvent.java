@@ -74,6 +74,19 @@ public class AuditEvent {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /**
+     * Idempotency key, sourced from the Kafka {@code ConsumerRecord} that
+     * produced this row — see migration V10's comment for the full
+     * account. Nullable at the entity level (matches the nullable DB
+     * column, for pre-migration rows), but every row written going
+     * forward by {@code AuditEventConsumer} always populates both.
+     */
+    @Column(name = "kafka_partition")
+    private Integer kafkaPartition;
+
+    @Column(name = "kafka_offset")
+    private Long kafkaOffset;
+
     protected AuditEvent() {}
 
     public static AuditEvent system(UUID incidentId,
@@ -81,10 +94,12 @@ public class AuditEvent {
                                     String eventType,
                                     String sourceService,
                                     String detail,
-                                    Map<String, Object> metadata) {
+                                    Map<String, Object> metadata,
+                                    Integer kafkaPartition,
+                                    Long kafkaOffset) {
         return create(incidentId, tenantId, eventType,
                 sourceService, sourceService, ActorType.SYSTEM,
-                detail, metadata);
+                detail, metadata, kafkaPartition, kafkaOffset);
     }
 
     public static AuditEvent user(UUID incidentId,
@@ -93,10 +108,12 @@ public class AuditEvent {
                                   String sourceService,
                                   String userId,
                                   String detail,
-                                  Map<String, Object> metadata) {
+                                  Map<String, Object> metadata,
+                                  Integer kafkaPartition,
+                                  Long kafkaOffset) {
         return create(incidentId, tenantId, eventType,
                 sourceService, userId, ActorType.USER,
-                detail, metadata);
+                detail, metadata, kafkaPartition, kafkaOffset);
     }
 
     private static AuditEvent create(UUID incidentId,
@@ -106,7 +123,9 @@ public class AuditEvent {
                                      String actor,
                                      ActorType actorType,
                                      String detail,
-                                     Map<String, Object> metadata) {
+                                     Map<String, Object> metadata,
+                                     Integer kafkaPartition,
+                                     Long kafkaOffset) {
         final AuditEvent event = new AuditEvent();
         event.id = UUID.randomUUID();
         event.incidentId = incidentId;
@@ -119,6 +138,8 @@ public class AuditEvent {
         event.metadata = metadata;
         event.occurredAt = Instant.now();
         event.createdAt = Instant.now();
+        event.kafkaPartition = kafkaPartition;
+        event.kafkaOffset = kafkaOffset;
         return event;
     }
 
@@ -133,4 +154,6 @@ public class AuditEvent {
     public String getSourceService() { return sourceService; }
     public Instant getOccurredAt()   { return occurredAt; }
     public Instant getCreatedAt()    { return createdAt; }
+    public Integer getKafkaPartition() { return kafkaPartition; }
+    public Long getKafkaOffset()       { return kafkaOffset; }
 }

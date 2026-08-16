@@ -202,6 +202,6 @@ class AuditQueryServiceTest {
         return AuditEvent.system(
                 INCIDENT_ID, TENANT_ID,
                 eventType, "incident-service",
-                "Test event", null);
+                "Test event", null, 0, 0L);
     }
 }
