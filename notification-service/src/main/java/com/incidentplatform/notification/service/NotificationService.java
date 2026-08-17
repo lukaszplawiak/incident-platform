@@ -1,9 +1,7 @@
 package com.incidentplatform.notification.service;
 
 import com.incidentplatform.notification.channel.NotificationException;
-import com.incidentplatform.notification.domain.NotificationLog;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
-import com.incidentplatform.notification.domain.NotificationQueueStatus;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
@@ -25,7 +23,10 @@ import java.util.UUID;
  * <h2>1. Enqueue (called by Kafka consumer — fast path)</h2>
  * {@link #enqueue} writes a PENDING outbox entry to {@code notification_queue}
  * and returns immediately. The Kafka consumer acknowledges after this returns.
- * No HTTP calls, no external dependencies — just one DB INSERT.
+ * No HTTP calls, no external dependencies — just one DB INSERT. Still
+ * {@code @Transactional} — a single fast operation with no external I/O
+ * is exactly what that annotation is for; unlike {@link #processEntry}
+ * below, there's nothing here to fix.
  *
  * <h2>2. Process (called by scheduler — slow path)</h2>
  * {@link #processEntry} reads a PENDING entry, resolves the current oncall
@@ -38,6 +39,17 @@ import java.util.UUID;
  * 30 seconds). Resolving at process time ensures the notification reaches
  * whoever is currently on duty — not the person who was on duty when the
  * Kafka event arrived.
+ *
+ * <h2>Fixed (backlog #42): {@code processEntry} no longer wraps external
+ * I/O in an open transaction</h2>
+ * See {@link NotificationPersistenceService}'s Javadoc for the full
+ * account — {@code processEntry} previously carried {@code @Transactional}
+ * on the whole method, including the oncall-service HTTP lookup and every
+ * per-channel send (Slack/SMTP/SMS). Every database write below now goes
+ * through {@code NotificationPersistenceService} instead, each in its own
+ * short, independent transaction opened only after the corresponding
+ * external call has already completed — matching the same fix already
+ * applied to {@code EscalationScheduler} (backlog #39).
  */
 @Service
 public class NotificationService {
@@ -50,15 +62,18 @@ public class NotificationService {
     private final NotificationRouter router;
     private final NotificationLogRepository logRepository;
     private final NotificationQueueRepository queueRepository;
+    private final NotificationPersistenceService persistenceService;
     private final AuditEventPublisher auditEventPublisher;
 
     public NotificationService(NotificationRouter router,
                                NotificationLogRepository logRepository,
                                NotificationQueueRepository queueRepository,
+                               NotificationPersistenceService persistenceService,
                                AuditEventPublisher auditEventPublisher) {
         this.router = router;
         this.logRepository = logRepository;
         this.queueRepository = queueRepository;
+        this.persistenceService = persistenceService;
         this.auditEventPublisher = auditEventPublisher;
     }
 
@@ -111,11 +126,13 @@ public class NotificationService {
      * (individual channel failures are logged to {@code notification_log}
      * with status FAILED but do not prevent other channels from being tried).
      * Marks {@code FAILED} only if an unexpected exception prevents processing
-     * entirely.
+     * entirely — that happens in {@code NotificationScheduler}'s catch
+     * block, not here, since this method no longer catches its own
+     * top-level failures (removing {@code @Transactional} means there's no
+     * longer a transaction boundary here to protect with a catch).
      *
      * @param entry the PENDING outbox entry to process
      */
-    @Transactional
     public void processEntry(NotificationQueueEntry entry) {
         final UUID incidentId = entry.getIncidentId();
         final String tenantId = entry.getTenantId();
@@ -129,16 +146,16 @@ public class NotificationService {
                         "eventType={}, tenant={}",
                 incidentId, eventType, tenantId);
 
-        // Resolve oncall and build channel requests — HTTP call to oncall-service.
-        // Happens here (scheduler thread), not in the consumer thread.
+        // Resolve oncall and build channel requests — HTTP call to
+        // oncall-service. Happens here (scheduler thread), with no
+        // database transaction open (backlog #42).
         final var channelRequests = router.route(
                 eventType, incidentId, tenantId,
                 entry.getSeverity(), entry.getTitle());
 
         if (channelRequests.isEmpty()) {
             log.debug("No channels configured for event: {}", eventType);
-            entry.markSent();
-            queueRepository.save(entry);
+            persistenceService.markSent(entry);
             return;
         }
 
@@ -148,7 +165,10 @@ public class NotificationService {
 
             // Per-channel idempotency — skip if already sent for this event.
             // Guards against duplicate sends if the scheduler runs twice
-            // before marking the entry as SENT.
+            // before marking the entry as SENT. Plain read, outside any
+            // transaction — gets its own short, auto-committing one from
+            // Spring Data JPA, same as every other read-only repository
+            // call in this codebase's schedulers.
             if (logRepository.existsByIncidentIdAndEventTypeAndChannel(
                     incidentId, eventType, channel.channelName())) {
                 log.info("Notification already sent (idempotency check): " +
@@ -160,11 +180,9 @@ public class NotificationService {
             try {
                 channel.send(request);
 
-                logRepository.save(NotificationLog.sent(
-                        incidentId, tenantId, eventType,
-                        channel.channelName(), request.recipient(),
-                        request.subject(), request.message()
-                ));
+                persistenceService.recordChannelSent(
+                        incidentId, tenantId, eventType, channel.channelName(),
+                        request.recipient(), request.subject(), request.message());
 
                 log.info("Notification sent: channel={}, recipient={}, " +
                                 "incidentId={}, tenant={}",
@@ -182,11 +200,9 @@ public class NotificationService {
                 );
 
             } catch (NotificationException e) {
-                logRepository.save(NotificationLog.failed(
-                        incidentId, tenantId, eventType,
-                        channel.channelName(), request.recipient(),
-                        e.getMessage()
-                ));
+                persistenceService.recordChannelFailed(
+                        incidentId, tenantId, eventType, channel.channelName(),
+                        request.recipient(), e.getMessage());
 
                 log.error("Notification failed: channel={}, recipient={}, " +
                                 "incidentId={}, error={}",
@@ -205,11 +221,9 @@ public class NotificationService {
                 );
 
             } catch (Exception e) {
-                logRepository.save(NotificationLog.failed(
-                        incidentId, tenantId, eventType,
-                        channel.channelName(), request.recipient(),
-                        "Unexpected error: " + e.getMessage()
-                ));
+                persistenceService.recordChannelFailed(
+                        incidentId, tenantId, eventType, channel.channelName(),
+                        request.recipient(), "Unexpected error: " + e.getMessage());
 
                 log.error("Unexpected error sending notification: " +
                                 "channel={}, incidentId={}",
@@ -220,8 +234,7 @@ public class NotificationService {
         // Mark the queue entry as processed — all channels attempted.
         // Individual channel failures are recorded in notification_log
         // but do not prevent the entry from being marked SENT here.
-        entry.markSent();
-        queueRepository.save(entry);
+        persistenceService.markSent(entry);
 
         log.info("Notification queue entry processed: eventType={}, " +
                         "channels={}, incidentId={}, tenant={}",

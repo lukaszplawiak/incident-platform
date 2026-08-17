@@ -6,6 +6,8 @@ import com.incidentplatform.incident.repository.IncidentEventOutboxRepository;
 import com.incidentplatform.incident.service.IncidentEventOutboxPersistenceService;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.security.TenantContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,6 +20,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -58,6 +61,11 @@ class IncidentEventOutboxSchedulerTest {
         return IncidentEventOutbox.pending(
                 UUID.randomUUID(), TENANT_ID,
                 IncidentEventTypes.INCIDENT_OPENED, "{\"incidentId\":\"test\"}");
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
     }
 
     @Test
@@ -131,5 +139,38 @@ class IncidentEventOutboxSchedulerTest {
 
         then(persistenceService).should().markFailed(eq(failing.getId()), any());
         then(persistenceService).should().markPublished(succeeding.getId());
+    }
+
+    /**
+     * The actual regression test for backlog #42's TenantContext fix.
+     * See this class's own Javadoc for the full account — every other
+     * scheduler in this codebase already set TenantContext per entry;
+     * this one was the gap.
+     */
+    @Test
+    @DisplayName("sets and clears TenantContext per entry")
+    void setsAndClearsTenantContextPerEntry() throws Exception {
+        final IncidentEventOutbox entry = buildEntry();
+        given(outboxRepository.findPendingOrderByCreatedAt(any(PageRequest.class)))
+                .willReturn(List.of(entry));
+
+        scheduler.processPending();
+
+        assertThat(TenantContext.getOrNull()).isNull();
+    }
+
+    @Test
+    @DisplayName("clears TenantContext even when sendRawSync throws")
+    void clearsTenantContextOnFailure() throws Exception {
+        final IncidentEventOutbox entry = buildEntry();
+        given(outboxRepository.findPendingOrderByCreatedAt(any(PageRequest.class)))
+                .willReturn(List.of(entry));
+        willThrow(new java.util.concurrent.ExecutionException(
+                "Broker unreachable", new RuntimeException()))
+                .given(kafkaSender).sendRawSync(any(), any(), any(), any());
+
+        scheduler.processPending();
+
+        assertThat(TenantContext.getOrNull()).isNull();
     }
 }
