@@ -103,6 +103,20 @@ public class EscalationTask {
     @Column(name = "version", nullable = false)
     private long version;
 
+    /**
+     * Retry tracking (backlog #41) — see migration V6's comment for the
+     * full account. Incremented only by {@link #recordFailedAttempt},
+     * called from {@code EscalationScheduler.checkAndEscalate()}'s
+     * generic failure catch — never for a task skipped due to a detected
+     * {@code OptimisticLockingFailureException} (backlog #38), since
+     * that's an expected, correct outcome, not a failure.
+     */
+    @Column(name = "retry_count", nullable = false)
+    private int retryCount = 0;
+
+    @Column(name = "error_message", columnDefinition = "TEXT")
+    private String errorMessage;
+
     protected EscalationTask() {}
 
     public static EscalationTask createLevel1(UUID incidentId,
@@ -170,6 +184,22 @@ public class EscalationTask {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Records a failed escalation attempt — status stays PENDING (the
+     * task will be retried on the next scheduler poll cycle, matching
+     * the platform's general "retry indefinitely, never give up on a
+     * real escalation" philosophy — see {@code EscalationTaskStatus}'s
+     * sibling in {@code IncidentEventOutboxStatus} for the same reasoning
+     * applied to Kafka publishing). Called only for genuine failures —
+     * see this field's own Javadoc for why an optimistic lock conflict
+     * must NOT call this.
+     */
+    public void recordFailedAttempt(String errorMessage) {
+        this.retryCount++;
+        this.errorMessage = errorMessage;
+        this.updatedAt = Instant.now();
+    }
+
     public boolean isPending() {
         return EscalationTaskStatus.PENDING.equals(this.status);
     }
@@ -195,4 +225,6 @@ public class EscalationTask {
     public Instant getCreatedAt()             { return createdAt; }
     public Instant getUpdatedAt()             { return updatedAt; }
     public long getVersion()                  { return version; }
+    public int getRetryCount()                { return retryCount; }
+    public String getErrorMessage()           { return errorMessage; }
 }

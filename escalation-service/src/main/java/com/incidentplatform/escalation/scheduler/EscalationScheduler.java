@@ -165,11 +165,39 @@ public class EscalationScheduler {
             try {
                 escalate(task);
             } catch (Exception e) {
-                log.error("Failed to escalate task: incidentId={}, error={}",
-                        task.getIncidentId(), e.getMessage(), e);
+                // Fixed (backlog #41): logs and records which attempt this
+                // was — task.getRetryCount() reflects PAST failures, so +1
+                // gives the correct 1-indexed "this is attempt number X"
+                // framing for the failure about to be recorded below.
+                log.error("Failed to escalate task: incidentId={}, tenant={}, " +
+                                "attempt={}, error={}",
+                        task.getIncidentId(), task.getTenantId(),
+                        task.getRetryCount() + 1, e.getMessage(), e);
+                recordFailedAttemptSafely(task, e.getMessage());
             } finally {
                 TenantContext.clear();
             }
+        }
+    }
+
+    /**
+     * Wraps {@code persistenceService.recordFailedAttempt(...)} so that a
+     * secondary failure recording the attempt count (e.g. the task was
+     * <em>also</em> concurrently modified while {@code escalate()} was
+     * failing) can never abort processing of the rest of this batch —
+     * attempt tracking is best-effort observability (backlog #41), not
+     * core business correctness; losing one count update matters far
+     * less than skipping every remaining task in the batch because of it.
+     */
+    private void recordFailedAttemptSafely(EscalationTask task, String errorMessage) {
+        try {
+            persistenceService.recordFailedAttempt(task, errorMessage);
+        } catch (Exception recordingFailure) {
+            log.warn("Failed to record escalation attempt count — " +
+                            "continuing with the rest of the batch anyway: " +
+                            "incidentId={}, tenant={}, error={}",
+                    task.getIncidentId(), task.getTenantId(),
+                    recordingFailure.getMessage());
         }
     }
 

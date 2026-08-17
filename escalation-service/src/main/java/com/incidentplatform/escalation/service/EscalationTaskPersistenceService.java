@@ -7,7 +7,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Short, independent transactions for {@link EscalationTask} state
- * changes made by {@code EscalationScheduler} — added for backlog #39.
+ * changes made by {@code EscalationScheduler} — added for backlog #39,
+ * extended for backlog #41's retry-attempt tracking.
  *
  * <h2>Why this class exists</h2>
  * {@code EscalationScheduler.checkAndEscalate()} previously carried
@@ -63,6 +64,36 @@ public class EscalationTaskPersistenceService {
     @Transactional
     public void markEscalated(EscalationTask task) {
         task.markEscalated();
+        taskRepository.saveAndFlush(task);
+    }
+
+    /**
+     * Records a failed escalation attempt (backlog #41) and commits
+     * immediately, in its own short transaction. Matches
+     * {@code IncidentEventOutbox.retryCount}/{@code errorMessage}'s exact
+     * shape (incident-service, backlog #36) — same concept, same column
+     * naming, applied here.
+     *
+     * <p>Takes {@code task} directly (like {@link #markEscalated} above),
+     * not a lookup-by-id like {@code IncidentEventOutboxPersistenceService
+     * .markFailed(UUID, String)} — matched to this class's own sibling
+     * method for consistency, since the caller here
+     * ({@code EscalationScheduler.checkAndEscalate()}) already has the
+     * task object in hand from {@code findDueForEscalation()}, with no
+     * intervening step that would make a fresh lookup necessary.
+     *
+     * <p>Deliberately does NOT catch
+     * {@link org.springframework.dao.OptimisticLockingFailureException}
+     * either — same reasoning as {@link #markEscalated}. In the rare case
+     * where the task was <em>also</em> concurrently modified while
+     * {@code escalate()} was failing (e.g. cancelled mid-flight), the
+     * caller must not let that secondary conflict abort processing of the
+     * rest of the batch — see {@code EscalationScheduler}'s own call site
+     * for how that's handled.
+     */
+    @Transactional
+    public void recordFailedAttempt(EscalationTask task, String errorMessage) {
+        task.recordFailedAttempt(errorMessage);
         taskRepository.saveAndFlush(task);
     }
 }
