@@ -2,9 +2,9 @@ package com.incidentplatform.escalation.scheduler;
 
 import com.incidentplatform.escalation.client.OncallServiceClient;
 import com.incidentplatform.escalation.domain.EscalationTask;
-import com.incidentplatform.escalation.domain.EscalationTaskStatus;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
+import com.incidentplatform.escalation.service.EscalationTaskPersistenceService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
@@ -39,12 +39,26 @@ import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
+/**
+ * Backlog #39 note: EscalationScheduler no longer calls
+ * taskRepository.saveAndFlush(...) directly — it delegates to
+ * EscalationTaskPersistenceService.markEscalated(task), a void method.
+ * Tests that previously stubbed/verified taskRepository.saveAndFlush(...)
+ * now stub/verify persistenceService.markEscalated(...) instead. Since
+ * markEscalated() is void, success requires no stub at all (Mockito's
+ * default behavior for an unstubbed void method is a no-op) — only
+ * failure paths need an explicit willThrow(...).given(persistenceService)
+ * stub.
+ */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("EscalationScheduler")
 class EscalationSchedulerTest {
 
     @Mock
     private EscalationTaskRepository taskRepository;
+
+    @Mock
+    private EscalationTaskPersistenceService persistenceService;
 
     @Mock
     private IncidentEventKafkaSender kafkaSender;
@@ -61,15 +75,18 @@ class EscalationSchedulerTest {
     private EscalationScheduler scheduler;
 
     private static final String TENANT_ID = "test-tenant";
+    private static final int BATCH_SIZE = 100;
 
     @BeforeEach
     void setUp() {
         scheduler = new EscalationScheduler(
                 taskRepository,
+                persistenceService,
                 kafkaSender,
                 escalationService,
                 auditEventPublisher,
-                oncallServiceClient);
+                oncallServiceClient,
+                BATCH_SIZE);
     }
 
     @AfterEach
@@ -86,9 +103,8 @@ class EscalationSchedulerTest {
         void shouldEscalateLevel1AndScheduleLevel2() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -97,7 +113,11 @@ class EscalationSchedulerTest {
             then(kafkaSender).should().send(
                     any(IncidentEscalatedEvent.class),
                     eq(IncidentEventTypes.INCIDENT_ESCALATED));
-            assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
+            // persistenceService is mocked here — the real status mutation
+            // happens inside its real implementation, tested separately in
+            // EscalationTaskPersistenceServiceTest.marksEscalatedAndPersists().
+            // This test verifies the scheduler calls it with the right task.
+            then(persistenceService).should().markEscalated(task);
 
             then(escalationService).should().scheduleLevel2Escalation(
                     task.getIncidentId(), TENANT_ID, task.getTeamId(),
@@ -109,9 +129,8 @@ class EscalationSchedulerTest {
         void shouldEscalateLevel2WithoutSchedulingLevel3() {
             // given
             final EscalationTask task = buildOverdueTask(2);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -120,7 +139,10 @@ class EscalationSchedulerTest {
             then(kafkaSender).should().send(
                     any(IncidentEscalatedEvent.class),
                     eq(IncidentEventTypes.INCIDENT_ESCALATED));
-            assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.ESCALATED);
+            // See shouldEscalateLevel1AndScheduleLevel2's comment — the real
+            // status mutation happens inside the (here, mocked) persistence
+            // service, tested separately.
+            then(persistenceService).should().markEscalated(task);
 
             then(escalationService).should(never())
                     .scheduleLevel2Escalation(any(), any(), any(), any(), any());
@@ -130,7 +152,7 @@ class EscalationSchedulerTest {
         @DisplayName("should do nothing when no tasks are due")
         void shouldDoNothingWhenNoTasksDue() {
             // given
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of());
 
             // when
@@ -138,7 +160,7 @@ class EscalationSchedulerTest {
 
             // then
             then(kafkaSender).should(never()).send(any(), any());
-            then(taskRepository).should(never()).saveAndFlush(any());
+            then(persistenceService).should(never()).markEscalated(any());
         }
 
         @Test
@@ -146,20 +168,18 @@ class EscalationSchedulerTest {
         void shouldPersistBeforePublishingToKafka() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
 
-            // then — save() must happen strictly before kafkaSender.send().
-            // If this order were reversed and taskRepository.saveAndFlush() threw after
-            // kafkaSender.send(), @Transactional would roll back the DB state but
-            // the Kafka event would already be in-flight — causing duplicate
-            // on-call notifications on the next scheduler tick.
-            final InOrder order = inOrder(taskRepository, kafkaSender);
-            order.verify(taskRepository).saveAndFlush(any(EscalationTask.class));
+            // then — markEscalated() must happen strictly before kafkaSender.send().
+            // If this order were reversed and persistenceService.markEscalated()
+            // threw after kafkaSender.send(), the notification would have already
+            // gone out for a task whose DB state was never actually persisted.
+            final InOrder order = inOrder(persistenceService, kafkaSender);
+            order.verify(persistenceService).markEscalated(any(EscalationTask.class));
             order.verify(kafkaSender).send(
                     any(IncidentEscalatedEvent.class),
                     eq(IncidentEventTypes.INCIDENT_ESCALATED));
@@ -172,9 +192,8 @@ class EscalationSchedulerTest {
             final EscalationTask task1 = buildOverdueTask(1);
             final EscalationTask task2 = buildOverdueTask(1);
 
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task1, task2));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // First kafkaSender.send() (task1) throws after the DB state has
             // already been persisted. Second call (task2) succeeds.
@@ -191,8 +210,8 @@ class EscalationSchedulerTest {
 
             // then — both tasks attempted despite task1's Kafka failure
             then(kafkaSender).should(times(2)).send(any(), any());
-            // task2 was also saved
-            then(taskRepository).should(times(2)).saveAndFlush(any());
+            // task2 was also persisted
+            then(persistenceService).should(times(2)).markEscalated(any());
         }
 
         @Test
@@ -200,20 +219,20 @@ class EscalationSchedulerTest {
         void shouldNotSendKafkaEventWhenDbSaveFails() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
 
-            // DB save throws — simulates connection pool exhaustion or timeout
+            // Persistence throws — simulates connection pool exhaustion or timeout
             willThrow(new RuntimeException("DB connection lost"))
-                    .given(taskRepository).saveAndFlush(any());
+                    .given(persistenceService).markEscalated(any());
 
-// when
+            // when
             scheduler.checkAndEscalate();
 
             // then — kafkaSender.send() must NOT be called.
-            // Since DB rolled back, findDueForEscalation() will return this task
-            // again on the next tick and escalation will be retried cleanly —
-            // no duplicate notification sent.
+            // Since the write failed, findDueForEscalation() will return this
+            // task again on the next tick and escalation will be retried
+            // cleanly — no duplicate notification sent.
             then(kafkaSender).should(never()).send(any(), any());
         }
 
@@ -224,26 +243,27 @@ class EscalationSchedulerTest {
          * IncidentAcknowledgedEvent) concurrently modified this task
          * between findDueForEscalation() reading it and this scheduler
          * tick trying to save it — surfacing as
-         * OptimisticLockingFailureException from saveAndFlush(). Unlike
-         * a generic DB failure (shouldNotSendKafkaEventWhenDbSaveFails
-         * above), this must be recognized specifically: no error should
-         * be logged as if something went wrong (the cancellation is the
-         * expected, correct outcome), and — critically — no Kafka event
-         * should be sent for a task that was just cancelled.
+         * OptimisticLockingFailureException from
+         * persistenceService.markEscalated(). Unlike a generic DB failure
+         * (shouldNotSendKafkaEventWhenDbSaveFails above), this must be
+         * recognized specifically: no error should be logged as if
+         * something went wrong (the cancellation is the expected, correct
+         * outcome), and — critically — no Kafka event should be sent for
+         * a task that was just cancelled.
          */
         @Test
         @DisplayName("should skip the task (no Kafka event, no error) when " +
-                "saveAndFlush hits an optimistic lock conflict — " +
+                "markEscalated hits an optimistic lock conflict — " +
                 "concurrently cancelled by an ACK")
         void shouldSkipTaskOnOptimisticLockConflict() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
 
             willThrow(new OptimisticLockingFailureException(
                     "Row was updated or deleted by another transaction"))
-                    .given(taskRepository).saveAndFlush(any());
+                    .given(persistenceService).markEscalated(any());
 
             // when
             scheduler.checkAndEscalate();
@@ -259,13 +279,13 @@ class EscalationSchedulerTest {
             // given
             final EscalationTask conflicted = buildOverdueTask(1);
             final EscalationTask normal = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(conflicted, normal));
 
             willThrow(new OptimisticLockingFailureException(
                     "Row was updated or deleted by another transaction"))
-                    .willAnswer(i -> i.getArgument(0))
-                    .given(taskRepository).saveAndFlush(any());
+                    .willDoNothing()
+                    .given(persistenceService).markEscalated(any());
 
             // when
             scheduler.checkAndEscalate();
@@ -279,9 +299,8 @@ class EscalationSchedulerTest {
         void shouldSendEventWithCorrectFields() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -304,9 +323,8 @@ class EscalationSchedulerTest {
         void shouldSendWithEscalatedEventType() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -319,6 +337,31 @@ class EscalationSchedulerTest {
                     any(IncidentEscalatedEvent.class),
                     eq(IncidentEventTypes.INCIDENT_ESCALATED));
         }
+
+        /**
+         * Regression test for backlog #39's batch-size cap. Verifies the
+         * limit configured in the constructor is actually passed through
+         * to the repository query as a Pageable, rather than the
+         * repository being called with an unbounded request.
+         */
+        @Test
+        @DisplayName("should cap the batch size passed to findDueForEscalation")
+        void shouldCapBatchSize() {
+            // given
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then
+            final ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
+                    ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+            then(taskRepository).should()
+                    .findDueForEscalation(any(), pageableCaptor.capture());
+
+            assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(BATCH_SIZE);
+        }
     }
 
     @Nested
@@ -330,9 +373,8 @@ class EscalationSchedulerTest {
         void shouldClearTenantContextAfterProcessing() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // when
             scheduler.checkAndEscalate();
@@ -346,9 +388,8 @@ class EscalationSchedulerTest {
         void shouldClearTenantContextOnFailure() {
             // given
             final EscalationTask task = buildOverdueTask(1);
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
             willThrow(new RuntimeException("Kafka unavailable"))
                     .given(kafkaSender).send(any(), any());
 
@@ -367,9 +408,8 @@ class EscalationSchedulerTest {
             final EscalationTask taskTenantA = buildOverdueTaskForTenant("tenant-a");
             final EscalationTask taskTenantB = buildOverdueTaskForTenant("tenant-b");
 
-            given(taskRepository.findDueForEscalation(any()))
+            given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(taskTenantA, taskTenantB));
-            given(taskRepository.saveAndFlush(any())).willAnswer(i -> i.getArgument(0));
 
             // Capture TenantContext at the moment each Kafka send happens — the
             // most direct way to verify the context was correctly scoped to
