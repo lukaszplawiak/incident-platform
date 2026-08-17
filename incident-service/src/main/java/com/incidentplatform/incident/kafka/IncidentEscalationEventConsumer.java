@@ -11,6 +11,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -39,6 +40,28 @@ import java.util.UUID;
  * pattern as the other {@code incidents.lifecycle} consumers
  * (escalation-service, notification-service, postmortem-service) for
  * consistency across the platform.
+ *
+ * <h2>Fixed (backlog #40): imprecise logging for an expected, self-healing
+ * concurrency conflict</h2>
+ * {@code Incident} has {@code @Version} — a REST-driven change to the
+ * same incident (e.g. an engineer acknowledging it via the API) racing
+ * against this consumer recording an escalation level can trigger an
+ * optimistic lock conflict. Unlike {@code EscalationScheduler}'s version
+ * of this problem (backlog #38, where retrying a concurrently-cancelled
+ * task is pointless — there is nothing left to reconcile), retrying
+ * here genuinely works: {@code recordEscalation(int)} only ever touches
+ * the {@code escalationLevel} field, so re-reading the row on Kafka
+ * redelivery and reapplying it correctly reconciles with whatever the
+ * other writer changed in the meantime. The generic
+ * {@code catch (Exception e)} below was therefore never <em>incorrect</em>
+ * here the way it would have been for {@code EscalationScheduler} — but
+ * it logged every failure identically as "Transient error... will be
+ * redelivered" at ERROR level, giving no way to tell a routine,
+ * self-healing concurrency conflict apart from a genuine problem (the
+ * database actually being unreachable) from the logs alone. The new,
+ * specific catch below doesn't change the retry behavior at all (still
+ * no acknowledge, still relies on Kafka redelivery) — only the
+ * diagnostic precision of what gets logged.
  */
 @Component
 public class IncidentEscalationEventConsumer {
@@ -101,6 +124,26 @@ public class IncidentEscalationEventConsumer {
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage());
             acknowledgment.acknowledge();
+            return;
+
+        } catch (OptimisticLockingFailureException e) {
+            // Fixed (backlog #40): a REST-driven change to this same
+            // incident (e.g. an ACK) raced with recordEscalation() and won.
+            // Not a genuine failure — unlike EscalationScheduler's version
+            // of this conflict (backlog #38), retrying here actually
+            // resolves it: recordEscalation() only touches escalationLevel,
+            // so redelivery re-reads the now-current row (including
+            // whatever the other writer changed) and correctly reapplies
+            // just the escalation level on top of it. Same
+            // don't-acknowledge-let-Kafka-redeliver behavior as the
+            // generic catch below — this exists purely so the log
+            // distinguishes "routine, self-healing concurrency conflict"
+            // from "the database is actually unreachable" (see this
+            // class's own Javadoc for the full account).
+            log.info("Concurrent modification detected while recording " +
+                            "escalation — will resolve via Kafka redelivery: " +
+                            "topic={}, partition={}, offset={}",
+                    record.topic(), record.partition(), record.offset());
             return;
 
         } catch (Exception e) {
