@@ -5,6 +5,7 @@ import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.dto.OncallUserDto;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
+import com.incidentplatform.escalation.service.EscalationTaskPersistenceService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
@@ -14,16 +15,57 @@ import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * <h2>Fixed (backlog #39): whole batch processed in one long-running transaction</h2>
+ * {@code checkAndEscalate()} previously carried {@code @Transactional} on
+ * the whole method — including the loop that called
+ * {@code OncallServiceClient.getCurrentOncall(...)}, a real, blocking
+ * HTTP call — holding one database connection open for the combined
+ * duration of every on-call lookup in the batch. Under a large backlog
+ * (e.g. after a scheduler outage, or a burst of simultaneous incidents)
+ * or a slow/degraded oncall-service, this risked holding a connection
+ * for a long time, potentially exhausting the pool.
+ *
+ * <p>Before implementing the fix, compared how this exact problem is
+ * already solved elsewhere in this codebase: {@code AuthEmailScheduler}
+ * (auth-service), {@code NotificationScheduler} (notification-service),
+ * {@code PostmortemRetryScheduler} (postmortem-service), and
+ * {@code IncidentEventOutboxScheduler} (incident-service, backlog #36)
+ * all remove {@code @Transactional} from the scheduled method and
+ * delegate each item's write to a small, dedicated persistence service
+ * with its own short transaction. Synthesized the best specific
+ * practices across all four rather than copying just one:
+ * {@code AuthEmailScheduler}/{@code PostmortemRetryScheduler}'s pattern
+ * of precisely-named persistence methods (over
+ * {@code NotificationScheduler}'s weaker inline
+ * {@code repository.save()} in the scheduler itself), and
+ * {@code IncidentEventOutboxScheduler}'s bounded batch size via
+ * {@code Pageable} (a gap in all three of the others). Deliberately did
+ * NOT copy the "pending threshold" pattern common to the other three —
+ * it exists there to avoid racing a writer that just inserted a fresh
+ * row; {@code findDueForEscalation}'s own
+ * {@code scheduledEscalationAt <= :now} condition already serves that
+ * purpose here structurally (a task can't be picked up before its
+ * scheduled time), making a separate threshold redundant.
+ *
+ * <p>Fixed by removing {@code @Transactional} entirely —
+ * {@code findDueForEscalation} is already its own short, auto-committing
+ * transaction (Spring Data JPA's default behavior for a repository query
+ * method called outside any open transaction), and each task's write now
+ * goes through {@link EscalationTaskPersistenceService}. See that
+ * class's Javadoc for the persistence side of this fix.
+ */
 @Component
 public class EscalationScheduler {
 
@@ -36,22 +78,37 @@ public class EscalationScheduler {
     private static final String ESCALATION_ROLE_LEVEL_2 = "MANAGER";
 
     private final EscalationTaskRepository taskRepository;
+    private final EscalationTaskPersistenceService persistenceService;
     private final IncidentEventKafkaSender kafkaSender;
     private final EscalationService escalationService;
     private final AuditEventPublisher auditEventPublisher;
     private final OncallServiceClient oncallServiceClient;
+    private final int batchSize;
 
     public EscalationScheduler(
             EscalationTaskRepository taskRepository,
+            EscalationTaskPersistenceService persistenceService,
             IncidentEventKafkaSender kafkaSender,
             EscalationService escalationService,
             AuditEventPublisher auditEventPublisher,
-            OncallServiceClient oncallServiceClient) {
+            OncallServiceClient oncallServiceClient,
+            // Fixed (backlog #39): caps how many due tasks one poll cycle
+            // processes — matches IncidentEventOutboxRepository's bounded-
+            // batch pattern (incident-service). Without this, a large
+            // backlog (scheduler outage, burst of simultaneous incidents)
+            // had no ceiling on how long a single cycle — and therefore
+            // how long each task's synchronous oncall-service HTTP call
+            // sequence — could take. A backlog too large for one batch
+            // simply drains oldest-first (see findDueForEscalation's
+            // ORDER BY) across subsequent cycles instead.
+            @Value("${escalation.scheduler-batch-size:100}") int batchSize) {
         this.taskRepository = taskRepository;
+        this.persistenceService = persistenceService;
         this.kafkaSender = kafkaSender;
         this.escalationService = escalationService;
         this.auditEventPublisher = auditEventPublisher;
         this.oncallServiceClient = oncallServiceClient;
+        this.batchSize = batchSize;
     }
 
     /**
@@ -66,6 +123,13 @@ public class EscalationScheduler {
      *
      * <p>What matters is that {@link TenantContext} is set for the duration
      * of processing each individual task — see {@link #escalate}.
+     *
+     * <p>Deliberately NOT {@code @Transactional} at this level — see this
+     * class's own Javadoc for the full account. Each task's database
+     * write is its own short transaction via
+     * {@link EscalationTaskPersistenceService}, opened only after the
+     * (potentially slow) oncall-service HTTP call in {@link #escalate}
+     * has already completed.
      */
     @Scheduled(
             fixedDelayString = "${escalation.scheduler-interval-ms:60000}",
@@ -76,10 +140,9 @@ public class EscalationScheduler {
             lockAtMostFor = "5m",
             lockAtLeastFor = "10s"
     )
-    @Transactional
     public void checkAndEscalate() {
-        final List<EscalationTask> dueTasks =
-                taskRepository.findDueForEscalation(Instant.now());
+        final List<EscalationTask> dueTasks = taskRepository.findDueForEscalation(
+                Instant.now(), PageRequest.of(0, batchSize));
 
         if (dueTasks.isEmpty()) {
             log.debug("Escalation check: no tasks due for escalation");
@@ -115,6 +178,11 @@ public class EscalationScheduler {
         // Determine which role to page based on escalation level:
         //   Level 1 → SECONDARY (primary was already paged at incident creation)
         //   Level 2 → MANAGER
+        //
+        // Fixed (backlog #39): this HTTP call now happens with no database
+        // transaction open at all — checkAndEscalate() no longer wraps
+        // this method in one. See this class's own Javadoc for the full
+        // account.
         final String role = task.getEscalationLevel() == 1
                 ? ESCALATION_ROLE_LEVEL_1 : ESCALATION_ROLE_LEVEL_2;
 
@@ -161,18 +229,20 @@ public class EscalationScheduler {
 
         // ── Ordering: persist state BEFORE publishing to Kafka ───────────────
         //
-        // task.markEscalated() + taskRepository.save() happen first so that if
-        // kafkaSender.send() throws afterwards, the @Transactional context on
-        // checkAndEscalate() has already committed the ESCALATED status to the
-        // database (save() is called inside the same transaction).
-        // findDueForEscalation() will therefore NOT return this task again on the
-        // next scheduler tick — preventing duplicate notifications (double SMS /
-        // email / Slack) to the on-call engineer.
+        // persistenceService.markEscalated(task) happens first so that if
+        // kafkaSender.send() throws afterwards, the ESCALATED status is
+        // already durably committed — in its own short transaction (backlog
+        // #39), independent of and already complete by the time this line
+        // returns, not waiting on any outer transaction to commit later.
+        // findDueForEscalation() will therefore NOT return this task again on
+        // the next scheduler tick — preventing duplicate notifications
+        // (double SMS / email / Slack) to the on-call engineer.
         //
         // Trade-off — at-most-once Kafka delivery:
-        // If the process crashes between save() and kafkaSender.send(), the task
-        // is marked ESCALATED in the DB but the Kafka event was never sent —
-        // the on-call engineer will not be notified for this escalation level.
+        // If the process crashes between markEscalated() and kafkaSender.send(),
+        // the task is marked ESCALATED in the DB but the Kafka event was never
+        // sent — the on-call engineer will not be notified for this escalation
+        // level.
         //
         // TODO: For true exactly-once delivery, replace the direct kafkaSender.send()
         //  call with the Transactional Outbox Pattern:
@@ -180,29 +250,24 @@ public class EscalationScheduler {
         //  2. A separate OutboxEventRelay scheduler polls PENDING outbox rows,
         //     sends them to Kafka, then marks them SENT.
         //  This guarantees that state change and Kafka publish either both happen
-        //  or neither does, even across process crashes.
-        //  Cost: ~5 new classes (OutboxEvent, OutboxEventRepository,
-        //  OutboxEventRelay, OutboxEventStatus, Flyway migration) + idempotent
-        //  consumer in notification-service to handle relay-induced at-least-once.
+        //  or neither does, even across process crashes. Same pattern already
+        //  implemented for incidents.lifecycle in incident-service (backlog #36) —
+        //  IncidentEventOutboxScheduler/IncidentEventOutboxPersistenceService is a
+        //  ready-made reference implementation to adapt here.
         //  Justified when running multiple instances (Kubernetes HPA) or when
         //  duplicate on-call notifications have business/regulatory consequences.
         // ────────────────────────────────────────────────────────────────────
         //
-        // Fixed (backlog #38): saveAndFlush(), not save() — a plain save()
-        // only queues the UPDATE; without an explicit flush, Hibernate may
-        // defer actually executing it (and therefore checking the @Version
-        // column below) until checkAndEscalate()'s transaction commits, at
-        // the very end of the whole batch — by which point kafkaSender.send()
-        // below would have already fired. Flushing here forces the version
-        // check to happen NOW, synchronously, so a task that
+        // Fixed (backlog #38): markEscalated() uses saveAndFlush() internally,
+        // not save() — forcing the @Version check to happen synchronously,
+        // before kafkaSender.send() below, so a task that
         // EscalationService.cancelEscalation() concurrently modified (on the
         // Kafka listener thread, independent of and unprotected by this
         // method's ShedLock — see EscalationTask's own Javadoc for the full
         // account) is caught and skipped BEFORE any notification is sent for
         // it, not after.
-        task.markEscalated();
         try {
-            taskRepository.saveAndFlush(task);
+            persistenceService.markEscalated(task);
         } catch (OptimisticLockingFailureException e) {
             // Not an error — this task was concurrently modified since
             // findDueForEscalation() read it, almost certainly cancelled by

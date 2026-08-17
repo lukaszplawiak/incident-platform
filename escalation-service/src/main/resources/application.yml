@@ -96,6 +96,12 @@ kafka:
 escalation:
   threshold-minutes: ${ESCALATION_THRESHOLD_MINUTES:15}
   scheduler-interval-ms: ${ESCALATION_SCHEDULER_INTERVAL_MS:60000}
+  # Fixed (backlog #39): caps how many due tasks one poll cycle processes.
+  # See EscalationScheduler's own Javadoc for the full account — without
+  # this, a large backlog (scheduler outage, burst of simultaneous
+  # incidents) had no ceiling on how long a single cycle's sequence of
+  # synchronous oncall-service HTTP calls could take.
+  scheduler-batch-size: ${ESCALATION_SCHEDULER_BATCH_SIZE:100}
 
 server:
   port: ${SERVER_PORT:8084}
