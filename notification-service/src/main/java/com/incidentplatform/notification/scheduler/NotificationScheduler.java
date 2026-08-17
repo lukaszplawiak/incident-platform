@@ -3,6 +3,7 @@ package com.incidentplatform.notification.scheduler;
 import com.incidentplatform.notification.config.NotificationSchedulerProperties;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
+import com.incidentplatform.notification.service.NotificationPersistenceService;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.security.TenantContext;
@@ -48,6 +49,7 @@ public class NotificationScheduler {
 
     private final NotificationQueueRepository queueRepository;
     private final NotificationService notificationService;
+    private final NotificationPersistenceService persistenceService;
     private final SlackMessageStore messageStore;
     private final Duration pendingThreshold;
     private final Duration slackMessageTsRetention;
@@ -55,10 +57,12 @@ public class NotificationScheduler {
     public NotificationScheduler(
             NotificationQueueRepository queueRepository,
             NotificationService notificationService,
+            NotificationPersistenceService persistenceService,
             SlackMessageStore messageStore,
             NotificationSchedulerProperties properties) {
         this.queueRepository = queueRepository;
         this.notificationService = notificationService;
+        this.persistenceService = persistenceService;
         this.messageStore = messageStore;
         this.pendingThreshold = properties.pendingThreshold();
         this.slackMessageTsRetention = properties.slackMessageTsRetention();
@@ -73,6 +77,25 @@ public class NotificationScheduler {
      *
      * <p>TenantContext is set per-entry and cleared in finally — no tenant
      * context leaks between entries even in the same scheduler run.
+     *
+     * <h2>Fixed (backlog #42): direct repository.save() in this catch
+     * block</h2>
+     * Previously called {@code queueRepository.save(entry)} directly here
+     * — the one spot in this scheduler that broke the platform's
+     * established convention (already followed by
+     * {@code AuthEmailScheduler}, {@code PostmortemRetryScheduler}, and
+     * {@code IncidentEventOutboxScheduler}) of never touching a
+     * repository directly from a scheduler, always delegating through a
+     * dedicated persistence service. Not a functional bug on its own —
+     * this single call, outside any open transaction, got its own short
+     * implicit one from Spring Data JPA regardless — but inconsistent
+     * with how every other scheduler in this codebase handles the same
+     * kind of write. Now delegates to
+     * {@code NotificationPersistenceService.markFailed(...)}, wrapped in
+     * the same defensive try/catch as before (a secondary failure
+     * recording the failure must not prevent processing of the rest of
+     * the batch — same reasoning as {@code EscalationScheduler}'s
+     * {@code recordFailedAttemptSafely}, backlog #41).
      */
     @Scheduled(
             fixedDelayString = "${notification.scheduler.interval-ms:30000}",
@@ -107,12 +130,11 @@ public class NotificationScheduler {
                         e.getMessage(), e);
 
                 try {
-                    entry.markFailed(e.getMessage());
-                    queueRepository.save(entry);
-                } catch (Exception saveEx) {
+                    persistenceService.markFailed(entry, e.getMessage());
+                } catch (Exception markFailedEx) {
                     log.error("Failed to mark queue entry as FAILED: " +
                                     "incidentId={}, error={}",
-                            entry.getIncidentId(), saveEx.getMessage());
+                            entry.getIncidentId(), markFailedEx.getMessage());
                 }
             } finally {
                 TenantContext.clear();

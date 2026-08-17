@@ -2,8 +2,6 @@ package com.incidentplatform.notification.service;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.channel.NotificationException;
-import com.incidentplatform.notification.domain.NotificationLog;
-import com.incidentplatform.notification.domain.NotificationLogStatus;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.domain.NotificationQueueStatus;
 import com.incidentplatform.notification.dto.NotificationRequest;
@@ -26,12 +24,23 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
+/**
+ * Backlog #42 note: processEntry() no longer writes to logRepository/
+ * queueRepository directly — it delegates through
+ * NotificationPersistenceService (a new mock here). ProcessEntry's tests
+ * below verify persistenceService interactions instead of repository
+ * saves directly. Enqueue's tests are unchanged — enqueue() still writes
+ * to queueRepository directly (a single fast DB operation with no
+ * external I/O, deliberately left as-is — see NotificationService's own
+ * Javadoc for why).
+ */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("NotificationService")
 class NotificationServiceTest {
@@ -39,6 +48,7 @@ class NotificationServiceTest {
     @Mock private NotificationRouter router;
     @Mock private NotificationLogRepository logRepository;
     @Mock private NotificationQueueRepository queueRepository;
+    @Mock private NotificationPersistenceService persistenceService;
     @Mock private NotificationChannel emailChannel;
     @Mock private NotificationChannel slackChannel;
     @Mock private AuditEventPublisher auditEventPublisher;
@@ -52,7 +62,8 @@ class NotificationServiceTest {
     @BeforeEach
     void setUp() {
         notificationService = new NotificationService(
-                router, logRepository, queueRepository, auditEventPublisher);
+                router, logRepository, queueRepository, persistenceService,
+                auditEventPublisher);
     }
 
     // ── enqueue ───────────────────────────────────────────────────────────
@@ -135,8 +146,6 @@ class NotificationServiceTest {
                             new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
                             new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
                     ));
-            given(logRepository.save(any())).willAnswer(i -> i.getArgument(0));
-            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             notificationService.processEntry(entry);
 
@@ -145,43 +154,37 @@ class NotificationServiceTest {
         }
 
         @Test
-        @DisplayName("should save SENT log after successful send")
-        void shouldSaveSentLog() {
+        @DisplayName("should record a SENT log entry after successful send")
+        void shouldRecordSentLog() {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
             given(router.route(any(), any(), any(), any(), any()))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request)));
-            given(logRepository.save(any())).willAnswer(i -> i.getArgument(0));
-            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             notificationService.processEntry(entry);
 
-            final ArgumentCaptor<NotificationLog> logCaptor =
-                    ArgumentCaptor.forClass(NotificationLog.class);
-            then(logRepository).should().save(logCaptor.capture());
-            assertThat(logCaptor.getValue().getStatus())
-                    .isEqualTo(NotificationLogStatus.SENT);
+            then(persistenceService).should().recordChannelSent(
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq("EMAIL"),
+                    eq(request.recipient()), eq(request.subject()), eq(request.message()));
         }
 
         @Test
-        @DisplayName("should mark queue entry SENT after processing")
+        @DisplayName("should mark queue entry SENT after processing, via persistenceService")
         void shouldMarkQueueEntrySent() {
             final NotificationQueueEntry entry = buildPendingEntry();
             given(router.route(any(), any(), any(), any(), any()))
                     .willReturn(List.of());
-            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             notificationService.processEntry(entry);
 
-            assertThat(entry.getStatus()).isEqualTo(NotificationQueueStatus.SENT);
-            assertThat(entry.getProcessedAt()).isNotNull();
+            then(persistenceService).should().markSent(entry);
         }
 
         @Test
-        @DisplayName("should save FAILED log and continue when channel throws")
-        void shouldSaveFailedLogOnChannelException() {
+        @DisplayName("should record a FAILED log and continue when channel throws")
+        void shouldRecordFailedLogOnChannelException() {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest emailRequest = buildRequest("EMAIL");
             final NotificationRequest slackRequest = buildRequest("SLACK");
@@ -198,26 +201,20 @@ class NotificationServiceTest {
                     "SMTP connection failed"))
                     .given(emailChannel).send(emailRequest);
 
-            given(logRepository.save(any())).willAnswer(i -> i.getArgument(0));
-            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
-
             notificationService.processEntry(entry);
 
             // Slack still called despite email failure
             then(slackChannel).should(times(1)).send(slackRequest);
 
-            final ArgumentCaptor<NotificationLog> logCaptor =
-                    ArgumentCaptor.forClass(NotificationLog.class);
-            then(logRepository).should(times(2)).save(logCaptor.capture());
-
-            assertThat(logCaptor.getAllValues())
-                    .anySatisfy(l ->
-                            assertThat(l.getStatus()).isEqualTo(NotificationLogStatus.FAILED))
-                    .anySatisfy(l ->
-                            assertThat(l.getStatus()).isEqualTo(NotificationLogStatus.SENT));
+            then(persistenceService).should().recordChannelFailed(
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq("EMAIL"),
+                    eq(emailRequest.recipient()), eq("SMTP connection failed"));
+            then(persistenceService).should().recordChannelSent(
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq("SLACK"),
+                    eq(slackRequest.recipient()), any(), any());
 
             // Queue entry still marked SENT — individual failures recorded in log
-            assertThat(entry.getStatus()).isEqualTo(NotificationQueueStatus.SENT);
+            then(persistenceService).should().markSent(entry);
         }
 
         @Test
@@ -231,12 +228,12 @@ class NotificationServiceTest {
                             new NotificationRouter.ChannelRequest(emailChannel, request)));
             given(logRepository.existsByIncidentIdAndEventTypeAndChannel(
                     INCIDENT_ID, EVENT_TYPE, "EMAIL")).willReturn(true);
-            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             notificationService.processEntry(entry);
 
             then(emailChannel).should(never()).send(any());
-            then(logRepository).should(never()).save(any(NotificationLog.class));
+            then(persistenceService).should(never())
+                    .recordChannelSent(any(), any(), any(), any(), any(), any(), any());
         }
 
         @Test
@@ -245,12 +242,35 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildPendingEntry();
             given(router.route(any(), any(), any(), any(), any()))
                     .willReturn(List.of());
-            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             notificationService.processEntry(entry);
 
             then(emailChannel).shouldHaveNoInteractions();
-            assertThat(entry.getStatus()).isEqualTo(NotificationQueueStatus.SENT);
+            then(persistenceService).should().markSent(entry);
+        }
+
+        /**
+         * Regression test for backlog #42's core fix: verifies
+         * processEntry() itself no longer touches logRepository/
+         * queueRepository for writes at all — every write goes through
+         * persistenceService, which is what makes it possible for
+         * NotificationPersistenceService's own short transactions to be
+         * genuinely independent of the (no longer existing) outer one.
+         */
+        @Test
+        @DisplayName("never calls logRepository.save or queueRepository.save directly")
+        void neverCallsRepositoriesDirectlyForWrites() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            final NotificationRequest request = buildRequest("EMAIL");
+            given(emailChannel.channelName()).willReturn("EMAIL");
+            given(router.route(any(), any(), any(), any(), any()))
+                    .willReturn(List.of(
+                            new NotificationRouter.ChannelRequest(emailChannel, request)));
+
+            notificationService.processEntry(entry);
+
+            then(logRepository).should(never()).save(any());
+            then(queueRepository).should(never()).save(any());
         }
     }
 

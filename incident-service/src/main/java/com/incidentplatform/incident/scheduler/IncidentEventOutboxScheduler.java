@@ -5,6 +5,7 @@ import com.incidentplatform.incident.domain.IncidentEventOutbox;
 import com.incidentplatform.incident.repository.IncidentEventOutboxRepository;
 import com.incidentplatform.incident.service.IncidentEventOutboxPersistenceService;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
+import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,6 +44,21 @@ import java.util.List;
  * <h2>ShedLock</h2>
  * Prevents duplicate publishing if incident-service is horizontally
  * scaled — only one instance processes a given poll cycle's batch.
+ *
+ * <h2>Fixed (backlog #42): missing TenantContext per entry</h2>
+ * {@code AuthEmailScheduler}, {@code PostmortemRetryScheduler}, and
+ * {@code EscalationScheduler} all set {@link TenantContext} for the
+ * duration of processing each individual item and clear it in
+ * {@code finally}, so every log line — including ones emitted deep
+ * inside {@code IncidentEventKafkaSender} — automatically carries the
+ * correct tenantId in MDC. This class was the one gap: every log line
+ * below previously had to pass {@code tenant={}} explicitly as a
+ * parameter instead of getting it for free from MDC, and any future
+ * logging added deeper in the call chain (e.g. inside
+ * {@code IncidentEventKafkaSender.sendRawSync}) wouldn't have picked up
+ * the tenant at all. {@link IncidentEventOutbox} already carries
+ * {@code tenantId} per entry, so nothing else needed to change to fix
+ * this — just set and clear it around {@link #processOne}.
  */
 @Component
 @EnableConfigurationProperties(IncidentEventOutboxProperties.class)
@@ -89,7 +105,16 @@ public class IncidentEventOutboxScheduler {
                 pending.size());
 
         for (final IncidentEventOutbox entry : pending) {
-            processOne(entry);
+            // Fixed (backlog #42): see this class's own Javadoc for the
+            // full account — matches the same per-entry
+            // set/try/finally-clear pattern already used by every other
+            // scheduler in this codebase.
+            TenantContext.set(entry.getTenantId());
+            try {
+                processOne(entry);
+            } finally {
+                TenantContext.clear();
+            }
         }
     }
 
