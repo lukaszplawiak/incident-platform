@@ -132,7 +132,7 @@ class EscalationSchedulerTest {
             given(taskRepository.findDueForEscalation(any(), any()))
                     .willReturn(List.of(task));
 
-            // when
+// when
             scheduler.checkAndEscalate();
 
             // then
@@ -234,6 +234,87 @@ class EscalationSchedulerTest {
             // task again on the next tick and escalation will be retried
             // cleanly — no duplicate notification sent.
             then(kafkaSender).should(never()).send(any(), any());
+        }
+
+        /**
+         * The actual regression test for backlog #41. When escalate()
+         * fails with a genuine error (not an optimistic-lock skip),
+         * verifies the failure is recorded via
+         * persistenceService.recordFailedAttempt — the mechanism that
+         * gives operators visibility into how many times a stuck task
+         * has already failed, rather than every failure log line looking
+         * identical regardless of attempt number.
+         */
+        @Test
+        @DisplayName("records a failed attempt via persistenceService when escalate() throws")
+        void recordsFailedAttemptOnGenericFailure() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+            willThrow(new RuntimeException("oncall-service unreachable"))
+                    .given(persistenceService).markEscalated(any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then
+            then(persistenceService).should()
+                    .recordFailedAttempt(task, "oncall-service unreachable");
+        }
+
+        @Test
+        @DisplayName("does NOT record a failed attempt when the task was " +
+                "skipped due to an optimistic lock conflict — that's not a failure")
+        void doesNotRecordFailedAttemptOnOptimisticLockConflict() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+            willThrow(new OptimisticLockingFailureException(
+                    "Row was updated or deleted by another transaction"))
+                    .given(persistenceService).markEscalated(any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — the OptimisticLockingFailureException is caught INSIDE
+            // escalate() itself (backlog #38) and never reaches
+            // checkAndEscalate()'s outer catch — recordFailedAttempt is only
+            // called from that outer catch, so it must never be invoked here.
+            then(persistenceService).should(never())
+                    .recordFailedAttempt(any(), any());
+        }
+
+        /**
+         * Verifies the defensive wrapper around recordFailedAttempt: if
+         * recording the attempt count itself ALSO fails (e.g. the task
+         * was concurrently modified while escalate() was already
+         * failing), that secondary failure must not abort processing of
+         * the rest of the batch — attempt tracking is best-effort
+         * observability, not core correctness.
+         */
+        @Test
+        @DisplayName("continues processing remaining tasks even if " +
+                "recordFailedAttempt itself throws")
+        void continuesBatchEvenIfRecordFailedAttemptThrows() {
+            // given
+            final EscalationTask failing = buildOverdueTask(1);
+            final EscalationTask normal = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(failing, normal));
+
+            willThrow(new RuntimeException("oncall-service unreachable"))
+                    .given(persistenceService).markEscalated(failing);
+            willThrow(new RuntimeException("DB also unavailable right now"))
+                    .given(persistenceService).recordFailedAttempt(any(), any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — the second, unaffected task still gets escalated normally,
+            // despite recordFailedAttempt itself throwing for the first one
+            then(kafkaSender).should(times(1)).send(any(), any());
         }
 
         /**

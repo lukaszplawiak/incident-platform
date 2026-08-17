@@ -90,4 +90,64 @@ class EscalationTaskPersistenceServiceTest {
         assertThatThrownBy(() -> persistenceService.markEscalated(task))
                 .isInstanceOf(OptimisticLockingFailureException.class);
     }
+
+    /**
+     * The actual regression coverage for backlog #41. Verifies the entity
+     * mutation (retryCount incremented, errorMessage set, status
+     * unchanged — still PENDING, so the next poll cycle retries it) and
+     * that it's persisted via saveAndFlush, matching markEscalated's own
+     * pattern.
+     */
+    @Test
+    @DisplayName("records a failed attempt — increments retryCount, sets " +
+            "errorMessage, leaves status PENDING for retry")
+    void recordsFailedAttemptAndPersists() {
+        // given
+        final EscalationTask task = buildTask();
+
+        // when
+        persistenceService.recordFailedAttempt(task, "oncall-service unreachable");
+
+        // then
+        assertThat(task.getRetryCount()).isEqualTo(1);
+        assertThat(task.getErrorMessage()).isEqualTo("oncall-service unreachable");
+        assertThat(task.getStatus()).isEqualTo(EscalationTaskStatus.PENDING);
+
+        final ArgumentCaptor<EscalationTask> captor =
+                ArgumentCaptor.forClass(EscalationTask.class);
+        then(taskRepository).should().saveAndFlush(captor.capture());
+        assertThat(captor.getValue()).isSameAs(task);
+    }
+
+    @Test
+    @DisplayName("increments retryCount cumulatively across repeated failed attempts")
+    void incrementsRetryCountCumulatively() {
+        // given
+        final EscalationTask task = buildTask();
+
+        // when
+        persistenceService.recordFailedAttempt(task, "first failure");
+        persistenceService.recordFailedAttempt(task, "second failure");
+        persistenceService.recordFailedAttempt(task, "third failure");
+
+        // then
+        assertThat(task.getRetryCount()).isEqualTo(3);
+        assertThat(task.getErrorMessage()).isEqualTo("third failure");
+    }
+
+    @Test
+    @DisplayName("recordFailedAttempt also propagates OptimisticLockingFailureException " +
+            "rather than catching it — same contract as markEscalated")
+    void recordFailedAttemptPropagatesOptimisticLockConflict() {
+        // given
+        final EscalationTask task = buildTask();
+        willThrow(new OptimisticLockingFailureException(
+                "Row was updated or deleted by another transaction"))
+                .given(taskRepository).saveAndFlush(any());
+
+        // when / then
+        assertThatThrownBy(() ->
+                persistenceService.recordFailedAttempt(task, "some error"))
+                .isInstanceOf(OptimisticLockingFailureException.class);
+    }
 }
