@@ -53,8 +53,31 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
     /**
      * Deletes all expired or used tokens — intended for scheduled cleanup.
      * Keeps the table lean without touching active tokens.
+     *
+     * <h2>Fixed (backlog #34): {@code clearAutomatically = true}</h2>
+     * {@code @Modifying} DELETE/UPDATE queries execute directly at the SQL
+     * level, bypassing Hibernate's persistence context entirely — an
+     * entity already loaded/saved earlier in the same transaction stays
+     * in that context, unaware the underlying row was just deleted.
+     * Without {@code clearAutomatically}, a subsequent {@code findById}
+     * (or any other read) for that same entity within the same
+     * transaction would return the stale, already-deleted in-memory
+     * object instead of correctly reflecting its removal — Hibernate
+     * checks the persistence context before ever re-querying the
+     * database. Confirmed as a real, reproducible issue by
+     * {@code AuthRepositoryIntegrationTest} (real Postgres, real
+     * Hibernate session) — exactly the class of bug a mocked-repository
+     * test cannot catch, since Mockito has no persistence context to get
+     * out of sync in the first place.
+     *
+     * <p>Currently benign in production — {@code AuthTokenCleanupScheduler}
+     * (the only caller) does nothing else with {@code AuthToken} in the
+     * same transaction — but {@code clearAutomatically = true} is the
+     * standard, defensive default for this exact class of query
+     * regardless, protecting any future code added to that same
+     * transactional scope.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true)
     @Query("""
             DELETE FROM AuthToken t
             WHERE t.usedAt IS NOT NULL
