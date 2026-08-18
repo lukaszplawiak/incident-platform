@@ -34,6 +34,7 @@ public interface OncallScheduleRepository
             SELECT s FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
             AND s.role = :role
+            AND s.status = com.incidentplatform.oncall.domain.OncallScheduleStatus.ACTIVE
             AND s.startsAt <= :now
             AND s.endsAt > :now
             ORDER BY s.startsAt DESC
@@ -60,6 +61,7 @@ public interface OncallScheduleRepository
             WHERE s.tenantId = :tenantId
             AND s.teamId = :teamId
             AND s.role = :role
+            AND s.status = com.incidentplatform.oncall.domain.OncallScheduleStatus.ACTIVE
             AND s.startsAt <= :now
             AND s.endsAt > :now
             ORDER BY s.startsAt DESC
@@ -78,6 +80,7 @@ public interface OncallScheduleRepository
             SELECT s FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
             AND s.teamId = :teamId
+            AND s.status = com.incidentplatform.oncall.domain.OncallScheduleStatus.ACTIVE
             AND s.startsAt <= :now
             AND s.endsAt > :now
             ORDER BY s.role ASC
@@ -90,6 +93,7 @@ public interface OncallScheduleRepository
     @Query("""
             SELECT s FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
+            AND s.status = com.incidentplatform.oncall.domain.OncallScheduleStatus.ACTIVE
             AND s.startsAt <= :now
             AND s.endsAt > :now
             ORDER BY s.role ASC
@@ -162,11 +166,18 @@ public interface OncallScheduleRepository
      * doesn't perform Hibernate's runtime JPQL type checking, so the
      * mismatch was invisible until a real-Postgres integration test
      * exercised this method for the first time.
+     * <p>Fixed (backlog #43): scoped to {@code status = ACTIVE} —
+     * without this, a superseded row (kept for history, not deleted —
+     * see {@code OncallScheduleStatus}'s Javadoc) would still count as a
+     * conflict against a brand-new schedule created for the exact same
+     * historical window, even though it no longer represents anything
+     * currently in effect.
      */
     @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
             AND s.role = :role
+            AND s.status = com.incidentplatform.oncall.domain.OncallScheduleStatus.ACTIVE
             AND (s.teamId = :teamId OR (s.teamId IS NULL AND :teamId IS NULL))
             AND s.startsAt < :endsAt
             AND s.endsAt > :startsAt
@@ -179,13 +190,24 @@ public interface OncallScheduleRepository
             @Param("endsAt") Instant endsAt);
 
     /**
-     * Same teamId-scoping fix and same {@code role} type fix as
-     * {@link #existsOverlappingForCreate} — see its Javadoc for both.
+     * Same teamId-scoping fix, same {@code role} type fix, and same
+     * {@code status = ACTIVE} scoping as {@link #existsOverlappingForCreate}
+     * — see its Javadoc for all three.
+     *
+     * <p>{@code excludeId} — previously unused dead code (no caller
+     * existed for it) until backlog #43's supersede pattern:
+     * {@code OncallScheduleService.supersede(...)} passes the old row's
+     * id here specifically so it can check "does the proposed replacement
+     * window overlap with anything else ACTIVE" without the old row (which,
+     * at the moment this check runs, is still ACTIVE — it isn't marked
+     * SUPERSEDED until immediately afterward, in the same transaction)
+     * counting as a conflict against itself.
      */
     @Query("""
             SELECT COUNT(s) > 0 FROM OncallSchedule s
             WHERE s.tenantId = :tenantId
             AND s.role = :role
+            AND s.status = com.incidentplatform.oncall.domain.OncallScheduleStatus.ACTIVE
             AND (s.teamId = :teamId OR (s.teamId IS NULL AND :teamId IS NULL))
             AND s.startsAt < :endsAt
             AND s.endsAt > :startsAt

@@ -347,4 +347,124 @@ class OncallScheduleOverlapIntegrationTest {
             assertThat(result).isEmpty();
         }
     }
+
+    /**
+     * Real-Postgres coverage for backlog #43's supersede pattern — the
+     * one part of this feature that genuinely cannot be verified against
+     * a mocked repository: whether the {@code excl_oncall_schedule_overlap}
+     * constraint's {@code WHERE (status = 'ACTIVE')} partial-index syntax
+     * (migration V5) is actually valid PostgreSQL and behaves as intended.
+     * If this migration's SQL were subtly wrong (a typo in the WHERE
+     * clause, an unsupported partial-EXCLUDE combination), the
+     * {@code @SpringBootTest} context itself would fail to start — but
+     * that alone wouldn't prove the constraint does what it's SUPPOSED to
+     * (scope correctly), only that it applied without a syntax error.
+     */
+    @Nested
+    @DisplayName("supersede pattern — excl_oncall_schedule_overlap scoped to ACTIVE (backlog #43)")
+    class SupersedePattern {
+
+        /**
+         * The core guarantee this whole pattern exists for: a SUPERSEDED
+         * row (kept for history, not deleted) must never block a new
+         * ACTIVE row from occupying the exact same window it used to
+         * occupy — otherwise OncallScheduleService.supersede's own
+         * old.markSuperseded() + save(replacement) sequence, within one
+         * transaction, would fail every single time (the two rows always
+         * overlap by construction — the whole point of an edit is
+         * "replace this window").
+         */
+        @Test
+        @DisplayName("a SUPERSEDED row does not conflict with an overlapping ACTIVE replacement")
+        void supersededRowDoesNotConflictWithReplacement() {
+            final UUID teamId = UUID.randomUUID();
+            final OncallSchedule original = buildSchedule(
+                    teamId, OncallRole.PRIMARY, STARTS_AT, ENDS_AT);
+            repository.saveAndFlush(original);
+
+            original.markSuperseded();
+            final OncallSchedule replacement = OncallSchedule.createSuperseding(
+                    original.getId(), TENANT_ID, teamId, "user-2", "Anna Nowak",
+                    "anna@example.com", "+48100200301", "U9876543210",
+                    OncallRole.PRIMARY, STARTS_AT, ENDS_AT, "Replacement");
+
+            // Same identical window as the original — this MUST succeed
+            // despite the physical row still being present in the table.
+            repository.saveAndFlush(original);
+            repository.saveAndFlush(replacement);
+
+            assertThat(repository.count()).isEqualTo(2);
+        }
+
+/**
+ * Sanity check that scoping the constraint to ACTIVE didn't
+ * accidentally disable it altogether — two genuinely conflicting
+ * ACTIVE rows must still be rejected, exactly as before V5.
+ */
+@Test
+@DisplayName("two ACTIVE rows with overlapping windows still conflict")
+void twoActiveRowsStillConflict() {
+    final UUID teamId = UUID.randomUUID();
+    repository.saveAndFlush(buildSchedule(teamId, OncallRole.PRIMARY,
+            STARTS_AT, ENDS_AT));
+
+    final OncallSchedule overlapping = buildSchedule(teamId, OncallRole.PRIMARY,
+            STARTS_AT.plusSeconds(3600), ENDS_AT.plusSeconds(3600));
+
+    assertThatThrownBy(() -> repository.saveAndFlush(overlapping))
+            .isInstanceOf(DataIntegrityViolationException.class);
+}
+
+        /**
+         * Regression test for existsOverlapping's excludeId parameter —
+         * previously dead code (backlog #43's Javadoc on that method) —
+         * now genuinely exercised: the row being excluded must not count
+         * as a conflict against itself.
+         */
+        @Test
+        @DisplayName("existsOverlapping excludes the given id from its own conflict check")
+        void existsOverlappingExcludesGivenId() {
+            final UUID teamId = UUID.randomUUID();
+            final OncallSchedule existing = buildSchedule(
+                    teamId, OncallRole.PRIMARY, STARTS_AT, ENDS_AT);
+            repository.saveAndFlush(existing);
+
+            final boolean overlapsExcludingSelf = repository.existsOverlapping(
+                    TENANT_ID, teamId, OncallRole.PRIMARY, STARTS_AT, ENDS_AT,
+                    existing.getId());
+
+            assertThat(overlapsExcludingSelf).isFalse();
+        }
+
+        @Test
+        @DisplayName("existsOverlapping still detects a conflict against a DIFFERENT row")
+        void existsOverlappingDetectsConflictAgainstDifferentRow() {
+            final UUID teamId = UUID.randomUUID();
+            repository.saveAndFlush(buildSchedule(
+                    teamId, OncallRole.PRIMARY, STARTS_AT, ENDS_AT));
+
+            final boolean overlaps = repository.existsOverlapping(
+                    TENANT_ID, teamId, OncallRole.PRIMARY, STARTS_AT, ENDS_AT,
+                    UUID.randomUUID()); // excluding an unrelated, non-existent id
+
+            assertThat(overlaps).isTrue();
+        }
+
+        @Test
+        @DisplayName("findCurrentOncallByRole ignores a SUPERSEDED row even during its original window")
+        void findCurrentOncallByRoleIgnoresSupersededRow() {
+            final Instant now = Instant.now();
+            final OncallSchedule original = buildSchedule(null, OncallRole.PRIMARY,
+                    now.minusSeconds(3600), now.plusSeconds(3600));
+            repository.saveAndFlush(original);
+
+            original.markSuperseded();
+            repository.saveAndFlush(original);
+
+            final var result = repository.findCurrentOncallByRole(
+                    TENANT_ID, OncallRole.PRIMARY, now);
+
+            assertThat(result).isEmpty();
+        }
+    }
 }

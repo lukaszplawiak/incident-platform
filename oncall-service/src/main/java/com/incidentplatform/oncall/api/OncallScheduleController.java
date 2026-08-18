@@ -4,6 +4,7 @@ import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
+import com.incidentplatform.oncall.dto.UpdateOncallScheduleRequest;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.security.TenantContext;
@@ -225,6 +226,62 @@ public class OncallScheduleController {
 
         final OncallScheduleDto created = service.create(tenantId, request, principal);
         return ResponseEntity.status(HttpStatus.CREATED).body(created);
+    }
+
+    /**
+     * <h2>Backlog #43: supersede pattern for editing a schedule</h2>
+     * Deliberately not {@code PUT /schedules/{id}} — standard REST
+     * semantics for {@code PUT} imply "replace the resource at this same
+     * identifier," but that's not what happens here: a new row with a
+     * new {@code id} is created, and the old one is re-labeled, not
+     * physically replaced. {@code /supersede} names what actually
+     * happens, rather than implying an in-place update that doesn't
+     * occur. See {@link OncallScheduleService#supersede} for the full
+     * account of why this exists instead of the previous
+     * DELETE-then-POST workaround.
+     *
+     * <h2>TeamRole.MANAGER authorization</h2>
+     * Same relaxation and same reasoning as {@link #create} — see its
+     * Javadoc. The fine-grained check happens in
+     * {@link OncallScheduleService#supersede}, which loads the existing
+     * schedule first (needed anyway, for the 404/409 cases) and checks
+     * the caller against that schedule's actual {@code teamId}.
+     */
+    @PostMapping(
+            value = "/schedules/{id}/supersede",
+            consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @PreAuthorize("hasRole('ADMIN') or hasRole('RESPONDER')")
+    @Operation(summary = "Edit an on-call schedule entry",
+            description = "Replaces an ACTIVE schedule entry with a new one, " +
+                    "atomically — the original is kept (re-labeled SUPERSEDED) " +
+                    "for history, never deleted, so there is no window where " +
+                    "this slot has no on-call coverage. ROLE_ADMIN, or a user " +
+                    "holding TeamRole.MANAGER for the schedule's team.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Schedule superseded"),
+            @ApiResponse(responseCode = "400", description = "Validation failed"),
+            @ApiResponse(responseCode = "404", description = "Schedule not found"),
+            @ApiResponse(responseCode = "409",
+                    description = "Schedule overlaps with an existing entry, or the " +
+                            "target schedule is not currently ACTIVE"),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid JWT token"),
+            @ApiResponse(responseCode = "403",
+                    description = "Insufficient permissions — ROLE_ADMIN or " +
+                            "TeamRole.MANAGER for this team required")
+    })
+    public ResponseEntity<OncallScheduleDto> supersede(
+            @PathVariable UUID id,
+            @Valid @RequestBody UpdateOncallScheduleRequest request,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        final String tenantId = TenantContext.get();
+        log.debug("POST /api/v1/oncall/schedules/{}/supersede, tenant={}, role={}",
+                id, tenantId, request.role());
+
+        final OncallScheduleDto replacement =
+                service.supersede(id, tenantId, request, principal);
+        return ResponseEntity.ok(replacement);
     }
 
     /**
