@@ -69,7 +69,16 @@ class OncallScheduleOverlapIntegrationTest {
     // for consistency between what's tested here and what actually runs.
     @Container
     @ServiceConnection
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    // withReuse(true): once enabled locally (~/.testcontainers.properties,
+    // testcontainers.reuse.enable=true), this container survives between
+    // local test runs instead of restarting from scratch every time — pure
+    // dev-loop speedup, no effect on CI (reuse is opt-in and typically off
+    // there, so CI behavior is unchanged). Added for consistency with
+    // AuthRepositoryIntegrationTest (auth-service, backlog #34), which
+    // established this as the standard for every Testcontainers-based
+    // integration test in this codebase going forward.
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
+            .withReuse(true);
 
     @Autowired
     private OncallScheduleRepository repository;

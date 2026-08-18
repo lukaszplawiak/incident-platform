@@ -114,6 +114,21 @@
             <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Backlog #34: needed for @Testcontainers/@Container (AuthRepositoryIntegrationTest) —
+             already present in oncall-service's pom.xml, missing here since
+             auth-service never had a Testcontainers-based test before now. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Backlog #34: needed for @ServiceConnection (AuthRepositoryIntegrationTest) —
+             same reasoning as above. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.wiremock</groupId>
             <artifactId>wiremock-standalone</artifactId>
