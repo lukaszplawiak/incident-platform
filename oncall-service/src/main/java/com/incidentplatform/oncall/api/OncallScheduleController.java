@@ -288,18 +288,30 @@ public class OncallScheduleController {
      * <h2>TeamRole.MANAGER authorization</h2>
      * Same relaxation and same reasoning as {@link #create} — see its
      * Javadoc. The fine-grained check happens in
-     * {@link OncallScheduleService#delete}, which loads the schedule
+     * {@link OncallScheduleService#cancel}, which loads the schedule
      * first (needed anyway, for the 404 case) and checks the caller
      * against that schedule's actual {@code teamId}.
+     *
+     * <h2>Backlog #44: soft-delete</h2>
+     * Internally delegates to {@link OncallScheduleService#cancel} — the
+     * schedule row is kept (re-labeled CANCELLED), never physically
+     * deleted. The HTTP contract here is unchanged: still
+     * {@code DELETE /schedules/{id}}, still 204 on success. See that
+     * method's Javadoc for the full account, including the new 409 case
+     * for a schedule whose window has already fully elapsed.
      */
     @DeleteMapping("/schedules/{id}")
     @PreAuthorize("hasRole('ADMIN') or hasRole('RESPONDER')")
     @Operation(summary = "Delete an on-call schedule entry",
             description = "ROLE_ADMIN, or a user holding TeamRole.MANAGER " +
-                    "for the schedule's team.")
+                    "for the schedule's team. Soft-delete — the entry is kept " +
+                    "for history, only its status changes.")
     @ApiResponses({
-            @ApiResponse(responseCode = "204", description = "Schedule deleted"),
+            @ApiResponse(responseCode = "204", description = "Schedule cancelled"),
             @ApiResponse(responseCode = "404", description = "Schedule not found"),
+            @ApiResponse(responseCode = "409",
+                    description = "The schedule's window has already fully elapsed " +
+                            "— only present or future entries can be cancelled"),
             @ApiResponse(responseCode = "401", description = "Missing or invalid JWT token"),
             @ApiResponse(responseCode = "403",
                     description = "Insufficient permissions — ROLE_ADMIN or " +
@@ -310,7 +322,7 @@ public class OncallScheduleController {
             @AuthenticationPrincipal UserPrincipal principal) {
         final String tenantId = TenantContext.get();
         log.debug("DELETE /api/v1/oncall/schedules/{}, tenant={}", id, tenantId);
-        service.delete(id, tenantId, principal);
+        service.cancel(id, tenantId, principal);
         return ResponseEntity.noContent().build();
     }
 

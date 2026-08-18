@@ -561,9 +561,9 @@ class OncallScheduleServiceTest {
             given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
                     .willReturn(Optional.of(schedule));
 
-            service.delete(SCHEDULE_ID, TENANT_ID, managerOf(teamId));
+            service.cancel(SCHEDULE_ID, TENANT_ID, managerOf(teamId));
 
-            then(repository).should().delete(schedule);
+            then(repository).should().save(schedule);
         }
 
         @Test
@@ -578,10 +578,10 @@ class OncallScheduleServiceTest {
                     .willReturn(Optional.of(schedule));
 
             assertThatThrownBy(() ->
-                    service.delete(SCHEDULE_ID, TENANT_ID, managerOf(otherTeamId)))
+                    service.cancel(SCHEDULE_ID, TENANT_ID, managerOf(otherTeamId)))
                     .isInstanceOf(BusinessException.class);
 
-            then(repository).should(never()).delete(any());
+            then(repository).should(never()).save(any());
         }
     }
     @Nested
@@ -704,11 +704,11 @@ class OncallScheduleServiceTest {
     }
 
     @Nested
-    @DisplayName("delete")
+    @DisplayName("delete (backlog #44: soft-cancel, not physical delete)")
     class Delete {
 
         @Test
-        @DisplayName("should delete schedule")
+        @DisplayName("should mark the schedule CANCELLED and save it, not physically delete it")
         void shouldDeleteSchedule() {
             // given
             final OncallSchedule schedule = buildSchedule(OncallRole.PRIMARY);
@@ -716,10 +716,12 @@ class OncallScheduleServiceTest {
                     .willReturn(Optional.of(schedule));
 
             // when
-            service.delete(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL);
+            service.cancel(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL);
 
             // then
-            then(repository).should().delete(schedule);
+            assertThat(schedule.getStatus()).isEqualTo(OncallScheduleStatus.CANCELLED);
+            then(repository).should().save(schedule);
+            then(repository).should(never()).delete(any());
         }
 
         @Test
@@ -731,11 +733,69 @@ class OncallScheduleServiceTest {
 
             // when / then
             assertThatThrownBy(() ->
-                    service.delete(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL))
+                    service.cancel(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessageContaining(SCHEDULE_ID.toString());
 
-            then(repository).should(never()).delete(any());
+            then(repository).should(never()).save(any());
+        }
+
+        /**
+         * The actual regression test for backlog #44's temporal rule —
+         * matches PagerDuty's "you can only delete present or future
+         * overrides." A schedule whose window has already fully
+         * completed cannot be cancelled: there is no sensible "the past
+         * didn't happen" meaning for it, and it should remain an
+         * accurate historical record of who actually was on-call.
+         */
+        @Test
+        @DisplayName("should reject cancelling a schedule whose window has already fully elapsed")
+        void shouldRejectCancellingAlreadyElapsedSchedule() {
+            // given — a schedule that ended in the past
+            final Instant pastStart = Instant.now().minusSeconds(3600 * 24 * 14);
+            final Instant pastEnd = Instant.now().minusSeconds(3600 * 24 * 7);
+            final OncallSchedule elapsed = OncallSchedule.create(
+                    TENANT_ID, null, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY,
+                    pastStart, pastEnd, "Elapsed schedule");
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(elapsed));
+
+            // when / then
+            assertThatThrownBy(() ->
+                    service.cancel(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("already fully elapsed");
+
+            then(repository).should(never()).save(any());
+        }
+
+        /**
+         * The complementary case: a schedule currently IN PROGRESS
+         * (started in the past, but not yet ended) must still be
+         * cancellable — e.g. someone's on-call shift ending early is a
+         * legitimate, common case. Only a FULLY completed window is
+         * rejected, not merely a started one.
+         */
+        @Test
+        @DisplayName("should allow cancelling a schedule that is currently in progress (mid-flight)")
+        void shouldAllowCancellingInProgressSchedule() {
+            // given — started an hour ago, ends in six days: currently active
+            final Instant inProgressStart = Instant.now().minusSeconds(3600);
+            final Instant inProgressEnd = Instant.now().plusSeconds(3600 * 24 * 6);
+            final OncallSchedule inProgress = OncallSchedule.create(
+                    TENANT_ID, null, "user-1", "Jan Kowalski", "jan@example.com",
+                    "+48100200300", "U0123456789", OncallRole.PRIMARY,
+                    inProgressStart, inProgressEnd, "In-progress schedule");
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(inProgress));
+
+            // when
+            service.cancel(SCHEDULE_ID, TENANT_ID, ADMIN_PRINCIPAL);
+
+            // then
+            assertThat(inProgress.getStatus()).isEqualTo(OncallScheduleStatus.CANCELLED);
+            then(repository).should().save(inProgress);
         }
     }
 

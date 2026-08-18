@@ -366,9 +366,40 @@ public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
      * is loaded first regardless (needed for the 404 case anyway), so its
      * real {@code teamId} is used for the check — see
      * {@link #requireAdminOrTeamManager}.
+     *
+     * <h2>Fixed (backlog #44): physical DELETE replaced with soft-cancel</h2>
+     * Previously called {@code repository.delete(schedule)} — a genuine,
+     * physical {@code DELETE FROM}. Inconsistent with the rest of this
+     * platform's convention that time-bound domain entities are never
+     * physically removed, only moved to a terminal status (see
+     * {@code EscalationTaskStatus.CANCELLED}, and {@code Incident}, which
+     * has no delete endpoint at all). Also a genuine, reachable bug
+     * introduced by backlog #43: a SUPERSEDED row is referenced by its
+     * replacement's {@code supersedes_id} foreign key, so physically
+     * deleting a schedule that had ever been edited would be rejected by
+     * that constraint with an unhandled
+     * {@code DataIntegrityViolationException} (500) — under the old
+     * implementation, a schedule could never actually be deleted once it
+     * had been superseded even once.
+     *
+     * <p>Now calls {@link OncallSchedule#cancel()} and saves, instead —
+     * same mechanics as {@link #supersede}'s {@code markSuperseded()}.
+     * The HTTP contract is unchanged: still {@code DELETE /schedules/{id}},
+     * still 204 on success — this is an internal implementation change,
+     * not an API change.
+     *
+     * <h2>New: rejects cancelling an already-elapsed schedule</h2>
+     * Matches how PagerDuty handles the same operation on its own
+     * overrides ("you can only delete present or future overrides") —
+     * see {@link OncallSchedule#hasFullyElapsed} for the exact rule. A
+     * schedule whose window is still in progress, or hasn't started yet,
+     * can still be cancelled (e.g. someone's on-call shift ending early
+     * is a legitimate, common case) — only one that has already fully
+     * run its course is rejected, with 409 Conflict, since there is no
+     * sensible "the future didn't happen" meaning for a past entry.
      */
     @Transactional
-    public void delete(UUID id, String tenantId, UserPrincipal principal) {
+    public void cancel(UUID id, String tenantId, UserPrincipal principal) {
         final OncallSchedule schedule = repository
                 .findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException(
@@ -376,9 +407,20 @@ public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
 
         requireAdminOrTeamManager(principal, schedule.getTeamId());
 
-        repository.delete(schedule);
+        if (schedule.hasFullyElapsed(Instant.now())) {
+            throw new BusinessException(
+                    ErrorCodes.VALIDATION_FAILED,
+                    "Cannot cancel a schedule entry whose window has already " +
+                            "fully elapsed — only present or future entries can " +
+                            "be cancelled",
+                    HttpStatus.CONFLICT
+            );
+        }
 
-        log.info("OncallSchedule deleted: id={}, tenantId={}", id, tenantId);
+        schedule.cancel();
+        repository.save(schedule);
+
+        log.info("OncallSchedule cancelled: id={}, tenantId={}", id, tenantId);
     }
 
     /**
