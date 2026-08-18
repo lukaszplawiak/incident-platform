@@ -176,6 +176,33 @@ public class OncallSchedule {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Marks this row CANCELLED — backlog #44's soft-delete. Same
+     * mechanics as {@link #markSuperseded} (excluded from "current"
+     * queries and the overlap constraint, physically kept for history),
+     * used by {@code OncallScheduleService.cancel} instead of a physical
+     * {@code repository.delete(...)}.
+     */
+    public void cancel() {
+        this.status = OncallScheduleStatus.CANCELLED;
+        this.updatedAt = Instant.now();
+    }
+
+    /**
+     * True if this schedule's window has already fully completed as of
+     * {@code now} — i.e. {@code endsAt} is not in the future. Used by
+     * {@code OncallScheduleService.cancel} to reject cancelling a
+     * schedule entry that has already run its full course, matching how
+     * PagerDuty handles the same operation on its own overrides ("you
+     * can only delete present or future overrides"). A schedule
+     * currently in progress ({@code startsAt <= now < endsAt}) is NOT
+     * considered fully elapsed — cancelling mid-flight (e.g. someone's
+     * on-call shift ending early) is a legitimate, common case.
+     */
+    public boolean hasFullyElapsed(Instant now) {
+        return !endsAt.isAfter(now);
+    }
+
     public boolean isActiveAt(Instant moment) {
         return !moment.isBefore(startsAt) && moment.isBefore(endsAt);
     }

@@ -379,7 +379,8 @@ class OncallScheduleControllerSecurityTest {
                             .with(principal("ROLE_RESPONDER")))
                     .andExpect(status().isNoContent());
 
-            then(service).should().delete(
+            // backlog #44: controller's delete() now calls service.cancel()
+            then(service).should().cancel(
                     eq(SCHEDULE_ID), any(), eq(buildPrincipal("ROLE_RESPONDER")));
         }
 
@@ -442,7 +443,8 @@ class OncallScheduleControllerSecurityTest {
                             .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isNoContent());
 
-            then(service).should().delete(
+            // backlog #44: controller's delete() now calls service.cancel()
+            then(service).should().cancel(
                     eq(SCHEDULE_ID), any(), eq(buildPrincipal("ROLE_ADMIN")));
         }
 

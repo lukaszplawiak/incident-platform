@@ -467,4 +467,53 @@ void twoActiveRowsStillConflict() {
             assertThat(result).isEmpty();
         }
     }
+
+    /**
+     * Real-Postgres coverage for backlog #44's soft-delete — verifies
+     * migration V6's CHECK constraint accepts CANCELLED, and that the
+     * excl_oncall_schedule_overlap constraint (already scoped to
+     * status = ACTIVE since V5) correctly treats a CANCELLED row the
+     * same way it already treats SUPERSEDED — excluded from conflict
+     * checks, with no further migration needed for that part.
+     */
+    @Nested
+    @DisplayName("soft-delete — CANCELLED status (backlog #44)")
+    class CancelledStatus {
+
+        @Test
+        @DisplayName("a CANCELLED row does not conflict with an overlapping ACTIVE replacement")
+        void cancelledRowDoesNotConflictWithNewActiveRow() {
+            final UUID teamId = UUID.randomUUID();
+            final OncallSchedule original = buildSchedule(
+                    teamId, OncallRole.PRIMARY, STARTS_AT, ENDS_AT);
+            repository.saveAndFlush(original);
+
+            original.cancel();
+            repository.saveAndFlush(original);
+
+            // Same identical window as the cancelled entry — must succeed.
+            final OncallSchedule replacement = buildSchedule(
+                    teamId, OncallRole.PRIMARY, STARTS_AT, ENDS_AT);
+            repository.saveAndFlush(replacement);
+
+            assertThat(repository.count()).isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("findCurrentOncallByRole ignores a CANCELLED row even during its original window")
+        void findCurrentOncallByRoleIgnoresCancelledRow() {
+            final Instant now = Instant.now();
+            final OncallSchedule schedule = buildSchedule(null, OncallRole.PRIMARY,
+                    now.minusSeconds(3600), now.plusSeconds(3600));
+            repository.saveAndFlush(schedule);
+
+            schedule.cancel();
+            repository.saveAndFlush(schedule);
+
+            final var result = repository.findCurrentOncallByRole(
+                    TENANT_ID, OncallRole.PRIMARY, now);
+
+            assertThat(result).isEmpty();
+        }
+    }
 }
