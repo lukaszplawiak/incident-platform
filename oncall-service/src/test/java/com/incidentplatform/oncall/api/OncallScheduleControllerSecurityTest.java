@@ -161,6 +161,23 @@ class OncallScheduleControllerSecurityTest {
             }
             """;
 
+    // Backlog #43 — same shape as VALID_CREATE_REQUEST, since
+    // UpdateOncallScheduleRequest deliberately mirrors
+    // CreateOncallScheduleRequest's fields exactly.
+    private static final String VALID_SUPERSEDE_REQUEST = """
+            {
+              "userId": "user-2",
+              "userName": "Anna Nowak",
+              "email": "anna@example.com",
+              "phone": "+48100200301",
+              "slackUserId": "U9876543210",
+              "role": "SECONDARY",
+              "startsAt": "2099-01-01T00:00:00Z",
+              "endsAt": "2099-01-08T00:00:00Z",
+              "notes": "replacement"
+            }
+            """;
+
     @BeforeEach
     void setUp() {
         TenantContext.set(TENANT_ID);
@@ -227,6 +244,15 @@ class OncallScheduleControllerSecurityTest {
             mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID))
                     .andExpect(status().isUnauthorized());
         }
+
+        @Test
+        @DisplayName("POST /schedules/{id}/supersede — 401 without token")
+        void supersede_returns401() throws Exception {
+            mockMvc.perform(post("/api/v1/oncall/schedules/{id}/supersede", SCHEDULE_ID)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(VALID_SUPERSEDE_REQUEST))
+                    .andExpect(status().isUnauthorized());
+        }
     }
 
     // ── ROLE_INGESTOR — 403 ───────────────────────────────────────────────
@@ -258,6 +284,16 @@ class OncallScheduleControllerSecurityTest {
         void delete_returns403() throws Exception {
             mockMvc.perform(delete("/api/v1/oncall/schedules/{id}", SCHEDULE_ID)
                             .with(principal("ROLE_INGESTOR")))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("POST /schedules/{id}/supersede — 403 for INGESTOR")
+        void supersede_returns403() throws Exception {
+            mockMvc.perform(post("/api/v1/oncall/schedules/{id}/supersede", SCHEDULE_ID)
+                            .with(principal("ROLE_INGESTOR"))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(VALID_SUPERSEDE_REQUEST))
                     .andExpect(status().isForbidden());
         }
     }
@@ -346,6 +382,24 @@ class OncallScheduleControllerSecurityTest {
             then(service).should().delete(
                     eq(SCHEDULE_ID), any(), eq(buildPrincipal("ROLE_RESPONDER")));
         }
+
+        @Test
+        @DisplayName("POST /schedules/{id}/supersede — reaches the service for RESPONDER " +
+                "with the correct principal (same reasoning as the create test above)")
+        void supersede_reachesServiceForResponder() throws Exception {
+            given(service.supersede(eq(SCHEDULE_ID), any(), any(),
+                    eq(buildPrincipal("ROLE_RESPONDER"))))
+                    .willReturn(buildScheduleDto());
+
+            mockMvc.perform(post("/api/v1/oncall/schedules/{id}/supersede", SCHEDULE_ID)
+                            .with(principal("ROLE_RESPONDER"))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(VALID_SUPERSEDE_REQUEST))
+                    .andExpect(status().isOk());
+
+            then(service).should().supersede(
+                    eq(SCHEDULE_ID), any(), any(), eq(buildPrincipal("ROLE_RESPONDER")));
+        }
     }
 
     // ── ROLE_ADMIN — full access ──────────────────────────────────────────
@@ -372,7 +426,7 @@ class OncallScheduleControllerSecurityTest {
                     .willReturn(buildScheduleDto());
 
             mockMvc.perform(post("/api/v1/oncall/schedules")
-                            .with(principal("ROLE_ADMIN"))
+                    .with(principal("ROLE_ADMIN"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
                     .andExpect(status().isCreated());
@@ -390,6 +444,23 @@ class OncallScheduleControllerSecurityTest {
 
             then(service).should().delete(
                     eq(SCHEDULE_ID), any(), eq(buildPrincipal("ROLE_ADMIN")));
+        }
+
+        @Test
+        @DisplayName("POST /schedules/{id}/supersede — 200 for ADMIN with the correct principal")
+        void supersede_returns200() throws Exception {
+            given(service.supersede(eq(SCHEDULE_ID), any(), any(),
+                    eq(buildPrincipal("ROLE_ADMIN"))))
+                    .willReturn(buildScheduleDto());
+
+            mockMvc.perform(post("/api/v1/oncall/schedules/{id}/supersede", SCHEDULE_ID)
+                            .with(principal("ROLE_ADMIN"))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(VALID_SUPERSEDE_REQUEST))
+                    .andExpect(status().isOk());
+
+            then(service).should().supersede(
+                    eq(SCHEDULE_ID), any(), any(), eq(buildPrincipal("ROLE_ADMIN")));
         }
     }
 
@@ -425,6 +496,16 @@ class OncallScheduleControllerSecurityTest {
                             .with(principal("ROLE_SERVICE"))
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(VALID_CREATE_REQUEST))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("POST /schedules/{id}/supersede — 403 for SERVICE")
+        void supersede_returns403ForService() throws Exception {
+            mockMvc.perform(post("/api/v1/oncall/schedules/{id}/supersede", SCHEDULE_ID)
+                            .with(principal("ROLE_SERVICE"))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(VALID_SUPERSEDE_REQUEST))
                     .andExpect(status().isForbidden());
         }
     }
@@ -548,7 +629,7 @@ class OncallScheduleControllerSecurityTest {
                 SCHEDULE_ID, TENANT_ID, null, "user-1", "Jan Kowalski",
                 "jan@example.com", "+48100200300", "U0123456789", "PRIMARY",
                 Instant.now(), Instant.now().plusSeconds(86400),
-                "test schedule", Instant.now()
+                "test schedule", Instant.now(), "ACTIVE", null
         );
     }
 }

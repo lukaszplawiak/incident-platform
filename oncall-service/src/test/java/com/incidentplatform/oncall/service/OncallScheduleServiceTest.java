@@ -2,10 +2,12 @@ package com.incidentplatform.oncall.service;
 
 import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.domain.OncallSchedule;
+import com.incidentplatform.oncall.domain.OncallScheduleStatus;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
+import com.incidentplatform.oncall.dto.UpdateOncallScheduleRequest;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -29,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.given;
@@ -222,6 +225,228 @@ class OncallScheduleServiceTest {
             // actual argument passed, not just that some call happened
             then(repository).should().existsOverlappingForCreate(
                     eq(TENANT_ID), eq(teamId), eq(OncallRole.PRIMARY), any(), any());
+        }
+    }
+
+    /**
+     * Coverage for backlog #43's supersede pattern — this method and
+     * {@code UpdateOncallScheduleRequest} did not exist before this fix.
+     * See {@code OncallScheduleService.supersede}'s own Javadoc for the
+     * full account of why this exists (replacing the previous
+     * DELETE-then-POST client-side workaround, which had a real coverage
+     * gap between the two calls).
+     */
+    @Nested
+    @DisplayName("supersede")
+    class Supersede {
+
+        @Test
+        @DisplayName("should mark the old row SUPERSEDED and save both rows")
+        void shouldMarkOldSupersededAndSaveBoth() {
+            // given
+            final OncallSchedule old = buildSchedule(OncallRole.PRIMARY);
+            final UpdateOncallScheduleRequest request =
+                    buildUpdateRequest(OncallRole.SECONDARY.name());
+
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(old));
+            given(repository.existsOverlapping(
+                    eq(TENANT_ID), isNull(), eq(OncallRole.SECONDARY),
+                    any(), any(), eq(SCHEDULE_ID)))
+                    .willReturn(false);
+            given(repository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            final OncallScheduleDto result =
+                    service.supersede(SCHEDULE_ID, TENANT_ID, request, ADMIN_PRINCIPAL);
+
+            // then
+            assertThat(old.getStatus()).isEqualTo(OncallScheduleStatus.SUPERSEDED);
+            assertThat(old.getSupersededAt()).isNotNull();
+
+            then(repository).should().save(old);
+            then(repository).should().save(argThat(saved ->
+                    saved != old && SCHEDULE_ID.equals(saved.getSupersedesId())));
+
+            assertThat(result.status()).isEqualTo(OncallScheduleStatus.ACTIVE.name());
+            assertThat(result.supersedesId()).isEqualTo(SCHEDULE_ID);
+            assertThat(result.userId()).isEqualTo("user-2");
+        }
+
+        @Test
+        @DisplayName("should throw ResourceNotFoundException when the target schedule doesn't exist")
+        void shouldThrowWhenNotFound() {
+            // given
+            final UpdateOncallScheduleRequest request =
+                    buildUpdateRequest(OncallRole.PRIMARY.name());
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.empty());
+
+            // when / then
+            assertThatThrownBy(() ->
+                    service.supersede(SCHEDULE_ID, TENANT_ID, request, ADMIN_PRINCIPAL))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining(SCHEDULE_ID.toString());
+
+            then(repository).should(never()).save(any());
+        }
+
+        /**
+         * The actual regression test for the "already SUPERSEDED" guard
+         * in OncallScheduleService.supersede — rejects a second attempt
+         * to edit the same row (e.g. a stale client, or two concurrent
+         * edits) with a clean 409 rather than silently creating a second,
+         * competing replacement for the same original.
+         */
+        @Test
+        @DisplayName("should throw when the target schedule is already SUPERSEDED")
+        void shouldThrowWhenAlreadySuperseded() {
+            // given
+            final OncallSchedule alreadySuperseded = buildSchedule(OncallRole.PRIMARY);
+            alreadySuperseded.markSuperseded();
+            final UpdateOncallScheduleRequest request =
+                    buildUpdateRequest(OncallRole.PRIMARY.name());
+
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(alreadySuperseded));
+
+            // when / then
+            assertThatThrownBy(() ->
+                    service.supersede(SCHEDULE_ID, TENANT_ID, request, ADMIN_PRINCIPAL))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("not currently ACTIVE");
+
+            then(repository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should throw BusinessException when the replacement window overlaps another schedule")
+        void shouldThrowWhenOverlapping() {
+            // given
+            final OncallSchedule old = buildSchedule(OncallRole.PRIMARY);
+            final UpdateOncallScheduleRequest request =
+                    buildUpdateRequest(OncallRole.PRIMARY.name());
+
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(old));
+            given(repository.existsOverlapping(
+                    anyString(), any(), any(), any(), any(), any()))
+                    .willReturn(true);
+
+            // when / then
+            assertThatThrownBy(() ->
+                    service.supersede(SCHEDULE_ID, TENANT_ID, request, ADMIN_PRINCIPAL))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("overlaps");
+
+            then(repository).should(never()).save(any());
+        }
+
+        /**
+         * Verifies the old row's own id is passed as excludeId — the
+         * mechanism that lets existsOverlapping (backlog #43, previously
+         * dead code) correctly ignore the old row against itself, since
+         * it's still ACTIVE at the exact moment this check runs.
+         */
+        @Test
+        @DisplayName("should exclude the old row's own id from the overlap check")
+        void shouldExcludeOldRowIdFromOverlapCheck() {
+            // given
+            final OncallSchedule old = buildSchedule(OncallRole.PRIMARY);
+            final UpdateOncallScheduleRequest request =
+                    buildUpdateRequest(OncallRole.PRIMARY.name());
+
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(old));
+            given(repository.existsOverlapping(
+                    anyString(), any(), any(), any(), any(), any()))
+                    .willReturn(false);
+            given(repository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            // when
+            service.supersede(SCHEDULE_ID, TENANT_ID, request, ADMIN_PRINCIPAL);
+
+            // then
+            then(repository).should().existsOverlapping(
+                    eq(TENANT_ID), isNull(), eq(OncallRole.PRIMARY),
+                    any(), any(), eq(SCHEDULE_ID));
+        }
+
+        @Test
+        @DisplayName("translates a DB-level exclusion-constraint violation into the same 409")
+        void translatesDataIntegrityViolationIntoBusinessException() {
+            // given
+            final OncallSchedule old = buildSchedule(OncallRole.PRIMARY);
+            final UpdateOncallScheduleRequest request =
+                    buildUpdateRequest(OncallRole.PRIMARY.name());
+
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(old));
+            given(repository.existsOverlapping(
+                    anyString(), any(), any(), any(), any(), any()))
+                    .willReturn(false);
+            given(repository.save(old)).willReturn(old);
+            given(repository.save(argThat(s -> s != null && s != old)))
+                    .willThrow(new DataIntegrityViolationException(
+                            "ERROR: conflicting key value violates exclusion " +
+                                    "constraint excl_oncall_schedule_overlap"));
+
+            // when / then
+            assertThatThrownBy(() ->
+                    service.supersede(SCHEDULE_ID, TENANT_ID, request, ADMIN_PRINCIPAL))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("overlaps");
+        }
+
+        @Test
+        @DisplayName("should throw for an invalid role string")
+        void shouldThrowForInvalidRole() {
+            // given
+            final OncallSchedule old = buildSchedule(OncallRole.PRIMARY);
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(old));
+
+            final UpdateOncallScheduleRequest request = new UpdateOncallScheduleRequest(
+                    null, "user-2", "Anna Nowak", "anna@example.com",
+                    "+48100200301", "U9876543210", "NOT_A_REAL_ROLE",
+                    STARTS_AT, ENDS_AT, "Replacement"
+            );
+
+            // when / then
+            assertThatThrownBy(() ->
+                    service.supersede(SCHEDULE_ID, TENANT_ID, request, ADMIN_PRINCIPAL))
+                    .isInstanceOf(BusinessException.class);
+
+            then(repository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should reject a Manager of a different team than the schedule's own")
+        void shouldRejectManagerOfDifferentTeam() {
+            // given
+            final UUID scheduleTeam = UUID.randomUUID();
+            final UUID otherTeam = UUID.randomUUID();
+            final OncallSchedule old = OncallSchedule.create(
+                    TENANT_ID, scheduleTeam, "user-1", "Jan Kowalski",
+                    "jan@example.com", "+48100200300", "U0123456789",
+                    OncallRole.PRIMARY, STARTS_AT, ENDS_AT, "Test schedule");
+            final UserPrincipal managerOfOtherTeam = new UserPrincipal(
+                    UUID.randomUUID(), TENANT_ID, "manager@example.com",
+                    List.of("ROLE_RESPONDER"), List.of(otherTeam));
+
+            given(repository.findByIdAndTenantId(SCHEDULE_ID, TENANT_ID))
+                    .willReturn(Optional.of(old));
+
+            final UpdateOncallScheduleRequest request =
+                    buildUpdateRequest(OncallRole.PRIMARY.name());
+
+            // when / then
+            assertThatThrownBy(() -> service.supersede(
+                    SCHEDULE_ID, TENANT_ID, request, managerOfOtherTeam))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("Requires ROLE_ADMIN");
+
+            then(repository).should(never()).save(any());
         }
     }
 
@@ -526,6 +751,21 @@ class OncallScheduleServiceTest {
                 STARTS_AT,
                 ENDS_AT,
                 "Test schedule"
+        );
+    }
+
+    private UpdateOncallScheduleRequest buildUpdateRequest(String role) {
+        return new UpdateOncallScheduleRequest(
+                null,
+                "user-2",
+                "Anna Nowak",
+                "anna@example.com",
+                "+48100200301",
+                "U9876543210",
+                role,
+                STARTS_AT,
+                ENDS_AT,
+                "Replacement"
         );
     }
 

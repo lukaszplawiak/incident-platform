@@ -12,6 +12,13 @@ import java.util.UUID;
  * later read back via GET /schedules, since this DTO silently dropped
  * the field. Field order mirrors OncallSchedule's declaration order
  * (id, tenantId, teamId, userId, ...).
+ *
+ * <p>{@code status}/{@code supersedesId} added for backlog #43's
+ * supersede pattern — {@code GET /schedules}/{@code GET /schedules/{id}}
+ * can now return a SUPERSEDED row (its own history is worth being able
+ * to see), and callers need a way to tell that apart from an ACTIVE one.
+ * {@code supersedesId} is null unless this row itself replaced an older
+ * one.
  */
 public record OncallScheduleDto(
         UUID id,
@@ -26,7 +33,9 @@ public record OncallScheduleDto(
         Instant startsAt,
         Instant endsAt,
         String notes,
-        Instant createdAt
+        Instant createdAt,
+        String status,
+        UUID supersedesId
 ) {
     public static OncallScheduleDto from(OncallSchedule schedule) {
         return new OncallScheduleDto(
@@ -42,7 +51,9 @@ public record OncallScheduleDto(
                 schedule.getStartsAt(),
                 schedule.getEndsAt(),
                 schedule.getNotes(),
-                schedule.getCreatedAt()
+                schedule.getCreatedAt(),
+                schedule.getStatus().name(),
+                schedule.getSupersedesId()
         );
     }
 }

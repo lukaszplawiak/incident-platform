@@ -6,6 +6,7 @@ import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.dto.SlackUserLookupResponse;
+import com.incidentplatform.oncall.dto.UpdateOncallScheduleRequest;
 import com.incidentplatform.oncall.repository.OncallScheduleRepository;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
@@ -133,6 +134,117 @@ public class OncallScheduleService {
     }
 
     /**
+     * Replaces an ACTIVE schedule entry with a new one, atomically —
+     * backlog #43's supersede pattern. Modeled after how PagerDuty
+     * handles editing a scheduled shift: the original row is never
+     * deleted, only re-labeled ({@link OncallSchedule#markSuperseded()}),
+     * so there is no window — unlike a client-side DELETE-then-POST —
+     * where "who is on-call right now" queries would find no one for
+     * this slot. Both the old row's status update and the new row's
+     * insert happen in this one {@code @Transactional} method: either
+     * both commit or neither does.
+     *
+     * <p>{@code oldId} must currently be ACTIVE — attempting to supersede
+     * an already-SUPERSEDED row (e.g. a stale client retrying, or two
+     * concurrent edit attempts) is rejected with 409 Conflict rather than
+     * silently creating a second, competing replacement.
+     *
+     * <p>Overlap checking uses {@link OncallScheduleRepository#existsOverlapping}
+     * (the {@code excludeId} variant — previously unused dead code; see
+     * its own Javadoc) rather than {@code existsOverlappingForCreate},
+     * specifically so the old row itself — still ACTIVE at the exact
+     * moment this check runs, since it isn't marked SUPERSEDED until the
+     * lines immediately after — never counts as a conflict against its
+     * own replacement.
+     */
+    @Transactional
+    public OncallScheduleDto supersede(UUID oldId,
+                                       String tenantId,
+                                       UpdateOncallScheduleRequest request,
+                                       UserPrincipal principal) {
+
+        final OncallSchedule old = repository.findByIdAndTenantId(oldId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "OncallSchedule", oldId));
+
+        if (!old.isActive()) {
+            throw new BusinessException(
+                    ErrorCodes.VALIDATION_FAILED,
+                    "Cannot supersede a schedule entry that is not currently ACTIVE " +
+                            "(it may have already been edited or is stale)",
+                    HttpStatus.CONFLICT
+            );
+        }
+
+        requireAdminOrTeamManager(principal, old.getTeamId());
+
+        final OncallRole role;
+        try {
+            role = OncallRole.valueOf(request.role());
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(
+                    ErrorCodes.VALIDATION_FAILED,
+                    String.format("Invalid on-call role '%s'. " +
+                                    "Allowed values: PRIMARY, SECONDARY, MANAGER",
+                            request.role()),
+                    HttpStatus.BAD_REQUEST
+            );
+        }
+
+        final boolean overlapping = repository.existsOverlapping(
+                tenantId,
+                request.teamId(),
+                role,
+                request.startsAt(),
+                request.endsAt(),
+                oldId
+        );
+
+        if (overlapping) {
+            throw BusinessException.scheduleOverlap(tenantId, request.role());
+        }
+
+        final OncallSchedule replacement = OncallSchedule.createSuperseding(
+                oldId,
+                tenantId,
+                request.teamId(),
+                request.userId(),
+                request.userName(),
+                request.email(),
+                request.phone(),
+                request.slackUserId(),
+                role,
+                request.startsAt(),
+                request.endsAt(),
+                request.notes()
+        );
+
+        old.markSuperseded();
+
+        // Same reasoning as create()'s identical try/catch — the
+        // application-level existsOverlapping check above is still a
+        // check-then-act, and excl_oncall_schedule_overlap (now scoped to
+        // status = ACTIVE, migration V5) is the real, race-proof
+        // guarantee underneath it.
+        try {
+            repository.save(old);
+            repository.save(replacement);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Schedule overlap caught by DB constraint on supersede " +
+                            "(race condition past the application-level check): " +
+                            "oldId={}, tenantId={}, teamId={}, role={}",
+                    oldId, tenantId, request.teamId(), request.role());
+            throw BusinessException.scheduleOverlap(tenantId, request.role());
+        }
+
+        log.info("OncallSchedule superseded: oldId={}, newId={}, tenantId={}, " +
+                        "userId={}, role={}",
+                oldId, replacement.getId(), tenantId, request.userId(), role);
+
+        return OncallScheduleDto.from(replacement);
+    }
+
+    /**
      * Fixed: previously passed the raw {@code role} String straight to
      * {@link OncallScheduleRepository#findCurrentOncallByRole}, which
      * needs an {@code OncallRole} (see that method's Javadoc for the full
@@ -159,24 +271,24 @@ public class OncallScheduleService {
                 .map(CurrentOncallResponse::from);
     }
 
-    /**
-     * Returns the current on-call person for a specific team and role.
-     * Primary query used by EscalationScheduler via HTTP.
-     *
-     * <p>Fixed: same {@code String}-to-{@code OncallRole} conversion fix
-     * and same "unparseable role treated as not-found" reasoning as
-     * {@link #getCurrentOncall} — see its Javadoc.
-     *
-     * @return empty when no active schedule found for this team/role
-     */
-    @Transactional(readOnly = true)
-    public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
-            String tenantId, UUID teamId, String role) {
-        return parseRole(role)
-                .flatMap(parsedRole -> repository.findCurrentOncallByTeamAndRole(
-                        tenantId, teamId, parsedRole, Instant.now()))
-                .map(CurrentOncallResponse::from);
-    }
+/**
+ * Returns the current on-call person for a specific team and role.
+ * Primary query used by EscalationScheduler via HTTP.
+ *
+ * <p>Fixed: same {@code String}-to-{@code OncallRole} conversion fix
+ * and same "unparseable role treated as not-found" reasoning as
+ * {@link #getCurrentOncall} — see its Javadoc.
+ *
+ * @return empty when no active schedule found for this team/role
+ */
+@Transactional(readOnly = true)
+public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
+        String tenantId, UUID teamId, String role) {
+    return parseRole(role)
+            .flatMap(parsedRole -> repository.findCurrentOncallByTeamAndRole(
+                    tenantId, teamId, parsedRole, Instant.now()))
+            .map(CurrentOncallResponse::from);
+}
 
     private static Optional<OncallRole> parseRole(String role) {
         try {

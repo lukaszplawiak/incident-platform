@@ -86,6 +86,25 @@ public class OncallSchedule {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
+    /**
+     * Supersede pattern (backlog #43) — see migration V5's comment for
+     * the full account. {@code status} defaults to ACTIVE for rows
+     * created via {@link #create}; {@link #createSuperseding} rows also
+     * start ACTIVE (they're the new, current version). {@code
+     * supersedesId} is null unless this row was itself created via
+     * {@link #createSuperseding}.
+     */
+    @NotNull
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 20)
+    private OncallScheduleStatus status;
+
+    @Column(name = "supersedes_id")
+    private UUID supersedesId;
+
+    @Column(name = "superseded_at")
+    private Instant supersededAt;
+
     protected OncallSchedule() {}
 
     public static OncallSchedule create(String tenantId,
@@ -112,13 +131,57 @@ public class OncallSchedule {
         schedule.startsAt = startsAt;
         schedule.endsAt = endsAt;
         schedule.notes = notes;
+        schedule.status = OncallScheduleStatus.ACTIVE;
         schedule.createdAt = Instant.now();
         schedule.updatedAt = Instant.now();
         return schedule;
     }
 
+    /**
+     * Creates a new ACTIVE row that replaces {@code supersededId} —
+     * backlog #43's supersede pattern. The caller
+     * ({@code OncallScheduleService.supersede}) is responsible for also
+     * calling {@link #markSuperseded()} on the old row and saving both
+     * within the same transaction — this factory only builds the new
+     * side of that pair.
+     */
+    public static OncallSchedule createSuperseding(UUID supersededId,
+                                                   String tenantId,
+                                                   UUID teamId,
+                                                   String userId,
+                                                   String userName,
+                                                   String email,
+                                                   String phone,
+                                                   String slackUserId,
+                                                   OncallRole role,
+                                                   Instant startsAt,
+                                                   Instant endsAt,
+                                                   String notes) {
+        final OncallSchedule schedule = create(
+                tenantId, teamId, userId, userName, email, phone,
+                slackUserId, role, startsAt, endsAt, notes);
+        schedule.supersedesId = supersededId;
+        return schedule;
+    }
+
+    /**
+     * Marks this row SUPERSEDED — it stops being considered by "current
+     * on-call" queries and by the overlap-detection constraint (which is
+     * scoped to {@code status = ACTIVE}, migration V5), but remains in
+     * the table for history rather than being deleted.
+     */
+    public void markSuperseded() {
+        this.status = OncallScheduleStatus.SUPERSEDED;
+        this.supersededAt = Instant.now();
+        this.updatedAt = Instant.now();
+    }
+
     public boolean isActiveAt(Instant moment) {
         return !moment.isBefore(startsAt) && moment.isBefore(endsAt);
+    }
+
+    public boolean isActive() {
+        return OncallScheduleStatus.ACTIVE.equals(this.status);
     }
 
     public boolean isPrimary()   { return OncallRole.PRIMARY.equals(this.role); }
@@ -139,4 +202,7 @@ public class OncallSchedule {
     public String getNotes()       { return notes; }
     public Instant getCreatedAt()  { return createdAt; }
     public Instant getUpdatedAt()  { return updatedAt; }
+    public OncallScheduleStatus getStatus() { return status; }
+    public UUID getSupersedesId()  { return supersedesId; }
+    public Instant getSupersededAt() { return supersededAt; }
 }
