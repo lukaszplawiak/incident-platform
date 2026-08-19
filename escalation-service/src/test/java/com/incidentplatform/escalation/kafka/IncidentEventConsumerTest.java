@@ -19,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.TransientDataAccessResourceException;
 import org.springframework.kafka.support.Acknowledgment;
 
 import java.nio.charset.StandardCharsets;
@@ -353,15 +354,26 @@ class IncidentEventConsumerTest {
         }
 
         @Test
-        @DisplayName("should NOT acknowledge when escalationService throws transient error")
+        @DisplayName("should NOT acknowledge when escalationService throws a " +
+                "genuinely transient error")
         void shouldNotAcknowledgeOnTransientException() {
-            // given — RuntimeException is transient (DB down, network issue)
-            // consumer should return without acknowledging so Kafka redelivers
+            // given — a real TransientDataAccessException subtype (DB down,
+            // network issue) is transient — consumer should return without
+            // acknowledging so Kafka redelivers.
+            //
+            // Fixed (backlog #47): uses a real TransientDataAccessException
+            // subtype now, not a plain RuntimeException — under the new,
+            // inverted retry-classification model (see IncidentEventConsumer's
+            // own Javadoc), only a genuinely recognized transient failure type
+            // is treated as worth retrying; a plain RuntimeException would now
+            // (correctly) be routed to DLT + acknowledged instead, which would
+            // have made this specific test assertion false under the new model.
             final ConsumerRecord<String, String> record =
                     buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
                             IncidentEventTypes.INCIDENT_OPENED);
 
-            org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
+            org.mockito.BDDMockito.willThrow(
+                            new TransientDataAccessResourceException("db error"))
                     .given(escalationService)
                     .scheduleEscalation(any(), any(), any(), any(), any(), any());
 
@@ -371,6 +383,71 @@ class IncidentEventConsumerTest {
             // then — NOT acknowledged, Kafka will redeliver
             then(acknowledgment).should(never()).acknowledge();
             assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        /**
+         * The actual regression test for backlog #47. Before this fix,
+         * DateTimeParseException (thrown by Instant.parse on a malformed
+         * timestamp in handleOpened) fell through uncaught into the old
+         * "assume transient, retry forever" default — permanently blocking
+         * this partition, since a malformed timestamp can never become
+         * parseable no matter how many times the same message is
+         * redelivered.
+         */
+        @Test
+        @DisplayName("should route to DLT and acknowledge on a malformed timestamp — " +
+                "the actual backlog #47 regression test")
+        void shouldAcknowledgeOnMalformedTimestamp() {
+            final String malformedTimestampPayload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "CRITICAL",
+                      "occurredAt": "not-a-valid-timestamp"
+                    }""", INCIDENT_ID, TENANT_ID);
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(malformedTimestampPayload, TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().publish(
+                    eq(malformedTimestampPayload), eq(TOPIC), eq(TENANT_ID), any());
+            then(acknowledgment).should().acknowledge();
+        }
+
+        /**
+         * Confirms the new default direction of the flipped model: an
+         * exception that is genuinely unexpected (not a recognized
+         * transient failure type, and not one of the specifically-named
+         * poison-pill types) is now treated as non-retryable by default —
+         * DLT + acknowledge — rather than the old "assume transient, retry
+         * forever" default.
+         */
+        @Test
+        @DisplayName("should route to DLT and acknowledge on an unrecognized, " +
+                "non-transient exception — confirms the new default direction")
+        void shouldAcknowledgeOnUnrecognizedNonTransientException() {
+            // openedEvent(...) embeds Instant.now() and returns a fresh string
+            // on every call — captured once here so the record built below
+            // and the DLT verification afterward refer to the exact same
+            // payload, not two different timestamps.
+            final String payload = openedEvent(Severity.CRITICAL);
+            final ConsumerRecord<String, String> record =
+                    buildRecord(payload, TENANT_ID, IncidentEventTypes.INCIDENT_OPENED);
+
+            org.mockito.BDDMockito.willThrow(
+                            new IllegalStateException("unexpected programming error"))
+                    .given(escalationService)
+                    .scheduleEscalation(any(), any(), any(), any(), any(), any());
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().publish(
+                    eq(payload), eq(TOPIC), eq(TENANT_ID), any());
+            then(acknowledgment).should().acknowledge();
         }
 
         @Test
