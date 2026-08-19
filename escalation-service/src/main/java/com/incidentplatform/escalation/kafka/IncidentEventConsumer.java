@@ -13,6 +13,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -22,6 +23,39 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * Kafka consumer for incident lifecycle events — schedules escalations
+ * for opened incidents, cancels them on acknowledgment.
+ *
+ * <h2>Fixed (backlog #47): retry classification was a deny-list, now an
+ * allow-list</h2>
+ * Previously classified errors as "known poison pill" ({@code
+ * UnrecognizedSeverityException}, {@code IllegalArgumentException}) vs.
+ * "assume transient, retry forever" (a generic {@code catch (Exception e)}
+ * covering everything else). {@code Instant.parse(...)} in
+ * {@link #handleOpened} throws {@code DateTimeParseException} on a
+ * malformed timestamp — which extends {@code DateTimeException extends
+ * RuntimeException}, NOT {@code IllegalArgumentException} — so it fell
+ * through, uncaught, into the generic branch: a message that could never
+ * succeed no matter how many times retried was treated as transient,
+ * never acknowledged, and redelivered forever, permanently blocking this
+ * partition (this exact same bug was found duplicated in
+ * postmortem-service's {@code IncidentEventConsumer}, where it was first
+ * caught).
+ *
+ * <p>Inverted the model to an allow-list: only
+ * {@link org.springframework.dao.TransientDataAccessException} (Spring's
+ * own, authoritative "this is genuinely worth retrying" hierarchy — e.g.
+ * connection pool exhaustion, query timeout, and — importantly for this
+ * consumer specifically — {@code ObjectOptimisticLockingFailureException}
+ * extends ... extends {@code TransientDataAccessException}, so
+ * {@code EscalationService.cancelEscalation}'s deliberate optimistic-lock
+ * propagation from backlog #38 is still correctly treated as retryable
+ * under this new model, unchanged) is treated as transient. Everything
+ * else — including any future exception type nobody explicitly
+ * anticipated — defaults to poison-pill handling (DLT + acknowledge)
+ * instead of defaulting to "retry forever".
+ */
 @Component
 public class IncidentEventConsumer {
 
@@ -115,16 +149,53 @@ public class IncidentEventConsumer {
             acknowledgment.acknowledge();
             return;
 
-        } catch (Exception e) {
-            // Transient error (DB unavailable, network issue while saving the
-            // escalation task). Do NOT acknowledge — Kafka will redeliver after
-            // consumer restart. Escalation scheduling may be delayed but will
-            // not be lost.
+        } catch (TransientDataAccessException e) {
+            // Fixed (backlog #47): genuinely transient — most likely a DB
+            // write failure (connection pool exhaustion, query timeout)
+            // while scheduling/cancelling an escalation, OR (see this
+            // class's own Javadoc) EscalationService.cancelEscalation's
+            // deliberate ObjectOptimisticLockingFailureException
+            // propagation from backlog #38 — both are
+            // TransientDataAccessException, Spring's own authoritative
+            // signal for "retrying this, unmodified, might succeed". Do
+            // NOT acknowledge — Kafka will redeliver after consumer
+            // restart. Escalation scheduling may be delayed but will not
+            // be lost.
             log.error("Transient error processing incident event — " +
                             "will be redelivered: topic={}, partition={}, " +
                             "offset={}, error={}",
                     record.topic(), record.partition(),
                     record.offset(), e.getMessage(), e);
+            return;
+
+        } catch (Exception e) {
+            // Fixed (backlog #47): this used to be the "assume transient,
+            // retry forever" default — the exact branch that let
+            // DateTimeParseException fall through uncaught. Now inverted:
+            // only the specific TransientDataAccessException catch above
+            // is treated as worth retrying. Anything else reaching this
+            // generic catch — including DateTimeParseException, and any
+            // future exception type nobody explicitly anticipated — is
+            // routed to DLT + acknowledged, exactly like the specific
+            // poison-pill catches above, rather than blocking this
+            // partition forever. See this class's own Javadoc for why
+            // this default direction, not "assume transient", is the
+            // safer one — a genuine, unexpected programming error is
+            // also correctly poison-pill handled this way, since
+            // retrying a deterministic bug would never succeed either.
+            final String tenantId = TenantContext.getOrNull();
+            log.error("Unexpected error (not a recognized transient failure) — " +
+                            "routing to DLT: topic={}, partition={}, offset={}, " +
+                            "tenant={}, error={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenantId, e.getMessage(), e);
+
+            deadLetterPublisher.publish(
+                    record.value(),
+                    record.topic(),
+                    tenantId != null ? tenantId : "unknown",
+                    e.getMessage());
+            acknowledgment.acknowledge();
             return;
 
         } finally {
