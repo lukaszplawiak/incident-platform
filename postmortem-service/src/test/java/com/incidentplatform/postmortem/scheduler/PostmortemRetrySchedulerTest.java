@@ -53,13 +53,24 @@ class PostmortemRetrySchedulerTest {
 
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int STUCK_THRESHOLD_MINUTES = 2;
+    // Fixed (backlog #48): PostmortemProperties gained two new constructor
+    // params (generatingBatchSize, retryBatchSize) — deliberately large
+    // here (not the production defaults of 10/20) so existing tests that
+    // stub any number of candidates continue to exercise the "process
+    // everything returned" path without needing per-test batch-size
+    // tuning; the actual batch-size-respecting behavior itself is
+    // covered separately below (BatchSizeCap nested class).
+    private static final int GENERATING_BATCH_SIZE = 100;
+    private static final int RETRY_BATCH_SIZE = 100;
 
     @BeforeEach
     void setUp() {
         final PostmortemPromptBuilder promptBuilder = new PostmortemPromptBuilder();
         final PostmortemProperties properties = new PostmortemProperties(
                 MAX_RETRY_ATTEMPTS,
-                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES));
+                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES),
+                GENERATING_BATCH_SIZE,
+                RETRY_BATCH_SIZE);
         scheduler = new PostmortemRetryScheduler(
                 postmortemRepository,
                 geminiClient,
@@ -82,7 +93,7 @@ class PostmortemRetrySchedulerTest {
         @Test
         @DisplayName("should do nothing when no GENERATING postmortems exist")
         void shouldDoNothingWhenNoGeneratingPostmortems() {
-            given(postmortemRepository.findStuckGenerating(any()))
+            given(postmortemRepository.findStuckGenerating(any(), any()))
                     .willReturn(List.of());
 
             scheduler.processGenerating();
@@ -96,7 +107,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should call Gemini and mark DRAFT when generation succeeds")
         void shouldMarkDraftWhenGeminiSucceeds() {
             final Postmortem postmortem = buildGeneratingPostmortem();
-            given(postmortemRepository.findStuckGenerating(any()))
+            given(postmortemRepository.findStuckGenerating(any(), any()))
                     .willReturn(List.of(postmortem));
             given(geminiClient.generate(anyString(), anyString()))
                     .willReturn("## Summary\nGenerated content");
@@ -120,7 +131,7 @@ class PostmortemRetrySchedulerTest {
             // First attempt failure — retryCount is still 0,
             // retry scheduler will pick it up later.
             final Postmortem postmortem = buildGeneratingPostmortem();
-            given(postmortemRepository.findStuckGenerating(any()))
+            given(postmortemRepository.findStuckGenerating(any(), any()))
                     .willReturn(List.of(postmortem));
             given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("Timeout"));
@@ -144,7 +155,7 @@ class PostmortemRetrySchedulerTest {
             // This ensures GENERATING→FAILED counts as attempt 0,
             // so the retry scheduler gets the full maxRetryAttempts budget.
             final Postmortem postmortem = buildGeneratingPostmortem();
-            given(postmortemRepository.findStuckGenerating(any()))
+            given(postmortemRepository.findStuckGenerating(any(), any()))
                     .willReturn(List.of(postmortem));
             given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
 
@@ -158,7 +169,7 @@ class PostmortemRetrySchedulerTest {
         void shouldContinueAfterOneFailure() {
             final Postmortem p1 = buildGeneratingPostmortem();
             final Postmortem p2 = buildGeneratingPostmortem();
-            given(postmortemRepository.findStuckGenerating(any()))
+            given(postmortemRepository.findStuckGenerating(any(), any()))
                     .willReturn(List.of(p1, p2));
             given(geminiClient.generate(anyString(), anyString()))
                     .willThrow(new GeminiException("Timeout"))
@@ -178,7 +189,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should clear TenantContext after processing")
         void shouldClearTenantContextAfterProcessing() {
             final Postmortem postmortem = buildGeneratingPostmortem();
-            given(postmortemRepository.findStuckGenerating(any()))
+            given(postmortemRepository.findStuckGenerating(any(), any()))
                     .willReturn(List.of(postmortem));
             given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
 
@@ -197,7 +208,7 @@ class PostmortemRetrySchedulerTest {
         @Test
         @DisplayName("should do nothing when no FAILED postmortems exist")
         void shouldDoNothingWhenNoFailedPostmortems() {
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of());
 
             scheduler.retryFailedPostmortems();
@@ -210,7 +221,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should increment retry count before calling Gemini")
         void shouldIncrementRetryCountBeforeCallingGemini() {
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
@@ -227,7 +238,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should mark DRAFT via persistenceService when Gemini succeeds")
         void shouldMarkDraftWhenGeminiSucceeds() {
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
@@ -253,7 +264,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should mark FAILED (not PERMANENTLY_FAILED) when retries remain")
         void shouldMarkFailedWhenRetriesRemain() {
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1); // 1 < MAX_RETRY_ATTEMPTS (3)
@@ -273,7 +284,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should mark PERMANENTLY_FAILED when retry count reaches maxRetryAttempts")
         void shouldMarkPermanentlyFailedAfterMaxRetries() {
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(MAX_RETRY_ATTEMPTS);
@@ -294,7 +305,7 @@ class PostmortemRetrySchedulerTest {
         void shouldContinueAfterOneFailure() {
             final Postmortem p1 = buildFailedPostmortem();
             final Postmortem p2 = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(p1, p2));
             given(persistenceService.incrementRetryCount(any())).willReturn(1);
             given(geminiClient.generate(anyString(), anyString()))
@@ -322,7 +333,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should clear TenantContext after retry run")
         void shouldClearTenantContextAfterProcessing() {
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
@@ -337,7 +348,7 @@ class PostmortemRetrySchedulerTest {
         @DisplayName("should clear TenantContext even when Gemini call throws")
         void shouldClearTenantContextOnFailure() {
             final Postmortem postmortem = buildFailedPostmortem();
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(postmortem));
             given(persistenceService.incrementRetryCount(postmortem.getId()))
                     .willReturn(1);
@@ -354,7 +365,7 @@ class PostmortemRetrySchedulerTest {
         void shouldNotLeakTenantIdBetweenCandidates() {
             final Postmortem pA = buildFailedPostmortemForTenant("tenant-a");
             final Postmortem pB = buildFailedPostmortemForTenant("tenant-b");
-            given(postmortemRepository.findFailedWithRemainingRetries(anyInt()))
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of(pA, pB));
             given(persistenceService.incrementRetryCount(any())).willReturn(1);
 
@@ -369,6 +380,78 @@ class PostmortemRetrySchedulerTest {
             assertThat(observedTenants).containsExactly("tenant-a", "tenant-b");
         }
     }
+
+/**
+ * The actual regression coverage for backlog #48 — verifies the
+ * scheduler genuinely passes {@code PageRequest.of(0, batchSize)}
+ * through to the repository, using scheduler instances configured
+ * with small, distinct batch sizes (not this file's default 100 —
+ * see {@link #GENERATING_BATCH_SIZE}/{@link #RETRY_BATCH_SIZE}'s own
+ * comment) so the assertion is meaningful and specific, not just
+ * "some positive number."
+ */
+@Nested
+@DisplayName("batch size cap (backlog #48)")
+class BatchSizeCap {
+
+    @Test
+    @DisplayName("processGenerating requests exactly generatingBatchSize rows, page 0")
+    void processGeneratingRequestsConfiguredBatchSize() {
+        final int smallBatchSize = 7;
+        final PostmortemProperties properties = new PostmortemProperties(
+                MAX_RETRY_ATTEMPTS,
+                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES),
+                smallBatchSize,
+                RETRY_BATCH_SIZE);
+        final PostmortemRetryScheduler smallBatchScheduler =
+                new PostmortemRetryScheduler(
+                        postmortemRepository, geminiClient,
+                        new PostmortemPromptBuilder(), persistenceService,
+                        properties);
+
+        given(postmortemRepository.findStuckGenerating(any(), any()))
+                .willReturn(List.of());
+
+        smallBatchScheduler.processGenerating();
+
+        final ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
+                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        then(postmortemRepository).should()
+                .findStuckGenerating(any(), pageableCaptor.capture());
+
+        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
+        assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
+    }
+
+    @Test
+    @DisplayName("retryFailedPostmortems requests exactly retryBatchSize rows, page 0")
+    void retryFailedPostmortemsRequestsConfiguredBatchSize() {
+        final int smallBatchSize = 5;
+        final PostmortemProperties properties = new PostmortemProperties(
+                MAX_RETRY_ATTEMPTS,
+                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES),
+                GENERATING_BATCH_SIZE,
+                smallBatchSize);
+        final PostmortemRetryScheduler smallBatchScheduler =
+                new PostmortemRetryScheduler(
+                        postmortemRepository, geminiClient,
+                        new PostmortemPromptBuilder(), persistenceService,
+                        properties);
+
+        given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
+                .willReturn(List.of());
+
+        smallBatchScheduler.retryFailedPostmortems();
+
+        final ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
+                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        then(postmortemRepository).should()
+                .findFailedWithRemainingRetries(anyInt(), pageableCaptor.capture());
+
+        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
+        assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
+    }
+}
 
     // ── helpers ───────────────────────────────────────────────────────────
 

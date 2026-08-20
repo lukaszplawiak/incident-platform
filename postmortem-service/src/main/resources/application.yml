@@ -161,6 +161,11 @@ resilience4j:
 postmortem:
   max-retry-attempts: ${POSTMORTEM_MAX_RETRY_ATTEMPTS:3}
   stuck-threshold: ${POSTMORTEM_STUCK_THRESHOLD:PT2M}
+  # Fixed (backlog #48): batch-size caps for the two scheduled methods —
+  # see PostmortemProperties' own Javadoc for the full reasoning behind
+  # these specific default values.
+  generating-batch-size: ${POSTMORTEM_GENERATING_BATCH_SIZE:10}
+  retry-batch-size: ${POSTMORTEM_RETRY_BATCH_SIZE:20}
   # Kept as plain properties for @Scheduled(fixedDelayString):
   generating-scheduler-interval-ms: ${POSTMORTEM_GENERATING_INTERVAL_MS:30000}
   retry-scheduler-interval-ms: ${POSTMORTEM_RETRY_INTERVAL_MS:300000}

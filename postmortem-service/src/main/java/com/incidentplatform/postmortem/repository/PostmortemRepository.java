@@ -36,19 +36,41 @@ public interface PostmortemRepository extends JpaRepository<Postmortem, UUID> {
      * scheduler a safety margin to avoid racing against a consumer that just
      * wrote the record and has not yet been picked up by the first scheduler
      * run.
+     *
+     * <h2>Fixed (backlog #48): {@code Pageable} added — previously unbounded</h2>
+     * Each row costs a real Gemini API call (3–15s) in the scheduler that
+     * consumes this — an unbounded result set could genuinely exceed
+     * {@code PostmortemRetryScheduler.processGenerating()}'s
+     * {@code lockAtMostFor}. Same {@code Pageable}-batching pattern as
+     * {@code EscalationTaskRepository.findDueForEscalation} (backlog #39).
+     * Explicit {@code ORDER BY p.createdAt ASC} added alongside the
+     * {@code Pageable} — without a stable order, {@code LIMIT}-based paging
+     * has no guaranteed row selection across repeated calls (every
+     * scheduler tick), risking the same arbitrary subset being picked every
+     * time while older stuck records are starved.
      */
     @Query("SELECT p FROM Postmortem p " +
             "WHERE p.status = 'GENERATING' " +
-            "AND p.createdAt < :stuckThreshold")
+            "AND p.createdAt < :stuckThreshold " +
+            "ORDER BY p.createdAt ASC")
     List<Postmortem> findStuckGenerating(
-            @Param("stuckThreshold") Instant stuckThreshold);
+            @Param("stuckThreshold") Instant stuckThreshold,
+            Pageable pageable);
 
     /**
      * Finds FAILED postmortems that still have remaining retry attempts.
+     *
+     * <h2>Fixed (backlog #48): {@code Pageable} added — same reasoning as
+     * {@link #findStuckGenerating}</h2>
+     * Caps how many rows {@code PostmortemRetryScheduler.retryFailedPostmortems()}
+     * processes per run, protecting its {@code lockAtMostFor}. Explicit
+     * {@code ORDER BY p.createdAt ASC} for the same stable-paging reason.
      */
     @Query("SELECT p FROM Postmortem p " +
             "WHERE p.status = 'FAILED' " +
-            "AND p.retryCount < :maxRetryAttempts")
+            "AND p.retryCount < :maxRetryAttempts " +
+            "ORDER BY p.createdAt ASC")
     List<Postmortem> findFailedWithRemainingRetries(
-            @Param("maxRetryAttempts") int maxRetryAttempts);
+            @Param("maxRetryAttempts") int maxRetryAttempts,
+            Pageable pageable);
 }
