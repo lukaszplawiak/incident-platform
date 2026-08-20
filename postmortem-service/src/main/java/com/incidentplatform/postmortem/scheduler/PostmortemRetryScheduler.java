@@ -12,6 +12,7 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -64,6 +65,8 @@ public class PostmortemRetryScheduler {
     private final PostmortemPersistenceService persistenceService;
     private final int maxRetryAttempts;
     private final Duration stuckThreshold;
+    private final int generatingBatchSize;
+    private final int retryBatchSize;
 
     public PostmortemRetryScheduler(PostmortemRepository postmortemRepository,
                                     GeminiClient geminiClient,
@@ -76,6 +79,8 @@ public class PostmortemRetryScheduler {
         this.persistenceService   = persistenceService;
         this.maxRetryAttempts     = properties.maxRetryAttempts();
         this.stuckThreshold       = properties.stuckThreshold();
+        this.generatingBatchSize  = properties.generatingBatchSize();
+        this.retryBatchSize       = properties.retryBatchSize();
     }
 
     /**
@@ -88,6 +93,14 @@ public class PostmortemRetryScheduler {
      *
      * <p>If Gemini succeeds → marks DRAFT.
      * If Gemini fails → marks FAILED (retry scheduler will pick up later).
+     *
+     * <h2>Fixed (backlog #48): batch size cap</h2>
+     * Previously processed every matching row unconditionally — see
+     * {@link PostmortemProperties#generatingBatchSize()}'s Javadoc for why
+     * an unbounded batch here was a genuine risk given each item's real
+     * Gemini API call cost. Any excess beyond {@code generatingBatchSize}
+     * is simply picked up on the next scheduler run rather than attempted
+     * in this one.
      */
     @Scheduled(
             fixedDelayString = "${postmortem.generating-scheduler-interval-ms:30000}",
@@ -100,8 +113,8 @@ public class PostmortemRetryScheduler {
     )
     public void processGenerating() {
         final Instant threshold = Instant.now().minus(stuckThreshold);
-        final List<Postmortem> candidates =
-                postmortemRepository.findStuckGenerating(threshold);
+        final List<Postmortem> candidates = postmortemRepository.findStuckGenerating(
+                threshold, PageRequest.of(0, generatingBatchSize));
 
         if (candidates.isEmpty()) {
             log.debug("Outbox check: no GENERATING postmortems to process");
@@ -125,47 +138,51 @@ public class PostmortemRetryScheduler {
         }
     }
 
-    /**
-     * Finds FAILED postmortems across all tenants and retries each one.
-     *
-     * <p>Deliberately NOT {@code @Transactional} at this level — see class
-     * Javadoc. Each database write is its own short transaction via
-     * {@link PostmortemPersistenceService}.
-     */
-    @Scheduled(
-            fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
-            initialDelayString = "120000"
-    )
-    @SchedulerLock(
-            name = "postmortem-service:retryFailedPostmortems",
-            lockAtMostFor = "9m",
-            lockAtLeastFor = "30s"
-    )
-    public void retryFailedPostmortems() {
-        final List<Postmortem> candidates =
-                postmortemRepository.findFailedWithRemainingRetries(maxRetryAttempts);
+/**
+ * Finds FAILED postmortems across all tenants and retries each one.
+ *
+ * <p>Deliberately NOT {@code @Transactional} at this level — see class
+ * Javadoc. Each database write is its own short transaction via
+ * {@link PostmortemPersistenceService}.
+ *
+ * <h2>Fixed (backlog #48): batch size cap</h2>
+ * Same reasoning as {@link #processGenerating}'s fix — see
+ * {@link PostmortemProperties#retryBatchSize()}'s Javadoc.
+ */
+@Scheduled(
+        fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
+        initialDelayString = "120000"
+)
+@SchedulerLock(
+        name = "postmortem-service:retryFailedPostmortems",
+        lockAtMostFor = "9m",
+        lockAtLeastFor = "30s"
+)
+public void retryFailedPostmortems() {
+    final List<Postmortem> candidates = postmortemRepository.findFailedWithRemainingRetries(
+            maxRetryAttempts, PageRequest.of(0, retryBatchSize));
 
-        if (candidates.isEmpty()) {
-            log.debug("Postmortem retry check: no FAILED postmortems with remaining retries");
-            return;
-        }
+    if (candidates.isEmpty()) {
+        log.debug("Postmortem retry check: no FAILED postmortems with remaining retries");
+        return;
+    }
 
-        log.info("Postmortem retry check: found {} candidates (maxRetryAttempts={})",
-                candidates.size(), maxRetryAttempts);
+    log.info("Postmortem retry check: found {} candidates (maxRetryAttempts={})",
+            candidates.size(), maxRetryAttempts);
 
-        for (final Postmortem postmortem : candidates) {
-            TenantContext.set(postmortem.getTenantId());
-            try {
-                retryOne(postmortem);
-            } catch (Exception e) {
-                log.error("Unexpected error during retry for postmortem: " +
-                                "incidentId={}, error={}",
-                        postmortem.getIncidentId(), e.getMessage());
-            } finally {
-                TenantContext.clear();
-            }
+    for (final Postmortem postmortem : candidates) {
+        TenantContext.set(postmortem.getTenantId());
+        try {
+            retryOne(postmortem);
+        } catch (Exception e) {
+            log.error("Unexpected error during retry for postmortem: " +
+                            "incidentId={}, error={}",
+                    postmortem.getIncidentId(), e.getMessage());
+        } finally {
+            TenantContext.clear();
         }
     }
+}
 
     /**
      * Processes a GENERATING outbox entry — first attempt at calling Gemini.
