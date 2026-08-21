@@ -176,6 +176,12 @@ class AuthTokenServiceTest {
             given(tokenRepository.findValidByHashAndType(
                     any(), eq(AuthToken.Type.REFRESH), any()))
                     .willReturn(Optional.of(stored));
+            // Fixed (backlog #53): rotateRefreshToken() calls consumeToken()
+            // internally, which now calls markUsedIfUnused() instead of
+            // save() — must be stubbed, same reasoning as the ConsumeToken
+            // tests below.
+            given(tokenRepository.markUsedIfUnused(any(), any()))
+                    .willReturn(1);
             given(jwtUtils.generateToken(any(), anyString(),
                     anyString(), any(), any(), any()))
                     .willReturn("new-access-token");
@@ -206,6 +212,8 @@ class AuthTokenServiceTest {
             given(tokenRepository.findValidByHashAndType(
                     any(), eq(AuthToken.Type.REFRESH), any()))
                     .willReturn(Optional.of(stored));
+            given(tokenRepository.markUsedIfUnused(any(), any()))
+                    .willReturn(1);
             given(jwtUtils.generateToken(any(), anyString(),
                     anyString(), any(), any(), any()))
                     .willReturn("new-access-token");
@@ -251,6 +259,12 @@ class AuthTokenServiceTest {
             given(tokenRepository.findValidByHashAndType(
                     any(), eq(AuthToken.Type.INVITE), any()))
                     .willReturn(Optional.of(stored));
+            // Fixed (backlog #53): consumeToken no longer calls save() —
+            // markUsedIfUnused must be stubbed, since Mockito's default
+            // for an unstubbed int-returning method is 0, which the new
+            // code correctly treats as "lost the race" and throws 401.
+            given(tokenRepository.markUsedIfUnused(any(), any()))
+                    .willReturn(1);
 
             final AuthToken result = service.consumeToken(
                     "raw-token", AuthToken.Type.INVITE);
@@ -268,6 +282,8 @@ class AuthTokenServiceTest {
 
             given(tokenRepository.findValidByHashAndType(any(), any(), any()))
                     .willReturn(Optional.of(stored));
+            given(tokenRepository.markUsedIfUnused(any(), any()))
+                    .willReturn(1);
 
             service.consumeToken("raw-token", AuthToken.Type.INVITE);
 
@@ -285,6 +301,39 @@ class AuthTokenServiceTest {
                     service.consumeToken("bad-token", AuthToken.Type.INVITE))
                     .isInstanceOf(BusinessException.class)
                     .hasMessageContaining("invalid, expired, or already used");
+        }
+
+        /**
+         * The actual regression test for backlog #53. Simulates the exact
+         * race the fix closes: the read check passes (token still looks
+         * valid), but by the time this call's conditional UPDATE runs,
+         * some other concurrent call has already claimed the token first
+         * — markUsedIfUnused correctly reports 0 rows affected. Verifies
+         * this is treated identically to the ordinary not-found case,
+         * not surfaced as a different error or, worse, silently ignored.
+         */
+        @Test
+        @DisplayName("throws 401 when markUsedIfUnused reports 0 rows — " +
+                "lost a concurrent race for the same token")
+        void throws401WhenLostConcurrentRace() {
+            final AuthToken stored = AuthToken.forTesting(
+                    user, TENANT_ID, "hash-value",
+                    AuthToken.Type.INVITE,
+                    Instant.now().plusSeconds(3600), null);
+
+            given(tokenRepository.findValidByHashAndType(any(), any(), any()))
+                    .willReturn(Optional.of(stored));
+            given(tokenRepository.markUsedIfUnused(any(), any()))
+                    .willReturn(0);
+
+            assertThatThrownBy(() ->
+                    service.consumeToken("raw-token", AuthToken.Type.INVITE))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("invalid, expired, or already used");
+
+            // The in-memory entity must NOT be marked used on the losing
+            // side — it never actually claimed the token.
+            assertThat(stored.isUsed()).isFalse();
         }
     }
 
