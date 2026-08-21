@@ -22,6 +22,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -116,5 +117,44 @@ public class PostmortemController {
                 incidentId, tenantId);
         return ResponseEntity.ok(
                 postmortemService.updateContent(incidentId, tenantId, request));
+    }
+
+    /**
+     * Backlog #50: completes the previously-unreachable REVIEWED status.
+     * Deliberately {@code POST .../review}, not folded into
+     * {@code PATCH /incident/{incidentId}} — this is a distinct,
+     * one-directional state transition (DRAFT → REVIEWED) with its own
+     * validation and audit trail, not a general-purpose content edit.
+     * Matches the same dedicated-action-endpoint convention as
+     * oncall-service's {@code POST /schedules/{id}/supersede}.
+     */
+    @PostMapping(
+            value = "/incident/{incidentId}/review",
+            produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @Operation(summary = "Mark a postmortem as reviewed",
+            description = "Confirms an engineer has read and approved the " +
+                    "postmortem content. Only a DRAFT postmortem can be reviewed.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "Postmortem marked REVIEWED"),
+            @ApiResponse(responseCode = "404",
+                    description = "Postmortem not found for this incident"),
+            @ApiResponse(responseCode = "409",
+                    description = "Postmortem is not currently DRAFT — " +
+                            "nothing to review yet, or already reviewed"),
+            @ApiResponse(responseCode = "401",
+                    description = "Missing or invalid JWT token"),
+            @ApiResponse(responseCode = "403",
+                    description = "Insufficient permissions")
+    })
+    public ResponseEntity<PostmortemDto> markReviewed(
+            @PathVariable UUID incidentId) {
+        final String tenantId = TenantContext.get();
+        log.debug("POST /api/v1/postmortems/incident/{}/review, tenant={}",
+                incidentId, tenantId);
+        return ResponseEntity.ok(
+                postmortemService.markReviewed(incidentId, tenantId));
     }
 }

@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -142,6 +143,13 @@ class PostmortemControllerSecurityTest {
                             .content("{\"content\":\"updated\"}"))
                     .andExpect(status().isUnauthorized());
         }
+
+        @Test
+        @DisplayName("POST /postmortems/incident/{id}/review — 401 without token")
+        void markReviewed_returns401() throws Exception {
+            mockMvc.perform(post("/api/v1/postmortems/incident/{id}/review", INCIDENT_ID))
+                    .andExpect(status().isUnauthorized());
+        }
     }
 
     // ── ROLE_INGESTOR — 403 ───────────────────────────────────────────────
@@ -175,6 +183,14 @@ class PostmortemControllerSecurityTest {
                             .content("{\"content\":\"updated\"}"))
                     .andExpect(status().isForbidden());
         }
+
+        @Test
+        @WithMockUser(roles = "INGESTOR")
+        @DisplayName("POST /postmortems/incident/{id}/review — 403 for INGESTOR")
+        void markReviewed_returns403() throws Exception {
+            mockMvc.perform(post("/api/v1/postmortems/incident/{id}/review", INCIDENT_ID))
+                    .andExpect(status().isForbidden());
+        }
     }
 
     // ── ROLE_SERVICE — 403 ───────────────────────────────────────────────
@@ -198,6 +214,14 @@ class PostmortemControllerSecurityTest {
             mockMvc.perform(patch("/api/v1/postmortems/incident/{id}", INCIDENT_ID)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"content\":\"updated\"}"))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @WithMockUser(roles = "SERVICE")
+        @DisplayName("POST /postmortems/incident/{id}/review — 403 for SERVICE")
+        void markReviewed_returns403() throws Exception {
+            mockMvc.perform(post("/api/v1/postmortems/incident/{id}/review", INCIDENT_ID))
                     .andExpect(status().isForbidden());
         }
     }
@@ -242,6 +266,17 @@ class PostmortemControllerSecurityTest {
                             .content("{\"content\":\"updated postmortem content\"}"))
                     .andExpect(status().isOk());
         }
+
+        @Test
+        @WithMockUser(roles = "RESPONDER")
+        @DisplayName("POST /postmortems/incident/{id}/review — 200 for RESPONDER")
+        void markReviewed_returns200() throws Exception {
+            given(postmortemService.markReviewed(eq(INCIDENT_ID), any()))
+                    .willReturn(buildPostmortemDto());
+
+            mockMvc.perform(post("/api/v1/postmortems/incident/{id}/review", INCIDENT_ID))
+                    .andExpect(status().isOk());
+        }
     }
 
     // ── ROLE_ADMIN — 200 ─────────────────────────────────────────────────
@@ -271,6 +306,17 @@ class PostmortemControllerSecurityTest {
             mockMvc.perform(patch("/api/v1/postmortems/incident/{id}", INCIDENT_ID)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"content\":\"updated postmortem content\"}"))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @WithMockUser(roles = "ADMIN")
+        @DisplayName("POST /postmortems/incident/{id}/review — 200 for ADMIN")
+        void markReviewed_returns200() throws Exception {
+            given(postmortemService.markReviewed(eq(INCIDENT_ID), any()))
+                    .willReturn(buildPostmortemDto());
+
+            mockMvc.perform(post("/api/v1/postmortems/incident/{id}/review", INCIDENT_ID))
                     .andExpect(status().isOk());
         }
     }

@@ -34,6 +34,7 @@ public final class AuditEventTypes {
     public static final String POSTMORTEM_FAILED         = "POSTMORTEM_FAILED";
     public static final String POSTMORTEM_PERMANENTLY_FAILED = "POSTMORTEM_PERMANENTLY_FAILED";
     public static final String POSTMORTEM_UPDATED        = "POSTMORTEM_UPDATED";
+    public static final String POSTMORTEM_REVIEWED       = "POSTMORTEM_REVIEWED";
 
 
     // ── Auth ────────────────────────────────────────────────────────────────

@@ -157,6 +157,21 @@ public class Postmortem {
         this.updatedAt = Instant.now();
     }
 
+    /**
+     * Marks this postmortem REVIEWED — an engineer has read and approved
+     * the content. Previously unreachable (backlog #50): the enum value
+     * and this transition existed, but no service method or API endpoint
+     * ever called it. Completed rather than removed, since the intent
+     * was clear and complete on its own — see
+     * {@code PostmortemService.markReviewed} for the actual entry point,
+     * including the guard that only a DRAFT postmortem can be reviewed
+     * (deliberately not enforced here — this method stays a simple,
+     * unguarded state transition, consistent with every other
+     * {@code mark*} method on this class; the service layer decides
+     * when the transition is valid, matching
+     * {@code OncallScheduleService.supersede}'s equivalent status guard
+     * in oncall-service).
+     */
     public void markReviewed() {
         this.status = PostmortemStatus.REVIEWED;
         this.updatedAt = Instant.now();
