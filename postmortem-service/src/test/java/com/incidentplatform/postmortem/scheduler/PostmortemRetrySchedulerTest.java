@@ -19,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -32,6 +33,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -197,6 +199,44 @@ class PostmortemRetrySchedulerTest {
 
             assertThat(TenantContext.getOrNull()).isNull();
         }
+
+        /**
+         * The actual regression test for backlog #49. Verifies the
+         * scheduler treats a concurrent-edit conflict as an expected,
+         * self-resolving outcome — not a processing error — and moves on
+         * to the next candidate rather than propagating the exception
+         * further (which the pre-existing generic catch would have done
+         * too, but logged as an ERROR rather than the correct, calmer
+         * INFO for what is by design an expected outcome, not a bug).
+         */
+        @Test
+        @DisplayName("should discard the Gemini result and continue, not error, " +
+                "when a concurrent edit is detected (backlog #49)")
+        void shouldDiscardResultOnConcurrentEditConflict() {
+            final Postmortem conflicting = buildGeneratingPostmortem();
+            final Postmortem normal = buildGeneratingPostmortem();
+            given(postmortemRepository.findStuckGenerating(any(), any()))
+                    .willReturn(List.of(conflicting, normal));
+            given(geminiClient.generate(anyString(), anyString()))
+                    .willReturn("draft");
+            willThrow(new OptimisticLockingFailureException(
+                    "Row was updated or deleted by another transaction"))
+                    .given(persistenceService)
+                    .markDraftAndPublish(eq(conflicting.getId()), any(), any(),
+                            any(), any(), anyInt());
+
+            scheduler.processGenerating();
+
+            // the conflicting record's Gemini result is discarded, not retried
+            then(persistenceService).should(org.mockito.Mockito.times(1))
+                    .markDraftAndPublish(eq(conflicting.getId()), any(), any(),
+                            any(), any(), anyInt());
+            // the batch continues — the next candidate is still processed
+            then(persistenceService).should()
+                    .markDraftAndPublish(eq(normal.getId()), any(), any(),
+                            any(), any(), anyInt());
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
     }
 
     // ── retryFailedPostmortems ────────────────────────────────────────────
@@ -321,6 +361,40 @@ class PostmortemRetrySchedulerTest {
                     .markDraftAndPublish(eq(p2.getId()), any(), any(),
                             anyString(), anyString(), anyInt());
         }
+
+/**
+ * The actual regression test for backlog #49, retry path.
+ * Verifies conflicts arising from either write retryOne can make
+ * — incrementRetryCount (before Gemini) or markDraftAndPublish
+ * (after it) — are treated as expected, self-resolving outcomes.
+ * This test covers the markDraftAndPublish case specifically;
+ * incrementRetryCount throwing is handled by the exact same catch
+ * block, so is not separately tested here.
+ */
+@Test
+@DisplayName("should discard the Gemini result and continue, not error, " +
+        "when a concurrent edit is detected (backlog #49)")
+void shouldDiscardResultOnConcurrentEditConflict() {
+    final Postmortem conflicting = buildFailedPostmortem();
+    final Postmortem normal = buildFailedPostmortem();
+    given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
+            .willReturn(List.of(conflicting, normal));
+    given(persistenceService.incrementRetryCount(any())).willReturn(1);
+    given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
+    willThrow(new OptimisticLockingFailureException(
+            "Row was updated or deleted by another transaction"))
+            .given(persistenceService)
+            .markDraftAndPublish(eq(conflicting.getId()), any(), any(),
+                    any(), any(), anyInt());
+
+    scheduler.retryFailedPostmortems();
+
+    // the batch continues — the next candidate is still processed
+    then(persistenceService).should()
+            .markDraftAndPublish(eq(normal.getId()), any(), any(),
+                    any(), any(), anyInt());
+    assertThat(TenantContext.getOrNull()).isNull();
+}
     }
 
     // ── TenantContext ─────────────────────────────────────────────────────
@@ -381,77 +455,77 @@ class PostmortemRetrySchedulerTest {
         }
     }
 
-/**
- * The actual regression coverage for backlog #48 — verifies the
- * scheduler genuinely passes {@code PageRequest.of(0, batchSize)}
- * through to the repository, using scheduler instances configured
- * with small, distinct batch sizes (not this file's default 100 —
- * see {@link #GENERATING_BATCH_SIZE}/{@link #RETRY_BATCH_SIZE}'s own
- * comment) so the assertion is meaningful and specific, not just
- * "some positive number."
- */
-@Nested
-@DisplayName("batch size cap (backlog #48)")
-class BatchSizeCap {
+    /**
+     * The actual regression coverage for backlog #48 — verifies the
+     * scheduler genuinely passes {@code PageRequest.of(0, batchSize)}
+     * through to the repository, using scheduler instances configured
+     * with small, distinct batch sizes (not this file's default 100 —
+     * see {@link #GENERATING_BATCH_SIZE}/{@link #RETRY_BATCH_SIZE}'s own
+     * comment) so the assertion is meaningful and specific, not just
+     * "some positive number."
+     */
+    @Nested
+    @DisplayName("batch size cap (backlog #48)")
+    class BatchSizeCap {
 
-    @Test
-    @DisplayName("processGenerating requests exactly generatingBatchSize rows, page 0")
-    void processGeneratingRequestsConfiguredBatchSize() {
-        final int smallBatchSize = 7;
-        final PostmortemProperties properties = new PostmortemProperties(
-                MAX_RETRY_ATTEMPTS,
-                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES),
-                smallBatchSize,
-                RETRY_BATCH_SIZE);
-        final PostmortemRetryScheduler smallBatchScheduler =
-                new PostmortemRetryScheduler(
-                        postmortemRepository, geminiClient,
-                        new PostmortemPromptBuilder(), persistenceService,
-                        properties);
+        @Test
+        @DisplayName("processGenerating requests exactly generatingBatchSize rows, page 0")
+        void processGeneratingRequestsConfiguredBatchSize() {
+            final int smallBatchSize = 7;
+            final PostmortemProperties properties = new PostmortemProperties(
+                    MAX_RETRY_ATTEMPTS,
+                    java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES),
+                    smallBatchSize,
+                    RETRY_BATCH_SIZE);
+            final PostmortemRetryScheduler smallBatchScheduler =
+                    new PostmortemRetryScheduler(
+                            postmortemRepository, geminiClient,
+                            new PostmortemPromptBuilder(), persistenceService,
+                            properties);
 
-        given(postmortemRepository.findStuckGenerating(any(), any()))
-                .willReturn(List.of());
+            given(postmortemRepository.findStuckGenerating(any(), any()))
+                    .willReturn(List.of());
 
-        smallBatchScheduler.processGenerating();
+            smallBatchScheduler.processGenerating();
 
-        final ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
-                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
-        then(postmortemRepository).should()
-                .findStuckGenerating(any(), pageableCaptor.capture());
+            final ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
+                    ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+            then(postmortemRepository).should()
+                    .findStuckGenerating(any(), pageableCaptor.capture());
 
-        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
-        assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
+            assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
+            assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
+        }
+
+        @Test
+        @DisplayName("retryFailedPostmortems requests exactly retryBatchSize rows, page 0")
+        void retryFailedPostmortemsRequestsConfiguredBatchSize() {
+            final int smallBatchSize = 5;
+            final PostmortemProperties properties = new PostmortemProperties(
+                    MAX_RETRY_ATTEMPTS,
+                    java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES),
+                    GENERATING_BATCH_SIZE,
+                    smallBatchSize);
+            final PostmortemRetryScheduler smallBatchScheduler =
+                    new PostmortemRetryScheduler(
+                            postmortemRepository, geminiClient,
+                            new PostmortemPromptBuilder(), persistenceService,
+                            properties);
+
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
+                    .willReturn(List.of());
+
+            smallBatchScheduler.retryFailedPostmortems();
+
+            final ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
+                    ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+            then(postmortemRepository).should()
+                    .findFailedWithRemainingRetries(anyInt(), pageableCaptor.capture());
+
+            assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
+            assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
+        }
     }
-
-    @Test
-    @DisplayName("retryFailedPostmortems requests exactly retryBatchSize rows, page 0")
-    void retryFailedPostmortemsRequestsConfiguredBatchSize() {
-        final int smallBatchSize = 5;
-        final PostmortemProperties properties = new PostmortemProperties(
-                MAX_RETRY_ATTEMPTS,
-                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES),
-                GENERATING_BATCH_SIZE,
-                smallBatchSize);
-        final PostmortemRetryScheduler smallBatchScheduler =
-                new PostmortemRetryScheduler(
-                        postmortemRepository, geminiClient,
-                        new PostmortemPromptBuilder(), persistenceService,
-                        properties);
-
-        given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
-                .willReturn(List.of());
-
-        smallBatchScheduler.retryFailedPostmortems();
-
-        final ArgumentCaptor<org.springframework.data.domain.Pageable> pageableCaptor =
-                ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
-        then(postmortemRepository).should()
-                .findFailedWithRemainingRetries(anyInt(), pageableCaptor.capture());
-
-        assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
-        assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
-    }
-}
 
     // ── helpers ───────────────────────────────────────────────────────────
 
