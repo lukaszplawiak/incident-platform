@@ -8,6 +8,7 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 
@@ -84,6 +85,23 @@ public class Postmortem {
     @NotNull
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /**
+     * Optimistic lock version (backlog #49). Detects the conflict between
+     * two independent writers on this row: an engineer manually editing
+     * content via {@code PostmortemService.updateContent} (HTTP request
+     * thread) versus {@code PostmortemRetryScheduler} writing back a
+     * Gemini result (scheduler thread) — see migration V4's comment for
+     * the full account of why this race is realistic here specifically,
+     * not just theoretical. On conflict, Hibernate throws
+     * {@code OptimisticLockingFailureException} at flush time; see
+     * {@code PostmortemRetryScheduler}'s catch block for how the
+     * scheduler resolves it (the engineer's edit wins — the scheduler
+     * discards its own Gemini result rather than retrying to overwrite).
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
 
     protected Postmortem() {}
 
@@ -163,4 +181,5 @@ public class Postmortem {
     public Integer getRetryCount()         { return retryCount; }
     public Instant getCreatedAt()          { return createdAt; }
     public Instant getUpdatedAt()          { return updatedAt; }
+    public long getVersion()               { return version; }
 }

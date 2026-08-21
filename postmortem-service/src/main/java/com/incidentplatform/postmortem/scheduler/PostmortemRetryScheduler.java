@@ -12,6 +12,7 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -51,6 +52,17 @@ import java.util.UUID;
  * <h2>ShedLock</h2>
  * Both methods are protected by ShedLock to prevent duplicate processing
  * when multiple instances of postmortem-service are running.
+ *
+ * <h2>Fixed (backlog #49): concurrent-edit conflict resolution</h2>
+ * {@code Postmortem} gained a {@code @Version} column — see its own
+ * Javadoc for the full account of the race this closes between an
+ * engineer manually editing content ({@code PostmortemService.updateContent})
+ * and this scheduler writing back a Gemini result. Both
+ * {@link #processGenerating} and {@link #retryFailedPostmortems} catch
+ * {@code OptimisticLockingFailureException} specifically, before the
+ * generic catch: the engineer's edit wins, and this scheduler simply
+ * discards its own Gemini result for that record rather than retrying to
+ * overwrite it.
  */
 @Component
 @EnableConfigurationProperties(PostmortemProperties.class)
@@ -128,6 +140,18 @@ public class PostmortemRetryScheduler {
             TenantContext.set(postmortem.getTenantId());
             try {
                 processOne(postmortem);
+            } catch (OptimisticLockingFailureException e) {
+                // Fixed (backlog #49): see Postmortem.version's own
+                // Javadoc for the full account. The engineer's edit wins
+                // — this Gemini result is simply discarded, not retried,
+                // since retrying would just race the same edit again (or
+                // a subsequent one) with no better outcome. INFO, not
+                // ERROR: this is an expected, self-resolving conflict,
+                // not a processing failure requiring operator attention.
+                log.info("Postmortem was edited concurrently (likely by an " +
+                                "engineer) while generating — discarding this " +
+                                "Gemini result: incidentId={}",
+                        postmortem.getIncidentId());
             } catch (Exception e) {
                 log.error("Unexpected error processing GENERATING postmortem: " +
                                 "incidentId={}, error={}",
@@ -174,6 +198,16 @@ public void retryFailedPostmortems() {
         TenantContext.set(postmortem.getTenantId());
         try {
             retryOne(postmortem);
+        } catch (OptimisticLockingFailureException e) {
+            // Fixed (backlog #49): same reasoning as processGenerating's
+            // identical catch — see Postmortem.version's own Javadoc.
+            // Covers a conflict at either point retryOne can write:
+            // incrementRetryCount (before the Gemini call) or
+            // markDraftAndPublish/markFailedAndPublish (after it).
+            log.info("Postmortem was edited concurrently (likely by an " +
+                            "engineer) during retry — discarding this " +
+                            "Gemini result: incidentId={}",
+                    postmortem.getIncidentId());
         } catch (Exception e) {
             log.error("Unexpected error during retry for postmortem: " +
                             "incidentId={}, error={}",
