@@ -6,6 +6,7 @@ import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -29,6 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PostmortemService")
@@ -149,11 +151,96 @@ class PostmortemServiceTest {
         }
     }
 
+    /**
+     * Coverage for backlog #50 — previously unreachable through the API
+     * (the REVIEWED status and {@code Postmortem.markReviewed()} existed,
+     * but nothing ever called them).
+     */
+    @Nested
+    @DisplayName("markReviewed")
+    class MarkReviewed {
+
+        @Test
+        @DisplayName("should mark a DRAFT postmortem as REVIEWED")
+        void shouldMarkReviewed() {
+            final Postmortem postmortem = buildDraftPostmortem();
+            given(postmortemRepository
+                    .findByIncidentIdAndTenantId(INCIDENT_ID, TENANT_ID))
+                    .willReturn(Optional.of(postmortem));
+            given(postmortemRepository.save(any()))
+                    .willAnswer(i -> i.getArgument(0));
+
+            final PostmortemDto result =
+                    postmortemService.markReviewed(INCIDENT_ID, TENANT_ID);
+
+            assertThat(result.status()).isEqualTo("REVIEWED");
+            then(postmortemRepository).should().save(postmortem);
+        }
+
+        @Test
+        @DisplayName("should throw ResourceNotFoundException when postmortem not found")
+        void shouldThrowWhenNotFound() {
+            given(postmortemRepository
+                    .findByIncidentIdAndTenantId(INCIDENT_ID, TENANT_ID))
+                    .willReturn(Optional.empty());
+
+            assertThatThrownBy(() ->
+                    postmortemService.markReviewed(INCIDENT_ID, TENANT_ID))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining(INCIDENT_ID.toString());
+        }
+
+        /**
+         * The actual regression coverage for backlog #50's status guard
+         * — a postmortem with no content yet (still GENERATING) has
+         * nothing meaningful to review; rejected with 409 rather than
+         * silently allowed.
+         */
+        @Test
+        @DisplayName("should throw BusinessException (409) when postmortem is not DRAFT")
+        void shouldThrowWhenNotDraft() {
+            final Postmortem postmortem = buildGeneratingPostmortem();
+            given(postmortemRepository
+                    .findByIncidentIdAndTenantId(INCIDENT_ID, TENANT_ID))
+                    .willReturn(Optional.of(postmortem));
+
+            assertThatThrownBy(() ->
+                    postmortemService.markReviewed(INCIDENT_ID, TENANT_ID))
+                    .isInstanceOf(BusinessException.class)
+                    .hasMessageContaining("GENERATING");
+
+            then(postmortemRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should throw BusinessException (409) when postmortem is already REVIEWED " +
+                "— not silently idempotent")
+        void shouldThrowWhenAlreadyReviewed() {
+            final Postmortem postmortem = buildDraftPostmortem();
+            postmortem.markReviewed();
+            given(postmortemRepository
+                    .findByIncidentIdAndTenantId(INCIDENT_ID, TENANT_ID))
+                    .willReturn(Optional.of(postmortem));
+
+            assertThatThrownBy(() ->
+                    postmortemService.markReviewed(INCIDENT_ID, TENANT_ID))
+                    .isInstanceOf(BusinessException.class);
+
+            then(postmortemRepository).should(never()).save(any());
+        }
+    }
+
     private Postmortem buildDraftPostmortem() {
         final Postmortem postmortem = Postmortem.createGenerating(
                 INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
                 OPENED_AT, RESOLVED_AT, DURATION);
         postmortem.markDraft("## Summary\nTest postmortem content", "test prompt");
         return postmortem;
+    }
+
+    private Postmortem buildGeneratingPostmortem() {
+        return Postmortem.createGenerating(
+                INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                OPENED_AT, RESOLVED_AT, DURATION);
     }
 }
