@@ -51,6 +51,55 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
             @Param("now") Instant now);
 
     /**
+     * Atomically marks a token used, but only if it is not already used —
+     * backlog #53. Returns the number of rows affected: {@code 1} if this
+     * call won the race and the token is now claimed, {@code 0} if some
+     * other concurrent call already claimed it first.
+     *
+     * <h2>Why a conditional UPDATE instead of {@code @Version}</h2>
+     * {@code AuthTokenService.consumeToken()} was a classic check-then-act:
+     * read the token (confirming {@code usedAt IS NULL}), then separately
+     * save it after calling {@code markUsed()} — with nothing preventing
+     * two concurrent calls (e.g. a client double-submit, or a replayed
+     * request) from both passing the read check before either write
+     * commits, letting a single-use token be consumed twice and both
+     * callers proceed with whatever action that token was meant to gate
+     * exactly once (issuing a new token pair, completing an invite, etc.).
+     *
+     * <p>{@code @Version} (the pattern already used for {@code User} in
+     * this same service, and for {@code EscalationTask}/{@code OncallSchedule}/
+     * {@code Postmortem} elsewhere in this codebase) was considered first,
+     * for consistency — but doesn't fit this entity's actual shape as
+     * well as it fits those. Those entities have several independently-
+     * mutated fields and multiple genuinely different writers reasonably
+     * racing over the whole row; {@code @Version} protects the row
+     * generically. {@code AuthToken} has exactly one mutable field and
+     * exactly one lifecycle transition ({@code usedAt}: null → set,
+     * exactly once) — the actual invariant that needs protecting is
+     * narrower and more specific than "detect any conflicting write to
+     * this row," and a plain {@code @Version} column would have required
+     * {@code saveAndFlush(...)} to reliably force the conflict to surface
+     * synchronously (since {@code consumeToken()} is called from several
+     * places that are themselves already {@code @Transactional}, meaning
+     * a plain {@code save()} could join that caller's transaction and
+     * defer its flush past where a catch block could reasonably sit).
+     *
+     * <p>A single conditional {@code UPDATE ... WHERE used_at IS NULL}
+     * encodes the real invariant directly, requires no new column, and
+     * needs no dependency on Hibernate's flush timing to behave
+     * correctly — the affected-row count is unambiguous the moment this
+     * statement executes, in any transactional context.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("""
+            UPDATE AuthToken t
+            SET t.usedAt = :now
+            WHERE t.id = :id
+              AND t.usedAt IS NULL
+            """)
+    int markUsedIfUnused(@Param("id") UUID id, @Param("now") Instant now);
+
+    /**
      * Deletes all expired or used tokens — intended for scheduled cleanup.
      * Keeps the table lean without touching active tokens.
      *

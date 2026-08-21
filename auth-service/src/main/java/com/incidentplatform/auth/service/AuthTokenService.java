@@ -123,37 +123,57 @@ public class AuthTokenService {
                 Duration.ofMinutes(MFA_SETUP_REQUIRED_MINUTES));
     }
 
-    /**
-     * Non-destructive lookup — validates the token exists, matches the
-     * expected type, and hasn't expired or been used, WITHOUT marking it
-     * used.
-     *
-     * <p>Used by the forced-MFA-setup flow's setup step
-     * (MfaService.setupMfaWithSetupToken), which may legitimately be
-     * retried — e.g. the user's authenticator app didn't scan the QR
-     * cleanly the first time — before the final enable step
-     * (MfaService.enableMfaWithSetupToken) actually consumes the token via
-     * {@link #consumeToken}.
-     *
-     * @throws BusinessException 401 if the token is invalid, expired, or used
-     */
-    @Transactional(readOnly = true)
-    public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
-        final String hash = hash(rawToken);
+/**
+ * Non-destructive lookup — validates the token exists, matches the
+ * expected type, and hasn't expired or been used, WITHOUT marking it
+ * used.
+ *
+ * <p>Used by the forced-MFA-setup flow's setup step
+ * (MfaService.setupMfaWithSetupToken), which may legitimately be
+ * retried — e.g. the user's authenticator app didn't scan the QR
+ * cleanly the first time — before the final enable step
+ * (MfaService.enableMfaWithSetupToken) actually consumes the token via
+ * {@link #consumeToken}.
+ *
+ * @throws BusinessException 401 if the token is invalid, expired, or used
+ */
+@Transactional(readOnly = true)
+public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
+    final String hash = hash(rawToken);
 
-        return tokenRepository
-                .findValidByHashAndType(hash, expectedType, Instant.now())
-                .orElseThrow(() -> {
-                    log.warn("Invalid or expired {} token attempted (peek)", expectedType);
-                    return new BusinessException(
-                            ErrorCodes.UNAUTHORIZED,
-                            "Invalid or expired token",
-                            HttpStatus.UNAUTHORIZED);
-                });
-    }
+    return tokenRepository
+            .findValidByHashAndType(hash, expectedType, Instant.now())
+            .orElseThrow(() -> {
+                log.warn("Invalid or expired {} token attempted (peek)", expectedType);
+                return new BusinessException(
+                        ErrorCodes.UNAUTHORIZED,
+                        "Invalid or expired token",
+                        HttpStatus.UNAUTHORIZED);
+            });
+}
 
     /**
      * Validates a token and marks it as used atomically.
+     *
+     * <h2>Fixed (backlog #53): load-mutate-save replaced with an atomic
+     * conditional UPDATE</h2>
+     * Previously: {@code findValidByHashAndType(...)} (confirms
+     * {@code usedAt IS NULL}), then separately {@code token.markUsed()}
+     * + {@code save(token)}. Nothing prevented two concurrent calls with
+     * the same raw token (a client double-submit, or a replayed request)
+     * from both passing the read check before either write committed —
+     * a single-use token could be consumed twice, with both callers
+     * proceeding to whatever action the token was meant to gate exactly
+     * once. See {@link AuthTokenRepository#markUsedIfUnused}'s own
+     * Javadoc for the full account of the fix and why a conditional
+     * UPDATE was chosen over adding {@code @Version} to {@link AuthToken}.
+     *
+     * <p>{@code claimed == 0} means some other concurrent call already
+     * won the race for this exact token between the read above and this
+     * UPDATE — treated identically to "token is invalid, expired, or
+     * already used", the same response already returned for the
+     * ordinary not-found case, since from the caller's perspective the
+     * two are indistinguishable and should be.
      *
      * @throws BusinessException 401 if the token is invalid, expired, or used
      */
@@ -172,8 +192,25 @@ public class AuthTokenService {
                             HttpStatus.UNAUTHORIZED);
                 });
 
+        final int claimed = tokenRepository.markUsedIfUnused(
+                token.getId(), Instant.now());
+
+        if (claimed == 0) {
+            log.warn("Token consumption lost a concurrent race — already " +
+                            "claimed by another request: type={}, tokenId={}",
+                    expectedType, token.getId());
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    "Token is invalid, expired, or already used",
+                    HttpStatus.UNAUTHORIZED);
+        }
+
+        // Keep the in-memory entity consistent with what was just
+        // persisted — no caller currently checks isUsed()/getUsedAt() on
+        // the returned token, but returning an object that still claims
+        // usedAt == null after this method's own name says otherwise
+        // would be a correctness trap waiting for the next caller that does.
         token.markUsed();
-        tokenRepository.save(token);
 
         log.info("Token consumed: type={}, userId={}, tenant={}",
                 expectedType, token.getUser().getId(), token.getTenantId());
@@ -233,8 +270,7 @@ public class AuthTokenService {
      */
     @Transactional
     public InviteTokenResult generatePasswordResetTokenWithEntity(User user,
-                                                                  String tenantId) {
-        final byte[] bytes = new byte[TOKEN_BYTES];
+                                                                  String tenantId) {        final byte[] bytes = new byte[TOKEN_BYTES];
         secureRandom.nextBytes(bytes);
         final String rawToken = Base64.getUrlEncoder()
                 .withoutPadding()
