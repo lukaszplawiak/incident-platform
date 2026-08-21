@@ -311,14 +311,48 @@ jobs:
   # Runs on every push to main unconditionally (safety net — catches
   # things path-filtering can miss, e.g. a transitive dependency bump
   # changing runtime behavior with no docker/k8s/yml file touched). On
-  # pull_request, only runs when detect-changes found an infra-relevant
-  # path changed.
+  # pull_request, runs whenever detect-changes found an infra-relevant
+  # path changed OR any service's own directory changed (backlog #35 —
+  # previously only the former, which missed pure .java-only PRs
+  # entirely; see the job's own `if:` condition below for the full
+  # account).
   # ──────────────────────────────────────────────────────────
   docker-compose-smoke-test:
     name: Docker Compose Smoke Test
     runs-on: ubuntu-latest
     needs: detect-changes
-    if: github.event_name == 'push' || needs.detect-changes.outputs.infra == 'true'
+    # Fixed (backlog #35): previously only `event_name == push` (i.e.
+    # after merge, too late) or `infra == 'true'` — the infra filter only
+    # matches docker/**, Dockerfile, k8s/**, application*.yml, and pom.xml
+    # changes. A PR touching only .java source in a service (no infra
+    # file touched at all) was skipped entirely here, only ever reaching
+    # this check on the subsequent push to main — after the bug already
+    # merged. Not a theoretical gap: both examples cited in this job's
+    # own header comment (the DB_HOST/DB_URL bug) and the JPQL role/
+    # teamRole typo in TeamMemberRepository (auth-service) were exactly
+    # this shape — pure .java changes, no infra file touched — and would
+    # have been invisible to this job on their original PR.
+    #
+    # Added `needs.detect-changes.outputs.services != '[]'` — the exact
+    # same condition job 3 (docker-build) already gates on, reusing it
+    # rather than inventing a parallel path filter. `services` already
+    # captures "did anything under this service's own directory change"
+    # (including .java files, unlike infra's application*.yml-only
+    # scoping), so this closes the gap using data already computed two
+    # jobs up. `infra` is kept alongside it, not replaced — it still adds
+    # real, unique coverage for changes under k8s/** or docker-compose.yml
+    # itself, neither of which maps to any single service's path filter
+    # and so would never appear in `services`.
+    #
+    # `event_name == 'push'` is now technically redundant — the compute
+    # step in detect-changes already forces `services` to all 7 on every
+    # push to main regardless of what changed, so `services != '[]'`
+    # alone would already be true there. Kept anyway, deliberately, as a
+    # explicit, defensive fallback: if that forcing logic in
+    # detect-changes ever changed or broke silently, this job's own
+    # safety net for the push-to-main case should not silently disappear
+    # along with it.
+    if: github.event_name == 'push' || needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.services != '[]'
     timeout-minutes: 20
 
     steps:
