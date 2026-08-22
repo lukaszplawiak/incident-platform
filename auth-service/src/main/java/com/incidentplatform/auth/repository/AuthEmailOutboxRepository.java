@@ -2,6 +2,7 @@ package com.incidentplatform.auth.repository;
 
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailType;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -32,15 +33,31 @@ public interface AuthEmailOutboxRepository
      * elsewhere in this module (e.g. {@code ApiKeyRepository.findActiveByHash}'s
      * {@code LEFT JOIN FETCH k.ownerUser}) — also avoids an N+1 lazy-load
      * per entry in the batch as a side benefit.
+     *
+     * <h2>Fixed (backlog #54): {@code Pageable} added — previously
+     * unbounded</h2>
+     * Each row costs a real, blocking SMTP send in the scheduler that
+     * consumes this — an unbounded result set could genuinely exceed
+     * {@code AuthEmailScheduler}'s {@code lockAtMostFor = "4m"}. Same
+     * {@code Pageable}-batching pattern as
+     * {@code EscalationTaskRepository.findDueForEscalation} (backlog
+     * #39) and {@code PostmortemRepository.findStuckGenerating} (backlog
+     * #48). Explicit {@code ORDER BY e.createdAt ASC} added alongside
+     * the {@code Pageable} — without a stable order, {@code LIMIT}-based
+     * paging has no guaranteed row selection across repeated calls
+     * (every scheduler tick), risking the same arbitrary subset being
+     * picked every time while older pending entries are starved.
      */
     @Query("SELECT e FROM AuthEmailOutbox e " +
             "JOIN FETCH e.user " +
             "WHERE e.status = 'PENDING' " +
             "AND e.createdAt < :pendingThreshold " +
-            "AND (:emailType IS NULL OR e.emailType = :emailType)")
+            "AND (:emailType IS NULL OR e.emailType = :emailType) " +
+            "ORDER BY e.createdAt ASC")
     List<AuthEmailOutbox> findPendingOlderThan(
             @Param("pendingThreshold") Instant pendingThreshold,
-            @Param("emailType") AuthEmailType emailType);
+            @Param("emailType") AuthEmailType emailType,
+            Pageable pageable);
 
     /**
      * Finds FAILED entries that still have remaining retry budget.
@@ -48,15 +65,20 @@ public interface AuthEmailOutboxRepository
      *
      * <p>{@code JOIN FETCH e.user} — same reasoning as
      * {@link #findPendingOlderThan}.
+     *
+     * <h2>Fixed (backlog #54): {@code Pageable} added — same reasoning
+     * as {@link #findPendingOlderThan}</h2>
      */
     @Query("SELECT e FROM AuthEmailOutbox e " +
             "JOIN FETCH e.user " +
             "WHERE e.status = 'FAILED' " +
             "AND e.retryCount < :maxRetries " +
-            "AND (:emailType IS NULL OR e.emailType = :emailType)")
+            "AND (:emailType IS NULL OR e.emailType = :emailType) " +
+            "ORDER BY e.createdAt ASC")
     List<AuthEmailOutbox> findFailedWithRemainingRetries(
             @Param("maxRetries") int maxRetries,
-            @Param("emailType") AuthEmailType emailType);
+            @Param("emailType") AuthEmailType emailType,
+            Pageable pageable);
 
     /**
      * Finds the most recent outbox entry for a user and email type.
