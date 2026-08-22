@@ -11,6 +11,7 @@ import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -68,6 +69,7 @@ public class AuthEmailScheduler {
     private final AuthEmailPersistenceService persistenceService;
     private final int maxRetryAttempts;
     private final Duration pendingThreshold;
+    private final int batchSize;
 
     public AuthEmailScheduler(AuthEmailOutboxRepository outboxRepository,
                               AuthEmailService emailService,
@@ -78,8 +80,17 @@ public class AuthEmailScheduler {
         this.persistenceService = persistenceService;
         this.maxRetryAttempts  = properties.maxRetryAttempts();
         this.pendingThreshold  = properties.pendingThreshold();
+        this.batchSize         = properties.batchSize();
     }
 
+    /**
+     * Fixed (backlog #54): batch size cap — previously processed every
+     * matching row unconditionally. See
+     * {@link InviteEmailProperties#batchSize()}'s Javadoc for why an
+     * unbounded batch here was a genuine risk given each item's real
+     * SMTP send cost. Any excess beyond {@code batchSize} is simply
+     * picked up on the next scheduler run rather than attempted in this one.
+     */
     @Scheduled(
             fixedDelayString = "${invite.email.scheduler-interval-ms:30000}",
             initialDelayString = "30000"
@@ -91,8 +102,8 @@ public class AuthEmailScheduler {
     )
     public void processPending() {
         final Instant threshold = Instant.now().minus(pendingThreshold);
-        final List<AuthEmailOutbox> pending =
-                outboxRepository.findPendingOlderThan(threshold, null);
+        final List<AuthEmailOutbox> pending = outboxRepository.findPendingOlderThan(
+                threshold, null, PageRequest.of(0, batchSize));
 
         if (pending.isEmpty()) {
             log.debug("Auth email outbox: no PENDING entries");
@@ -107,6 +118,10 @@ public class AuthEmailScheduler {
         }
     }
 
+    /**
+     * Fixed (backlog #54): batch size cap — same reasoning as
+     * {@link #processPending}'s fix.
+     */
     @Scheduled(
             fixedDelayString = "${invite.email.retry-interval-ms:300000}",
             initialDelayString = "120000"
@@ -117,9 +132,8 @@ public class AuthEmailScheduler {
             lockAtLeastFor = "10s"
     )
     public void retryFailed() {
-        final List<AuthEmailOutbox> failed =
-                outboxRepository.findFailedWithRemainingRetries(
-                        maxRetryAttempts, null);
+        final List<AuthEmailOutbox> failed = outboxRepository.findFailedWithRemainingRetries(
+                maxRetryAttempts, null, PageRequest.of(0, batchSize));
 
         if (failed.isEmpty()) {
             log.debug("Auth email outbox: no FAILED entries with remaining retries");

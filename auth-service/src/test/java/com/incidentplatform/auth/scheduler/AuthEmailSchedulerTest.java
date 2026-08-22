@@ -13,8 +13,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.Pageable;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -48,12 +50,21 @@ class AuthEmailSchedulerTest {
 
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final String TENANT_ID = "test-tenant";
+    // Fixed (backlog #54): InviteEmailProperties gained a new
+    // constructor param (batchSize) — deliberately large here (not the
+    // production default of 15) so existing tests that stub any number
+    // of candidates continue to exercise the "process everything
+    // returned" path without needing per-test batch-size tuning; the
+    // actual batch-size-respecting behavior is covered separately below
+    // (BatchSizeCap nested class).
+    private static final int BATCH_SIZE = 100;
 
     @BeforeEach
     void setUp() {
         final InviteEmailProperties properties = new InviteEmailProperties(
                 "noreply@test.com", "http://localhost:4200",
-                MAX_RETRY_ATTEMPTS, Duration.ofSeconds(30), 30000L, 300000L);
+                MAX_RETRY_ATTEMPTS, Duration.ofSeconds(30), BATCH_SIZE,
+                30000L, 300000L);
         scheduler = new AuthEmailScheduler(
                 outboxRepository, emailService, persistenceService, properties);
     }
@@ -77,7 +88,7 @@ class AuthEmailSchedulerTest {
         @Test
         @DisplayName("does nothing when no PENDING entries exist")
         void doesNothingWhenEmpty() {
-            given(outboxRepository.findPendingOlderThan(any(), any()))
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
                     .willReturn(List.of());
 
             scheduler.processPending();
@@ -90,7 +101,7 @@ class AuthEmailSchedulerTest {
         @DisplayName("sends the email and calls markSent on success")
         void sendsAndMarksSent() {
             final AuthEmailOutbox entry = buildInviteEntry();
-            given(outboxRepository.findPendingOlderThan(any(), any()))
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
                     .willReturn(List.of(entry));
 
             scheduler.processPending();
@@ -112,7 +123,7 @@ class AuthEmailSchedulerTest {
         void continuesAfterOneFailure() {
             final AuthEmailOutbox failing = buildInviteEntry("failing@firma.pl");
             final AuthEmailOutbox succeeding = buildInviteEntry("succeeding@firma.pl");
-            given(outboxRepository.findPendingOlderThan(any(), any()))
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
                     .willReturn(List.of(failing, succeeding));
             org.mockito.Mockito.doThrow(new InviteEmailException(
                             failing.getEmail(), "SMTP timeout", new RuntimeException()))
@@ -142,7 +153,7 @@ class AuthEmailSchedulerTest {
             // instead, directly assert on the null-rawToken branch using markSent()
             entry.markSent();
 
-            given(outboxRepository.findPendingOlderThan(any(), any()))
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
                     .willReturn(List.of(entry));
 
             scheduler.processPending();
@@ -156,7 +167,7 @@ class AuthEmailSchedulerTest {
         @DisplayName("calls markFailed (not permanently) when attempts remain")
         void marksFailedWhenAttemptsRemain() {
             final AuthEmailOutbox entry = buildInviteEntry(); // retryCount == 0
-            given(outboxRepository.findPendingOlderThan(any(), any()))
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
                     .willReturn(List.of(entry));
             org.mockito.Mockito.doThrow(new InviteEmailException(
                             "user@firma.pl", "SMTP down", new RuntimeException()))
@@ -178,7 +189,7 @@ class AuthEmailSchedulerTest {
             // this attempt (3rd) reaches MAX_RETRY_ATTEMPTS.
             entry.markFailed("attempt 1");
             entry.markFailed("attempt 2");
-            given(outboxRepository.findFailedWithRemainingRetries(anyInt(), any()))
+            given(outboxRepository.findFailedWithRemainingRetries(anyInt(), any(), any()))
                     .willReturn(List.of(entry));
             org.mockito.Mockito.doThrow(new InviteEmailException(
                             "user@firma.pl", "SMTP still down", new RuntimeException()))
@@ -196,7 +207,7 @@ class AuthEmailSchedulerTest {
         @DisplayName("calls markFailed on an unexpected (non-InviteEmailException) error")
         void marksFailedOnUnexpectedException() {
             final AuthEmailOutbox entry = buildInviteEntry();
-            given(outboxRepository.findPendingOlderThan(any(), any()))
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
                     .willReturn(List.of(entry));
             org.mockito.Mockito.doThrow(new RuntimeException("boom"))
                     .when(emailService).sendInviteEmail(anyString(), anyString());
@@ -215,13 +226,76 @@ class AuthEmailSchedulerTest {
         @Test
         @DisplayName("does nothing when no FAILED entries with remaining retries exist")
         void doesNothingWhenEmpty() {
-            given(outboxRepository.findFailedWithRemainingRetries(anyInt(), any()))
+            given(outboxRepository.findFailedWithRemainingRetries(anyInt(), any(), any()))
                     .willReturn(List.of());
 
             scheduler.retryFailed();
 
             then(emailService).shouldHaveNoInteractions();
             then(persistenceService).shouldHaveNoInteractions();
+        }
+    }
+
+    /**
+     * The actual regression coverage for backlog #54 — verifies both
+     * scheduled methods genuinely pass {@code PageRequest.of(0, batchSize)}
+     * through to the repository, using a scheduler instance configured
+     * with a small, distinct batch size (not this file's default 100 —
+     * see {@link #BATCH_SIZE}'s own comment) so the assertion is
+     * meaningful and specific, not just "some positive number."
+     */
+    @Nested
+    @DisplayName("batch size cap (backlog #54)")
+    class BatchSizeCap {
+
+        @Test
+        @DisplayName("processPending requests exactly batchSize rows, page 0")
+        void processPendingRequestsConfiguredBatchSize() {
+            final int smallBatchSize = 7;
+            final InviteEmailProperties properties = new InviteEmailProperties(
+                    "noreply@test.com", "http://localhost:4200",
+                    MAX_RETRY_ATTEMPTS, Duration.ofSeconds(30), smallBatchSize,
+                    30000L, 300000L);
+            final AuthEmailScheduler smallBatchScheduler = new AuthEmailScheduler(
+                    outboxRepository, emailService, persistenceService, properties);
+
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
+                    .willReturn(List.of());
+
+            smallBatchScheduler.processPending();
+
+            final ArgumentCaptor<Pageable> pageableCaptor =
+                    ArgumentCaptor.forClass(Pageable.class);
+            then(outboxRepository).should()
+                    .findPendingOlderThan(any(), any(), pageableCaptor.capture());
+
+            assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
+            assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
+        }
+
+        @Test
+        @DisplayName("retryFailed requests exactly batchSize rows, page 0")
+        void retryFailedRequestsConfiguredBatchSize() {
+            final int smallBatchSize = 5;
+            final InviteEmailProperties properties = new InviteEmailProperties(
+                    "noreply@test.com", "http://localhost:4200",
+                    MAX_RETRY_ATTEMPTS, Duration.ofSeconds(30), smallBatchSize,
+                    30000L, 300000L);
+            final AuthEmailScheduler smallBatchScheduler = new AuthEmailScheduler(
+                    outboxRepository, emailService, persistenceService, properties);
+
+            given(outboxRepository.findFailedWithRemainingRetries(anyInt(), any(), any()))
+                    .willReturn(List.of());
+
+            smallBatchScheduler.retryFailed();
+
+            final ArgumentCaptor<Pageable> pageableCaptor =
+                    ArgumentCaptor.forClass(Pageable.class);
+            then(outboxRepository).should()
+                    .findFailedWithRemainingRetries(anyInt(), any(), pageableCaptor.capture());
+
+            assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
+            assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
         }
     }
 }

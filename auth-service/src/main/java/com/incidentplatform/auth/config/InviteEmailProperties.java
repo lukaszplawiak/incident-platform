@@ -47,6 +47,7 @@ import java.time.Duration;
  *     app-base-url: ${APP_BASE_URL:http://localhost:3000}
  *     max-retry-attempts: ${INVITE_EMAIL_MAX_RETRIES:3}
  *     pending-threshold-seconds: ${INVITE_EMAIL_PENDING_THRESHOLD_SECONDS:30}
+ *     batch-size: ${INVITE_EMAIL_BATCH_SIZE:15}
  *     scheduler-interval-ms: ${INVITE_EMAIL_SCHEDULER_INTERVAL_MS:30000}
  *     retry-interval-ms: ${INVITE_EMAIL_RETRY_INTERVAL_MS:300000}
  * }</pre>
@@ -85,6 +86,32 @@ public record InviteEmailProperties(
          */
         @NotNull(message = "invite.email.pending-threshold must not be null")
         Duration pendingThreshold,
+
+        /**
+         * Fixed (backlog #54): caps how many outbox entries
+         * {@code AuthEmailScheduler.processPending()}/{@code retryFailed()}
+         * process per scheduled run — previously unbounded. Each item
+         * costs a real, blocking SMTP send, so a large backlog (e.g. a
+         * bulk-invite of a new team, or a period of SMTP degradation)
+         * could genuinely approach or exceed {@code lockAtMostFor = "4m"}
+         * on either method — ShedLock would then release the lock
+         * mid-batch, risking a second instance picking up the same batch
+         * concurrently and sending duplicate emails. Default 15 leaves
+         * roughly 37% margin against the 240s budget at a 10s/item worst
+         * case (SMTP relays are prone to throttling/greylisting delays).
+         *
+         * <p>A single shared property, not split into separate
+         * generating/retry batch sizes the way
+         * {@code PostmortemProperties} does (backlog #48) — that split
+         * exists there specifically because {@code processGenerating}
+         * and {@code retryFailedPostmortems} have genuinely different
+         * {@code lockAtMostFor} budgets (4m vs 9m). Both scheduled
+         * methods here share the identical 4m budget, so one property
+         * correctly reflects that there's only one constraint being
+         * protected, not two.
+         */
+        @Positive(message = "invite.email.batch-size must be positive")
+        int batchSize,
 
         /**
          * Fixed delay between scheduler runs for PENDING entries (milliseconds).

@@ -86,6 +86,9 @@ invite:
     app-base-url: ${APP_BASE_URL:http://localhost:3000}
     max-retry-attempts: ${INVITE_EMAIL_MAX_RETRIES:3}
     pending-threshold: ${INVITE_EMAIL_PENDING_THRESHOLD:PT30S}
+    # Fixed (backlog #54): see InviteEmailProperties' own Javadoc for the
+    # full reasoning behind this default value.
+    batch-size: ${INVITE_EMAIL_BATCH_SIZE:15}
     scheduler-interval-ms: ${INVITE_EMAIL_SCHEDULER_INTERVAL_MS:30000}
     retry-interval-ms: ${INVITE_EMAIL_RETRY_INTERVAL_MS:300000}
 
