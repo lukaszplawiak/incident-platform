@@ -55,8 +55,32 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
     /**
      * Bulk-revokes all PERSONAL keys belonging to a user.
      * Called when a user is archived or anonymized.
+     *
+     * <h2>Fixed (backlog #56): {@code clearAutomatically = true}</h2>
+     * {@code @Modifying} UPDATE/DELETE queries execute directly at the
+     * SQL level, bypassing Hibernate's persistence context entirely — an
+     * {@code ApiKey} entity already loaded/saved earlier in the same
+     * transaction stays in that context, unaware the underlying row was
+     * just updated by this statement. Without {@code clearAutomatically},
+     * a subsequent read of that same entity within the same transaction
+     * would return the stale, pre-revocation in-memory object instead of
+     * correctly reflecting {@code revokedAt} now being set — Hibernate
+     * checks the persistence context before ever re-querying the
+     * database. Same class of issue already found and fixed for
+     * {@code AuthTokenRepository.deleteExpiredAndUsed} (backlog #34),
+     * confirmed reproducible there by a real-Postgres Testcontainers
+     * test — a mocked-repository test cannot catch this, since Mockito
+     * has no persistence context to get out of sync in the first place.
+     *
+     * <p>Currently benign in production — both callers
+     * ({@code UserManagementService.archiveUser}/{@code anonymizeUser})
+     * only call this bulk update and never subsequently read an
+     * {@code ApiKey} in the same transaction — but
+     * {@code clearAutomatically = true} is the standard, defensive
+     * default for this exact class of query regardless, protecting any
+     * future code added to that same transactional scope.
      */
-    @Modifying
+    @Modifying(clearAutomatically = true)
     @Query("UPDATE ApiKey k SET k.revokedAt = :now " +
             "WHERE k.ownerUser.id = :userId AND k.revokedAt IS NULL")
     void revokeAllPersonalKeysForUser(
