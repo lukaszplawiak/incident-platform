@@ -8,6 +8,8 @@ import com.incidentplatform.auth.exception.InviteEmailException;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.service.AuthEmailPersistenceService;
 import com.incidentplatform.auth.service.AuthEmailService;
+import com.incidentplatform.shared.security.TenantContext;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -67,6 +69,11 @@ class AuthEmailSchedulerTest {
                 30000L, 300000L);
         scheduler = new AuthEmailScheduler(
                 outboxRepository, emailService, persistenceService, properties);
+    }
+
+    @AfterEach
+    void tearDown() {
+        TenantContext.clear();
     }
 
     private AuthEmailOutbox buildInviteEntry() {
@@ -181,6 +188,7 @@ class AuthEmailSchedulerTest {
                     .markPermanentlyFailed(any(), anyString());
         }
 
+
         @Test
         @DisplayName("calls markPermanentlyFailed when retry attempts are exhausted")
         void marksPermanentlyFailedWhenAttemptsExhausted() {
@@ -233,6 +241,72 @@ class AuthEmailSchedulerTest {
 
             then(emailService).shouldHaveNoInteractions();
             then(persistenceService).shouldHaveNoInteractions();
+        }
+    }
+
+    /**
+     * The actual regression coverage for backlog #55.
+     */
+    @Nested
+    @DisplayName("TenantContext handling (backlog #55)")
+    class TenantContextHandling {
+
+        @Test
+        @DisplayName("sets and clears TenantContext per entry during processPending")
+        void setsAndClearsTenantContextPerEntryProcessPending() {
+            final AuthEmailOutbox entry = buildInviteEntry();
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
+                    .willReturn(List.of(entry));
+
+            scheduler.processPending();
+
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("clears TenantContext even when processPending's send throws")
+        void clearsTenantContextOnFailureProcessPending() {
+            final AuthEmailOutbox entry = buildInviteEntry();
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
+                    .willReturn(List.of(entry));
+            org.mockito.Mockito.doThrow(new RuntimeException("boom"))
+                    .when(emailService).sendInviteEmail(anyString(), anyString());
+
+            scheduler.processPending();
+
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("sets and clears TenantContext per entry during retryFailed")
+        void setsAndClearsTenantContextPerEntryRetryFailed() {
+            final AuthEmailOutbox entry = buildInviteEntry();
+            given(outboxRepository.findFailedWithRemainingRetries(anyInt(), any(), any()))
+                    .willReturn(List.of(entry));
+
+            scheduler.retryFailed();
+
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("uses the entry's own tenant, from entry.getUser().getTenantId()")
+        void usesEntryOwnTenant() {
+            final AuthEmailOutbox entryTenantA = buildInviteEntry("a@firma.pl");
+            given(outboxRepository.findPendingOlderThan(any(), any(), any()))
+                    .willReturn(List.of(entryTenantA));
+
+            final java.util.List<String> observedTenants = new java.util.ArrayList<>();
+            org.mockito.Mockito.doAnswer(invocation -> {
+                        observedTenants.add(TenantContext.getOrNull());
+                        return null;
+                    })
+                    .when(emailService).sendInviteEmail(anyString(), anyString());
+
+            scheduler.processPending();
+
+            assertThat(observedTenants).containsExactly(
+                    entryTenantA.getUser().getTenantId());
         }
     }
 

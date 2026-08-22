@@ -7,6 +7,7 @@ import com.incidentplatform.auth.exception.InviteEmailException;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.service.AuthEmailPersistenceService;
 import com.incidentplatform.auth.service.AuthEmailService;
+import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -42,6 +43,21 @@ import java.util.List;
  * <h2>ShedLock</h2>
  * Both methods are protected by ShedLock to prevent duplicate sends when
  * multiple auth-service instances are running.
+ *
+ * <h2>Fixed (backlog #55): missing TenantContext per entry</h2>
+ * {@code EscalationScheduler}, {@code IncidentEventOutboxScheduler},
+ * {@code NotificationScheduler}, and {@code PostmortemRetryScheduler}
+ * all set {@link TenantContext} for the duration of processing each
+ * individual item and clear it in {@code finally}, so every log line —
+ * including ones emitted deeper in {@code AuthEmailPersistenceService}/
+ * {@code AuthEmailService} — automatically carries the correct tenantId
+ * via MDC. This class was the one gap: {@code processOne}'s own log
+ * lines (e.g. "Auth email sent: type={}, email={}, userId={}, attempt={}")
+ * did not even include a tenant field explicitly, unlike every other
+ * scheduler's equivalent log lines. {@code entry.getUser()} is already
+ * eagerly {@code JOIN FETCH}ed by both repository queries, so
+ * {@code entry.getUser().getTenantId()} is safely available with no
+ * additional query.
  *
  * <h2>Fixed: no single transaction spans a whole batch of SMTP sends</h2>
  * {@link #processPending()}/{@link #retryFailed()} previously carried
@@ -114,7 +130,16 @@ public class AuthEmailScheduler {
                 pending.size());
 
         for (final AuthEmailOutbox entry : pending) {
-            processOne(entry);
+            // Fixed (backlog #55): see this class's own Javadoc for the
+            // full account — matches the same per-entry
+            // set/try/finally-clear pattern already used by every other
+            // scheduler in this codebase.
+            TenantContext.set(entry.getUser().getTenantId());
+            try {
+                processOne(entry);
+            } finally {
+                TenantContext.clear();
+            }
         }
     }
 
@@ -143,7 +168,12 @@ public class AuthEmailScheduler {
         log.info("Auth email outbox: retrying {} FAILED entries", failed.size());
 
         for (final AuthEmailOutbox entry : failed) {
-            processOne(entry);
+            TenantContext.set(entry.getUser().getTenantId());
+            try {
+                processOne(entry);
+            } finally {
+                TenantContext.clear();
+            }
         }
     }
 
