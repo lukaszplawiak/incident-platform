@@ -8,7 +8,17 @@ import org.springframework.validation.annotation.Validated;
 import java.time.Duration;
 
 /**
- * Configuration for the login brute-force protection mechanism.
+ * Configuration for {@link BruteForceProtectionService}.
+ *
+ * <h2>Renamed from LoginAttemptProperties (backlog #58)</h2>
+ * The underlying mechanism (sliding-window failure counter + lockout,
+ * Redis-backed) is not specific to the login endpoint — it now also
+ * protects MFA verification (see {@link BruteForceProtectionService.Scope}).
+ * {@code LoginAttemptProperties} would have been a misleading name once
+ * a second, independently-counted scope existed. One shared set of
+ * thresholds is used for every scope today — see
+ * {@code BruteForceProtectionService}'s own Javadoc for why scope-specific
+ * thresholds were deliberately not added in this pass.
  *
  * <h2>Upgrade from compact constructor validation to @Validated + Bean Validation</h2>
  * Previously this record used a compact constructor with manual {@code if} checks
@@ -37,26 +47,26 @@ import java.time.Duration;
  *
  * <h2>YAML configuration</h2>
  * <pre>{@code
- * login-attempt:
- *   enabled: true
- *   max-failures: ${LOGIN_ATTEMPT_MAX_FAILURES:5}
- *   lockout-duration: ${LOGIN_ATTEMPT_LOCKOUT_DURATION:PT15M}
- *   window: ${LOGIN_ATTEMPT_WINDOW:PT10M}
+ * brute-force-protection:
+ *   enabled: ${BRUTE_FORCE_PROTECTION_ENABLED:true}
+ *   max-failures: ${BRUTE_FORCE_PROTECTION_MAX_FAILURES:5}
+ *   lockout-duration: ${BRUTE_FORCE_PROTECTION_LOCKOUT_DURATION:PT15M}
+ *   window: ${BRUTE_FORCE_PROTECTION_WINDOW:PT10M}
  * }</pre>
  */
-@ConfigurationProperties(prefix = "login-attempt")
+@ConfigurationProperties(prefix = "brute-force-protection")
 @Validated
-public record LoginAttemptProperties(
+public record BruteForceProtectionProperties(
 
         boolean enabled,
 
-        @Positive(message = "login-attempt.max-failures must be positive")
+        @Positive(message = "brute-force-protection.max-failures must be positive")
         int maxFailures,
 
-        @NotNull(message = "login-attempt.lockout-duration must not be null")
+        @NotNull(message = "brute-force-protection.lockout-duration must not be null")
         Duration lockoutDuration,
 
-        @NotNull(message = "login-attempt.window must not be null")
+        @NotNull(message = "brute-force-protection.window must not be null")
         Duration window
 
 ) {}

@@ -8,6 +8,7 @@ import com.incidentplatform.auth.dto.MfaBackupCodesStatusResponse;
 import com.incidentplatform.auth.dto.MfaEnableResponse;
 import com.incidentplatform.auth.dto.MfaEnableWithLoginResponse;
 import com.incidentplatform.auth.dto.MfaSetupResponse;
+import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
 import com.incidentplatform.auth.repository.MfaBackupCodeRepository;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
@@ -26,6 +27,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -45,6 +47,7 @@ public class MfaService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final AuditEventPublisher auditEventPublisher;
+    private final BruteForceProtectionService bruteForceProtectionService;
 
     public MfaService(UserRepository userRepository,
                       MfaBackupCodeRepository backupCodeRepository,
@@ -54,7 +57,8 @@ public class MfaService {
                       AesEncryptionService aesEncryptionService,
                       PasswordEncoder passwordEncoder,
                       JwtUtils jwtUtils,
-                      AuditEventPublisher auditEventPublisher) {
+                      AuditEventPublisher auditEventPublisher,
+                      BruteForceProtectionService bruteForceProtectionService) {
         this.userRepository       = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.authTokenService     = authTokenService;
@@ -64,6 +68,7 @@ public class MfaService {
         this.passwordEncoder      = passwordEncoder;
         this.jwtUtils             = jwtUtils;
         this.auditEventPublisher  = auditEventPublisher;
+        this.bruteForceProtectionService = bruteForceProtectionService;
     }
 
     // ── Setup (step 1) ────────────────────────────────────────────────────
@@ -201,18 +206,56 @@ public class MfaService {
 
     /**
      * Completes MFA login — verifies TOTP code and issues access + refresh tokens.
+     *
+     * <h2>Fixed (backlog #58): brute-force protection added</h2>
+     * Previously had no failure limiting at all — see
+     * {@link BruteForceProtectionService}'s own Javadoc for the full
+     * account of why this was a genuine gap (an attacker who already has
+     * a valid password could cycle through unlimited TOTP guesses over
+     * time, one per login/MFA-session cycle) even though the sibling
+     * login endpoint has always had this protection.
+     *
+     * <p>Uses {@link AuthTokenService#peekToken} to resolve the user
+     * (and thus the lockout key) BEFORE consuming the token — checking
+     * lockout first, the same ordering {@code AuthService.login} already
+     * uses for the identical timing-attack reason, and avoids burning a
+     * legitimate, unexpired session token on a request that's about to
+     * be rejected for lockout anyway. {@link AuthTokenService#consumeToken}
+     * only runs once we know the request should proceed.
      */
     @Transactional
     public LoginResponse verifyMfaToken(String rawMfaToken, String totpCode) {
+        final AuthToken peeked = authTokenService.peekToken(
+                rawMfaToken, AuthToken.Type.MFA_SESSION);
+        final User peekedUser = peeked.getUser();
+        final String tenantId = peeked.getTenantId();
+        final String lockoutIdentifier = peekedUser.getId().toString();
+
+        if (bruteForceProtectionService.isLocked(
+                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId)) {
+            final Duration remaining = bruteForceProtectionService.getRemainingLockout(
+                    BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+            log.warn("MFA verification rejected — locked out: userId={}, " +
+                            "tenant={}, remainingSeconds={}",
+                    peekedUser.getId(), tenantId, remaining.toSeconds());
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    String.format("Too many failed MFA attempts. Try again in %d minutes.",
+                            remaining.toMinutes() + 1),
+                    HttpStatus.UNAUTHORIZED);
+        }
+
         final AuthToken mfaToken = authTokenService.consumeToken(
                 rawMfaToken, AuthToken.Type.MFA_SESSION);
 
         final User user     = mfaToken.getUser();
-        final String tenantId = mfaToken.getTenantId();
 
         final String plainSecret = aesEncryptionService.decrypt(user.getMfaSecret());
 
         if (!totpService.verify(plainSecret, totpCode)) {
+            bruteForceProtectionService.recordFailure(
+                    BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+
             auditEventPublisher.publishAuth(
                     user.getId(), tenantId,
                     AuditEventTypes.MFA_VERIFY_FAILED,
@@ -226,6 +269,9 @@ public class MfaService {
                     "Invalid TOTP code",
                     HttpStatus.UNAUTHORIZED);
         }
+
+        bruteForceProtectionService.recordSuccess(
+                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
 
         return issueTokens(user, tenantId);
     }
@@ -333,14 +379,43 @@ public class MfaService {
 
     /**
      * Completes MFA login using a backup code instead of TOTP.
+     *
+     * <h2>Fixed (backlog #58): brute-force protection added</h2>
+     * Same reasoning and ordering as {@link #verifyMfaToken}'s identical
+     * fix — see its own Javadoc and {@link BruteForceProtectionService}'s
+     * for the full account. Shares the same {@code Scope.MFA} counter as
+     * TOTP verification, not a separate one — both are equally valid
+     * ways to complete the same MFA step, so a failed guess at either
+     * counts toward the same lockout; a determined attacker shouldn't
+     * get twice the total guesses just by alternating between the two
+     * verification methods.
      */
     @Transactional
     public LoginResponse verifyWithBackupCode(String rawMfaToken, String backupCode) {
+        final AuthToken peeked = authTokenService.peekToken(
+                rawMfaToken, AuthToken.Type.MFA_SESSION);
+        final User peekedUser = peeked.getUser();
+        final String tenantId = peeked.getTenantId();
+        final String lockoutIdentifier = peekedUser.getId().toString();
+
+        if (bruteForceProtectionService.isLocked(
+                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId)) {
+            final Duration remainingLockout = bruteForceProtectionService.getRemainingLockout(
+                    BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+            log.warn("MFA backup code verification rejected — locked out: " +
+                            "userId={}, tenant={}, remainingSeconds={}",
+                    peekedUser.getId(), tenantId, remainingLockout.toSeconds());
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    String.format("Too many failed MFA attempts. Try again in %d minutes.",
+                            remainingLockout.toMinutes() + 1),
+                    HttpStatus.UNAUTHORIZED);
+        }
+
         final AuthToken mfaToken = authTokenService.consumeToken(
                 rawMfaToken, AuthToken.Type.MFA_SESSION);
 
         final User user     = mfaToken.getUser();
-        final String tenantId = mfaToken.getTenantId();
 
         final List<MfaBackupCode> unusedCodes =
                 backupCodeRepository.findUnusedByUserId(user.getId());
@@ -354,6 +429,9 @@ public class MfaService {
         }
 
         if (matched == null) {
+            bruteForceProtectionService.recordFailure(
+                    BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+
             auditEventPublisher.publishAuth(
                     user.getId(), tenantId,
                     AuditEventTypes.MFA_VERIFY_FAILED,
@@ -367,6 +445,9 @@ public class MfaService {
                     "Invalid or already used backup code",
                     HttpStatus.UNAUTHORIZED);
         }
+
+        bruteForceProtectionService.recordSuccess(
+                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
 
         matched.markUsed();
         backupCodeRepository.save(matched);

@@ -22,9 +22,19 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
 
+/**
+ * Renamed from LoginAttemptServiceTest (backlog #58) — see
+ * {@link BruteForceProtectionService}'s own Javadoc for the full account
+ * of the rename/generalization. Existing coverage carried over unchanged
+ * (still exercised via {@link BruteForceProtectionService.Scope#LOGIN},
+ * matching this class's prior, login-only behavior exactly), plus a new
+ * {@code ScopeIsolation} section verifying LOGIN and MFA scopes use
+ * genuinely independent Redis keys and counters — the actual point of
+ * this generalization.
+ */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("LoginAttemptService")
-class LoginAttemptServiceTest {
+@DisplayName("BruteForceProtectionService")
+class BruteForceProtectionServiceTest {
 
     @Mock
     private StringRedisTemplate redis;
@@ -32,20 +42,24 @@ class LoginAttemptServiceTest {
     @Mock
     private ValueOperations<String, String> valueOps;
 
-    private LoginAttemptService service;
+    private BruteForceProtectionService service;
 
     private static final String EMAIL = "user@example.com";
     private static final String TENANT = "test-tenant";
     private static final int MAX_FAILURES = 5;
+    private static final BruteForceProtectionService.Scope LOGIN =
+            BruteForceProtectionService.Scope.LOGIN;
+    private static final BruteForceProtectionService.Scope MFA =
+            BruteForceProtectionService.Scope.MFA;
 
     @BeforeEach
     void setUp() {
-        final LoginAttemptProperties props = new LoginAttemptProperties(
+        final BruteForceProtectionProperties props = new BruteForceProtectionProperties(
                 true, MAX_FAILURES,
                 Duration.ofMinutes(15), Duration.ofMinutes(10));
 
         lenient().when(redis.opsForValue()).thenReturn(valueOps);
-        service = new LoginAttemptService(redis, props, new SimpleMeterRegistry());
+        service = new BruteForceProtectionService(redis, props, new SimpleMeterRegistry());
     }
 
     // ── isLocked ──────────────────────────────────────────────────────────
@@ -58,14 +72,14 @@ class LoginAttemptServiceTest {
         @DisplayName("returns false when no lockout key exists")
         void returnsFalseWhenNotLocked() {
             given(valueOps.get(anyString())).willReturn(null);
-            assertThat(service.isLocked(EMAIL, TENANT)).isFalse();
+            assertThat(service.isLocked(LOGIN, EMAIL, TENANT)).isFalse();
         }
 
         @Test
         @DisplayName("returns true when lockout key exists")
         void returnsTrueWhenLocked() {
             given(valueOps.get(anyString())).willReturn("1");
-            assertThat(service.isLocked(EMAIL, TENANT)).isTrue();
+            assertThat(service.isLocked(LOGIN, EMAIL, TENANT)).isTrue();
         }
 
         @Test
@@ -73,7 +87,7 @@ class LoginAttemptServiceTest {
         void returnsFalseOnRedisException() {
             given(valueOps.get(anyString()))
                     .willThrow(new RuntimeException("Redis unavailable"));
-            assertThat(service.isLocked(EMAIL, TENANT)).isFalse();
+            assertThat(service.isLocked(LOGIN, EMAIL, TENANT)).isFalse();
         }
     }
 
@@ -89,7 +103,7 @@ class LoginAttemptServiceTest {
             lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn(1L);
 
-            service.recordFailure(EMAIL, TENANT);
+            service.recordFailure(LOGIN, EMAIL, TENANT);
 
             then(valueOps).should().increment(
                     "auth:login:attempts:" + TENANT + ":" + EMAIL);
@@ -101,7 +115,7 @@ class LoginAttemptServiceTest {
             lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn(1L);
 
-            service.recordFailure(EMAIL, TENANT);
+            service.recordFailure(LOGIN, EMAIL, TENANT);
 
             then(redis).should().expire(
                     eq("auth:login:attempts:" + TENANT + ":" + EMAIL),
@@ -114,18 +128,19 @@ class LoginAttemptServiceTest {
             lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn(3L);
 
-            service.recordFailure(EMAIL, TENANT);
+
+            service.recordFailure(LOGIN, EMAIL, TENANT);
 
             then(redis).should(never()).expire(anyString(), any(Duration.class));
         }
 
         @Test
-        @DisplayName("locks account when max failures reached")
-        void locksAccountAtMaxFailures() {
+        @DisplayName("locks out when max failures reached")
+        void locksAtMaxFailures() {
             lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn((long) MAX_FAILURES);
 
-            service.recordFailure(EMAIL, TENANT);
+            service.recordFailure(LOGIN, EMAIL, TENANT);
 
             then(valueOps).should().set(
                     eq("auth:login:locked:" + TENANT + ":" + EMAIL),
@@ -139,7 +154,7 @@ class LoginAttemptServiceTest {
             lenient().when(redis.opsForValue()).thenReturn(valueOps);
             given(valueOps.increment(anyString())).willReturn((long) MAX_FAILURES - 1);
 
-            service.recordFailure(EMAIL, TENANT);
+            service.recordFailure(LOGIN, EMAIL, TENANT);
 
             then(valueOps).should(never()).set(
                     anyString(), anyString(), any(Duration.class));
@@ -155,7 +170,7 @@ class LoginAttemptServiceTest {
         @Test
         @DisplayName("deletes both attempts and locked keys")
         void deletesBothKeys() {
-            service.recordSuccess(EMAIL, TENANT);
+            service.recordSuccess(LOGIN, EMAIL, TENANT);
 
             then(redis).should().delete(
                     "auth:login:attempts:" + TENANT + ":" + EMAIL);
@@ -172,25 +187,64 @@ class LoginAttemptServiceTest {
 
         @BeforeEach
         void disableRateLimiting() {
-            final LoginAttemptProperties disabledProps = new LoginAttemptProperties(
-                    false, MAX_FAILURES,
-                    Duration.ofMinutes(15), Duration.ofMinutes(10));
-            service = new LoginAttemptService(
+            final BruteForceProtectionProperties disabledProps =
+                    new BruteForceProtectionProperties(
+                            false, MAX_FAILURES,
+                            Duration.ofMinutes(15), Duration.ofMinutes(10));
+            service = new BruteForceProtectionService(
                     redis, disabledProps, new SimpleMeterRegistry());
         }
 
         @Test
         @DisplayName("isLocked always returns false when disabled")
         void alwaysPermitsWhenDisabled() {
-            assertThat(service.isLocked(EMAIL, TENANT)).isFalse();
+            assertThat(service.isLocked(LOGIN, EMAIL, TENANT)).isFalse();
             then(redis).shouldHaveNoInteractions();
         }
 
         @Test
         @DisplayName("recordFailure does nothing when disabled")
         void recordFailureDoesNothingWhenDisabled() {
-            service.recordFailure(EMAIL, TENANT);
+            service.recordFailure(LOGIN, EMAIL, TENANT);
             then(redis).shouldHaveNoInteractions();
+        }
+    }
+
+    /**
+     * The actual regression coverage for backlog #58's generalization —
+     * verifies LOGIN and MFA scopes are genuinely independent: a failure
+     * recorded under one scope must not affect the other's Redis key or
+     * lockout state, since the whole point of this fix was ensuring a
+     * correct password (LOGIN success) never suppresses an MFA lockout
+     * building up from repeated bad TOTP guesses, and vice versa.
+     */
+    @Nested
+    @DisplayName("scope isolation (backlog #58)")
+    class ScopeIsolation {
+
+        @Test
+        @DisplayName("LOGIN and MFA use different Redis keys for the same identifier/tenant")
+        void useDifferentKeysPerScope() {
+            lenient().when(redis.opsForValue()).thenReturn(valueOps);
+            given(valueOps.increment(anyString())).willReturn(1L);
+
+            service.recordFailure(LOGIN, EMAIL, TENANT);
+            service.recordFailure(MFA, EMAIL, TENANT);
+
+            then(valueOps).should().increment("auth:login:attempts:" + TENANT + ":" + EMAIL);
+            then(valueOps).should().increment("auth:mfa:attempts:" + TENANT + ":" + EMAIL);
+        }
+
+        @Test
+        @DisplayName("checking isLocked for MFA does not read the LOGIN lockout key")
+        void isLockedChecksOnlyItsOwnScopeKey() {
+            given(valueOps.get("auth:mfa:locked:" + TENANT + ":" + EMAIL))
+                    .willReturn(null);
+
+            assertThat(service.isLocked(MFA, EMAIL, TENANT)).isFalse();
+
+            then(valueOps).should().get("auth:mfa:locked:" + TENANT + ":" + EMAIL);
+            then(valueOps).should(never()).get("auth:login:locked:" + TENANT + ":" + EMAIL);
         }
     }
 }
