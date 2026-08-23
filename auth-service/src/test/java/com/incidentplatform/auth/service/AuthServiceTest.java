@@ -3,7 +3,7 @@ package com.incidentplatform.auth.service;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
-import com.incidentplatform.auth.ratelimit.LoginAttemptService;
+import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
@@ -50,7 +50,7 @@ class AuthServiceTest {
     private AuthTokenService authTokenService;
 
     @Mock
-    private LoginAttemptService loginAttemptService;
+    private BruteForceProtectionService bruteForceProtectionService;
 
     @Mock
     private AuditEventPublisher auditEventPublisher;
@@ -71,12 +71,12 @@ class AuthServiceTest {
     @BeforeEach
     void setUp() {
         authService = new AuthService(
-                userRepository, jwtUtils, loginAttemptService,
+                userRepository, jwtUtils, bruteForceProtectionService,
                 authTokenService, ENCODER,
                 auditEventPublisher, teamMemberRepository,
                 tenantSettingsService);
         // Default: not locked
-        given(loginAttemptService.isLocked(any(), any())).willReturn(false);
+        given(bruteForceProtectionService.isLocked(any(), any(), any())).willReturn(false);
         // lenient — not all tests reach this (some fail before MFA check)
         lenient().when(tenantSettingsService.isMfaRequired(any())).thenReturn(false);
     }
@@ -147,7 +147,8 @@ class AuthServiceTest {
 
             authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID);
 
-            then(loginAttemptService).should().recordSuccess(EMAIL, TENANT_ID);
+            then(bruteForceProtectionService).should().recordSuccess(
+                    BruteForceProtectionService.Scope.LOGIN, EMAIL, TENANT_ID);
         }
     }
 
@@ -160,8 +161,10 @@ class AuthServiceTest {
         @Test
         @DisplayName("throws 401 immediately when account is locked")
         void throws401WhenLocked() {
-            given(loginAttemptService.isLocked(EMAIL, TENANT_ID)).willReturn(true);
-            given(loginAttemptService.getRemainingLockout(EMAIL, TENANT_ID))
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.LOGIN, EMAIL, TENANT_ID)).willReturn(true);
+            given(bruteForceProtectionService.getRemainingLockout(
+                    BruteForceProtectionService.Scope.LOGIN, EMAIL, TENANT_ID))
                     .willReturn(Duration.ofMinutes(14));
 
             assertThatThrownBy(() ->
@@ -174,8 +177,9 @@ class AuthServiceTest {
         @Test
         @DisplayName("does not query DB when account is locked")
         void doesNotQueryDbWhenLocked() {
-            given(loginAttemptService.isLocked(EMAIL, TENANT_ID)).willReturn(true);
-            given(loginAttemptService.getRemainingLockout(any(), any()))
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.LOGIN, EMAIL, TENANT_ID)).willReturn(true);
+            given(bruteForceProtectionService.getRemainingLockout(any(), any(), any()))
                     .willReturn(Duration.ofMinutes(1));
 
             assertThatThrownBy(() ->
@@ -202,7 +206,8 @@ class AuthServiceTest {
                     authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
                     .isInstanceOf(BusinessException.class);
 
-            then(loginAttemptService).should().recordFailure(EMAIL, TENANT_ID);
+            then(bruteForceProtectionService).should().recordFailure(
+                    BruteForceProtectionService.Scope.LOGIN, EMAIL, TENANT_ID);
         }
 
         @Test
@@ -219,8 +224,10 @@ class AuthServiceTest {
                     authService.login(new LoginRequest(EMAIL, "WrongPass"), TENANT_ID))
                     .isInstanceOf(BusinessException.class);
 
-            then(loginAttemptService).should().recordFailure(EMAIL, TENANT_ID);
+            then(bruteForceProtectionService).should().recordFailure(
+                    BruteForceProtectionService.Scope.LOGIN, EMAIL, TENANT_ID);
         }
+
 
         @Test
         @DisplayName("does not call JwtUtils when credentials are invalid")

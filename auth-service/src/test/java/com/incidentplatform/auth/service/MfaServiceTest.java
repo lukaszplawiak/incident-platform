@@ -6,6 +6,8 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.MfaEnableResponse;
 import com.incidentplatform.auth.dto.MfaEnableWithLoginResponse;
 import com.incidentplatform.auth.dto.MfaSetupResponse;
+import com.incidentplatform.auth.dto.LoginResponse;
+import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
 import com.incidentplatform.auth.repository.MfaBackupCodeRepository;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
@@ -50,6 +52,7 @@ class MfaServiceTest {
     @Mock private AesEncryptionService aesEncryptionService;
     @Mock private AuditEventPublisher auditEventPublisher;
     @Mock private JwtUtils jwtUtils;
+    @Mock private BruteForceProtectionService bruteForceProtectionService;
 
     private final PasswordEncoder passwordEncoder =
             Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
@@ -65,7 +68,8 @@ class MfaServiceTest {
         service = new MfaService(
                 userRepository, backupCodeRepository, authTokenService,
                 teamMemberRepository, totpService, aesEncryptionService,
-                passwordEncoder, jwtUtils, auditEventPublisher);
+                passwordEncoder, jwtUtils, auditEventPublisher,
+                bruteForceProtectionService);
         TenantContext.set(TENANT_ID);
     }
 
@@ -172,6 +176,230 @@ class MfaServiceTest {
                     .isInstanceOf(BusinessException.class)
                     .extracting(e -> ((BusinessException) e).getHttpStatus())
                     .isEqualTo(HttpStatus.CONFLICT);
+        }
+    }
+
+    // ── verifyMfaToken (backlog #58) ────────────────────────────────────
+
+    /**
+     * No prior test coverage existed for this method before backlog #58 —
+     * added alongside the lockout fix itself.
+     */
+    @Nested
+    @DisplayName("verifyMfaToken")
+    class VerifyMfaToken {
+
+        @Test
+        @DisplayName("returns LoginResponse and clears the failure counter on valid TOTP code")
+        void verifiesAndIssuesTokens() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(false);
+            given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
+            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(true);
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
+                    .willReturn("access-token");
+            given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
+            given(authTokenService.generateRefreshToken(any(), anyString()))
+                    .willReturn("refresh-token");
+
+            final LoginResponse response =
+                    service.verifyMfaToken("raw-mfa-token", "123456");
+
+            assertThat(response.accessToken()).isEqualTo("access-token");
+            then(bruteForceProtectionService).should().recordSuccess(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("throws 401 and records a failure on invalid TOTP code")
+        void throws401AndRecordsFailureOnInvalidCode() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(false);
+            given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
+            given(totpService.verify("PLAIN_SECRET", "000000")).willReturn(false);
+
+            assertThatThrownBy(() -> service.verifyMfaToken("raw-mfa-token", "000000"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+            then(bruteForceProtectionService).should().recordFailure(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+        }
+
+        /**
+         * The actual regression test for backlog #58 — verifies a
+         * locked-out request is rejected WITHOUT ever consuming the
+         * single-use MFA session token, so a legitimate user isn't
+         * additionally penalized (their unexpired token stays valid for
+         * once the lockout clears).
+         */
+        @Test
+        @DisplayName("throws 401 without consuming the token when locked out (backlog #58)")
+        void throws401WhenLockedOutWithoutConsumingToken() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(true);
+            given(bruteForceProtectionService.getRemainingLockout(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(java.time.Duration.ofMinutes(5));
+
+            assertThatThrownBy(() -> service.verifyMfaToken("raw-mfa-token", "123456"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+            then(authTokenService).should(org.mockito.Mockito.never())
+                    .consumeToken(anyString(), any());
+            then(totpService).should(org.mockito.Mockito.never())
+                    .verify(any(), any());
+        }
+    }
+
+    // ── verifyWithBackupCode (backlog #58) ──────────────────────────────
+
+    /**
+     * No prior test coverage existed for this method before backlog #58 —
+     * added alongside the lockout fix itself.
+     */
+    @Nested
+    @DisplayName("verifyWithBackupCode")
+    class VerifyWithBackupCode {
+
+        @Test
+        @DisplayName("returns LoginResponse and clears the failure counter on a valid backup code")
+        void verifiesAndIssuesTokens() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+            final MfaBackupCode backupCode = MfaBackupCode.create(
+                    user, passwordEncoder.encode("aaaa1111"));
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(false);
+            given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(backupCodeRepository.findUnusedByUserId(USER_ID))
+                    .willReturn(List.of(backupCode));
+            given(backupCodeRepository.countUnusedByUserId(USER_ID)).willReturn(0L);
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
+                    .willReturn("access-token");
+            given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
+            given(authTokenService.generateRefreshToken(any(), anyString()))
+                    .willReturn("refresh-token");
+
+            final LoginResponse response =
+                    service.verifyWithBackupCode("raw-mfa-token", "aaaa1111");
+
+            assertThat(response.accessToken()).isEqualTo("access-token");
+            assertThat(backupCode.isUsed()).isTrue();
+            then(bruteForceProtectionService).should().recordSuccess(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("throws 401 and records a failure on an invalid backup code")
+        void throws401AndRecordsFailureOnInvalidCode() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(false);
+            given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(backupCodeRepository.findUnusedByUserId(USER_ID))
+                    .willReturn(List.of());
+
+            assertThatThrownBy(() ->
+                    service.verifyWithBackupCode("raw-mfa-token", "wrongcode"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+            then(bruteForceProtectionService).should().recordFailure(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+        }
+
+        /**
+         * The actual regression test for backlog #58, backup-code path.
+         * Also verifies the shared-counter design decision documented on
+         * this method's own Javadoc: TOTP and backup-code verification
+         * intentionally share the same MFA lockout counter, so this test
+         * uses the same scope key a TOTP-path lockout would use.
+         */
+        @Test
+        @DisplayName("throws 401 without consuming the token when locked out (backlog #58)")
+        void throws401WhenLockedOutWithoutConsumingToken() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(true);
+            given(bruteForceProtectionService.getRemainingLockout(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(java.time.Duration.ofMinutes(5));
+
+            assertThatThrownBy(() ->
+                    service.verifyWithBackupCode("raw-mfa-token", "aaaa1111"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+            then(authTokenService).should(org.mockito.Mockito.never())
+                    .consumeToken(anyString(), any());
+            then(backupCodeRepository).should(org.mockito.Mockito.never())
+                    .findUnusedByUserId(any());
         }
     }
 

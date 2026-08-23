@@ -74,11 +74,11 @@ jwt:
 #
 # Fail-open: if Redis is unavailable, login is allowed (Redis outage
 # must not lock out all users). Prometheus counter fires on each lockout.
-login-attempt:
-  enabled: ${LOGIN_ATTEMPT_ENABLED:true}
-  max-failures: ${LOGIN_ATTEMPT_MAX_FAILURES:5}
-  lockout-duration: ${LOGIN_ATTEMPT_LOCKOUT_DURATION:PT15M}
-  window: ${LOGIN_ATTEMPT_WINDOW:PT10M}
+brute-force-protection:
+  enabled: ${BRUTE_FORCE_PROTECTION_ENABLED:true}
+  max-failures: ${BRUTE_FORCE_PROTECTION_MAX_FAILURES:5}
+  lockout-duration: ${BRUTE_FORCE_PROTECTION_LOCKOUT_DURATION:PT15M}
+  window: ${BRUTE_FORCE_PROTECTION_WINDOW:PT10M}
 
 invite:
   email:

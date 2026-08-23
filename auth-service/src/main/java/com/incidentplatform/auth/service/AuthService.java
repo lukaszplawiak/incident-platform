@@ -3,7 +3,7 @@ package com.incidentplatform.auth.service;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
-import com.incidentplatform.auth.ratelimit.LoginAttemptService;
+import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
@@ -32,7 +32,7 @@ public class AuthService {
     private final UserRepository userRepository;
     private final JwtUtils jwtUtils;
     private final PasswordEncoder passwordEncoder;
-    private final LoginAttemptService loginAttemptService;
+    private final BruteForceProtectionService bruteForceProtectionService;
     private final AuthTokenService authTokenService;
     private final AuditEventPublisher auditEventPublisher;
     private final TeamMemberRepository teamMemberRepository;
@@ -40,7 +40,7 @@ public class AuthService {
 
     public AuthService(UserRepository userRepository,
                        JwtUtils jwtUtils,
-                       LoginAttemptService loginAttemptService,
+                       BruteForceProtectionService bruteForceProtectionService,
                        AuthTokenService authTokenService,
                        PasswordEncoder passwordEncoder,
                        AuditEventPublisher auditEventPublisher,
@@ -48,7 +48,7 @@ public class AuthService {
                        TenantSettingsService tenantSettingsService) {
         this.userRepository        = userRepository;
         this.jwtUtils              = jwtUtils;
-        this.loginAttemptService   = loginAttemptService;
+        this.bruteForceProtectionService = bruteForceProtectionService;
         this.authTokenService      = authTokenService;
         this.passwordEncoder       = passwordEncoder;
         this.auditEventPublisher   = auditEventPublisher;
@@ -64,9 +64,10 @@ public class AuthService {
         // Checking first prevents timing attacks: if we checked the password
         // first, an attacker could use timing differences to enumerate valid
         // emails even when locked out.
-        if (loginAttemptService.isLocked(email, tenantId)) {
-            final Duration remaining =
-                    loginAttemptService.getRemainingLockout(email, tenantId);
+        if (bruteForceProtectionService.isLocked(
+                BruteForceProtectionService.Scope.LOGIN, email, tenantId)) {
+            final Duration remaining = bruteForceProtectionService.getRemainingLockout(
+                    BruteForceProtectionService.Scope.LOGIN, email, tenantId);
             log.warn("Login rejected — account locked: email={}, tenant={}, " +
                     "remainingSeconds={}", email, tenantId, remaining.toSeconds());
             throw new BusinessException(
@@ -85,7 +86,8 @@ public class AuthService {
                 .filter(User::isActive)
                 .filter(u -> u.getPasswordHash() != null)
                 .orElseGet(() -> {
-                    loginAttemptService.recordFailure(email, tenantId);
+                    bruteForceProtectionService.recordFailure(
+                            BruteForceProtectionService.Scope.LOGIN, email, tenantId);
                     log.warn("Login failed — user not found, inactive, or " +
                             "OAuth2-only: email={}, tenant={}", email, tenantId);
                     return null;
@@ -97,14 +99,15 @@ public class AuthService {
 
         // ── 3. Verify password ─────────────────────────────────────────────
         if (!passwordEncoder.matches(request.password(), user.getPasswordHash())) {
-            loginAttemptService.recordFailure(email, tenantId);
+            bruteForceProtectionService.recordFailure(
+                    BruteForceProtectionService.Scope.LOGIN, email, tenantId);
             log.warn("Login failed — wrong password: email={}, tenant={}",
                     email, tenantId);
             throw invalidCredentials();
         }
 
-        // ── 4. Success — clear failure counter ─────────────────────────────
-        loginAttemptService.recordSuccess(email, tenantId);
+        bruteForceProtectionService.recordSuccess(
+                BruteForceProtectionService.Scope.LOGIN, email, tenantId);
 
         // ── 5. MFA check ───────────────────────────────────────────────────
         // Two conditions trigger MFA second factor:
