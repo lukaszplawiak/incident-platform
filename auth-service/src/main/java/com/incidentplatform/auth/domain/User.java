@@ -136,6 +136,22 @@ public class User {
     @Column(name = "mfa_enabled_at")
     private Instant mfaEnabledAt;
 
+    /**
+     * Last TOTP time-step (epochSeconds / 30) accepted for this user
+     * (backlog #59). NULL until the first successful TOTP verification.
+     *
+     * <p>Set by {@code MfaService.verifyTotpAndRecordUsage} — the single
+     * place all four TOTP-verifying flows in {@code MfaService}
+     * (enable, disable, login verification, forced-setup enable) route
+     * through, so a code accepted for any one of those purposes cannot
+     * be replayed against any of the others either. See
+     * {@code TotpService.verify}'s own Javadoc for why this tracking
+     * lives here rather than in that stateless class, and migration V15
+     * for the full account of the vulnerability this closes.
+     */
+    @Column(name = "mfa_last_used_time_step")
+    private Long mfaLastUsedTimeStep;
+
     @OneToMany(mappedBy = "user",
             cascade = CascadeType.ALL,
             fetch = FetchType.LAZY,
@@ -352,6 +368,19 @@ public class User {
     public String getMfaSecret()         { return mfaSecret; }
     public String getMfaPendingSecret()  { return mfaPendingSecret; }
     public Instant getMfaEnabledAt()     { return mfaEnabledAt; }
+    public Long getMfaLastUsedTimeStep() { return mfaLastUsedTimeStep; }
 
+    /**
+     * Records the TOTP time step just accepted for this user (backlog
+     * #59) — see {@link #mfaLastUsedTimeStep}'s own Javadoc. Deliberately
+     * NOT reset by {@link #disableMfa()}: time steps are wall-clock-derived
+     * ({@code epochSeconds / 30}) and monotonically increasing regardless
+     * of secret, so a stale value from a previous secret can never
+     * incorrectly reject a genuinely new code after re-enabling MFA —
+     * "now" is always later than any step recorded in the past.
+     */
+    public void recordMfaTimeStep(long timeStep) {
+        this.mfaLastUsedTimeStep = timeStep;
+    }
 
 }

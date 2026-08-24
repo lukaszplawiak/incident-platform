@@ -13,6 +13,7 @@ import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * TOTP (Time-based One-Time Password) implementation per RFC 6238.
@@ -115,13 +116,28 @@ public class TotpService {
      * <p>Checks the current time window and ±{@value #WINDOW} windows
      * to tolerate minor clock drift.
      *
+     * <h2>Fixed (backlog #59): returns the matched time step, not just a boolean</h2>
+     * Previously returned {@code boolean} — the caller learned only
+     * "valid" or "invalid," with no way to detect or prevent a captured,
+     * still-valid code being replayed by a second, independent
+     * verification attempt within the same ~90s tolerance window. This
+     * method has no state of its own to track that (a single secret
+     * belongs to exactly one user, but this class is stateless by
+     * design — see {@code MfaService.verifyTotpAndRecordUsage} for
+     * where the actual per-user tracking now lives). Returning the
+     * matched step lets the caller compare it against the last step it
+     * previously accepted for that specific user and reject a replay,
+     * while a code that matches no window at all is still simply
+     * {@link Optional#empty()}, exactly as {@code false} was before.
+     *
      * @param base32Secret base32-encoded TOTP secret (plain, not encrypted)
      * @param code         6-digit code from authenticator app
-     * @return true if the code is valid for the current time window
+     * @return the matched time step (epochSeconds / {@value #TIME_STEP}),
+     *         or {@link Optional#empty()} if the code matches no window
      */
-    public boolean verify(String base32Secret, String code) {
+    public Optional<Long> verify(String base32Secret, String code) {
         if (code == null || code.length() != CODE_DIGITS) {
-            return false;
+            return Optional.empty();
         }
 
         final byte[] key = base32Decode(base32Secret);
@@ -133,10 +149,10 @@ public class TotpService {
             if (MessageDigest.isEqual(
                     expected.getBytes(StandardCharsets.UTF_8),
                     code.getBytes(StandardCharsets.UTF_8))) {
-                return true;
+                return Optional.of(t);
             }
         }
-        return false;
+        return Optional.empty();
     }
 
     // ── Backup codes ──────────────────────────────────────────────────────

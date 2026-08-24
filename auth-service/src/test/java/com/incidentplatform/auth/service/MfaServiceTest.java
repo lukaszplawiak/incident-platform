@@ -132,7 +132,7 @@ class MfaServiceTest {
                     .willReturn(Optional.of(user));
             given(aesEncryptionService.decrypt("encrypted-secret"))
                     .willReturn("PLAIN_SECRET");
-            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(true);
+            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(Optional.of(100L));
             given(totpService.generateBackupCodes())
                     .willReturn(List.of("code1", "code2", "code3",
                             "code4", "code5", "code6", "code7", "code8"));
@@ -157,7 +157,7 @@ class MfaServiceTest {
                     .willReturn(Optional.of(user));
             given(aesEncryptionService.decrypt("encrypted-secret"))
                     .willReturn("PLAIN_SECRET");
-            given(totpService.verify("PLAIN_SECRET", "999999")).willReturn(false);
+            given(totpService.verify("PLAIN_SECRET", "999999")).willReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.enableMfa("999999", buildPrincipal()))
                     .isInstanceOf(BusinessException.class)
@@ -205,7 +205,7 @@ class MfaServiceTest {
             given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
                     .willReturn(mfaSessionToken);
             given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
-            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(true);
+            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(Optional.of(100L));
             given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(List.of());
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
@@ -241,7 +241,7 @@ class MfaServiceTest {
             given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
                     .willReturn(mfaSessionToken);
             given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
-            given(totpService.verify("PLAIN_SECRET", "000000")).willReturn(false);
+            given(totpService.verify("PLAIN_SECRET", "000000")).willReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.verifyMfaToken("raw-mfa-token", "000000"))
                     .isInstanceOf(BusinessException.class)
@@ -285,6 +285,94 @@ class MfaServiceTest {
                     .consumeToken(anyString(), any());
             then(totpService).should(org.mockito.Mockito.never())
                     .verify(any(), any());
+        }
+
+        /**
+         * The actual regression test for backlog #59 — a code that is
+         * cryptographically valid but whose matched time step was
+         * already accepted by a prior verification must be rejected as
+         * a replay, and treated identically to an ordinary wrong code
+         * (same exception, same brute-force failure recording) so an
+         * attacker probing with a known-once-valid code learns nothing
+         * from the response.
+         */
+        @Test
+        @DisplayName("rejects a replayed TOTP code — same matched time step as a " +
+                "previously accepted verification (backlog #59)")
+        void rejectsReplayedTotpCode() {
+            final User user = buildUser(true);
+            user.recordMfaTimeStep(100L); // simulates an earlier accepted verification
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(false);
+            given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
+            // Cryptographically valid — matches time step 100 — but that
+            // step was already accepted once before (see recordMfaTimeStep
+            // above), so this must be rejected as a replay.
+            given(totpService.verify("PLAIN_SECRET", "123456"))
+                    .willReturn(Optional.of(100L));
+
+            assertThatThrownBy(() -> service.verifyMfaToken("raw-mfa-token", "123456"))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(e -> ((BusinessException) e).getHttpStatus())
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+            then(bruteForceProtectionService).should().recordFailure(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+            // The tracked step must not be disturbed by a rejected replay.
+            assertThat(user.getMfaLastUsedTimeStep()).isEqualTo(100L);
+        }
+
+        /**
+         * Confirms the fix doesn't over-reject: a genuinely new code —
+         * matching a LATER time step than the one previously accepted —
+         * must still succeed, and the tracked step must advance to the
+         * new value.
+         */
+        @Test
+        @DisplayName("accepts a code matching a newer time step and advances the " +
+                "tracked step (backlog #59)")
+        void acceptsNewerTimeStepAndAdvancesTracking() {
+            final User user = buildUser(true);
+            user.recordMfaTimeStep(100L);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION,
+                    Instant.now().plusSeconds(300), null);
+
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID))
+                    .willReturn(false);
+            given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
+            given(totpService.verify("PLAIN_SECRET", "654321"))
+                    .willReturn(Optional.of(101L));
+            given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(List.of());
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
+                    .willReturn("access-token");
+            given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
+            given(authTokenService.generateRefreshToken(any(), anyString()))
+                    .willReturn("refresh-token");
+
+            final LoginResponse response =
+                    service.verifyMfaToken("raw-mfa-token", "654321");
+
+            assertThat(response.accessToken()).isEqualTo("access-token");
+            assertThat(user.getMfaLastUsedTimeStep()).isEqualTo(101L);
         }
     }
 
@@ -418,7 +506,7 @@ class MfaServiceTest {
                     .willReturn(Optional.of(user));
             given(aesEncryptionService.decrypt("encrypted-secret"))
                     .willReturn("PLAIN_SECRET");
-            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(true);
+            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(Optional.of(100L));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             service.disableMfa(rawPassword, "123456", buildPrincipal());
@@ -530,7 +618,7 @@ class MfaServiceTest {
             given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
                     .willReturn(setupToken);
             given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
-            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(true);
+            given(totpService.verify("PLAIN_SECRET", "123456")).willReturn(Optional.of(100L));
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
             given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(List.of());
@@ -568,7 +656,7 @@ class MfaServiceTest {
             given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
                     .willReturn(setupToken);
             given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
-            given(totpService.verify("PLAIN_SECRET", "000000")).willReturn(false);
+            given(totpService.verify("PLAIN_SECRET", "000000")).willReturn(Optional.empty());
 
             assertThatThrownBy(() ->
                     service.enableMfaWithSetupToken("raw-setup-token", "000000"))
@@ -629,22 +717,22 @@ class MfaServiceTest {
         @DisplayName("verify returns false for obviously wrong code")
         void verifyReturnsFalseForWrongCode() {
             final String secret = realTotpService.generateSecret();
-            assertThat(realTotpService.verify(secret, "000000")).isFalse();
+            assertThat(realTotpService.verify(secret, "000000")).isEmpty();
         }
 
         @Test
         @DisplayName("verify returns false for null code")
         void verifyReturnsFalseForNull() {
             final String secret = realTotpService.generateSecret();
-            assertThat(realTotpService.verify(secret, null)).isFalse();
+            assertThat(realTotpService.verify(secret, null)).isEmpty();
         }
 
         @Test
         @DisplayName("verify returns false for wrong length code")
         void verifyReturnsFalseForWrongLength() {
             final String secret = realTotpService.generateSecret();
-            assertThat(realTotpService.verify(secret, "12345")).isFalse();
-            assertThat(realTotpService.verify(secret, "1234567")).isFalse();
+            assertThat(realTotpService.verify(secret, "12345")).isEmpty();
+            assertThat(realTotpService.verify(secret, "1234567")).isEmpty();
         }
 
         @Test
