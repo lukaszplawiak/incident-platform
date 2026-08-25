@@ -201,7 +201,15 @@ public class TotpService {
             return String.format("%0" + CODE_DIGITS + "d", binary % CODE_MODULUS);
 
         } catch (Exception e) {
-            throw new RuntimeException("TOTP code generation failed", e);
+            // Fixed (backlog #61): was a generic RuntimeException with a
+            // vague message. HmacSHA1 is guaranteed available in every
+            // JVM — the same "this cannot actually happen" guarantee
+            // AuthTokenService.hash() relies on for SHA-256 — so this
+            // now matches that exact style (IllegalStateException, a
+            // specific "X not available" message) instead of two
+            // different, inconsistent idioms for the identical class of
+            // situation within the same module.
+            throw new IllegalStateException("HmacSHA1 not available", e);
         }
     }
 
