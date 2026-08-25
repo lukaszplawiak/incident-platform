@@ -86,25 +86,11 @@ public class MfaService {
         final String tenantId = TenantContext.get();
         final User user = requireUser(principal.userId(), tenantId);
 
-        if (user.isMfaEnabled()) {
-            throw new BusinessException(
-                    ErrorCodes.BUSINESS_RULE_VIOLATION,
-                    "MFA is already enabled. Disable it first before reconfiguring.",
-                    HttpStatus.CONFLICT);
-        }
-
-        final String plainSecret     = totpService.generateSecret();
-        final String encryptedSecret = aesEncryptionService.encrypt(plainSecret);
-
-        user.storePendingMfaSecret(encryptedSecret);
-        userRepository.save(user);
-
-        final String qrUrl = totpService.generateQrUrl(
-                plainSecret, user.getEmail(), tenantId);
+        final MfaSetupResponse response = doSetupMfa(user, tenantId);
 
         log.info("MFA setup initiated: userId={}, tenant={}", principal.userId(), tenantId);
 
-        return new MfaSetupResponse(qrUrl, plainSecret);
+        return response;
     }
 
     // ── Enable (step 2) ───────────────────────────────────────────────────
@@ -119,36 +105,10 @@ public class MfaService {
         final String tenantId = TenantContext.get();
         final User user = requireUser(principal.userId(), tenantId);
 
-        if (user.getMfaPendingSecret() == null) {
-            throw new BusinessException(
-                    ErrorCodes.BUSINESS_RULE_VIOLATION,
-                    "No pending MFA setup found. Call POST /auth/mfa/setup first.",
-                    HttpStatus.CONFLICT);
-        }
-
-        final String plainSecret = aesEncryptionService.decrypt(
-                user.getMfaPendingSecret());
-
-        if (!verifyTotpAndRecordUsage(user, plainSecret, totpCode)) {
-            throw new BusinessException(
-                    ErrorCodes.UNAUTHORIZED,
-                    "Invalid TOTP code. Verify your authenticator app clock is synced.",
-                    HttpStatus.UNAUTHORIZED);
-        }
-
-        user.enableMfa();
-        userRepository.save(user);
-
-        final List<String> plainCodes = totpService.generateBackupCodes();
-        saveBackupCodes(user, plainCodes);
-
-        auditEventPublisher.publishAuth(
-                principal.userId(), tenantId,
-                AuditEventTypes.MFA_ENABLED,
-                "auth-service",
-                principal.userId().toString(),
-                "MFA enabled",
-                Map.of());
+        final List<String> plainCodes = doEnableMfa(
+                user, tenantId, totpCode,
+                "No pending MFA setup found. Call POST /auth/mfa/setup first.",
+                "MFA enabled");
 
         log.info("MFA enabled: userId={}, tenant={}", principal.userId(), tenantId);
 
@@ -226,39 +186,20 @@ public class MfaService {
      */
     @Transactional
     public LoginResponse verifyMfaToken(String rawMfaToken, String totpCode) {
-        final AuthToken peeked = authTokenService.peekToken(
-                rawMfaToken, AuthToken.Type.MFA_SESSION);
-        final User peekedUser = peeked.getUser();
-        final String tenantId = peeked.getTenantId();
-        final String lockoutIdentifier = peekedUser.getId().toString();
+        final MfaSessionContext session =
+                resolveAndCheckMfaSession(rawMfaToken, "TOTP");
 
-        if (bruteForceProtectionService.isLocked(
-                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId)) {
-            final Duration remaining = bruteForceProtectionService.getRemainingLockout(
-                    BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
-            log.warn("MFA verification rejected — locked out: userId={}, " +
-                            "tenant={}, remainingSeconds={}",
-                    peekedUser.getId(), tenantId, remaining.toSeconds());
-            throw new BusinessException(
-                    ErrorCodes.UNAUTHORIZED,
-                    String.format("Too many failed MFA attempts. Try again in %d minutes.",
-                            remaining.toMinutes() + 1),
-                    HttpStatus.UNAUTHORIZED);
-        }
-
-        final AuthToken mfaToken = authTokenService.consumeToken(
-                rawMfaToken, AuthToken.Type.MFA_SESSION);
-
-        final User user     = mfaToken.getUser();
+        final User user = session.token().getUser();
 
         final String plainSecret = aesEncryptionService.decrypt(user.getMfaSecret());
 
         if (!verifyTotpAndRecordUsage(user, plainSecret, totpCode)) {
             bruteForceProtectionService.recordFailure(
-                    BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+                    BruteForceProtectionService.Scope.MFA,
+                    session.lockoutIdentifier(), session.tenantId());
 
             auditEventPublisher.publishAuth(
-                    user.getId(), tenantId,
+                    user.getId(), session.tenantId(),
                     AuditEventTypes.MFA_VERIFY_FAILED,
                     "auth-service",
                     user.getId().toString(),
@@ -288,9 +229,10 @@ public class MfaService {
         userRepository.save(user);
 
         bruteForceProtectionService.recordSuccess(
-                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+                BruteForceProtectionService.Scope.MFA,
+                session.lockoutIdentifier(), session.tenantId());
 
-        return issueTokens(user, tenantId);
+        return issueTokens(user, session.tenantId());
     }
 
     // ── Setup (forced flow — tenant requires MFA, no access token yet) ─────
@@ -314,26 +256,12 @@ public class MfaService {
         final User user = setupToken.getUser();
         final String tenantId = setupToken.getTenantId();
 
-        if (user.isMfaEnabled()) {
-            throw new BusinessException(
-                    ErrorCodes.BUSINESS_RULE_VIOLATION,
-                    "MFA is already enabled.",
-                    HttpStatus.CONFLICT);
-        }
-
-        final String plainSecret     = totpService.generateSecret();
-        final String encryptedSecret = aesEncryptionService.encrypt(plainSecret);
-
-        user.storePendingMfaSecret(encryptedSecret);
-        userRepository.save(user);
-
-        final String qrUrl = totpService.generateQrUrl(
-                plainSecret, user.getEmail(), tenantId);
+        final MfaSetupResponse response = doSetupMfa(user, tenantId);
 
         log.info("MFA setup (tenant-required flow) initiated: userId={}, tenant={}",
                 user.getId(), tenantId);
 
-        return new MfaSetupResponse(qrUrl, plainSecret);
+        return response;
     }
 
     /**
@@ -353,36 +281,10 @@ public class MfaService {
         final User user = setupToken.getUser();
         final String tenantId = setupToken.getTenantId();
 
-        if (user.getMfaPendingSecret() == null) {
-            throw new BusinessException(
-                    ErrorCodes.BUSINESS_RULE_VIOLATION,
-                    "No pending MFA setup found. Call POST /auth/mfa/setup-required first.",
-                    HttpStatus.CONFLICT);
-        }
-
-        final String plainSecret = aesEncryptionService.decrypt(
-                user.getMfaPendingSecret());
-
-        if (!verifyTotpAndRecordUsage(user, plainSecret, totpCode)) {
-            throw new BusinessException(
-                    ErrorCodes.UNAUTHORIZED,
-                    "Invalid TOTP code. Verify your authenticator app clock is synced.",
-                    HttpStatus.UNAUTHORIZED);
-        }
-
-        user.enableMfa();
-        userRepository.save(user);
-
-        final List<String> plainCodes = totpService.generateBackupCodes();
-        saveBackupCodes(user, plainCodes);
-
-        auditEventPublisher.publishAuth(
-                user.getId(), tenantId,
-                AuditEventTypes.MFA_ENABLED,
-                "auth-service",
-                user.getId().toString(),
-                "MFA enabled (tenant-required flow, login completed)",
-                Map.of());
+        final List<String> plainCodes = doEnableMfa(
+                user, tenantId, totpCode,
+                "No pending MFA setup found. Call POST /auth/mfa/setup-required first.",
+                "MFA enabled (tenant-required flow, login completed)");
 
         log.info("MFA enabled via tenant-required flow, completing login: userId={}, tenant={}",
                 user.getId(), tenantId);
@@ -392,98 +294,80 @@ public class MfaService {
         return new MfaEnableWithLoginResponse(plainCodes, loginResponse);
     }
 
-// ── Verify backup code ────────────────────────────────────────────────
+    // ── Verify backup code ────────────────────────────────────────────────
 
-/**
- * Completes MFA login using a backup code instead of TOTP.
- *
- * <h2>Fixed (backlog #58): brute-force protection added</h2>
- * Same reasoning and ordering as {@link #verifyMfaToken}'s identical
- * fix — see its own Javadoc and {@link BruteForceProtectionService}'s
- * for the full account. Shares the same {@code Scope.MFA} counter as
- * TOTP verification, not a separate one — both are equally valid
- * ways to complete the same MFA step, so a failed guess at either
- * counts toward the same lockout; a determined attacker shouldn't
- * get twice the total guesses just by alternating between the two
- * verification methods.
- */
-@Transactional
-public LoginResponse verifyWithBackupCode(String rawMfaToken, String backupCode) {
-    final AuthToken peeked = authTokenService.peekToken(
-            rawMfaToken, AuthToken.Type.MFA_SESSION);
-    final User peekedUser = peeked.getUser();
-    final String tenantId = peeked.getTenantId();
-    final String lockoutIdentifier = peekedUser.getId().toString();
+    /**
+     * Completes MFA login using a backup code instead of TOTP.
+     *
+     * <h2>Fixed (backlog #58): brute-force protection added</h2>
+     * Same reasoning and ordering as {@link #verifyMfaToken}'s identical
+     * fix — see its own Javadoc and {@link BruteForceProtectionService}'s
+     * for the full account. Shares the same {@code Scope.MFA} counter as
+     * TOTP verification, not a separate one — both are equally valid
+     * ways to complete the same MFA step, so a failed guess at either
+     * counts toward the same lockout; a determined attacker shouldn't
+     * get twice the total guesses just by alternating between the two
+     * verification methods.
+     */
+    @Transactional
+    public LoginResponse verifyWithBackupCode(String rawMfaToken, String backupCode) {
+        final MfaSessionContext session =
+                resolveAndCheckMfaSession(rawMfaToken, "backup code");
 
-    if (bruteForceProtectionService.isLocked(
-            BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId)) {
-        final Duration remainingLockout = bruteForceProtectionService.getRemainingLockout(
-                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
-        log.warn("MFA backup code verification rejected — locked out: " +
-                        "userId={}, tenant={}, remainingSeconds={}",
-                peekedUser.getId(), tenantId, remainingLockout.toSeconds());
-        throw new BusinessException(
-                ErrorCodes.UNAUTHORIZED,
-                String.format("Too many failed MFA attempts. Try again in %d minutes.",
-                        remainingLockout.toMinutes() + 1),
-                HttpStatus.UNAUTHORIZED);
-    }
+        final User user = session.token().getUser();
 
-    final AuthToken mfaToken = authTokenService.consumeToken(
-            rawMfaToken, AuthToken.Type.MFA_SESSION);
+        final List<MfaBackupCode> unusedCodes =
+                backupCodeRepository.findUnusedByUserId(user.getId());
 
-    final User user     = mfaToken.getUser();
-
-    final List<MfaBackupCode> unusedCodes =
-            backupCodeRepository.findUnusedByUserId(user.getId());
-
-    MfaBackupCode matched = null;
-    for (final MfaBackupCode code : unusedCodes) {
-        if (passwordEncoder.matches(backupCode, code.getCodeHash())) {
-            matched = code;
-            break;
+        MfaBackupCode matched = null;
+        for (final MfaBackupCode code : unusedCodes) {
+            if (passwordEncoder.matches(backupCode, code.getCodeHash())) {
+                matched = code;
+                break;
+            }
         }
-    }
 
-    if (matched == null) {
-        bruteForceProtectionService.recordFailure(
-                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+        if (matched == null) {
+            bruteForceProtectionService.recordFailure(
+                    BruteForceProtectionService.Scope.MFA,
+                    session.lockoutIdentifier(), session.tenantId());
+
+            auditEventPublisher.publishAuth(
+                    user.getId(), session.tenantId(),
+                    AuditEventTypes.MFA_VERIFY_FAILED,
+                    "auth-service",
+                    user.getId().toString(),
+                    "MFA verification failed — invalid backup code",
+                    Map.of());
+
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    "Invalid or already used backup code",
+                    HttpStatus.UNAUTHORIZED);
+        }
+
+        bruteForceProtectionService.recordSuccess(
+                BruteForceProtectionService.Scope.MFA,
+                session.lockoutIdentifier(), session.tenantId());
+
+        matched.markUsed();
+        backupCodeRepository.save(matched);
+
+        final long remaining = backupCodeRepository.countUnusedByUserId(user.getId());
 
         auditEventPublisher.publishAuth(
-                user.getId(), tenantId,
-                AuditEventTypes.MFA_VERIFY_FAILED,
+                user.getId(), session.tenantId(),
+                AuditEventTypes.MFA_BACKUP_CODE_USED,
                 "auth-service",
                 user.getId().toString(),
-                "MFA verification failed — invalid backup code",
-                Map.of());
+                "MFA backup code used for login",
+                Map.of("remainingCodes", String.valueOf(remaining)));
 
-        throw new BusinessException(
-                ErrorCodes.UNAUTHORIZED,
-                "Invalid or already used backup code",
-                HttpStatus.UNAUTHORIZED);
+        log.warn("MFA backup code used: userId={}, tenant={}, remaining={}",
+                user.getId(), session.tenantId(), remaining);
+
+        return issueTokens(user, session.tenantId());
     }
-
-    bruteForceProtectionService.recordSuccess(
-            BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
-
-    matched.markUsed();
-    backupCodeRepository.save(matched);
-
-    final long remaining = backupCodeRepository.countUnusedByUserId(user.getId());
-
-    auditEventPublisher.publishAuth(
-            user.getId(), tenantId,
-            AuditEventTypes.MFA_BACKUP_CODE_USED,
-            "auth-service",
-            user.getId().toString(),
-            "MFA backup code used for login",
-            Map.of("remainingCodes", String.valueOf(remaining)));
-
-    log.warn("MFA backup code used: userId={}, tenant={}, remaining={}",
-            user.getId(), tenantId, remaining);
-
-    return issueTokens(user, tenantId);
-}
 
     // ── Backup codes status ───────────────────────────────────────────────
 
@@ -502,6 +386,147 @@ public LoginResponse verifyWithBackupCode(String rawMfaToken, String backupCode)
     }
 
     // ── private ───────────────────────────────────────────────────────────
+
+    /**
+     * Shared logic between {@link #verifyMfaToken} and
+     * {@link #verifyWithBackupCode} (backlog #60) — resolves the user
+     * behind an MFA session token, checks brute-force lockout, and
+     * consumes the token only once the request is confirmed to proceed.
+     * See {@link #verifyMfaToken}'s own Javadoc for the full reasoning
+     * behind this peek-then-check-then-consume ordering (backlog #58).
+     *
+     * @param rawMfaToken           the raw MFA_SESSION token from the request
+     * @param verificationMethodLabel a short label ("TOTP" or "backup code")
+     *                              used only to make the lockout log line
+     *                              identify which verification path
+     *                              triggered it — the two call sites
+     *                              previously had near-identical but
+     *                              subtly different wording here
+     * @return the consumed token plus the lockout identifier/tenantId
+     *         the caller needs for its own subsequent recordFailure/
+     *         recordSuccess calls
+     * @throws BusinessException 401 if currently locked out for this user
+     */
+    private MfaSessionContext resolveAndCheckMfaSession(
+            String rawMfaToken, String verificationMethodLabel) {
+        final AuthToken peeked = authTokenService.peekToken(
+                rawMfaToken, AuthToken.Type.MFA_SESSION);
+        final String tenantId = peeked.getTenantId();
+        final String lockoutIdentifier = peeked.getUser().getId().toString();
+
+        if (bruteForceProtectionService.isLocked(
+                BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId)) {
+            final Duration remaining = bruteForceProtectionService.getRemainingLockout(
+                    BruteForceProtectionService.Scope.MFA, lockoutIdentifier, tenantId);
+            log.warn("MFA {} verification rejected — locked out: userId={}, " +
+                            "tenant={}, remainingSeconds={}",
+                    verificationMethodLabel, peeked.getUser().getId(),
+                    tenantId, remaining.toSeconds());
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    String.format("Too many failed MFA attempts. Try again in %d minutes.",
+                            remaining.toMinutes() + 1),
+                    HttpStatus.UNAUTHORIZED);
+        }
+
+        final AuthToken consumed = authTokenService.consumeToken(
+                rawMfaToken, AuthToken.Type.MFA_SESSION);
+
+        return new MfaSessionContext(consumed, lockoutIdentifier, tenantId);
+    }
+
+    private record MfaSessionContext(
+            AuthToken token, String lockoutIdentifier, String tenantId) {}
+
+    /**
+     * Shared logic between {@link #setupMfa} and
+     * {@link #setupMfaWithSetupToken} (backlog #60) — generate, encrypt,
+     * and store a fresh pending secret, returning the QR response.
+     *
+     * <p>The 409 "already enabled" message is deliberately unified to
+     * the more informative of the two previously-slightly-different
+     * strings ("...Disable it first before reconfiguring.") — purely
+     * cosmetic wording, not user- or endpoint-specific information, so
+     * harmonizing it is a strict improvement with no meaningful
+     * behavior change. Contrast {@link #doEnableMfa}'s "no pending
+     * setup" message, which is NOT unified, since that difference
+     * genuinely carries different, correct information per caller (which
+     * endpoint to call next).
+     */
+    private MfaSetupResponse doSetupMfa(User user, String tenantId) {
+        if (user.isMfaEnabled()) {
+            throw new BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "MFA is already enabled. Disable it first before reconfiguring.",
+                    HttpStatus.CONFLICT);
+        }
+
+        final String plainSecret     = totpService.generateSecret();
+        final String encryptedSecret = aesEncryptionService.encrypt(plainSecret);
+
+        user.storePendingMfaSecret(encryptedSecret);
+        userRepository.save(user);
+
+        final String qrUrl = totpService.generateQrUrl(
+                plainSecret, user.getEmail(), tenantId);
+
+        return new MfaSetupResponse(qrUrl, plainSecret);
+    }
+
+/**
+ * Shared logic between {@link #enableMfa} and
+ * {@link #enableMfaWithSetupToken} (backlog #60) — verify the
+ * pending secret against the supplied TOTP code, activate MFA, and
+ * generate backup codes.
+ *
+ * @param noPendingSetupMessage the 409 message when no pending secret
+ *                              exists — deliberately NOT unified
+ *                              across callers, since each correctly
+ *                              names a different endpoint the caller
+ *                              should have called first
+ * @param auditDescription     the {@code AuditEventTypes.MFA_ENABLED}
+ *                              description — kept caller-specific so
+ *                              the audit trail can distinguish the
+ *                              ordinary setup flow from the
+ *                              tenant-required, login-completing one
+ * @return the plain-text backup codes — shown to the caller once
+ */
+private List<String> doEnableMfa(User user, String tenantId, String totpCode,
+                                 String noPendingSetupMessage,
+                                 String auditDescription) {
+    if (user.getMfaPendingSecret() == null) {
+        throw new BusinessException(
+                ErrorCodes.BUSINESS_RULE_VIOLATION,
+                noPendingSetupMessage,
+                HttpStatus.CONFLICT);
+    }
+
+    final String plainSecret = aesEncryptionService.decrypt(
+            user.getMfaPendingSecret());
+
+    if (!verifyTotpAndRecordUsage(user, plainSecret, totpCode)) {
+        throw new BusinessException(
+                ErrorCodes.UNAUTHORIZED,
+                "Invalid TOTP code. Verify your authenticator app clock is synced.",
+                HttpStatus.UNAUTHORIZED);
+    }
+
+    user.enableMfa();
+    userRepository.save(user);
+
+    final List<String> plainCodes = totpService.generateBackupCodes();
+    saveBackupCodes(user, plainCodes);
+
+    auditEventPublisher.publishAuth(
+            user.getId(), tenantId,
+            AuditEventTypes.MFA_ENABLED,
+            "auth-service",
+            user.getId().toString(),
+            auditDescription,
+            Map.of());
+
+    return plainCodes;
+}
 
     /**
      * Verifies a TOTP code against a decrypted secret AND checks it
