@@ -40,15 +40,21 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Security tests for {@link TeamController} — previously with no test
- * coverage of any kind.
+ * Security tests for {@link TeamController}.
+ *
+ * <h2>Fixed (backlog #63): read endpoints now require an explicit role</h2>
+ * {@code listTeams}/{@code getTeam}/{@code listMembers} previously had no
+ * {@code @PreAuthorize} at all — reachable by any authenticated
+ * principal, including non-human accounts like {@code ROLE_SERVICE}/
+ * {@code ROLE_INGESTOR}. Now require {@code ROLE_RESPONDER} or
+ * {@code ROLE_ADMIN}, matching {@code postmortem-service}'s
+ * {@code PostmortemController} convention — see {@link TeamController}'s
+ * own Javadoc for the full reasoning. The {@code IngestorRole} nested
+ * class below is the actual regression coverage for this fix.
  *
  * <p>Write endpoints (create/archive/restore team, add/remove member,
- * update member role) are ADMIN only. Read endpoints (list teams, get
- * team, list members) have no {@code @PreAuthorize} — reachable by any
- * authenticated user, RESPONDER included. This mirrors how the rest of
- * the platform treats read vs. write on team data (e.g. oncall-service's
- * GET /schedules is RESPONDER+ADMIN, only mutation is ADMIN-only).
+ * update member role) remain ADMIN only (or {@code TeamRole.MANAGER}
+ * for the specific team, on membership endpoints) — unchanged by this fix.
  *
  * <h2>Why a real UserPrincipal-typed Authentication, not @WithMockUser</h2>
  * {@code @WithMockUser} authenticates as a generic
@@ -225,7 +231,7 @@ class TeamControllerSecurityTest {
     class ResponderRole {
 
         @Test
-        @DisplayName("GET /teams — 200 (read-only, no role restriction)")
+        @DisplayName("GET /teams — 200")
         void listTeams_returns200() throws Exception {
             given(teamService.listTeams()).willReturn(List.of(buildTeamDto()));
 
@@ -234,7 +240,7 @@ class TeamControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("GET /teams/{id} — 200 (read-only, no role restriction)")
+        @DisplayName("GET /teams/{id} — 200")
         void getTeam_returns200() throws Exception {
             given(teamService.getTeam(TEAM_ID)).willReturn(buildTeamDto());
 
@@ -244,7 +250,7 @@ class TeamControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("GET /teams/{id}/members — 200 (read-only, no role restriction)")
+        @DisplayName("GET /teams/{id}/members — 200")
         void listMembers_returns200() throws Exception {
             given(teamService.listMembers(TEAM_ID)).willReturn(List.of(buildTeamMemberDto()));
 
@@ -271,6 +277,7 @@ class TeamControllerSecurityTest {
                             .with(principal("ROLE_RESPONDER")))
                     .andExpect(status().isForbidden());
         }
+
 
         @Test
         @DisplayName("POST /teams/{id}/restore — 403 (restore is ADMIN only)")
@@ -377,6 +384,42 @@ class TeamControllerSecurityTest {
             mockMvc.perform(delete("/api/v1/teams/{teamId}/members/{userId}", TEAM_ID, USER_ID)
                             .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isNoContent());
+        }
+    }
+
+    // ── INGESTOR — the actual regression coverage for backlog #63 ──────────
+
+    /**
+     * Before this fix, all three of these would have returned 200 for
+     * ANY authenticated role, including this one — a machine/integration
+     * account with no legitimate reason to browse team structure or
+     * membership. This class is the actual regression test.
+     */
+    @Nested
+    @DisplayName("INGESTOR role (backlog #63)")
+    class IngestorRole {
+
+        @Test
+        @DisplayName("GET /teams — 403")
+        void listTeams_returns403() throws Exception {
+            mockMvc.perform(get("/api/v1/teams").with(principal("ROLE_INGESTOR")))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("GET /teams/{id} — 403")
+        void getTeam_returns403() throws Exception {
+            mockMvc.perform(get("/api/v1/teams/{teamId}", TEAM_ID)
+                            .with(principal("ROLE_INGESTOR")))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("GET /teams/{id}/members — 403")
+        void listMembers_returns403() throws Exception {
+            mockMvc.perform(get("/api/v1/teams/{teamId}/members", TEAM_ID)
+                            .with(principal("ROLE_INGESTOR")))
+                    .andExpect(status().isForbidden());
         }
     }
 }
