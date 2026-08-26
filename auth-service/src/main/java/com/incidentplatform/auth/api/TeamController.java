@@ -31,6 +31,21 @@ import java.util.List;
 import java.util.UUID;
 
 /**
+ * <h2>Read endpoint authorization (backlog #63)</h2>
+ * {@code listTeams}, {@code getTeam}, {@code listMembers} require
+ * {@code ROLE_RESPONDER} or {@code ROLE_ADMIN} — previously had no
+ * {@code @PreAuthorize} at all, meaning any authenticated principal
+ * (including non-human accounts like {@code ROLE_SERVICE}/
+ * {@code ROLE_INGESTOR}) could read full team structure and membership
+ * for the tenant. Matches {@code IntegrationController}'s convention of
+ * requiring an explicit role even for reads (there, {@code ROLE_ADMIN}
+ * only, since integrations are pure admin configuration) — but that
+ * specific role choice doesn't fit team data, which responders need
+ * routinely (who's on my team, who to escalate to), so
+ * {@code postmortem-service}'s {@code PostmortemController} convention
+ * ({@code ROLE_RESPONDER} or {@code ROLE_ADMIN}, since postmortems are
+ * likewise routine operational content) was matched instead.
+ *
  * <h2>TeamRole.MANAGER authorization</h2>
  * Membership endpoints ({@code addMember}, {@code updateMemberRole},
  * {@code removeMember}) accept {@code ROLE_ADMIN} (tenant-wide) OR a user
@@ -44,6 +59,12 @@ import java.util.UUID;
  * has ROLE_RESPONDER" as a soft operational assumption rather than a
  * hard-validated invariant, consistent with how the Manager role itself
  * was scoped.
+ *
+ * <p>The three read endpoints above intentionally do NOT also check
+ * {@code isManagerOf(#teamId)} alongside the role check — it would be
+ * redundant given the broad {@code ROLE_RESPONDER} grant already covers
+ * the expected case (a manager holding {@code ROLE_RESPONDER}), and
+ * {@code listTeams} has no {@code teamId} to check against at all.
  */
 @RestController
 @RequestMapping("/api/v1/teams")
@@ -71,6 +92,7 @@ public class TeamController {
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "List all active teams in the current tenant")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     public ResponseEntity<List<TeamDto>> listTeams() {
         return ResponseEntity.ok(teamService.listTeams());
     }
@@ -79,6 +101,7 @@ public class TeamController {
     @Operation(summary = "Get a team by ID")
     @ApiResponses({@ApiResponse(responseCode = "200", description = "Team found"),
             @ApiResponse(responseCode = "404", description = "Team not found")})
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     public ResponseEntity<TeamDto> getTeam(@PathVariable UUID teamId) {
         return ResponseEntity.ok(teamService.getTeam(teamId));
     }
@@ -136,6 +159,7 @@ public class TeamController {
 
     @GetMapping(value = "/{teamId}/members", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "List members of a team")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     public ResponseEntity<List<TeamMemberDto>> listMembers(@PathVariable UUID teamId) {
         return ResponseEntity.ok(teamService.listMembers(teamId));
     }
