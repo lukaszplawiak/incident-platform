@@ -13,12 +13,24 @@ import java.util.HexFormat;
  * Generates and hashes API keys.
  *
  * <h2>Key format</h2>
- * {@code ipl_<prefix8>.<random32>}
+ * {@code ipl_<random32>} — e.g. {@code ipl_xY3kP9qR2vN8mZ7wA1bC4dE6fG0hJ5iK}
  * <ul>
  *   <li>{@code ipl_} — platform prefix, distinguishes from other secret types</li>
- *   <li>{@code <prefix8>} — first 8 chars of the random section for UI display</li>
- *   <li>{@code <random32>} — 24 bytes of SecureRandom → base64url, ~143 bits entropy</li>
+ *   <li>{@code <random32>} — 24 bytes of SecureRandom → base64url, ~143 bits
+ *       entropy, exactly 32 characters (24 bytes × 8 bits ÷ 6 bits-per-char,
+ *       no padding needed)</li>
  * </ul>
+ *
+ * <h2>Fixed (backlog #65): corrected misleading key-format documentation</h2>
+ * Previously documented as {@code ipl_<prefix8>.<random32>} — the dot
+ * implied a two-part, delimited structure with a separate 8-character
+ * prefix segment. The generated key has no dot at all: it's one
+ * continuous string, {@code ipl_} directly followed by the full
+ * 32-character random part. {@link #extractPrefix} does not split on any
+ * delimiter — it takes the first 8 characters of that same continuous
+ * random part via {@code substring(0, 8)}. Someone reading only the old
+ * Javadoc could reasonably, but incorrectly, assume the raw key could be
+ * split on {@code "."} to recover the prefix.
  *
  * <h2>Why SHA-256 not Argon2</h2>
  * API keys have 143 bits of entropy — brute-forcing a leaked SHA-256 hash
@@ -42,7 +54,7 @@ public class ApiKeyHasher {
     /**
      * Generates a new raw API key.
      *
-     * @return {@code ipl_<prefix8>.<random32>}
+     * @return {@code ipl_<random32>} — see class Javadoc for the exact format
      */
     public String generateRawKey() {
         final byte[] randomBytes = new byte[RANDOM_BYTES];

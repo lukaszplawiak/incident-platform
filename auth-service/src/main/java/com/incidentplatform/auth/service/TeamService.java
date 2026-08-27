@@ -142,16 +142,16 @@ public class TeamService {
 
         final Team team = teamRepository
                 .findArchivedByIdAndTenantId(teamId, tenantId)
-                .orElseThrow(() -> new com.incidentplatform.shared.exception
-                        .ResourceNotFoundException("ArchivedTeam", teamId.toString()));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "ArchivedTeam", teamId.toString()));
 
         // Guard: name conflict — another active team may have taken the name
         if (teamRepository.existsByNameAndTenantId(team.getName(), tenantId)) {
-            throw new com.incidentplatform.shared.exception.BusinessException(
+            throw new BusinessException(
                     ErrorCodes.BUSINESS_RULE_VIOLATION,
                     "Cannot restore team \"" + team.getName() + "\" — " +
                             "an active team with this name already exists in the tenant",
-                    org.springframework.http.HttpStatus.CONFLICT);
+                    HttpStatus.CONFLICT);
         }
 
         team.restore();
