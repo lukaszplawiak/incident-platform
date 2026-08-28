@@ -86,6 +86,20 @@ kafka:
     # Gives operators time to inspect, replay or discard poison pills.
     # Override per environment: dev=1, staging=7, prod=30.
     retention-days: ${DEAD_LETTER_RETENTION_DAYS:30}
+  # Fixed (backlog #66): KafkaConfig's own Javadoc already documented
+  # this section as the way to configure partitions/replicas for
+  # production — this was the missing other half of that promise; the
+  # values below were previously only ever set via @Value's own inline
+  # defaults, with no YAML entry point an operator could actually find.
+  # Defaults match those exact previous hardcoded values exactly — zero
+  # behavior change unless explicitly overridden. A production cluster
+  # with more than one broker available should raise `replicas` (e.g.
+  # to 3) for broker-failure resilience — the default of 1 here is only
+  # correct for local/CI docker-compose, which runs a single broker.
+  topic-config:
+    partitions: ${KAFKA_TOPIC_PARTITIONS:3}
+    replicas: ${KAFKA_TOPIC_REPLICAS:1}
+    dead-letter-partitions: ${KAFKA_DEAD_LETTER_TOPIC_PARTITIONS:1}
 
 ingestion:
   max-payload-bytes: ${INGESTION_MAX_PAYLOAD_BYTES:1048576}
