@@ -175,6 +175,36 @@ resilience4j:
           - org.springframework.data.redis.RedisConnectionFailureException
           - io.lettuce.core.RedisConnectionException
           - java.net.ConnectException
+      # Fixed (backlog #67): RateLimitingService previously had no
+      # circuit breaker at all — see its own Javadoc for the full
+      # account of why that mattered (every call independently waiting
+      # out a Redis timeout during degradation, rather than the circuit
+      # opening after a threshold and failing open immediately for
+      # subsequent calls).
+      #
+      # Same thresholds as redis-dedup above — both protect the same
+      # Redis instance in the same service, so there's no reason to
+      # tune them differently without a specific need to.
+      #
+      # record-exceptions is deliberately NOT an identical copy of
+      # redis-dedup's list: RateLimitingService goes through bucket4j's
+      # own LettuceBasedProxyManager, a raw Lettuce connection that
+      # bypasses Spring Data Redis entirely (see RedisRateLimitConfig's
+      # own Javadoc for why) — so
+      # org.springframework.data.redis.RedisConnectionFailureException,
+      # a Spring Data Redis translation-layer exception, can never
+      # actually be thrown on this path and is correctly omitted here.
+      redis-ratelimit:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - io.lettuce.core.RedisConnectionException
+          - java.net.ConnectException
 
 # ================================================================
 # Rate Limiting — multi-layer DDoS protection (Layer 3)
