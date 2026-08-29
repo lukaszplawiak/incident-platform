@@ -2,6 +2,7 @@ package com.incidentplatform.ingestion.ratelimit;
 
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -32,6 +33,37 @@ import org.springframework.stereotype.Service;
  * {@link RateLimitingConfig} for why it now hands out reusable
  * {@code BucketConfiguration} rules instead of per-key {@code Bucket}
  * instances.
+ *
+ * <h2>Fixed (backlog #67): no @CircuitBreaker on the Redis dependency</h2>
+ * {@code DeduplicationService} (this same module, the identical class
+ * of Redis dependency, the identical fail-open philosophy) protects its
+ * Redis call with {@code @CircuitBreaker} — this class only had a plain
+ * {@code try/catch}, no circuit breaker. The two behave identically
+ * during a full Redis outage (both fail open), but differ during
+ * degradation (elevated latency/timeouts rather than immediate
+ * connection failure): without a circuit breaker, every single
+ * {@code tryConsume} call — one per incoming alert-ingestion HTTP
+ * request — independently waits out its own Redis timeout before
+ * falling back, rather than the circuit opening after a threshold of
+ * failures and immediately failing open for subsequent calls with no
+ * further wait on Redis at all. Under sustained degradation with many
+ * concurrent requests, that difference can exhaust the HTTP
+ * request-handling thread pool — a secondary availability problem on
+ * top of the Redis issue itself, which the circuit breaker is
+ * specifically designed to prevent.
+ *
+ * <p>Fixed the same way {@code DeduplicationService} already fixed the
+ * identical "internal try/catch defeats the @CircuitBreaker proxy"
+ * issue for itself (see that class's own Javadoc for the full
+ * mechanism): the try/catch here is removed so a Redis failure
+ * propagates out of {@link #tryConsume} for the proxy to see and
+ * record, and {@link #tryConsumeFallback} — called directly by the
+ * proxy once the failure-rate threshold is crossed — now provides the
+ * fail-open behavior instead. See {@code application.yml}'s
+ * {@code resilience4j.circuitbreaker.instances.redis-ratelimit} for the
+ * threshold configuration, deliberately identical to
+ * {@code redis-dedup}'s — both protect the same Redis instance in the
+ * same service.
  *
  * <p>The {@code enabled} flag is read from {@link RateLimitingProperties}
  * injected through {@link RateLimitingConfig} — no {@code @Value} annotation
@@ -76,45 +108,55 @@ public class RateLimitingService {
                 .register(meterRegistry);
     }
 
+    @CircuitBreaker(name = "redis-ratelimit", fallbackMethod = "tryConsumeFallback")
     public RateLimitResult tryConsume(String tenantId, String clientIp) {
         if (!enabled) {
             return RateLimitResult.permit();
         }
 
-        // Redis errors fail OPEN (request allowed through), matching
-        // DeduplicationService and LoginAttemptService in this same
-        // codebase: a rate limiter that itself takes the ingestion
-        // pipeline down during a Redis blip would be a worse outcome
-        // than temporarily under-enforcing limits.
-        try {
-            final Bucket tenantBucket = proxyManager.builder()
-                    .build(TENANT_KEY_PREFIX + tenantId, config::tenantBucketConfiguration);
+        // No try/catch here — a Redis failure must propagate out of this
+        // method for @CircuitBreaker's proxy to see it and record it.
+        // See this class's Javadoc.
+        final Bucket tenantBucket = proxyManager.builder()
+                .build(TENANT_KEY_PREFIX + tenantId, config::tenantBucketConfiguration);
 
-            if (!tenantBucket.tryConsume(1)) {
-                tenantRateLimitedCounter.increment();
-                log.warn("Rate limit exceeded for tenant: tenantId={}, clientIp={}",
-                        tenantId, clientIp);
-                return RateLimitResult.tenantLimited(tenantId);
-            }
-
-            final Bucket ipBucket = proxyManager.builder()
-                    .build(IP_KEY_PREFIX + clientIp, config::ipBucketConfiguration);
-
-            if (!ipBucket.tryConsume(1)) {
-                ipRateLimitedCounter.increment();
-                log.warn("Rate limit exceeded for IP: clientIp={}, tenantId={}",
-                        clientIp, tenantId);
-                return RateLimitResult.ipLimited(clientIp);
-            }
-
-            return RateLimitResult.permit();
-
-        } catch (Exception e) {
-            redisErrorCounter.increment();
-            log.error("Redis unavailable during rate limit check — failing open: " +
-                            "tenantId={}, clientIp={}, error={}",
-                    tenantId, clientIp, e.getMessage(), e);
-            return RateLimitResult.permit();
+        if (!tenantBucket.tryConsume(1)) {
+            tenantRateLimitedCounter.increment();
+            log.warn("Rate limit exceeded for tenant: tenantId={}, clientIp={}",
+                    tenantId, clientIp);
+            return RateLimitResult.tenantLimited(tenantId);
         }
+
+        final Bucket ipBucket = proxyManager.builder()
+                .build(IP_KEY_PREFIX + clientIp, config::ipBucketConfiguration);
+
+        if (!ipBucket.tryConsume(1)) {
+            ipRateLimitedCounter.increment();
+            log.warn("Rate limit exceeded for IP: clientIp={}, tenantId={}",
+                    clientIp, tenantId);
+            return RateLimitResult.ipLimited(clientIp);
+        }
+
+        return RateLimitResult.permit();
+    }
+
+    /**
+     * Called by the Resilience4j proxy — either when {@link #tryConsume}
+     * throws a matching exception, or when the circuit is already OPEN
+     * (in which case {@code ex} is a
+     * {@link io.github.resilience4j.circuitbreaker.CallNotPermittedException},
+     * not a Redis exception — the broad {@code Exception} parameter type
+     * here is Resilience4j's own required convention for fallback
+     * methods). Same fail-open behavior the removed internal try/catch
+     * used to provide directly — a rate limiter that itself takes the
+     * ingestion pipeline down during a Redis blip would be a worse
+     * outcome than temporarily under-enforcing limits.
+     */
+    RateLimitResult tryConsumeFallback(String tenantId, String clientIp, Exception ex) {
+        redisErrorCounter.increment();
+        log.error("Redis unavailable during rate limit check — failing open: " +
+                        "tenantId={}, clientIp={}, error={}",
+                tenantId, clientIp, ex.getMessage(), ex);
+        return RateLimitResult.permit();
     }
 }

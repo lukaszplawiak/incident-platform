@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
@@ -35,6 +36,17 @@ import static org.mockito.Mockito.verify;
  * {@code Counter} individually — same choice as
  * {@code LoginAttemptServiceTest} — so counter assertions read the
  * actual recorded value instead of verifying mock interactions.
+ *
+ * <h2>Fixed (backlog #67): RedisFailure/tryConsumeFallback test split</h2>
+ * Mirrors the identical split {@code DeduplicationServiceTest} already
+ * uses for {@code isDuplicate}/{@code isDuplicateFallback} after that
+ * class's own {@code @CircuitBreaker} fix: {@code RedisFailure} below
+ * now verifies {@code tryConsume} itself lets a Redis failure propagate
+ * (all this plain, proxy-free unit test can verify about the annotated
+ * method), and the separate {@code TryConsumeFallback} class calls
+ * {@code tryConsumeFallback} directly, since a Mockito-only test has no
+ * AOP proxy to invoke it for us the way a real, Spring-managed circuit
+ * breaker would.
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("RateLimitingService")
@@ -197,41 +209,82 @@ class RateLimitingServiceTest {
         assertThat(result.reason()).isNull();
     }
 
-    // ── Redis failure — fail open ────────────────────────────────────────
+    // ── Redis failure — propagates for the @CircuitBreaker proxy ────────
     //
-    // Same contract as DeduplicationService (this module) and
-    // LoginAttemptService (auth-service): a Redis outage must not take
-    // the ingestion pipeline down with it.
+    // Fixed (backlog #67): previously tryConsume() caught Redis
+    // exceptions internally and returned a permit directly — see
+    // RateLimitingService's own Javadoc for why that defeated
+    // @CircuitBreaker exactly the way DeduplicationServiceTest's
+    // identical fix already documented for isDuplicate(). This class is
+    // a plain unit test (no Spring context, no AOP proxy involved), so
+    // it can only verify the annotated method's own behavior in
+    // isolation: that a Redis failure now propagates instead of being
+    // swallowed. The actual fail-open behavior is tested separately and
+    // directly against tryConsumeFallback below — that's the method the
+    // proxy would call in a real, Spring-managed circuit breaker.
 
     @Nested
     @DisplayName("Redis failure")
     class RedisFailure {
 
         @Test
-        @DisplayName("fails open (permits) and increments the Redis-error counter when Redis is unavailable")
-        void failsOpenOnRedisException() {
+        @DisplayName("propagates a Redis failure instead of swallowing it — " +
+                "this is what makes the @CircuitBreaker proxy actually work")
+        void propagatesRedisFailure() {
             given(bucketBuilder.build(eq(TENANT_KEY), any(Supplier.class)))
                     .willThrow(new RuntimeException("Redis connection refused"));
 
-            final RateLimitResult result = service.tryConsume(TENANT_ID, CLIENT_IP);
-
-            assertThat(result.allowed()).isTrue();
-            assertThat(counterValue("rate_limit.redis.errors")).isEqualTo(1.0);
+            assertThatThrownBy(() -> service.tryConsume(TENANT_ID, CLIENT_IP))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("Redis connection refused");
         }
 
         @Test
-        @DisplayName("fails open even when only the IP bucket call fails")
-        void failsOpenWhenIpBucketCallFails() {
+        @DisplayName("propagates even when only the IP bucket call fails")
+        void propagatesWhenIpBucketCallFails() {
             given(bucketBuilder.build(eq(TENANT_KEY), any(Supplier.class)))
                     .willReturn(tenantBucket);
             given(tenantBucket.tryConsume(1)).willReturn(true);
             given(bucketBuilder.build(eq(IP_KEY), any(Supplier.class)))
                     .willThrow(new RuntimeException("Redis timeout"));
 
-            final RateLimitResult result = service.tryConsume(TENANT_ID, CLIENT_IP);
+            assertThatThrownBy(() -> service.tryConsume(TENANT_ID, CLIENT_IP))
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("Redis timeout");
+        }
+    }
+
+    // ── tryConsumeFallback ───────────────────────────────────────────────
+
+    /**
+     * The actual regression coverage for backlog #67's fail-open
+     * contract — called directly, exactly as
+     * {@code DeduplicationServiceTest.IsDuplicateFallback} tests
+     * {@code isDuplicateFallback}, since a plain Mockito unit test has
+     * no AOP proxy to invoke it for us.
+     */
+    @Nested
+    @DisplayName("tryConsumeFallback")
+    class TryConsumeFallback {
+
+        @Test
+        @DisplayName("fails open (permits) and increments the Redis-error counter")
+        void failsOpenAndIncrementsCounter() {
+            final RateLimitResult result = service.tryConsumeFallback(
+                    TENANT_ID, CLIENT_IP, new RuntimeException("Redis unavailable"));
 
             assertThat(result.allowed()).isTrue();
             assertThat(counterValue("rate_limit.redis.errors")).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("does not touch the tenant or IP rejection counters — this is not a real rejection")
+        void doesNotAffectRejectionCounters() {
+            service.tryConsumeFallback(
+                    TENANT_ID, CLIENT_IP, new RuntimeException("boom"));
+
+            assertThat(counterValue("rate_limit.tenant.rejected")).isEqualTo(0.0);
+            assertThat(counterValue("rate_limit.ip.rejected")).isEqualTo(0.0);
         }
     }
 }
