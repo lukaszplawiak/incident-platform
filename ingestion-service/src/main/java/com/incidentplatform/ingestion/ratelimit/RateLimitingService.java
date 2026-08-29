@@ -26,7 +26,8 @@ import org.springframework.stereotype.Service;
  * when traffic (and therefore replica count) is highest.
  *
  * <p>Both problems are fixed the same way {@code DeduplicationService}
- * (same module) and {@code LoginAttemptService} (auth-service) already
+ * (same module) and {@code BruteForceProtectionService} (auth-service,
+ * renamed from {@code LoginAttemptService} — backlog #58) already
  * solve the identical class of problem: move the per-key state to
  * Redis, which expires it automatically and shares it across every
  * replica. See {@link RedisRateLimitConfig} for the Redis wiring and

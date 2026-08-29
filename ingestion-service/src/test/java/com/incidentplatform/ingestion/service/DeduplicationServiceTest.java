@@ -34,7 +34,8 @@ import static org.mockito.Mockito.lenient;
  * {@code @CircuitBreaker} whose correctness turned out to matter (see
  * that class's Javadoc for the bug this fix addresses).
  *
- * <p>Mirrors {@code LoginAttemptServiceTest} (auth-service) — mocks
+ * <p>Mirrors {@code BruteForceProtectionServiceTest} (auth-service,
+ * renamed from {@code LoginAttemptServiceTest} — backlog #58) — mocks
  * {@link StringRedisTemplate}/{@link ValueOperations} rather than
  * standing up a real Redis, and uses a real {@link SimpleMeterRegistry}
  * instead of mocking every {@code Counter} individually so assertions
