@@ -28,13 +28,14 @@ import static org.mockito.Mockito.verify;
  * Tests for {@link RateLimitingService} — the Redis-backed rate limiter
  * (see its own Javadoc for why this replaced an in-memory
  * {@code ConcurrentHashMap<String, Bucket>}, and
- * {@code LoginAttemptServiceTest} in auth-service for the sibling test
+ * {@code BruteForceProtectionServiceTest} in auth-service (renamed from
+ * {@code LoginAttemptServiceTest} — backlog #58) for the sibling test
  * this one's structure mirrors, adapted for bucket4j-redis's
  * {@code ProxyManager} API instead of {@code StringRedisTemplate}).
  *
  * <p>Uses a real {@link SimpleMeterRegistry} rather than mocking every
  * {@code Counter} individually — same choice as
- * {@code LoginAttemptServiceTest} — so counter assertions read the
+ * {@code BruteForceProtectionServiceTest} — so counter assertions read the
  * actual recorded value instead of verifying mock interactions.
  *
  * <h2>Fixed (backlog #67): RedisFailure/tryConsumeFallback test split</h2>

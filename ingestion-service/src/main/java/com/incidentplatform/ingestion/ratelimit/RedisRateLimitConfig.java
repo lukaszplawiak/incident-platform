@@ -86,8 +86,10 @@ public class RedisRateLimitConfig {
      * request instead of caching {@code Bucket} instances itself; each
      * call is a Redis round-trip (same trade-off
      * {@code DeduplicationService} and auth-service's
-     * {@code LoginAttemptService} already accept elsewhere in this
-     * codebase), and per-key state now lives in Redis, not JVM heap.
+     * {@code BruteForceProtectionService} (renamed from
+     * {@code LoginAttemptService} — backlog #58) already accept
+     * elsewhere in this codebase), and per-key state now lives in
+     * Redis, not JVM heap.
      */
     @Bean
     public ProxyManager<String> rateLimitProxyManager(

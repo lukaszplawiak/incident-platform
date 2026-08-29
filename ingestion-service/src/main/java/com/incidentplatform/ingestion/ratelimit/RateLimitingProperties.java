@@ -18,7 +18,8 @@ import org.springframework.validation.annotation.Validated;
  *
  * <p>Consistent with the approach used for
  * {@link com.incidentplatform.shared.security.JwtProperties} and
- * {@link com.incidentplatform.auth.ratelimit.LoginAttemptProperties}.
+ * {@code com.incidentplatform.auth.ratelimit.BruteForceProtectionProperties}
+ * (renamed from {@code LoginAttemptProperties} — backlog #58).
  *
  * <h2>YAML configuration</h2>
  * <pre>{@code
