@@ -24,6 +24,28 @@ public record IngestionSummary(
         @JsonProperty("received")
         int received,
 
+        /**
+         * Fixed (backlog #72): documenting semantics that were previously
+         * implicit and easy to misread. This counts firing alerts handed
+         * off to {@code AlertKafkaProducer.publishFiring} — NOT confirmed
+         * delivered to Kafka. The send itself is fire-and-forget/async by
+         * deliberate design (see {@code AlertKafkaProducer}'s own Javadoc
+         * for the full "occasional alert loss vs endpoint availability
+         * under pressure" reasoning); this count increments synchronously,
+         * immediately after the async send is initiated, before its
+         * result is known. If Kafka is entirely down for a whole batch,
+         * a caller reading this summary would still see
+         * {@code processed: N} for all N alerts — delivery FAILURES
+         * during a Kafka outage surface via
+         * {@code AlertKafkaProducer}'s own counter/logs, not through this
+         * field or anywhere else in this summary. Deliberately NOT
+         * renamed to something like {@code accepted} to more precisely
+         * signal this — {@code processed} is both the wire-format JSON
+         * key (external API contract) and the Java record component name
+         * referenced throughout this codebase's tests; a rename's blast
+         * radius wasn't judged proportionate to a documentation-clarity
+         * finding with no actual behavior change behind it.
+         */
         @JsonProperty("processed")
         int processed,
 
