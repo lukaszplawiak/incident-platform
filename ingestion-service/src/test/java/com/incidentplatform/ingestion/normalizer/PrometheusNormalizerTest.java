@@ -288,7 +288,7 @@ class PrometheusNormalizerTest {
                           "labels": {
                             "alertname": "HighMemoryUsage",
                             "severity": "warning",
-                            "instance": "server-2:9100"
+                                                        "instance": "server-2:9100"
                           }
                         }
                       ]
@@ -426,8 +426,9 @@ class PrometheusNormalizerTest {
         }
 
         @Test
-        @DisplayName("should throw when alertname label is missing")
-        void shouldThrowWhenAlertnameMissing() throws Exception {
+        @DisplayName("should collect a malformed alert as malformedAlerts instead of " +
+                "throwing — backlog #69, no longer fails the whole batch")
+        void shouldCollectMalformedAlertInsteadOfThrowing() throws Exception {
             final JsonNode payload = objectMapper.readTree("""
                     {
                       "alerts": [{
@@ -436,9 +437,74 @@ class PrometheusNormalizerTest {
                       }]
                     }
                     """);
-            assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
-                    .isInstanceOf(NormalizationException.class)
-                    .hasMessageContaining("alertname");
+
+            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
+
+            assertThat(result.firingAlerts()).isEmpty();
+            assertThat(result.resolvedAlerts()).isEmpty();
+            assertThat(result.malformedAlerts()).hasSize(1);
+            assertThat(result.malformedAlerts().get(0).reason())
+                    .contains("alertname");
+            assertThat(result.malformedAlerts().get(0).rawAlert())
+                    .isEqualTo(payload.get("alerts").get(0));
+        }
+
+        /**
+         * The actual regression test for backlog #69 — the specific
+         * scenario the fix targets: several alerts in one batch, one of
+         * them malformed. Before this fix, the malformed one would have
+         * made {@code normalize} throw, and {@code AlertIngestionService}
+         * would have dead-lettered the ENTIRE batch as one unit —
+         * discarding the two genuinely valid alerts alongside it. Now
+         * they must be processed normally, isolated from the one that
+         * failed.
+         */
+        @Test
+        @DisplayName("should isolate one malformed alert from otherwise-valid " +
+                "siblings in the same batch (backlog #69)")
+        void shouldIsolateMalformedAlertFromValidSiblings() throws Exception {
+            final JsonNode payload = objectMapper.readTree("""
+                    {
+                      "alerts": [
+                        {
+                          "status": "firing",
+                          "labels": {
+                            "alertname": "HighCpuUsage",
+                            "severity": "critical",
+                            "instance": "server-1:9100"
+                          }
+                        },
+                        {
+                          "status": "firing",
+                          "labels": { "severity": "critical", "instance": "server-2" }
+                        },
+                        {
+                          "status": "resolved",
+                          "labels": {
+                            "alertname": "HighMemoryUsage",
+                            "instance": "server-3:9100"
+                          }
+                        }
+                      ]
+                    }
+                    """);
+
+            final NormalizationResult result = normalizer.normalize(payload, TENANT_ID, null);
+
+            assertThat(result.firingAlerts()).hasSize(1);
+            assertThat(result.firingAlerts().get(0).source())
+                    .isEqualTo("prometheus");
+            assertThat(result.resolvedAlerts()).hasSize(1);
+            assertThat(result.malformedAlerts()).hasSize(1);
+            assertThat(result.malformedAlerts().get(0).reason())
+                    .contains("alertname");
+
+            // Confirms the fix documented on NormalizationResult.isTruncated:
+            // a batch with a malformed alert but no batch-size truncation
+            // must not report itself as truncated.
+            assertThat(result.totalReceived()).isEqualTo(3);
+            assertThat(result.totalProcessed()).isEqualTo(3);
+            assertThat(result.isTruncated()).isFalse();
         }
     }
 

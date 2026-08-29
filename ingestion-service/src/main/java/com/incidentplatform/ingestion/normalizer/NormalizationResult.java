@@ -1,5 +1,6 @@
 package com.incidentplatform.ingestion.normalizer;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 
@@ -29,6 +30,42 @@ import java.util.List;
  * {@code IngestionSummary.received} and a {@code truncated} flag instead
  * of silently reporting the smaller, already-capped number as if it were
  * the whole truth.
+ *
+ * <h2>Fixed (backlog #69): one malformed alert no longer fails the
+ * whole batch</h2>
+ * {@link PrometheusNormalizer} previously let a
+ * {@link NormalizationException} from any single alert within a batch
+ * propagate uncaught, which {@code AlertIngestionService} then handled
+ * by dead-lettering the <em>entire</em> payload as one unit — including
+ * every other alert in that batch, however many, however valid. Given
+ * real Alertmanager traffic groups many alerts into one webhook call,
+ * and batches are largest during exactly the major incidents where
+ * alert delivery matters most, this meant a single malformed alert
+ * (from a misconfigured rule, a non-Alertmanager caller mimicking the
+ * format, or a mangled entry from an intermediate proxy) could silently
+ * withhold many genuinely valid, actionable alerts until someone
+ * noticed the dead-letter entry and manually recovered them.
+ *
+ * <p>{@link #malformedAlerts} now carries each alert that individually
+ * failed normalization, isolated from the ones that succeeded — see
+ * {@code PrometheusNormalizer}'s own per-item try/catch for where these
+ * are collected, and {@code AlertIngestionService} for where each one is
+ * now dead-lettered individually (the same
+ * {@code DeadLetterPublisher.publish} call already used for
+ * serialization failures, just also reached from this new source), while
+ * every other alert in the same batch is still processed normally. Same
+ * principle already established elsewhere in this codebase for batch
+ * processing — see {@code AuthEmailScheduler}'s (auth-service)
+ * {@code continuesAfterOneFailure} test: one bad item in a batch must not
+ * stop the rest from being handled.
+ *
+ * <p>{@link #totalProcessed()} now includes {@code malformedAlerts.size()}
+ * alongside firing and resolved counts — deliberately, so
+ * {@link #isTruncated()} keeps meaning specifically "the batch-size limit
+ * dropped alerts before they were even attempted," not "something,
+ * anything, didn't end up in firingAlerts/resolvedAlerts." A batch with
+ * some malformed alerts but no batch-size truncation should not report
+ * itself as truncated.
  */
 public record NormalizationResult(
 
@@ -36,15 +73,28 @@ public record NormalizationResult(
 
         List<ResolvedAlertNotification> resolvedAlerts,
 
+        List<MalformedAlert> malformedAlerts,
+
         int totalReceived
 
 ) {
+    /**
+     * One alert that was individually attempted and failed normalization
+     * within an otherwise-processed batch (backlog #69) — carries enough
+     * to dead-letter it on its own: the raw sub-payload exactly as
+     * received, and why it failed.
+     */
+    public record MalformedAlert(JsonNode rawAlert, String reason) {}
+
     public NormalizationResult {
         firingAlerts = firingAlerts != null
                 ? List.copyOf(firingAlerts)
                 : List.of();
         resolvedAlerts = resolvedAlerts != null
                 ? List.copyOf(resolvedAlerts)
+                : List.of();
+        malformedAlerts = malformedAlerts != null
+                ? List.copyOf(malformedAlerts)
                 : List.of();
     }
 
@@ -53,15 +103,18 @@ public record NormalizationResult(
      * every normalizer except {@link PrometheusNormalizer} — Generic and
      * Wazuh each normalize exactly one alert per call). {@code
      * totalReceived} is simply {@code alerts.size()} — there's nothing to
-     * have been truncated.
+     * have been truncated, and nothing to have been individually
+     * malformed either: a normalization failure for a single-alert
+     * normalizer throws in the ordinary way, since there is no "rest of
+     * the batch" to isolate it from.
      */
     public static NormalizationResult firingOnly(List<UnifiedAlertDto> alerts) {
         final int size = alerts != null ? alerts.size() : 0;
-        return new NormalizationResult(alerts, List.of(), size);
+        return new NormalizationResult(alerts, List.of(), List.of(), size);
     }
 
     public static NormalizationResult empty() {
-        return new NormalizationResult(List.of(), List.of(), 0);
+        return new NormalizationResult(List.of(), List.of(), List.of(), 0);
     }
 
     public boolean isEmpty() {
@@ -69,15 +122,19 @@ public record NormalizationResult(
     }
 
     public int totalProcessed() {
-        return firingAlerts.size() + resolvedAlerts.size();
+        return firingAlerts.size() + resolvedAlerts.size() + malformedAlerts.size();
     }
 
     /**
      * True when {@link #totalReceived} exceeds what actually made it into
-     * {@link #firingAlerts}/{@link #resolvedAlerts} — i.e. a normalizer
-     * (currently only {@link PrometheusNormalizer}, via
+     * {@link #firingAlerts}/{@link #resolvedAlerts}/{@link #malformedAlerts}
+     * combined — i.e. a normalizer (currently only
+     * {@link PrometheusNormalizer}, via
      * {@code ingestion.prometheus.max-batch-size}) capped the batch and
      * silently dropped the remainder before this result was even built.
+     * Deliberately unaffected by {@link #malformedAlerts} — see this
+     * class's own Javadoc (backlog #69) for why those are counted inside
+     * {@link #totalProcessed()} instead.
      */
     public boolean isTruncated() {
         return totalReceived > totalProcessed();
