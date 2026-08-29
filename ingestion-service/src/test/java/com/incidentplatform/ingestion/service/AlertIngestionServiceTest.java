@@ -145,7 +145,8 @@ class AlertIngestionServiceTest {
             final UnifiedAlertDto alert = buildAlert();
             final JsonNode rawPayload = buildRawPayload();
             given(normalizer.normalize(rawPayload, TENANT_ID, null))
-                    .willReturn(new NormalizationResult(List.of(alert), List.of(), 5));
+                    .willReturn(new NormalizationResult(
+                            List.of(alert), List.of(), List.of(), 5));
             given(deduplicationService.isDuplicate(alert)).willReturn(false);
             given(kafkaProducer.publishFiring(alert))
                     .willReturn(CompletableFuture.completedFuture(sendResult));
@@ -254,7 +255,8 @@ class AlertIngestionServiceTest {
                     TENANT_ID, SOURCE, "prometheus:highcpu:server-1", Instant.now());
             final JsonNode rawPayload = buildRawPayload();
             given(normalizer.normalize(rawPayload, TENANT_ID, null))
-                    .willReturn(new NormalizationResult(List.of(), List.of(notification), 1));
+                    .willReturn(new NormalizationResult(
+                            List.of(), List.of(notification), List.of(), 1));
 
             final IngestionSummary summary =
                     service.ingest(SOURCE, rawPayload, TENANT_ID, null);
@@ -285,6 +287,56 @@ class AlertIngestionServiceTest {
             then(deadLetterPublisher).should().publish(
                     eq(rawPayload), eq(SOURCE), eq(TENANT_ID), anyString());
             then(kafkaProducer).shouldHaveNoInteractions();
+        }
+    }
+
+    /**
+     * The actual regression coverage for backlog #69 — verifies
+     * AlertIngestionService's side of the fix: each entry in
+     * {@code NormalizationResult.malformedAlerts()} is dead-lettered
+     * individually (same {@code DeadLetterPublisher.publish} call
+     * already used for serialization failures), counted into
+     * {@code IngestionSummary.deadLetter}, and — critically — does not
+     * prevent the rest of the batch's valid alerts from being processed
+     * normally in the same call.
+     */
+    @Nested
+    @DisplayName("ingest — malformed alerts within an otherwise-valid batch")
+    class MalformedAlertsWithinBatch {
+
+        @Test
+        @DisplayName("dead-letters a malformed alert individually and still " +
+                "processes the valid alerts in the same batch")
+        void deadLettersMalformedAlertAndStillProcessesValidSiblings() {
+            final UnifiedAlertDto validAlert = buildAlert();
+            final JsonNode rawPayload = buildRawPayload();
+            final JsonNode malformedRawAlert = objectMapper.createObjectNode()
+                    .put("status", "firing");
+            final NormalizationResult.MalformedAlert malformed =
+                    new NormalizationResult.MalformedAlert(
+                            malformedRawAlert, "Missing 'alertname' label");
+
+            given(normalizer.normalize(rawPayload, TENANT_ID, null))
+                    .willReturn(new NormalizationResult(
+                            List.of(validAlert), List.of(), List.of(malformed), 2));
+            given(deduplicationService.isDuplicate(validAlert)).willReturn(false);
+            given(kafkaProducer.publishFiring(validAlert))
+                    .willReturn(CompletableFuture.completedFuture(sendResult));
+
+            final IngestionSummary summary =
+                    service.ingest(SOURCE, rawPayload, TENANT_ID, null);
+
+            assertThat(summary.deadLetter()).isEqualTo(1);
+            assertThat(summary.processed()).isEqualTo(1);
+            assertThat(summary.received()).isEqualTo(2);
+            assertThat(summary.truncated())
+                    .as("a malformed alert alone must not report as truncated — " +
+                            "that's a distinct concept (batch-size limiting)")
+                    .isFalse();
+
+            then(deadLetterPublisher).should().publish(
+                    eq(malformedRawAlert), eq(SOURCE), eq(TENANT_ID), anyString());
+            then(kafkaProducer).should().publishFiring(validAlert);
         }
     }
 

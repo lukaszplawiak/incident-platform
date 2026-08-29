@@ -54,26 +54,46 @@ public class PrometheusNormalizer extends BaseNormalizer {
 
         List<UnifiedAlertDto> firingAlerts = new ArrayList<>();
         List<ResolvedAlertNotification> resolvedAlerts = new ArrayList<>();
+        List<NormalizationResult.MalformedAlert> malformedAlerts = new ArrayList<>();
 
+        // Fixed (backlog #69): each alert's normalization is now isolated
+        // from its siblings — previously a NormalizationException from
+        // any single alert propagated uncaught out of this whole method,
+        // which AlertIngestionService then handled by dead-lettering the
+        // ENTIRE batch as one unit, discarding every other alert in it,
+        // however many, however valid. Real Alertmanager traffic groups
+        // many alerts into one webhook call, and batches are largest
+        // during exactly the major incidents where alert delivery matters
+        // most — see NormalizationResult's own Javadoc for the full
+        // account. A malformed alert is now caught here, collected into
+        // malformedAlerts for AlertIngestionService to dead-letter
+        // individually, and the loop continues — one bad alert no longer
+        // withholds the rest of an otherwise-valid batch.
         for (int i = 0; i < limit; i++) {
             final JsonNode alert = alerts.get(i);
             final String status = getText(alert, "status", STATUS_FIRING);
 
-            // NormalizationException is unchecked — it propagates naturally
-            // without a try-catch block. The removed catch { throw e; } was
-            // a no-op that added noise and implied unfinished error handling.
-            if (STATUS_RESOLVED.equals(status)) {
-                resolvedAlerts.add(normalizeResolvedAlert(alert, tenantId, i));
-            } else {
-                firingAlerts.add(normalizeFiringAlert(alert, tenantId, teamId, i));
+            try {
+                if (STATUS_RESOLVED.equals(status)) {
+                    resolvedAlerts.add(normalizeResolvedAlert(alert, tenantId, i));
+                } else {
+                    firingAlerts.add(normalizeFiringAlert(alert, tenantId, teamId, i));
+                }
+            } catch (NormalizationException e) {
+                log.warn("Skipping malformed alert at index {} within an " +
+                                "otherwise-valid batch — isolated from the rest, " +
+                                "not failing the whole batch: source={}, tenant={}, " +
+                                "reason={}",
+                        i, SOURCE, tenantId, e.getReason());
+                malformedAlerts.add(
+                        new NormalizationResult.MalformedAlert(alert, e.getReason()));
             }
         }
 
         log.info("Prometheus batch normalized: total={}, firing={}, resolved={}, " +
-                        "skipped={}, tenant={}",
+                        "malformed={}, truncated={}, tenant={}",
                 totalAlerts, firingAlerts.size(), resolvedAlerts.size(),
-                totalAlerts - firingAlerts.size() - resolvedAlerts.size(),
-                tenantId);
+                malformedAlerts.size(), totalAlerts - limit, tenantId);
 
         // Fixed: totalAlerts (the true count from the raw payload, before
         // this method's own limit-truncation above) is passed explicitly
@@ -82,7 +102,8 @@ public class PrometheusNormalizer extends BaseNormalizer {
         // already capped by `limit` above when totalAlerts > maxBatchSize.
         // See NormalizationResult's own Javadoc for the full account of
         // why this distinction matters.
-        return new NormalizationResult(firingAlerts, resolvedAlerts, totalAlerts);
+        return new NormalizationResult(
+                firingAlerts, resolvedAlerts, malformedAlerts, totalAlerts);
     }
 
     @Override

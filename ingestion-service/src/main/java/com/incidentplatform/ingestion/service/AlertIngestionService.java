@@ -91,6 +91,23 @@ public class AlertIngestionService {
         // number as if it were the whole payload.
         final int received = result.totalReceived();
 
+        // Fixed (backlog #69): PrometheusNormalizer now isolates a
+        // malformed alert from the rest of its batch instead of letting
+        // it abort normalization for the whole payload (see
+        // NormalizationResult's own Javadoc for the full account). Each
+        // one collected here is dead-lettered on its own, through the
+        // same DeadLetterPublisher.publish call already used below for
+        // serialization failures — this is simply a second source
+        // reaching it, not a new mechanism — so the rest of this batch's
+        // valid alerts are still processed normally in the loops below,
+        // unaffected by however many malformed alerts came alongside them.
+        for (NormalizationResult.MalformedAlert malformed : result.malformedAlerts()) {
+            deadLetterPublisher.publish(
+                    malformed.rawAlert(), source, tenantId,
+                    "Alert normalization failed: " + malformed.reason());
+            deadLetter++;
+        }
+
         for (UnifiedAlertDto alert : result.firingAlerts()) {
             try {
                 if (deduplicationService.isDuplicate(alert)) {
