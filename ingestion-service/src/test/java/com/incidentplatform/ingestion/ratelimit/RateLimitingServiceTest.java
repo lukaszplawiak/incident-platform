@@ -89,17 +89,15 @@ class RateLimitingServiceTest {
         service = new RateLimitingService(config, proxyManager, meterRegistry);
     }
 
+    // Fixed (backlog #73): RateLimitingProperties no longer has a
+    // severity component — see that record's own Javadoc for the full
+    // account of why the half-built severity-capacity feature was
+    // removed rather than completed.
     private RateLimitingProperties buildProperties(boolean enabled) {
         return new RateLimitingProperties(
                 enabled,
                 new RateLimitingProperties.Tenant(100, 10, 1),
-                new RateLimitingProperties.Ip(50, 5, 1),
-                new RateLimitingProperties.Severity(
-                        new RateLimitingProperties.SeverityLimit(1000),
-                        new RateLimitingProperties.SeverityLimit(500),
-                        new RateLimitingProperties.SeverityLimit(100),
-                        new RateLimitingProperties.SeverityLimit(50)
-                )
+                new RateLimitingProperties.Ip(50, 5, 1)
         );
     }
 

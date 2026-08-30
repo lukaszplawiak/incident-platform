@@ -211,7 +211,6 @@ resilience4j:
 #
 # Per tenant:   isolation between tenants
 # Per IP:       protection against attacks from a single source
-# Per severity: CRITICAL > HIGH > MEDIUM > LOW
 #
 # TODO (Layer 1): Cloudflare — when project goes to public domain
 # TODO (Layer 2): Nginx Ingress rate limiting — when Kubernetes
@@ -219,6 +218,22 @@ resilience4j:
 #   alerts.raw.critical, alerts.raw.high etc.
 #   Priority benefit is minimal with single instance.
 # TODO (Layer 5): Prometheus alert RateLimitExceeded — when monitoring
+#
+# Fixed (backlog #73): removed a "Per severity: CRITICAL > HIGH > MEDIUM
+# > LOW" fixed-capacity bucket that used to be listed here as a peer of
+# tenant/IP, alongside the RateLimitingProperties.severity config it
+# read from (also removed — see that record's own Javadoc for the full
+# account). Two independent problems: tryConsume() runs once per HTTP
+# request, before the payload is normalized, and a single Prometheus
+# webhook call can legitimately batch alerts of different severities —
+# there was no single well-defined "severity of this request" to check.
+# Separately, even where severity IS known up front, a fixed, always-
+# enforced quota per severity isn't what production alerting systems
+# mean by protecting critical alerts under load — that's priority-based
+# load shedding, conditional on actual system stress, not a constant cap
+# regardless of load. Genuine severity-aware protection belongs in
+# Layer 4 above instead — differentiated downstream processing/
+# prioritization, not an additional reject-gate at ingestion.
 # ================================================================
 rate-limiting:
   enabled: ${RATE_LIMITING_ENABLED:true}
@@ -230,15 +245,6 @@ rate-limiting:
     capacity: ${RATE_LIMIT_IP_CAPACITY:50}
     refill-tokens: ${RATE_LIMIT_IP_REFILL:5}
     refill-period-seconds: ${RATE_LIMIT_IP_PERIOD:1}
-  severity:
-    critical:
-      capacity: ${RATE_LIMIT_CRITICAL_CAPACITY:1000}
-    high:
-      capacity: ${RATE_LIMIT_HIGH_CAPACITY:500}
-    medium:
-      capacity: ${RATE_LIMIT_MEDIUM_CAPACITY:100}
-    low:
-      capacity: ${RATE_LIMIT_LOW_CAPACITY:50}
 alertmanager:
   # Path to the file where the Alertmanager ingestor token is written.
   # Must match the credentials_file path mounted into the Alertmanager container.
