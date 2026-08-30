@@ -21,6 +21,18 @@ import org.springframework.validation.annotation.Validated;
  * {@code com.incidentplatform.auth.ratelimit.BruteForceProtectionProperties}
  * (renamed from {@code LoginAttemptProperties} — backlog #58).
  *
+ * <h2>Fixed (backlog #73): removed the unused, half-built {@code severity}
+ * section</h2>
+ * A third {@code severity} component (fixed capacity per CRITICAL/HIGH/
+ * MEDIUM/LOW) previously sat alongside {@code tenant}/{@code ip} here,
+ * with a reader ({@code RateLimitingConfig.getSeverityCapacity}) that
+ * had no caller anywhere. See that method's own former Javadoc (now in
+ * {@code RateLimitingConfig}'s class-level Javadoc) for the full account
+ * of why completing it as originally shaped would have been the wrong
+ * mechanism, not just an unfinished one — genuine severity-aware
+ * protection belongs in {@code application.yml}'s already-planned
+ * "Layer 4: Separate Kafka topics per severity" instead.
+ *
  * <h2>YAML configuration</h2>
  * <pre>{@code
  * rate-limiting:
@@ -33,15 +45,6 @@ import org.springframework.validation.annotation.Validated;
  *     capacity: 50
  *     refill-tokens: 5
  *     refill-period-seconds: 1
- *   severity:
- *     critical:
- *       capacity: 1000
- *     high:
- *       capacity: 500
- *     medium:
- *       capacity: 100
- *     low:
- *       capacity: 50
  * }</pre>
  */
 @ConfigurationProperties(prefix = "rate-limiting")
@@ -51,8 +54,7 @@ public record RateLimitingProperties(
         boolean enabled,
 
         @NotNull @Valid Tenant tenant,
-        @NotNull @Valid Ip ip,
-        @NotNull @Valid Severity severity
+        @NotNull @Valid Ip ip
 
 ) {
 
@@ -76,17 +78,5 @@ public record RateLimitingProperties(
 
             @Positive(message = "rate-limiting.ip.refill-period-seconds must be positive")
             long refillPeriodSeconds
-    ) {}
-
-    public record Severity(
-            @NotNull @Valid SeverityLimit critical,
-            @NotNull @Valid SeverityLimit high,
-            @NotNull @Valid SeverityLimit medium,
-            @NotNull @Valid SeverityLimit low
-    ) {}
-
-    public record SeverityLimit(
-            @Positive(message = "rate-limiting severity capacity must be positive")
-            long capacity
     ) {}
 }
