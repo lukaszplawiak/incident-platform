@@ -1,0 +1,38 @@
+-- Fixed (backlog #74): closes a check-then-act race in
+-- IncidentCommandService.createFromAlert() — existsActiveByTenantIdAndAlertFingerprint()
+-- (a read) and the subsequent INSERT of a new Incident (a write) had no
+-- atomic protection between them. Under normal, single-replica operation,
+-- Kafka's tenant-keyed partitioning (AlertKafkaProducer keys by tenantId,
+-- not fingerprint) naturally serializes all of one tenant's messages
+-- through a single consumer thread, making this race very unlikely in
+-- practice — but with incident-service horizontally scaled to multiple
+-- replicas (already anticipated elsewhere in this codebase's own roadmap
+-- comments) and a partition rebalance occurring while a message is
+-- in-flight (read done, not yet committed/acknowledged), a partition can
+-- be picked up by a second replica mid-processing, and both can
+-- concurrently see "no active incident yet" and both create one.
+--
+-- A resulting duplicate is worse than just confusing: autoResolve() calls
+-- findActiveByAlertFingerprintAndTenantId(), which returns Optional<Incident>
+-- with no LIMIT/Top-N semantics — it assumes at most one active row per
+-- (tenant_id, alert_fingerprint). Two active rows for the same fingerprint
+-- breaks that assumption; the underlying alert clearing would then either
+-- fail outright or silently resolve only one of the two, leaving the other
+-- as a permanently stuck, never-auto-resolved incident.
+--
+-- Matches the exact same pattern already used elsewhere in this codebase
+-- for the identical class of problem: a DB-level uniqueness constraint
+-- doing the actual deduplication, with application code treating the
+-- resulting exception as an expected, recoverable outcome rather than a
+-- failure — see AuditEventConsumer's own uq_audit_events_kafka_partition_offset
+-- constraint (migration V10, backlog #37) and oncall-service's
+-- excl_oncall_schedule_overlap exclusion constraint.
+--
+-- Partial (WHERE status != 'CLOSED') rather than a plain unique index —
+-- mirrors existsActiveByTenantIdAndAlertFingerprint()'s own definition of
+-- "active" exactly, so a CLOSED incident's fingerprint can legitimately be
+-- reused by a brand new incident later (e.g. the same alert condition
+-- recurring long after the original was fully closed out).
+CREATE UNIQUE INDEX uq_incidents_active_tenant_fingerprint
+    ON incidents (tenant_id, alert_fingerprint)
+    WHERE status != 'CLOSED';
