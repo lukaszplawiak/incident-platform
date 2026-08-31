@@ -25,6 +25,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.Instant;
 import java.util.List;
@@ -36,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
@@ -50,6 +52,7 @@ class IncidentCommandServiceTest {
     @Mock private IncidentEventPublisher eventPublisher;
     @Mock private IncidentWebSocketPublisher webSocketPublisher;
     @Mock private AuditEventPublisher auditEventPublisher;
+    @Mock private IncidentCreationService incidentCreationService;
 
     private IncidentCommandService commandService;
 
@@ -60,7 +63,8 @@ class IncidentCommandServiceTest {
     void setUp() {
         commandService = new IncidentCommandService(
                 incidentRepository, historyRepository,
-                eventPublisher, webSocketPublisher, auditEventPublisher);
+                eventPublisher, webSocketPublisher, auditEventPublisher,
+                incidentCreationService);
     }
 
     @Nested
@@ -73,33 +77,77 @@ class IncidentCommandServiceTest {
             // given
             final UnifiedAlertDto alert = buildAlert(Severity.CRITICAL,
                     "prometheus:highcpuusage:server-1");
+            final IncidentDto createdDto = buildIncidentDto(Severity.CRITICAL);
 
             given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
                     TENANT_ID, alert.fingerprint())).willReturn(false);
-            given(incidentRepository.save(any(Incident.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
-            given(historyRepository.save(any(IncidentHistory.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
+            given(incidentCreationService.tryCreate(alert, TENANT_ID))
+                    .willReturn(createdDto);
 
             // when
             commandService.createFromAlert(alert, TENANT_ID);
 
             // then
-            then(incidentRepository).should(times(1)).save(any(Incident.class));
-            then(historyRepository).should(times(1)).save(any(IncidentHistory.class));
-            then(eventPublisher).should(times(1)).publishOpened(any(Incident.class));
-            then(webSocketPublisher).should(times(1)).publishCreated(any(IncidentDto.class));
+            then(incidentCreationService).should(times(1)).tryCreate(alert, TENANT_ID);
+            then(webSocketPublisher).should(times(1)).publishCreated(createdDto);
         }
 
         @Test
-        @DisplayName("should create new incident with correct severity")
-        void shouldCreateNewIncidentWithCorrectSeverity() {
-            // given
+        @DisplayName("passes the DTO returned by tryCreate through to " +
+                "webSocketPublisher.publishCreated unchanged")
+        void passesThroughCreatedDtoUnchanged() {
+            // given — HIGH severity here specifically (distinct from the
+            // CRITICAL used above) so this test isn't a pure duplicate of
+            // shouldCreateNewIncidentWhenNoDuplicate; the entity-construction
+            // details (status, severity, tenantId ending up correct on the
+            // created Incident) are now IncidentCreationService's own
+            // responsibility — see IncidentCreationServiceTest's Success
+            // nested class for that coverage. This test verifies only what
+            // IncidentCommandService itself is responsible for: forwarding
+            // whatever tryCreate returns, without alteration.
             final UnifiedAlertDto alert = buildAlert(Severity.HIGH,
                     "prometheus:alert:server-1");
+            final IncidentDto createdDto = buildIncidentDto(Severity.HIGH);
 
             given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
                     anyString(), anyString())).willReturn(false);
+            given(incidentCreationService.tryCreate(alert, TENANT_ID))
+                    .willReturn(createdDto);
+
+            // when
+            commandService.createFromAlert(alert, TENANT_ID);
+
+            // then
+            then(webSocketPublisher).should().publishCreated(createdDto);
+        }
+
+        /**
+         * The actual regression test for backlog #74 — verifies the
+         * fallback behavior when {@link IncidentCreationService#tryCreate}
+         * loses the creation race (returns {@link Optional#empty()}):
+         * {@code createFromAlert} must fall through to exactly the same
+         * duplicate-handling path already used when a duplicate is
+         * detected up front, not silently drop the alert or attempt to
+         * create it again.
+         */
+        @Test
+        @DisplayName("falls through to duplicate handling when tryCreate " +
+                "loses the creation race (backlog #74)")
+        void fallsThroughToDuplicateHandlingWhenCreationRaceLost() {
+            final UnifiedAlertDto alert = buildAlert(Severity.CRITICAL,
+                    "prometheus:highcpuusage:server-1");
+            final Incident winnersIncident = buildIncident(Severity.LOW,
+                    "prometheus:highcpuusage:server-1");
+
+            given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
+                    TENANT_ID, alert.fingerprint())).willReturn(false);
+            given(incidentCreationService.tryCreate(alert, TENANT_ID))
+                    .willThrow(new DataIntegrityViolationException(
+                            "duplicate key value violates unique constraint " +
+                                    "\"uq_incidents_active_tenant_fingerprint\""));
+            given(incidentRepository.findActiveByAlertFingerprintAndTenantId(
+                    alert.fingerprint(), TENANT_ID))
+                    .willReturn(Optional.of(winnersIncident));
             given(incidentRepository.save(any(Incident.class)))
                     .willAnswer(inv -> inv.getArgument(0));
             given(historyRepository.save(any(IncidentHistory.class)))
@@ -108,15 +156,15 @@ class IncidentCommandServiceTest {
             // when
             commandService.createFromAlert(alert, TENANT_ID);
 
-            // then
-            final ArgumentCaptor<Incident> captor =
-                    ArgumentCaptor.forClass(Incident.class);
-            then(incidentRepository).should().save(captor.capture());
-
-            final Incident saved = captor.getValue();
-            assertThat(saved.getStatus()).isEqualTo(IncidentStatus.OPEN);
-            assertThat(saved.getTenantId()).isEqualTo(TENANT_ID);
-            assertThat(saved.getSeverity()).isEqualTo(Severity.HIGH);
+            // then — never attempted a second create, never published
+            // CREATED (the winner's replica already did that); this
+            // replica only sees a duplicate and, since the alert's
+            // severity (CRITICAL) is higher than the winner's stored
+            // incident (LOW), escalates it and publishes UPDATE.
+            then(incidentCreationService).should(times(1))
+                    .tryCreate(alert, TENANT_ID);
+            then(webSocketPublisher).should(never()).publishCreated(any());
+            then(webSocketPublisher).should().publishUpdate(any(IncidentDto.class));
         }
 
         @Test
@@ -245,6 +293,37 @@ class IncidentCommandServiceTest {
 
             // then
             then(incidentRepository).should(never()).save(any(Incident.class));
+        }
+
+        /**
+         * Previously untested branch — the exists() check found an active
+         * incident, but the subsequent findActiveByAlertFingerprintAndTenantId
+         * lookup inside handleDuplicateAlert found none (TOCTOU: it was
+         * deleted/resolved in between). Verifies this still correctly
+         * creates a new incident via incidentCreationService — now going
+         * through the same collaborator as the primary create-new path
+         * (backlog #74), rather than the deleted private createNewIncident
+         * helper this branch called before.
+         */
+        @Test
+        @DisplayName("creates a new incident when the exists() check and the " +
+                "duplicate lookup disagree (TOCTOU)")
+        void createsNewIncidentOnToctouRace() {
+            final UnifiedAlertDto alert = buildAlert(Severity.CRITICAL,
+                    "prometheus:highcpuusage:server-1");
+            final IncidentDto createdDto = buildIncidentDto(Severity.CRITICAL);
+
+            given(incidentRepository.existsActiveByTenantIdAndAlertFingerprint(
+                    TENANT_ID, alert.fingerprint())).willReturn(true);
+            given(incidentRepository.findActiveByAlertFingerprintAndTenantId(
+                    alert.fingerprint(), TENANT_ID))
+                    .willReturn(Optional.empty());
+            given(incidentCreationService.tryCreate(alert, TENANT_ID))
+                    .willReturn(createdDto);
+
+            commandService.createFromAlert(alert, TENANT_ID);
+
+            then(webSocketPublisher).should().publishCreated(createdDto);
         }
     }
 
@@ -688,6 +767,18 @@ class IncidentCommandServiceTest {
                 UUID.randomUUID(),
                 Instant.now().minusSeconds(60)
         );
+    }
+
+    /**
+     * Convenience for tests stubbing {@link IncidentCreationService#tryCreate}'s
+     * return value — added for backlog #74, where that method's mocked
+     * result needed to be a ready-made {@link IncidentDto} rather than an
+     * {@link Incident} entity for {@code incidentRepository.save(...)} to
+     * echo back, since {@code createFromAlert} no longer calls the
+     * repository directly for the "create new" path.
+     */
+    private IncidentDto buildIncidentDto(Severity severity) {
+        return IncidentDto.from(buildIncident(severity, "prometheus:highcpuusage:server-1"));
     }
 
     private Incident buildIncidentWithStatus(String fingerprint,

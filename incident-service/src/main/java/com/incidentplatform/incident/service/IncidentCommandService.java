@@ -19,10 +19,12 @@ import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -38,20 +40,39 @@ public class IncidentCommandService {
     private final IncidentEventPublisher eventPublisher;
     private final IncidentWebSocketPublisher webSocketPublisher;
     private final AuditEventPublisher auditEventPublisher;
+    private final IncidentCreationService incidentCreationService;
 
     public IncidentCommandService(
             IncidentRepository incidentRepository,
             IncidentHistoryRepository historyRepository,
             IncidentEventPublisher eventPublisher,
             IncidentWebSocketPublisher webSocketPublisher,
-            AuditEventPublisher auditEventPublisher) {
+            AuditEventPublisher auditEventPublisher,
+            IncidentCreationService incidentCreationService) {
         this.incidentRepository = incidentRepository;
         this.historyRepository = historyRepository;
         this.eventPublisher = eventPublisher;
         this.webSocketPublisher = webSocketPublisher;
         this.auditEventPublisher = auditEventPublisher;
+        this.incidentCreationService = incidentCreationService;
     }
 
+    /**
+     * <h2>Fixed (backlog #74): falls through to duplicate handling on a
+     * lost creation race</h2>
+     * The "no duplicate exists" branch now delegates to
+     * {@link IncidentCreationService#tryCreate}, which throws
+     * {@link org.springframework.dao.DataIntegrityViolationException} if
+     * another replica concurrently created the incident first (see that
+     * class's own Javadoc, and migration V11, for the full account — and
+     * for why the exception is deliberately left to propagate rather than
+     * caught inside {@code tryCreate} itself). On that outcome, this
+     * method falls through to exactly the same {@link #handleDuplicateAlert}
+     * path already used for a duplicate detected by the initial
+     * {@code existsActiveByTenantIdAndAlertFingerprint} check — from this
+     * point on, "lost the race" and "was already a duplicate" are
+     * indistinguishable and should be handled identically.
+     */
     @Transactional
     public void createFromAlert(UnifiedAlertDto alert, String tenantId) {
         log.info("Processing alert: alertId={}, fingerprint={}, severity={}, tenant={}",
@@ -74,8 +95,24 @@ public class IncidentCommandService {
             if (result.severityChanged()) {
                 webSocketPublisher.publishUpdate(result.dto());
             }
-        } else {
-            webSocketPublisher.publishCreated(createNewIncident(alert, tenantId));
+            return;
+        }
+
+        try {
+            final IncidentDto created = incidentCreationService.tryCreate(alert, tenantId);
+            webSocketPublisher.publishCreated(created);
+        } catch (DataIntegrityViolationException e) {
+            // Lost the race — someone else's tryCreate() won in the meantime.
+            // Safe to catch here: this exception has already fully unwound
+            // incidentCreationService.tryCreate's own, separate REQUIRES_NEW
+            // transaction by the time it reaches this catch block — this
+            // method's own, suspended-then-resumed outer transaction was
+            // never touched. Re-read and treat exactly like a duplicate
+            // detected up front.
+            final DuplicateAlertResult result = handleDuplicateAlert(alert, tenantId);
+            if (result.severityChanged()) {
+                webSocketPublisher.publishUpdate(result.dto());
+            }
         }
     }
 
@@ -210,55 +247,55 @@ public class IncidentCommandService {
     }
 
 
-    /**
-     * Assigns a team to an incident.
-     *
-     * <p>ROLE_ADMIN can assign any team. Everyone else must be a member of
-     * the target team ({@link UserPrincipal#isMemberOf}, populated from the
-     * JWT {@code teamIds} claim) — otherwise throws
-     * {@link BusinessException#notTeamMember} (403).
-     *
-     * <p>This check previously didn't exist at all — any authenticated
-     * RESPONDER, regardless of team membership, could assign any incident
-     * to any team. Found while adding security test coverage for
-     * IncidentController.
-     */
-    @Transactional
-    public IncidentDto assignTeam(UUID incidentId,
-                                  AssignTeamRequest request,
-                                  UserPrincipal principal,
-                                  String tenantId) {
-        if (!principal.hasRole("ROLE_ADMIN") && !principal.isMemberOf(request.teamId())) {
-            throw BusinessException.notTeamMember(request.teamId());
-        }
-
-        final UUID assignedBy = principal.userId();
-
-        final Incident incident = incidentRepository
-                .findByIdAndTenantId(incidentId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Incident", incidentId));
-
-        incident.assignToTeam(request.teamId());
-        incidentRepository.save(incident);
-
-        log.info("Incident team assigned: incidentId={}, teamId={}, by={}, tenant={}",
-                incidentId, request.teamId(), assignedBy, tenantId);
-
-        final IncidentDto dto = IncidentDto.from(incident);
-        webSocketPublisher.publishUpdate(dto);
-
-        auditEventPublisher.publishIncidentUser(
-                incidentId, tenantId,
-                AuditEventTypes.INCIDENT_TEAM_ASSIGNED, SERVICE_NAME,
-                assignedBy.toString(),
-                String.format("Incident assigned to teamId=%s", request.teamId()),
-                Map.of("teamId", request.teamId().toString(),
-                        "assignedBy", assignedBy.toString())
-        );
-
-        return dto;
+/**
+ * Assigns a team to an incident.
+ *
+ * <p>ROLE_ADMIN can assign any team. Everyone else must be a member of
+ * the target team ({@link UserPrincipal#isMemberOf}, populated from the
+ * JWT {@code teamIds} claim) — otherwise throws
+ * {@link BusinessException#notTeamMember} (403).
+ *
+ * <p>This check previously didn't exist at all — any authenticated
+ * RESPONDER, regardless of team membership, could assign any incident
+ * to any team. Found while adding security test coverage for
+ * IncidentController.
+ */
+@Transactional
+public IncidentDto assignTeam(UUID incidentId,
+                              AssignTeamRequest request,
+                              UserPrincipal principal,
+                              String tenantId) {
+    if (!principal.hasRole("ROLE_ADMIN") && !principal.isMemberOf(request.teamId())) {
+        throw BusinessException.notTeamMember(request.teamId());
     }
+
+    final UUID assignedBy = principal.userId();
+
+    final Incident incident = incidentRepository
+            .findByIdAndTenantId(incidentId, tenantId)
+            .orElseThrow(() -> new ResourceNotFoundException(
+                    "Incident", incidentId));
+
+    incident.assignToTeam(request.teamId());
+    incidentRepository.save(incident);
+
+    log.info("Incident team assigned: incidentId={}, teamId={}, by={}, tenant={}",
+            incidentId, request.teamId(), assignedBy, tenantId);
+
+    final IncidentDto dto = IncidentDto.from(incident);
+    webSocketPublisher.publishUpdate(dto);
+
+    auditEventPublisher.publishIncidentUser(
+            incidentId, tenantId,
+            AuditEventTypes.INCIDENT_TEAM_ASSIGNED, SERVICE_NAME,
+            assignedBy.toString(),
+            String.format("Incident assigned to teamId=%s", request.teamId()),
+            Map.of("teamId", request.teamId().toString(),
+                    "assignedBy", assignedBy.toString())
+    );
+
+    return dto;
+}
 
     /**
      * Unassigns an incident's team.
@@ -312,53 +349,6 @@ public class IncidentCommandService {
         return dto;
     }
 
-    private IncidentDto createNewIncident(UnifiedAlertDto alert,
-                                          String tenantId) {
-        final Incident incident = new Incident(
-                tenantId,
-                alert.title(),
-                alert.description(),
-                alert.severity(),
-                alert.sourceType(),
-                alert.source(),
-                alert.fingerprint(),
-                alert.alertId(),
-                alert.firedAt()
-        );
-
-        // Set teamId from Integration-based routing.
-        // UnifiedAlertDto.teamId is resolved by ApiKeyLookupServiceImpl
-        // from the Integration that authenticated the alert request.
-        // Null for JWT-authenticated requests or integrations without team.
-        if (alert.teamId() != null) {
-            incident.assignToTeam(alert.teamId());
-        }
-
-        incidentRepository.save(incident);
-
-        historyRepository.save(IncidentHistory.forCreation(
-                incident.getId(), tenantId, ChangeSource.KAFKA_CONSUMER));
-
-        log.info("New incident created: incidentId={}, title='{}', " +
-                        "severity={}, tenant={}",
-                incident.getId(), incident.getTitle(),
-                incident.getSeverity(), tenantId);
-
-        eventPublisher.publishOpened(incident);
-
-        auditEventPublisher.publishIncident(
-                incident.getId(), tenantId,
-                AuditEventTypes.INCIDENT_CREATED, SERVICE_NAME,
-                String.format("Incident created from %s alert: '%s'",
-                        alert.source(), alert.title()),
-                Map.of("source", alert.source(),
-                        "severity", alert.severity().name(),
-                        "fingerprint", alert.fingerprint())
-        );
-
-        return IncidentDto.from(incident);
-    }
-
     /**
      * Result of processing a duplicate alert — the resulting DTO and whether
      * severity was actually changed, so the caller knows whether a
@@ -378,11 +368,40 @@ public class IncidentCommandService {
             // TOCTOU race between the exists() check and this lookup — the
             // incident was deleted/resolved between the two calls. This is
             // genuinely a new incident from the client's perspective, so we
-            // create and publish CREATED directly here rather than via the
+            // attempt to create it directly here rather than via the
             // caller's duplicate-branch logic.
-            final IncidentDto created = createNewIncident(alert, tenantId);
-            webSocketPublisher.publishCreated(created);
-            return new DuplicateAlertResult(created, false);
+            //
+            // Fixed (backlog #74): now goes through the same
+            // incidentCreationService.tryCreate(...) as the primary
+            // create-new path, rather than the old, deleted private
+            // createNewIncident(...) helper — extends the same
+            // uq_incidents_active_tenant_fingerprint race protection to
+            // this rarer nested-race branch too. incidentCreationService
+            // is a genuinely different Spring bean, so calling it from
+            // here is a real, externally-proxied call, not the
+            // self-invocation that would silently ignore its
+            // @Transactional(REQUIRES_NEW) — see that class's own Javadoc.
+            try {
+                final IncidentDto created =
+                        incidentCreationService.tryCreate(alert, tenantId);
+                webSocketPublisher.publishCreated(created);
+                return new DuplicateAlertResult(created, false);
+            } catch (DataIntegrityViolationException e) {
+                // Exceptionally unlikely: lost this nested race too. One
+                // more read — whoever won must now be visible. Not retried
+                // further; two concurrent creators both losing to a third
+                // within the same request is not a realistic scenario
+                // worth building unbounded retry logic for.
+                final Incident winner = incidentRepository
+                        .findActiveByAlertFingerprintAndTenantId(
+                                alert.fingerprint(), tenantId)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "Lost two consecutive incident-creation races for the " +
+                                        "same fingerprint but no winning incident is " +
+                                        "visible: fingerprint=" + alert.fingerprint() +
+                                        ", tenant=" + tenantId));
+                return new DuplicateAlertResult(IncidentDto.from(winner), false);
+            }
         }
 
         final Incident existing = existingOpt.get();
