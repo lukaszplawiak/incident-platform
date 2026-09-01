@@ -38,7 +38,7 @@ import java.util.Map;
  *   <li><b>Does not reject or route records.</b> Dropping records here would
  *       bypass the dead-letter topic mechanism and lose messages permanently.
  *       Records with a missing or invalid tenant are handled as poison pills
- *       by each individual consumer via {@code extractTenantId()}.
+ *       by each consumer, via {@link TenantKafkaRecordResolver#extractTenantId}.
  * </ul>
  *
  * <h2>Division of responsibility</h2>
@@ -55,9 +55,12 @@ import java.util.Map;
  *     <td>Spring listener thread</td>
  *   </tr>
  *   <tr>
- *     <td>Each {@code @KafkaListener} consumer</td>
- *     <td>Enforcement — header → payload fallback → poison pill via
- *         {@code extractTenantId()}</td>
+ *     <td>{@link TenantKafkaRecordResolver}</td>
+ *     <td>Enforcement — header → payload fallback → poison pill, injected
+ *         into and called by each {@code @KafkaListener} consumer (fixed,
+ *         backlog #75: previously five separate, byte-for-byte identical
+ *         private {@code extractTenantId()} methods, one per consumer
+ *         class across four services — see that class's own Javadoc)</td>
  *     <td>Spring listener thread</td>
  *   </tr>
  * </table>

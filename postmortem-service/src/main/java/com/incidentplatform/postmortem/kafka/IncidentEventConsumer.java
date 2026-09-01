@@ -1,12 +1,11 @@
 package com.incidentplatform.postmortem.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
-import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -18,7 +17,6 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
@@ -83,15 +81,15 @@ public class IncidentEventConsumer {
             LoggerFactory.getLogger(IncidentEventConsumer.class);
 
     private final PostmortemPersistenceService persistenceService;
-    private final ObjectMapper objectMapper;
     private final DeadLetterPublisher deadLetterPublisher;
+    private final TenantKafkaRecordResolver tenantRecordResolver;
 
     public IncidentEventConsumer(PostmortemPersistenceService persistenceService,
-                                 ObjectMapper objectMapper,
-                                 DeadLetterPublisher deadLetterPublisher) {
+                                 DeadLetterPublisher deadLetterPublisher,
+                                 TenantKafkaRecordResolver tenantRecordResolver) {
         this.persistenceService = persistenceService;
-        this.objectMapper = objectMapper;
         this.deadLetterPublisher = deadLetterPublisher;
+        this.tenantRecordResolver = tenantRecordResolver;
     }
 
     @KafkaListener(
@@ -116,8 +114,8 @@ public class IncidentEventConsumer {
                 return;
             }
 
-            final JsonNode event = parseJson(record.value());
-            final String tenantId = extractTenantId(record, event);
+            final JsonNode event = tenantRecordResolver.parseJson(record.value());
+            final String tenantId = tenantRecordResolver.extractTenantId(record, event);
             TenantContext.set(tenantId);
 
             if (IncidentEventTypes.INCIDENT_RESOLVED.equals(eventType)) {
@@ -260,15 +258,6 @@ public class IncidentEventConsumer {
         }
     }
 
-    private JsonNode parseJson(String value) {
-        try {
-            return objectMapper.readTree(value);
-        } catch (IOException e) {
-            throw new IllegalArgumentException(
-                    "Unparseable JSON payload: " + e.getMessage(), e);
-        }
-    }
-
     private String extractEventType(ConsumerRecord<?, ?> record) {
         final Header header = record.headers()
                 .lastHeader(IncidentEventTypes.HEADER_NAME);
@@ -279,33 +268,5 @@ public class IncidentEventConsumer {
             }
         }
         return null;
-    }
-
-    private String extractTenantId(ConsumerRecord<?, ?> record, JsonNode payload) {
-        // Step 1 — Kafka header (set by TenantKafkaProducerInterceptor)
-        final Header header = record.headers()
-                .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
-        if (header != null) {
-            final String tenantId = new String(header.value(), StandardCharsets.UTF_8);
-            if (!tenantId.isBlank()) {
-                return tenantId;
-            }
-        }
-
-        // Step 2 — payload field (fallback for replay / non-interceptor producers)
-        final String payloadTenantId = payload.path("tenantId").asText(null);
-        if (payloadTenantId != null && !payloadTenantId.isBlank()) {
-            log.warn("X-Tenant-Id header missing — resolved tenantId from payload: " +
-                            "topic={}, partition={}, offset={}, tenantId={}",
-                    record.topic(), record.partition(), record.offset(), payloadTenantId);
-            return payloadTenantId;
-        }
-
-        // Step 3 — poison pill: tenantId absent in both header and payload
-        throw new IllegalArgumentException(
-                "Missing tenantId in both X-Tenant-Id header and payload.tenantId: " +
-                        "topic=" + record.topic() +
-                        ", partition=" + record.partition() +
-                        ", offset=" + record.offset());
     }
 }
