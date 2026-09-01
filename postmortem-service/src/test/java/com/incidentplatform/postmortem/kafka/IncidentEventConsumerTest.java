@@ -7,6 +7,7 @@ import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -58,7 +59,12 @@ class IncidentEventConsumerTest {
     void setUp() {
         final ObjectMapper objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
-        consumer = new IncidentEventConsumer(persistenceService, objectMapper, deadLetterPublisher);
+        // Fixed (backlog #75): extractTenantId/parseJson moved to the
+        // shared TenantKafkaRecordResolver — note the constructor's
+        // argument order also changed to match production.
+        consumer = new IncidentEventConsumer(
+                persistenceService, deadLetterPublisher,
+                new TenantKafkaRecordResolver(objectMapper));
     }
 
     @AfterEach

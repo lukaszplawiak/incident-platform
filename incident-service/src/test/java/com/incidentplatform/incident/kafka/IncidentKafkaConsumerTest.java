@@ -9,6 +9,7 @@ import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
@@ -60,8 +61,15 @@ class IncidentKafkaConsumerTest {
     void setUp() {
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
+        // Fixed (backlog #75): extractTenantId/parseJson moved to the
+        // shared TenantKafkaRecordResolver — a real instance here (not a
+        // mock), matching this test's existing use of a real ObjectMapper,
+        // since the tenant-resolution scenarios below exercise that exact
+        // logic (now relocated, not rewritten) via the public
+        // consumeAlert/consumeResolvedAlert methods.
         consumer = new IncidentKafkaConsumer(
-                commandService, objectMapper, deadLetterPublisher);
+                commandService, objectMapper, deadLetterPublisher,
+                new TenantKafkaRecordResolver(objectMapper));
     }
 
     @AfterEach

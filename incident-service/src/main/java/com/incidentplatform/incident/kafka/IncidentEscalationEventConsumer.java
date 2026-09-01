@@ -1,11 +1,10 @@
 package com.incidentplatform.incident.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.repository.IncidentRepository;
 import com.incidentplatform.shared.events.IncidentEventTypes;
-import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
@@ -17,7 +16,6 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
@@ -36,10 +34,11 @@ import java.util.UUID;
  * NOT go through {@link com.incidentplatform.incident.domain.IncidentFsm},
  * since escalation level is independent of the main lifecycle status.
  *
- * <p>Uses the same header → payload → poison-pill tenant/event-type extraction
- * pattern as the other {@code incidents.lifecycle} consumers
- * (escalation-service, notification-service, postmortem-service) for
- * consistency across the platform.
+ * <p>Uses the same shared {@link TenantKafkaRecordResolver} (backlog #75)
+ * as the other {@code incidents.lifecycle} consumers (escalation-service,
+ * notification-service, postmortem-service) for consistency across the
+ * platform — see that class's own Javadoc for the full account of the
+ * duplication this replaced.
  *
  * <h2>Fixed (backlog #40): imprecise logging for an expected, self-healing
  * concurrency conflict</h2>
@@ -70,12 +69,12 @@ public class IncidentEscalationEventConsumer {
             LoggerFactory.getLogger(IncidentEscalationEventConsumer.class);
 
     private final IncidentRepository incidentRepository;
-    private final ObjectMapper objectMapper;
+    private final TenantKafkaRecordResolver tenantRecordResolver;
 
     public IncidentEscalationEventConsumer(IncidentRepository incidentRepository,
-                                           ObjectMapper objectMapper) {
+                                           TenantKafkaRecordResolver tenantRecordResolver) {
         this.incidentRepository = incidentRepository;
-        this.objectMapper = objectMapper;
+        this.tenantRecordResolver = tenantRecordResolver;
     }
 
     @KafkaListener(
@@ -110,8 +109,8 @@ public class IncidentEscalationEventConsumer {
                 return;
             }
 
-            final JsonNode event = parseJson(record.value());
-            final String tenantId = extractTenantId(record, event);
+            final JsonNode event = tenantRecordResolver.parseJson(record.value());
+            final String tenantId = tenantRecordResolver.extractTenantId(record, event);
             TenantContext.set(tenantId);
 
             handleEscalated(event, tenantId);
@@ -184,15 +183,6 @@ public class IncidentEscalationEventConsumer {
                 );
     }
 
-    private JsonNode parseJson(String value) {
-        try {
-            return objectMapper.readTree(value);
-        } catch (IOException e) {
-            throw new IllegalArgumentException(
-                    "Unparseable JSON payload: " + e.getMessage(), e);
-        }
-    }
-
     private String extractEventType(ConsumerRecord<?, ?> record) {
         final Header header = record.headers()
                 .lastHeader(IncidentEventTypes.HEADER_NAME);
@@ -203,30 +193,5 @@ public class IncidentEscalationEventConsumer {
             }
         }
         return null;
-    }
-
-    private String extractTenantId(ConsumerRecord<?, ?> record, JsonNode payload) {
-        final Header header = record.headers()
-                .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
-        if (header != null) {
-            final String tenantId = new String(header.value(), StandardCharsets.UTF_8);
-            if (!tenantId.isBlank()) {
-                return tenantId;
-            }
-        }
-
-        final String payloadTenantId = payload.path("tenantId").asText(null);
-        if (payloadTenantId != null && !payloadTenantId.isBlank()) {
-            log.warn("X-Tenant-Id header missing — resolved tenantId from payload: " +
-                            "topic={}, partition={}, offset={}, tenantId={}",
-                    record.topic(), record.partition(), record.offset(), payloadTenantId);
-            return payloadTenantId;
-        }
-
-        throw new IllegalArgumentException(
-                "Missing tenantId in both X-Tenant-Id header and payload.tenantId: " +
-                        "topic=" + record.topic() +
-                        ", partition=" + record.partition() +
-                        ", offset=" + record.offset());
     }
 }
