@@ -177,11 +177,7 @@ public class IncidentCommandService {
         log.info("Updating status: incidentId={}, target={}, changedBy={}, tenant={}",
                 incidentId, command.status(), changedBy, tenantId);
 
-        final Incident incident = incidentRepository
-                .findByIdAndTenantId(incidentId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Incident", incidentId));
-
+        final Incident incident = requireIncident(incidentId, tenantId);
         final IncidentStatus previousStatus = incident.getStatus();
 
         applyTransition(incident, command.status(), changedBy);
@@ -217,22 +213,29 @@ public class IncidentCommandService {
         return dto;
     }
 
+    /**
+     * Fixed (backlog #76): {@code assignTo}/{@code assignTeam}/
+     * {@code unassignTeam} previously each repeated the identical
+     * load-or-404 / save / build DTO / publish WebSocket update sequence
+     * inline. Extracted to {@link #requireIncident} and
+     * {@link #saveAndPublishUpdate} — the one thing deliberately NOT
+     * extracted alongside them is the audit-event publish, since its
+     * event type, message, and metadata genuinely differ per method (and
+     * {@link #unassignTeam} specifically needs to read
+     * {@code incident.getTeamId()} <em>before</em> mutating it, for its
+     * "previousTeamId" audit field — easy with the incident staying a
+     * plain local variable in each caller, awkward if mutation were
+     * pushed into a shared helper via a passed-in lambda instead).
+     */
     @Transactional
     public IncidentDto assignTo(UUID incidentId, UUID assignToId,
                                 UUID assignedBy, String tenantId) {
-        final Incident incident = incidentRepository
-                .findByIdAndTenantId(incidentId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Incident", incidentId));
-
+        final Incident incident = requireIncident(incidentId, tenantId);
         incident.assignTo(assignToId);
-        incidentRepository.save(incident);
+        final IncidentDto dto = saveAndPublishUpdate(incident);
 
         log.info("Incident assigned: incidentId={}, assignedTo={}, assignedBy={}, tenant={}",
                 incidentId, assignToId, assignedBy, tenantId);
-
-        final IncidentDto dto = IncidentDto.from(incident);
-        webSocketPublisher.publishUpdate(dto);
 
         auditEventPublisher.publishIncidentUser(
                 incidentId, tenantId,
@@ -247,55 +250,52 @@ public class IncidentCommandService {
     }
 
 
-/**
- * Assigns a team to an incident.
- *
- * <p>ROLE_ADMIN can assign any team. Everyone else must be a member of
- * the target team ({@link UserPrincipal#isMemberOf}, populated from the
- * JWT {@code teamIds} claim) — otherwise throws
- * {@link BusinessException#notTeamMember} (403).
- *
- * <p>This check previously didn't exist at all — any authenticated
- * RESPONDER, regardless of team membership, could assign any incident
- * to any team. Found while adding security test coverage for
- * IncidentController.
- */
-@Transactional
-public IncidentDto assignTeam(UUID incidentId,
-                              AssignTeamRequest request,
-                              UserPrincipal principal,
-                              String tenantId) {
-    if (!principal.hasRole("ROLE_ADMIN") && !principal.isMemberOf(request.teamId())) {
-        throw BusinessException.notTeamMember(request.teamId());
+    /**
+     * Assigns a team to an incident.
+     *
+     * <p>ROLE_ADMIN can assign any team. Everyone else must be a member of
+     * the target team ({@link UserPrincipal#isMemberOf}, populated from the
+     * JWT {@code teamIds} claim) — otherwise throws
+     * {@link BusinessException#notTeamMember} (403).
+     *
+     * <p>This check previously didn't exist at all — any authenticated
+     * RESPONDER, regardless of team membership, could assign any incident
+     * to any team. Found while adding security test coverage for
+     * IncidentController.
+     *
+     * <p>See {@link #assignTo}'s own Javadoc (backlog #76) for why the
+     * load/save/publish sequence below is split across
+     * {@link #requireIncident} and {@link #saveAndPublishUpdate}.
+     */
+    @Transactional
+    public IncidentDto assignTeam(UUID incidentId,
+                                  AssignTeamRequest request,
+                                  UserPrincipal principal,
+                                  String tenantId) {
+        if (!principal.hasRole("ROLE_ADMIN") && !principal.isMemberOf(request.teamId())) {
+            throw BusinessException.notTeamMember(request.teamId());
+        }
+
+        final UUID assignedBy = principal.userId();
+
+        final Incident incident = requireIncident(incidentId, tenantId);
+        incident.assignToTeam(request.teamId());
+        final IncidentDto dto = saveAndPublishUpdate(incident);
+
+        log.info("Incident team assigned: incidentId={}, teamId={}, by={}, tenant={}",
+                incidentId, request.teamId(), assignedBy, tenantId);
+
+        auditEventPublisher.publishIncidentUser(
+                incidentId, tenantId,
+                AuditEventTypes.INCIDENT_TEAM_ASSIGNED, SERVICE_NAME,
+                assignedBy.toString(),
+                String.format("Incident assigned to teamId=%s", request.teamId()),
+                Map.of("teamId", request.teamId().toString(),
+                        "assignedBy", assignedBy.toString())
+        );
+
+        return dto;
     }
-
-    final UUID assignedBy = principal.userId();
-
-    final Incident incident = incidentRepository
-            .findByIdAndTenantId(incidentId, tenantId)
-            .orElseThrow(() -> new ResourceNotFoundException(
-                    "Incident", incidentId));
-
-    incident.assignToTeam(request.teamId());
-    incidentRepository.save(incident);
-
-    log.info("Incident team assigned: incidentId={}, teamId={}, by={}, tenant={}",
-            incidentId, request.teamId(), assignedBy, tenantId);
-
-    final IncidentDto dto = IncidentDto.from(incident);
-    webSocketPublisher.publishUpdate(dto);
-
-    auditEventPublisher.publishIncidentUser(
-            incidentId, tenantId,
-            AuditEventTypes.INCIDENT_TEAM_ASSIGNED, SERVICE_NAME,
-            assignedBy.toString(),
-            String.format("Incident assigned to teamId=%s", request.teamId()),
-            Map.of("teamId", request.teamId().toString(),
-                    "assignedBy", assignedBy.toString())
-    );
-
-    return dto;
-}
 
     /**
      * Unassigns an incident's team.
@@ -309,15 +309,20 @@ public IncidentDto assignTeam(UUID incidentId,
      *
      * <p>Same previously-missing check as {@link #assignTeam} — see that
      * method's Javadoc for context.
+     *
+     * <p>See {@link #assignTo}'s own Javadoc (backlog #76) for why the
+     * load/save/publish sequence below is split across
+     * {@link #requireIncident} and {@link #saveAndPublishUpdate} — and
+     * specifically why the incident stays a plain local variable here
+     * rather than that split being pushed further into a shared mutation
+     * step: {@code previousTeamId} below must be read <em>before</em>
+     * {@link Incident#unassignTeam()} runs.
      */
     @Transactional
     public IncidentDto unassignTeam(UUID incidentId,
                                     UserPrincipal principal,
                                     String tenantId) {
-        final Incident incident = incidentRepository
-                .findByIdAndTenantId(incidentId, tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "Incident", incidentId));
+        final Incident incident = requireIncident(incidentId, tenantId);
 
         final UUID currentTeamId = incident.getTeamId();
         if (currentTeamId != null
@@ -329,13 +334,10 @@ public IncidentDto assignTeam(UUID incidentId,
         final UUID unassignedBy = principal.userId();
         final UUID previousTeamId = incident.getTeamId();
         incident.unassignTeam();
-        incidentRepository.save(incident);
+        final IncidentDto dto = saveAndPublishUpdate(incident);
 
         log.info("Incident team unassigned: incidentId={}, previousTeamId={}, by={}, tenant={}",
                 incidentId, previousTeamId, unassignedBy, tenantId);
-
-        final IncidentDto dto = IncidentDto.from(incident);
-        webSocketPublisher.publishUpdate(dto);
 
         auditEventPublisher.publishIncidentUser(
                 incidentId, tenantId,
@@ -346,6 +348,39 @@ public IncidentDto assignTeam(UUID incidentId,
                         "unassignedBy", unassignedBy.toString())
         );
 
+        return dto;
+    }
+
+    /**
+     * Loads an incident by ID, scoped to the tenant, or throws
+     * {@link ResourceNotFoundException} (404) — backlog #76, previously
+     * repeated identically in {@link #updateStatus}, {@link #assignTo},
+     * {@link #assignTeam}, and {@link #unassignTeam}.
+     */
+    private Incident requireIncident(UUID incidentId, String tenantId) {
+        return incidentRepository
+                .findByIdAndTenantId(incidentId, tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Incident", incidentId));
+    }
+
+    /**
+     * Persists an already-mutated incident, builds its DTO, and publishes
+     * a WebSocket update — backlog #76, previously repeated identically in
+     * {@link #assignTo}, {@link #assignTeam}, and {@link #unassignTeam}.
+     * Deliberately NOT used by {@link #updateStatus}: that method's own
+     * save/publish sequence genuinely differs (a history entry is saved
+     * between the mutation and the DTO build, it publishes a Kafka event
+     * via {@link #publishStatusChangeEvent} in addition to WebSocket, and
+     * it calls {@code webSocketPublisher.publishStatusChanged} — a
+     * different method — not {@code publishUpdate}), so forcing it through
+     * this same helper would not actually remove duplication, only hide a
+     * real behavioral difference behind a shared name.
+     */
+    private IncidentDto saveAndPublishUpdate(Incident incident) {
+        incidentRepository.save(incident);
+        final IncidentDto dto = IncidentDto.from(incident);
+        webSocketPublisher.publishUpdate(dto);
         return dto;
     }
 
