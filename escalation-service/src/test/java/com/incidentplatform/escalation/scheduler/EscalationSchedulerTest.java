@@ -6,6 +6,7 @@ import com.incidentplatform.escalation.repository.EscalationTaskRepository;
 import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.escalation.service.EscalationTaskPersistenceService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
@@ -200,7 +201,11 @@ class EscalationSchedulerTest {
             // NOTE: with persist-first ordering, task1 is saved as ESCALATED
             // in DB even though its Kafka send failed — it will NOT be retried
             // by the scheduler. This is the at-most-once trade-off documented
-            // in EscalationScheduler (see Outbox Pattern TODO).
+            // in EscalationScheduler (see Outbox Pattern TODO). Fixed (backlog
+            // #77): this failure is now caught inside escalate() itself and
+            // recorded as ESCALATION_NOTIFICATION_FAILED — see
+            // publishesNotificationFailedAuditEventOnKafkaSendFailure below for
+            // the dedicated assertion on that mechanism specifically.
             willThrow(new RuntimeException("Kafka unavailable"))
                     .willDoNothing()
                     .given(kafkaSender).send(any(), any());
@@ -212,6 +217,86 @@ class EscalationSchedulerTest {
             then(kafkaSender).should(times(2)).send(any(), any());
             // task2 was also persisted
             then(persistenceService).should(times(2)).markEscalated(any());
+        }
+
+        /**
+         * The actual regression test for backlog #77's Kafka-send half.
+         * Before this fix, a Kafka send failure here propagated all the way
+         * out to checkAndEscalate()'s generic catch, which called
+         * persistenceService.recordFailedAttempt(...) — a method whose own
+         * Javadoc promises the task will be retried on the next poll cycle,
+         * a promise that was false here: the task's status was already
+         * ESCALATED (set by markEscalated() above, on this exact task
+         * object, before the Kafka send was even attempted), and
+         * recordFailedAttempt() never touches status — so
+         * findDueForEscalation()'s WHERE status = 'PENDING' would never
+         * return it again. Verifies the fix: recordFailedAttempt is no
+         * longer called for this failure, and the new, honestly-named
+         * ESCALATION_NOTIFICATION_FAILED audit event is published instead.
+         */
+        @Test
+        @DisplayName("publishes ESCALATION_NOTIFICATION_FAILED (not recordFailedAttempt) " +
+                "when the Kafka send fails (backlog #77)")
+        void publishesNotificationFailedAuditEventOnKafkaSendFailure() {
+            // given
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+            willThrow(new RuntimeException("Kafka unavailable"))
+                    .given(kafkaSender).send(any(), any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then
+            then(auditEventPublisher).should().publishIncident(
+                    eq(task.getIncidentId()), eq(TENANT_ID),
+                    eq(AuditEventTypes.ESCALATION_NOTIFICATION_FAILED),
+                    any(), any(), any());
+            then(auditEventPublisher).should(never()).publishIncident(
+                    any(), any(), eq(AuditEventTypes.ESCALATION_FIRED),
+                    any(), any(), any());
+            then(persistenceService).should(never())
+                    .recordFailedAttempt(any(), any());
+        }
+
+        /**
+         * The actual regression test for backlog #77's
+         * scheduleLevel2Escalation() half — the narrower failure mode
+         * where the level-1 notification already succeeded, but level 2
+         * never gets scheduled, silently stopping this incident's
+         * escalation chain. Same fix, same reasoning as the Kafka-send
+         * case above.
+         */
+        @Test
+        @DisplayName("publishes ESCALATION_NOTIFICATION_FAILED (not recordFailedAttempt) " +
+                "when scheduleLevel2Escalation fails (backlog #77)")
+        void publishesNotificationFailedAuditEventOnLevel2SchedulingFailure() {
+            // given — level 1 task, so !task.isMaxLevel() is true and
+            // scheduleLevel2Escalation() is attempted
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+            willThrow(new RuntimeException("DB unavailable"))
+                    .given(escalationService).scheduleLevel2Escalation(
+                            any(), any(), any(), any(), any());
+
+            // when
+            scheduler.checkAndEscalate();
+
+            // then — the level-1 notification still went out successfully
+            then(kafkaSender).should().send(any(), any());
+            then(auditEventPublisher).should().publishIncident(
+                    any(), any(), eq(AuditEventTypes.ESCALATION_FIRED),
+                    any(), any(), any());
+            // ...but level 2 scheduling failed, recorded honestly instead
+            // of via the misleading recordFailedAttempt path
+            then(auditEventPublisher).should().publishIncident(
+                    eq(task.getIncidentId()), eq(TENANT_ID),
+                    eq(AuditEventTypes.ESCALATION_NOTIFICATION_FAILED),
+                    any(), any(), any());
+            then(persistenceService).should(never())
+                    .recordFailedAttempt(any(), any());
         }
 
         @Test

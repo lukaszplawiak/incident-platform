@@ -24,6 +24,7 @@ public final class AuditEventTypes {
     // ── Escalation ──────────────────────────────────────────────────────────
     public static final String ESCALATION_FIRED          = "ESCALATION_FIRED";
     public static final String ESCALATION_SCHEDULED      = "ESCALATION_SCHEDULED";
+    public static final String ESCALATION_NOTIFICATION_FAILED = "ESCALATION_NOTIFICATION_FAILED";
 
     // ── Notification ────────────────────────────────────────────────────────
     public static final String NOTIFICATION_SENT         = "NOTIFICATION_SENT";
