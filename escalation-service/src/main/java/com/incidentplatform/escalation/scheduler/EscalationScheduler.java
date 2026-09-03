@@ -314,7 +314,68 @@ public class EscalationScheduler {
 
         // Publishes to incidents-lifecycle with X-Event-Type header so that
         // notification-service routes this event to EMAIL/SLACK/SMS.
-        kafkaSender.send(event, IncidentEventTypes.INCIDENT_ESCALATED);
+        //
+        // Fixed (backlog #77): markEscalated() above already mutated this
+        // SAME task object's status to ESCALATED in memory (EscalationTask
+        // .markEscalated() sets the field directly, and
+        // EscalationTaskPersistenceService.markEscalated(task) is called
+        // with this exact reference) — before this comment's fix, an
+        // exception here propagated to checkAndEscalate()'s generic catch,
+        // which called recordFailedAttemptSafely(task, ...). That method's
+        // own Javadoc explicitly promises "status stays PENDING (the task
+        // will be retried on the next scheduler poll cycle)" — a promise
+        // that was FALSE for this specific case: EscalationTask
+        // .recordFailedAttempt() never touches status, so a task whose
+        // status is already ESCALATED stays ESCALATED, and
+        // findDueForEscalation()'s WHERE t.status = 'PENDING' means it is
+        // never picked up again. The task would be silently, permanently
+        // stuck at this escalation level — worse than the already-known,
+        // already-documented "process crashes between markEscalated() and
+        // kafkaSender.send()" trade-off above (which only loses one
+        // notification): here, kafkaSender.send() and
+        // scheduleLevel2Escalation() below can BOTH fail without a crash,
+        // for an ordinary transient reason (a Kafka blip, a momentary DB
+        // hiccup), and the code claimed a retry would happen that never
+        // actually could.
+        //
+        // The full, principled fix is the same Transactional Outbox
+        // pattern already flagged above (backlog #36's
+        // IncidentEventOutboxScheduler is the ready-made reference) —
+        // deliberately NOT built now: it solves only the Kafka-send half
+        // of this specific problem, not the scheduleLevel2Escalation()
+        // half below, so adapting it here would need its own design, not
+        // a copy-paste, and the narrow race window this whole comment
+        // describes doesn't yet justify that scope on its own (see
+        // "Justified when..." above — unchanged). Until then: stop
+        // claiming a retry that cannot happen. A failure past this point
+        // is caught, logged loudly, and recorded as its own, distinct,
+        // clearly-named audit event instead of silently (and incorrectly)
+        // funneled through the ordinary retry-attempt bookkeeping.
+        try {
+            kafkaSender.send(event, IncidentEventTypes.INCIDENT_ESCALATED);
+        } catch (Exception e) {
+            log.error("Failed to publish escalation notification — task is " +
+                            "ESCALATED in the database but no notification was " +
+                            "sent and this will NOT be automatically retried " +
+                            "(see this method's own comment): incidentId={}, " +
+                            "tenant={}, escalationLevel={}, error={}",
+                    task.getIncidentId(), task.getTenantId(),
+                    task.getEscalationLevel(), e.getMessage(), e);
+
+            auditEventPublisher.publishIncident(
+                    task.getIncidentId(), task.getTenantId(),
+                    AuditEventTypes.ESCALATION_NOTIFICATION_FAILED, SERVICE_NAME,
+                    String.format("Escalation level %d marked complete, but the " +
+                                    "notification to %s failed to send — no automatic " +
+                                    "retry will occur. Manual follow-up required.",
+                            task.getEscalationLevel(), role),
+                    Map.of("escalationLevel", task.getEscalationLevel(),
+                            "role", role,
+                            "failurePhase", "kafka-send",
+                            "error", e.getMessage() != null ? e.getMessage() : "unknown")
+            );
+            return;
+        }
 
         log.info("Incident escalated: incidentId={}, tenant={}, " +
                         "severity={}, escalationLevel={}",
@@ -334,29 +395,56 @@ public class EscalationScheduler {
         );
 
         if (!task.isMaxLevel()) {
-            escalationService.scheduleLevel2Escalation(
-                    task.getIncidentId(),
-                    task.getTenantId(),
-                    task.getTeamId(),
-                    task.getSeverity(),
-                    task.getTitle()
-            );
+            // Same fix, same reasoning as the kafkaSender.send() block
+            // above — this call can also fail for an ordinary transient
+            // reason with no automatic retry, but here the level-1
+            // notification above has ALREADY been sent successfully, so
+            // the failure mode is narrower: level 2 simply never gets
+            // scheduled, and this incident's escalation chain silently
+            // stops at level 1 if nobody acknowledges it.
+            try {
+                escalationService.scheduleLevel2Escalation(
+                        task.getIncidentId(),
+                        task.getTenantId(),
+                        task.getTeamId(),
+                        task.getSeverity(),
+                        task.getTitle()
+                );
 
-            log.info("Level 2 escalation scheduled: incidentId={}, " +
-                            "tenant={}, severity={}",
-                    task.getIncidentId(), task.getTenantId(),
-                    task.getSeverity());
+                log.info("Level 2 escalation scheduled: incidentId={}, " +
+                                "tenant={}, severity={}",
+                        task.getIncidentId(), task.getTenantId(),
+                        task.getSeverity());
 
-            auditEventPublisher.publishIncident(
-                    task.getIncidentId(), task.getTenantId(),
-                    AuditEventTypes.ESCALATION_SCHEDULED, SERVICE_NAME,
-                    String.format("Level 2 escalation scheduled — MANAGER " +
-                                    "will be notified if no ACK within %d minutes.",
-                            EscalationTask.resolveTimeout(task.getSeverity())),
-                    Map.of("escalationLevel", 2,
-                            "timeoutMinutes",
-                            EscalationTask.resolveTimeout(task.getSeverity()))
-            );
+                auditEventPublisher.publishIncident(
+                        task.getIncidentId(), task.getTenantId(),
+                        AuditEventTypes.ESCALATION_SCHEDULED, SERVICE_NAME,
+                        String.format("Level 2 escalation scheduled — MANAGER " +
+                                        "will be notified if no ACK within %d minutes.",
+                                EscalationTask.resolveTimeout(task.getSeverity())),
+                        Map.of("escalationLevel", 2,
+                                "timeoutMinutes",
+                                EscalationTask.resolveTimeout(task.getSeverity()))
+                );
+            } catch (Exception e) {
+                log.error("Failed to schedule level 2 escalation — level 1 " +
+                                "notification was sent, but this incident's " +
+                                "escalation chain will NOT automatically continue " +
+                                "(see this method's own comment): incidentId={}, " +
+                                "tenant={}, error={}",
+                        task.getIncidentId(), task.getTenantId(),
+                        e.getMessage(), e);
+
+                auditEventPublisher.publishIncident(
+                        task.getIncidentId(), task.getTenantId(),
+                        AuditEventTypes.ESCALATION_NOTIFICATION_FAILED, SERVICE_NAME,
+                        "Level 1 escalation fired, but scheduling level 2 failed — " +
+                                "no automatic retry will occur. Manual follow-up required.",
+                        Map.of("escalationLevel", 2,
+                                "failurePhase", "schedule-level-2",
+                                "error", e.getMessage() != null ? e.getMessage() : "unknown")
+                );
+            }
         } else {
             log.info("Max escalation level reached: incidentId={}, tenant={}",
                     task.getIncidentId(), task.getTenantId());
