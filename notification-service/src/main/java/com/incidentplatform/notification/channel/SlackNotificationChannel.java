@@ -244,6 +244,20 @@ public class SlackNotificationChannel implements NotificationChannel {
                 cause);
     }
 
+    /**
+     * Fixed (backlog #78): previously logged this failure and returned
+     * normally (void, no signal of any kind) — the caller
+     * ({@code SlackActionService.updateSlackMessages}) had no way to know
+     * this failed, and unconditionally deleted the {@code SlackMessageTs}
+     * tracking row for every channel regardless of whether its update
+     * actually succeeded, destroying the one piece of data a future retry
+     * mechanism would need. Now rethrows (as {@link NotificationException},
+     * matching the exact exception type {@link #sendWithAckButtonFallback}
+     * already uses elsewhere in this same class for the identical
+     * "retries exhausted, tell the caller" situation) so the caller can
+     * make an informed decision per channel instead of silently assuming
+     * success.
+     */
     void updateMessageFallback(String channel,
                                String messageTs,
                                String acknowledgedByName,
@@ -252,6 +266,10 @@ public class SlackNotificationChannel implements NotificationChannel {
         log.warn("Failed to update Slack message after ACK: " +
                         "channel={}, ts={}, error={}",
                 channel, messageTs, cause.getMessage());
+        throw new NotificationException(
+                "SLACK", channel,
+                "Failed to update Slack message after ACK: " + cause.getMessage(),
+                cause);
     }
 
     private boolean isSlackUserId(String recipient) {

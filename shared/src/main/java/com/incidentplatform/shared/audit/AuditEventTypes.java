@@ -29,6 +29,7 @@ public final class AuditEventTypes {
     // ── Notification ────────────────────────────────────────────────────────
     public static final String NOTIFICATION_SENT         = "NOTIFICATION_SENT";
     public static final String NOTIFICATION_FAILED       = "NOTIFICATION_FAILED";
+    public static final String SLACK_ACK_MESSAGE_UPDATE_FAILED = "SLACK_ACK_MESSAGE_UPDATE_FAILED";
 
     // ── Postmortem ──────────────────────────────────────────────────────────
     public static final String POSTMORTEM_GENERATED      = "POSTMORTEM_GENERATED";
