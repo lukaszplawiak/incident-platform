@@ -162,65 +162,88 @@ public class PostmortemRetryScheduler {
         }
     }
 
-/**
- * Finds FAILED postmortems across all tenants and retries each one.
- *
- * <p>Deliberately NOT {@code @Transactional} at this level — see class
- * Javadoc. Each database write is its own short transaction via
- * {@link PostmortemPersistenceService}.
- *
- * <h2>Fixed (backlog #48): batch size cap</h2>
- * Same reasoning as {@link #processGenerating}'s fix — see
- * {@link PostmortemProperties#retryBatchSize()}'s Javadoc.
- */
-@Scheduled(
-        fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
-        initialDelayString = "120000"
-)
-@SchedulerLock(
-        name = "postmortem-service:retryFailedPostmortems",
-        lockAtMostFor = "9m",
-        lockAtLeastFor = "30s"
-)
-public void retryFailedPostmortems() {
-    final List<Postmortem> candidates = postmortemRepository.findFailedWithRemainingRetries(
-            maxRetryAttempts, PageRequest.of(0, retryBatchSize));
+    /**
+     * Finds FAILED postmortems across all tenants and retries each one.
+     *
+     * <p>Deliberately NOT {@code @Transactional} at this level — see class
+     * Javadoc. Each database write is its own short transaction via
+     * {@link PostmortemPersistenceService}.
+     *
+     * <h2>Fixed (backlog #48): batch size cap</h2>
+     * Same reasoning as {@link #processGenerating}'s fix — see
+     * {@link PostmortemProperties#retryBatchSize()}'s Javadoc.
+     */
+    @Scheduled(
+            fixedDelayString = "${postmortem.retry-scheduler-interval-ms:300000}",
+            initialDelayString = "120000"
+    )
+    @SchedulerLock(
+            name = "postmortem-service:retryFailedPostmortems",
+            lockAtMostFor = "9m",
+            lockAtLeastFor = "30s"
+    )
+    public void retryFailedPostmortems() {
+        final List<Postmortem> candidates = postmortemRepository.findFailedWithRemainingRetries(
+                maxRetryAttempts, PageRequest.of(0, retryBatchSize));
 
-    if (candidates.isEmpty()) {
-        log.debug("Postmortem retry check: no FAILED postmortems with remaining retries");
-        return;
-    }
+        if (candidates.isEmpty()) {
+            log.debug("Postmortem retry check: no FAILED postmortems with remaining retries");
+            return;
+        }
 
-    log.info("Postmortem retry check: found {} candidates (maxRetryAttempts={})",
-            candidates.size(), maxRetryAttempts);
+        log.info("Postmortem retry check: found {} candidates (maxRetryAttempts={})",
+                candidates.size(), maxRetryAttempts);
 
-    for (final Postmortem postmortem : candidates) {
-        TenantContext.set(postmortem.getTenantId());
-        try {
-            retryOne(postmortem);
-        } catch (OptimisticLockingFailureException e) {
-            // Fixed (backlog #49): same reasoning as processGenerating's
-            // identical catch — see Postmortem.version's own Javadoc.
-            // Covers a conflict at either point retryOne can write:
-            // incrementRetryCount (before the Gemini call) or
-            // markDraftAndPublish/markFailedAndPublish (after it).
-            log.info("Postmortem was edited concurrently (likely by an " +
-                            "engineer) during retry — discarding this " +
-                            "Gemini result: incidentId={}",
-                    postmortem.getIncidentId());
-        } catch (Exception e) {
-            log.error("Unexpected error during retry for postmortem: " +
-                            "incidentId={}, error={}",
-                    postmortem.getIncidentId(), e.getMessage());
-        } finally {
-            TenantContext.clear();
+        for (final Postmortem postmortem : candidates) {
+            TenantContext.set(postmortem.getTenantId());
+            try {
+                retryOne(postmortem);
+            } catch (OptimisticLockingFailureException e) {
+                // Fixed (backlog #49): same reasoning as processGenerating's
+                // identical catch — see Postmortem.version's own Javadoc.
+                // Covers a conflict at either point retryOne can write:
+                // incrementRetryCount (before the Gemini call) or
+                // markDraftAndPublish/markFailedAndPublish (after it).
+                log.info("Postmortem was edited concurrently (likely by an " +
+                                "engineer) during retry — discarding this " +
+                                "Gemini result: incidentId={}",
+                        postmortem.getIncidentId());
+            } catch (Exception e) {
+                log.error("Unexpected error during retry for postmortem: " +
+                                "incidentId={}, error={}",
+                        postmortem.getIncidentId(), e.getMessage());
+            } finally {
+                TenantContext.clear();
+            }
         }
     }
-}
 
     /**
      * Processes a GENERATING outbox entry — first attempt at calling Gemini.
      * If Gemini fails → marks FAILED so the retry scheduler picks it up.
+     *
+     * <h2>Fixed (backlog #80): the whole attempt is now inside one try,
+     * catching any Exception</h2>
+     * {@code promptBuilder.systemInstruction()}/{@code .userContent(...)}
+     * previously ran OUTSIDE this method's try block entirely, and the
+     * catch itself was scoped to {@link GeminiException} specifically —
+     * either one throwing anything else (e.g. a {@code NullPointerException}
+     * from a malformed {@code Postmortem} field) would propagate uncaught
+     * straight to {@link #processGenerating}'s own outer catch, which only
+     * logs and moves on — this record would stay GENERATING forever,
+     * silently retried every {@code generating-scheduler-interval-ms} with
+     * no bound and no path to {@code PERMANENTLY_FAILED}, unlike a genuine
+     * Gemini failure (correctly marked FAILED, then bounded by
+     * {@code maxRetryAttempts} in {@link #retryOne}). Same underlying
+     * principle already established for this exact class of gap in
+     * {@code IncidentEventConsumer} (backlog #47, this same service): a
+     * deny-list of "known, expected" failure types silently leaves
+     * everything else outside the bookkeeping it's supposed to be subject
+     * to. Inverted the same way — catch broadly, carve out only the one
+     * exception type ({@link OptimisticLockingFailureException}) that
+     * genuinely needs different handling (re-thrown unchanged, so
+     * {@link #processGenerating}'s own catch for it — a routine,
+     * self-resolving conflict, not a generation failure — still runs).
      */
     private void processOne(Postmortem postmortem) {
         final UUID postmortemId = postmortem.getId();
@@ -230,10 +253,9 @@ public void retryFailedPostmortems() {
         log.info("Processing GENERATING postmortem: incidentId={}, tenant={}",
                 incidentId, tenantId);
 
-        final String systemInstruction = promptBuilder.systemInstruction();
-        final String userContent = promptBuilder.userContent(postmortem);
-
         try {
+            final String systemInstruction = promptBuilder.systemInstruction();
+            final String userContent = promptBuilder.userContent(postmortem);
             final String content = geminiClient.generate(systemInstruction, userContent);
 
             persistenceService.markDraftAndPublish(
@@ -245,22 +267,49 @@ public void retryFailedPostmortems() {
                             "contentLength={}",
                     incidentId, tenantId, content.length());
 
-        } catch (GeminiException e) {
-            // First attempt failed — mark FAILED so the retry scheduler
+        } catch (OptimisticLockingFailureException e) {
+            // Not a generation failure — an engineer concurrently edited
+            // this record via updateContent. Re-thrown unchanged so
+            // processGenerating()'s own catch for it (INFO-level, "expected,
+            // self-resolving conflict") runs, instead of this method's own
+            // catch below wrongly treating it as "Gemini/prompt failed".
+            throw e;
+
+        } catch (Exception e) {
+            // First attempt failed (Gemini, or prompt-building on this
+            // record's own data) — mark FAILED so the retry scheduler
             // picks it up. retryCount stays at 0 (not incremented here —
             // retry scheduler increments before each retry attempt).
+            final String errorMessage = e.getMessage() != null
+                    ? e.getMessage() : e.getClass().getSimpleName();
+
             persistenceService.markFailedAndPublish(
-                    postmortemId, incidentId, tenantId, e.getMessage());
+                    postmortemId, incidentId, tenantId, errorMessage);
 
             log.warn("Postmortem generation failed on first attempt, " +
                             "will be retried: incidentId={}, tenant={}, error={}",
-                    incidentId, tenantId, e.getMessage());
+                    incidentId, tenantId, errorMessage);
         }
     }
 
     /**
      * Retries a FAILED postmortem — increments retry count, calls Gemini,
      * marks DRAFT or FAILED/PERMANENTLY_FAILED based on the outcome.
+     *
+     * <h2>Fixed (backlog #80): the maxRetryAttempts ceiling now applies to
+     * any failure, not just GeminiException</h2>
+     * Same fix, same reasoning as {@link #processOne} — see its Javadoc
+     * for the full account. Here specifically: {@code retryCount} was
+     * already durably incremented above before this method's own try/catch
+     * even began, so a non-{@link GeminiException} failure previously
+     * meant that increment was never followed by the corresponding
+     * {@code retryCount >= maxRetryAttempts} check — a record could
+     * accumulate retries past the configured ceiling via this uncounted
+     * path while {@link com.incidentplatform.postmortem.repository.PostmortemRepository
+     * #findFailedWithRemainingRetries}'s own {@code retryCount < maxRetryAttempts}
+     * filter would eventually stop returning it — stuck in plain FAILED
+     * forever, never reaching PERMANENTLY_FAILED, invisible to any
+     * "needs a human" dashboard filtering on that status specifically.
      */
     private void retryOne(Postmortem postmortem) {
         final UUID postmortemId = postmortem.getId();
@@ -275,10 +324,9 @@ public void retryFailedPostmortems() {
         log.info("Retrying postmortem generation: incidentId={}, tenant={}, attempt={}/{}",
                 incidentId, tenantId, retryCount, maxRetryAttempts);
 
-        final String systemInstruction = promptBuilder.systemInstruction();
-        final String userContent = promptBuilder.userContent(postmortem);
-
         try {
+            final String systemInstruction = promptBuilder.systemInstruction();
+            final String userContent = promptBuilder.userContent(postmortem);
             final String content = geminiClient.generate(systemInstruction, userContent);
 
             persistenceService.markDraftAndPublish(
@@ -289,8 +337,18 @@ public void retryFailedPostmortems() {
             log.info("Postmortem retry succeeded: incidentId={}, tenant={}, attempt={}",
                     incidentId, tenantId, retryCount);
 
-        } catch (GeminiException e) {
-            final String errorMessage = e.getMessage();
+        } catch (OptimisticLockingFailureException e) {
+            // Not a retry failure — an engineer concurrently edited this
+            // record. Re-thrown unchanged so retryFailedPostmortems()'s
+            // own catch for it runs instead of this method's own catch
+            // below wrongly treating it as "Gemini/prompt failed" and
+            // consuming retry budget for a conflict that has nothing to
+            // do with Gemini.
+            throw e;
+
+        } catch (Exception e) {
+            final String errorMessage = e.getMessage() != null
+                    ? e.getMessage() : e.getClass().getSimpleName();
 
             if (retryCount >= maxRetryAttempts) {
                 persistenceService.markPermanentlyFailedAndPublish(
