@@ -150,6 +150,36 @@ class PostmortemRetrySchedulerTest {
             then(persistenceService).should(never()).incrementRetryCount(any());
         }
 
+/**
+ * The actual regression test for backlog #80's processOne half.
+ * Before this fix, a non-GeminiException failure here (e.g. a
+ * NullPointerException from promptBuilder, which previously ran
+ * outside this method's try block entirely) would propagate
+ * uncaught to processGenerating()'s own generic catch — this
+ * record would stay GENERATING forever, silently reprocessed
+ * every scheduler run with no bound and no path to FAILED
+ * (and therefore never to PERMANENTLY_FAILED either), unlike a
+ * genuine Gemini failure.
+ */
+@Test
+@DisplayName("should mark FAILED when a non-GeminiException failure occurs " +
+        "on first attempt (backlog #80)")
+void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
+    final Postmortem postmortem = buildGeneratingPostmortem();
+    given(postmortemRepository.findStuckGenerating(any(), any()))
+            .willReturn(List.of(postmortem));
+    given(geminiClient.generate(anyString(), anyString()))
+            .willThrow(new RuntimeException("Unexpected null field"));
+
+    scheduler.processGenerating();
+
+    then(persistenceService).should().markFailedAndPublish(
+            postmortem.getId(), postmortem.getIncidentId(),
+            postmortem.getTenantId(), "Unexpected null field");
+    then(persistenceService).should(never())
+            .markPermanentlyFailedAndPublish(any(), any(), any(), any(), anyInt());
+}
+
         @Test
         @DisplayName("should NOT increment retryCount on first attempt")
         void shouldNotIncrementRetryCountOnFirstAttempt() {
@@ -340,6 +370,41 @@ class PostmortemRetrySchedulerTest {
                     .markFailedAndPublish(any(), any(), any(), any());
         }
 
+        /**
+         * The actual regression test for backlog #80. Before this fix,
+         * retryOne's maxRetryAttempts ceiling only applied inside
+         * catch (GeminiException e) — a non-GeminiException failure (here,
+         * a plain RuntimeException standing in for e.g. a NullPointerException
+         * from promptBuilder) would propagate uncaught to
+         * retryFailedPostmortems()'s own generic catch, which only logs
+         * and moves on, never reaching markPermanentlyFailedAndPublish even
+         * when retryCount had already reached the ceiling — the record
+         * would then silently drop out of findFailedWithRemainingRetries's
+         * own retryCount < maxRetryAttempts filter once the (uncounted-
+         * toward-the-ceiling) increments eventually exceeded it, stuck in
+         * plain FAILED forever.
+         */
+        @Test
+        @DisplayName("should mark PERMANENTLY_FAILED when a non-GeminiException " +
+                "failure occurs at maxRetryAttempts (backlog #80)")
+        void shouldMarkPermanentlyFailedOnNonGeminiExceptionAtMaxRetries() {
+            final Postmortem postmortem = buildFailedPostmortem();
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
+                    .willReturn(List.of(postmortem));
+            given(persistenceService.incrementRetryCount(postmortem.getId()))
+                    .willReturn(MAX_RETRY_ATTEMPTS);
+            given(geminiClient.generate(anyString(), anyString()))
+                    .willThrow(new RuntimeException("Unexpected null field"));
+
+            scheduler.retryFailedPostmortems();
+
+            then(persistenceService).should().markPermanentlyFailedAndPublish(
+                    postmortem.getId(), postmortem.getIncidentId(),
+                    postmortem.getTenantId(), "Unexpected null field", MAX_RETRY_ATTEMPTS);
+            then(persistenceService).should(never())
+                    .markFailedAndPublish(any(), any(), any(), any());
+        }
+
         @Test
         @DisplayName("should continue retrying other postmortems if one fails")
         void shouldContinueAfterOneFailure() {
@@ -362,39 +427,39 @@ class PostmortemRetrySchedulerTest {
                             anyString(), anyString(), anyInt());
         }
 
-/**
- * The actual regression test for backlog #49, retry path.
- * Verifies conflicts arising from either write retryOne can make
- * — incrementRetryCount (before Gemini) or markDraftAndPublish
- * (after it) — are treated as expected, self-resolving outcomes.
- * This test covers the markDraftAndPublish case specifically;
- * incrementRetryCount throwing is handled by the exact same catch
- * block, so is not separately tested here.
- */
-@Test
-@DisplayName("should discard the Gemini result and continue, not error, " +
-        "when a concurrent edit is detected (backlog #49)")
-void shouldDiscardResultOnConcurrentEditConflict() {
-    final Postmortem conflicting = buildFailedPostmortem();
-    final Postmortem normal = buildFailedPostmortem();
-    given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
-            .willReturn(List.of(conflicting, normal));
-    given(persistenceService.incrementRetryCount(any())).willReturn(1);
-    given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
-    willThrow(new OptimisticLockingFailureException(
-            "Row was updated or deleted by another transaction"))
-            .given(persistenceService)
-            .markDraftAndPublish(eq(conflicting.getId()), any(), any(),
-                    any(), any(), anyInt());
+        /**
+         * The actual regression test for backlog #49, retry path.
+         * Verifies conflicts arising from either write retryOne can make
+         * — incrementRetryCount (before Gemini) or markDraftAndPublish
+         * (after it) — are treated as expected, self-resolving outcomes.
+         * This test covers the markDraftAndPublish case specifically;
+         * incrementRetryCount throwing is handled by the exact same catch
+         * block, so is not separately tested here.
+         */
+        @Test
+        @DisplayName("should discard the Gemini result and continue, not error, " +
+                "when a concurrent edit is detected (backlog #49)")
+        void shouldDiscardResultOnConcurrentEditConflict() {
+            final Postmortem conflicting = buildFailedPostmortem();
+            final Postmortem normal = buildFailedPostmortem();
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
+                    .willReturn(List.of(conflicting, normal));
+            given(persistenceService.incrementRetryCount(any())).willReturn(1);
+            given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
+            willThrow(new OptimisticLockingFailureException(
+                    "Row was updated or deleted by another transaction"))
+                    .given(persistenceService)
+                    .markDraftAndPublish(eq(conflicting.getId()), any(), any(),
+                            any(), any(), anyInt());
 
-    scheduler.retryFailedPostmortems();
+            scheduler.retryFailedPostmortems();
 
-    // the batch continues — the next candidate is still processed
-    then(persistenceService).should()
-            .markDraftAndPublish(eq(normal.getId()), any(), any(),
-                    any(), any(), anyInt());
-    assertThat(TenantContext.getOrNull()).isNull();
-}
+            // the batch continues — the next candidate is still processed
+            then(persistenceService).should()
+                    .markDraftAndPublish(eq(normal.getId()), any(), any(),
+                            any(), any(), anyInt());
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
     }
 
     // ── TenantContext ─────────────────────────────────────────────────────
@@ -402,6 +467,7 @@ void shouldDiscardResultOnConcurrentEditConflict() {
     @Nested
     @DisplayName("TenantContext handling")
     class TenantContextHandling {
+
 
         @Test
         @DisplayName("should clear TenantContext after retry run")
