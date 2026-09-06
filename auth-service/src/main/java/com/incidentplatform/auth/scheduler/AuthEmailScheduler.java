@@ -177,6 +177,36 @@ public class AuthEmailScheduler {
         }
     }
 
+    /**
+     * <h2>Fixed (backlog #81): the maxRetryAttempts ceiling now applies to
+     * any failure, not just InviteEmailException</h2>
+     * Previously had two separate catch blocks: {@code catch
+     * (InviteEmailException e)} correctly checked {@code newRetryCount >=
+     * maxRetryAttempts} before deciding FAILED vs PERMANENTLY_FAILED, but
+     * the generic {@code catch (Exception e)} below it always called
+     * {@code markFailed} unconditionally, regardless of how many times
+     * this entry had already failed. Confirmed {@code AuthEmailOutbox
+     * .markFailed()} increments {@code retryCount} internally on every
+     * call, and confirmed {@code AuthEmailOutboxRepository
+     * #findFailedWithRemainingRetries}'s own {@code retryCount
+     * maxRetries} filter — so an entry hitting a non-InviteEmailException
+     * failure (e.g. a template-rendering bug, not an SMTP failure) could
+     * accumulate retries past the configured ceiling via this uncounted
+     * path, then silently drop out of that query once retryCount finally
+     * exceeded it: stuck in plain FAILED forever, never reaching
+     * PERMANENTLY_FAILED, invisible to any "needs a human" filter on that
+     * status specifically. Exact same shape of gap already found and
+     * fixed in postmortem-service's PostmortemRetryScheduler (backlog
+     * #80) — same fix applied here.
+     *
+     * <p>Verified {@link InviteEmailException} carries no information this
+     * catch block actually used beyond {@code e.getMessage()} (its
+     * {@code recipientEmail} field was never read here — {@code email}
+     * comes from {@code entry.getEmail()} instead) before widening,
+     * confirming the type distinction added nothing worth preserving —
+     * same conclusion already reached for {@code GeminiException} in
+     * backlog #80.
+     */
     private void processOne(AuthEmailOutbox entry) {
         final java.util.UUID entryId = entry.getId();
         final String email = entry.getEmail();
@@ -206,28 +236,24 @@ public class AuthEmailScheduler {
                     entry.getEmailType(), email,
                     entry.getUser().getId(), entry.getRetryCount() + 1);
 
-        } catch (InviteEmailException e) {
+        } catch (Exception e) {
             final int newRetryCount = entry.getRetryCount() + 1;
+            final String errorMessage = e.getMessage() != null
+                    ? e.getMessage() : e.getClass().getSimpleName();
 
             if (newRetryCount >= maxRetryAttempts) {
-                persistenceService.markPermanentlyFailed(entryId, e.getMessage());
+                persistenceService.markPermanentlyFailed(entryId, errorMessage);
                 log.error("Auth email permanently failed after {} attempts: " +
                                 "type={}, email={}, userId={}, error={}",
                         maxRetryAttempts, entry.getEmailType(),
-                        email, entry.getUser().getId(), e.getMessage());
+                        email, entry.getUser().getId(), errorMessage);
             } else {
-                persistenceService.markFailed(entryId, e.getMessage());
+                persistenceService.markFailed(entryId, errorMessage);
                 log.warn("Auth email failed (attempt {}/{}), will retry: " +
                                 "type={}, email={}, error={}",
                         newRetryCount, maxRetryAttempts,
-                        entry.getEmailType(), email, e.getMessage());
+                        entry.getEmailType(), email, errorMessage);
             }
-        } catch (Exception e) {
-            log.error("Unexpected error processing auth email outbox entry: " +
-                            "entryId={}, type={}, email={}, error={}",
-                    entryId, entry.getEmailType(), email, e.getMessage(), e);
-            persistenceService.markFailed(
-                    entryId, "Unexpected error: " + e.getMessage());
         }
     }
 }

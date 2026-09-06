@@ -222,8 +222,47 @@ class AuthEmailSchedulerTest {
 
             scheduler.processPending();
 
+            // Fixed (backlog #81): no longer prefixed with "Unexpected error: " —
+            // the generic catch now shares the exact same message-handling
+            // logic as the InviteEmailException path, since the two are no
+            // longer distinguished (see this method's own Javadoc for why).
             then(persistenceService).should()
-                    .markFailed(entry.getId(), "Unexpected error: boom");
+                    .markFailed(entry.getId(), "boom");
+        }
+
+        /**
+         * The actual regression test for backlog #81. Before this fix, a
+         * non-InviteEmailException failure (here, a plain RuntimeException
+         * standing in for e.g. a template-rendering bug) never checked
+         * newRetryCount >= maxRetryAttempts at all — markFailed was called
+         * unconditionally regardless of how many times this entry had
+         * already failed, so an entry repeatedly hitting this kind of
+         * error would accumulate retries past the configured ceiling via
+         * this uncounted path, then silently drop out of
+         * findFailedWithRemainingRetries's own retryCount < maxRetries
+         * filter once it finally exceeded that ceiling — stuck in plain
+         * FAILED forever, never reaching PERMANENTLY_FAILED.
+         */
+        @Test
+        @DisplayName("calls markPermanentlyFailed when a non-InviteEmailException " +
+                "error occurs at maxRetryAttempts (backlog #81)")
+        void marksPermanentlyFailedOnUnexpectedExceptionAtMaxRetries() {
+            final AuthEmailOutbox entry = buildInviteEntry();
+            // Exhaust retries: entry starts at 0, needs 2 prior failures so
+            // this attempt (3rd) reaches MAX_RETRY_ATTEMPTS.
+            entry.markFailed("attempt 1");
+            entry.markFailed("attempt 2");
+            given(outboxRepository.findFailedWithRemainingRetries(anyInt(), any(), any()))
+                    .willReturn(List.of(entry));
+            org.mockito.Mockito.doThrow(new RuntimeException("Unexpected null field"))
+                    .when(emailService).sendInviteEmail(anyString(), anyString());
+
+            scheduler.retryFailed();
+
+            then(persistenceService).should()
+                    .markPermanentlyFailed(entry.getId(), "Unexpected null field");
+            then(persistenceService).should(never())
+                    .markFailed(any(), anyString());
         }
     }
 
