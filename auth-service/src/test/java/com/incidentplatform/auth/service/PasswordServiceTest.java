@@ -48,6 +48,7 @@ class PasswordServiceTest {
 
     private static final String TENANT_ID    = "test-tenant";
     private static final UUID USER_ID        = UUID.randomUUID();
+    private static final UUID SESSION_ID     = UUID.randomUUID();
     private static final String CURRENT_PASSWORD = "CurrentPass123!";
     private static final String NEW_PASSWORD     = "NewPassword456!";
     private static final PasswordEncoder ENCODER =
@@ -90,6 +91,34 @@ class PasswordServiceTest {
             assertThat(newHash).isNotEqualTo(NEW_PASSWORD);
             assertThat(newHash).startsWith("$argon2id$");
             assertThat(ENCODER.matches(NEW_PASSWORD, newHash)).isTrue();
+        }
+
+        /**
+         * The actual regression test for the changePassword/resetPassword
+         * asymmetry finding. Before this fix, changePassword() did not
+         * invalidate any sessions at all — an attacker with a stolen
+         * refresh token (but not the current password) would keep a
+         * working session even after the legitimate user proactively
+         * changed their password in response to suspecting compromise.
+         * Verifies the fix uses the session-preserving variant
+         * specifically (not the same blunt "invalidate everything"
+         * resetPassword() correctly uses, where there's no session to
+         * preserve since the user isn't authenticated during that flow).
+         */
+        @Test
+        @DisplayName("invalidates every other session's refresh token, " +
+                "preserving the current one")
+        void invalidatesOtherSessionsExceptCurrent() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.changePassword(buildPrincipal(),
+                    new ChangePasswordRequest(CURRENT_PASSWORD, NEW_PASSWORD));
+
+            then(authTokenService).should()
+                    .invalidateAllRefreshTokensExceptSession(USER_ID, SESSION_ID);
         }
 
         @Test
@@ -286,6 +315,7 @@ class PasswordServiceTest {
     }
 
     private UserPrincipal buildPrincipal() {
-        return new UserPrincipal(USER_ID, TENANT_ID, "u@example.com", List.of("ROLE_RESPONDER"), List.of());
+        return new UserPrincipal(USER_ID, TENANT_ID, "u@example.com",
+                List.of("ROLE_RESPONDER"), List.of(), List.of(), SESSION_ID);
     }
 }

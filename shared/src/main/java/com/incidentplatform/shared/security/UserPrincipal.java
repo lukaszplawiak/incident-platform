@@ -75,7 +75,20 @@ public record UserPrincipal(
          * <p>Example values: {@code "incidents:read"}, {@code "alerts:ingest"}.
          * Checked via {@link #hasScope(String)} in controller/service layer.
          */
-        List<String> scopes
+        List<String> scopes,
+
+        /**
+         * Links this principal's access token to the {@code AuthToken}
+         * (REFRESH type, auth-service) issued at the same login — see
+         * auth-service migration V16's own comment for the full account
+         * of why this exists. Populated from the JWT {@code sessionId}
+         * claim by {@link JwtAuthFilter}; null for API key principals
+         * (no login session — machine-to-machine authentication) and for
+         * any access token issued with no session (service tokens,
+         * dev/test tokens via {@code DevTokenController}, or tokens
+         * issued before this claim existed).
+         */
+        UUID sessionId
 
 ) {
 
@@ -87,22 +100,40 @@ public record UserPrincipal(
     }
 
     /**
-     * Convenience constructor for JWT-authenticated principals.
+     * Convenience constructor for JWT-authenticated principals with no
+     * associated session — {@link #sessionId} = null. See the
+     * session-aware overload below when a real session is available.
      * Sets {@link #isApiKey} = false and {@link #scopes} = empty.
      */
     public UserPrincipal(UUID userId, String tenantId, String email,
                          List<String> roles, List<UUID> teamIds) {
-        this(userId, tenantId, email, roles, teamIds, List.of(), false, List.of());
+        this(userId, tenantId, email, roles, teamIds, List.of(), false, List.of(), null);
     }
 
     /**
      * Convenience constructor for JWT-authenticated principals that also
-     * carries {@link #managedTeamIds}.
+     * carries {@link #managedTeamIds}, with no associated session —
+     * {@link #sessionId} = null. See the session-aware overload below
+     * when a real session is available.
      */
     public UserPrincipal(UUID userId, String tenantId, String email,
                          List<String> roles, List<UUID> teamIds,
                          List<UUID> managedTeamIds) {
-        this(userId, tenantId, email, roles, teamIds, managedTeamIds, false, List.of());
+        this(userId, tenantId, email, roles, teamIds, managedTeamIds, false, List.of(), null);
+    }
+
+    /**
+     * Convenience constructor for JWT-authenticated principals built from
+     * a real login session — used by {@link JwtAuthFilter} once it has
+     * extracted a non-empty {@code sessionId} claim. Every other
+     * convenience constructor in this class defaults {@link #sessionId}
+     * to null; this is the one path that carries a real value through.
+     */
+    public UserPrincipal(UUID userId, String tenantId, String email,
+                         List<String> roles, List<UUID> teamIds,
+                         List<UUID> managedTeamIds, UUID sessionId) {
+        this(userId, tenantId, email, roles, teamIds, managedTeamIds,
+                false, List.of(), sessionId);
     }
 
     public Collection<? extends GrantedAuthority> getAuthorities() {

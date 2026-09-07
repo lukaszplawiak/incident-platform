@@ -129,6 +129,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         final List<String> roles   = jwtUtils.extractRoles(claims);
         final List<java.util.UUID> teamIds = jwtUtils.extractTeamIds(claims);
         final List<java.util.UUID> managedTeamIds = jwtUtils.extractManagedTeamIds(claims);
+        // Empty for tokens with no associated session (service tokens,
+        // dev/test tokens, API key principals never reach this filter at
+        // all) — see UserPrincipal.sessionId's own Javadoc.
+        final Optional<UUID> sessionIdOpt = jwtUtils.extractSessionId(claims);
 
         if (userIdOpt.isEmpty() || tenantIdOpt.isEmpty() || emailOpt.isEmpty()) {
             log.warn("JWT token missing required claims (userId/tenantId/email), " +
@@ -146,8 +150,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         request.setAttribute(
                 TenantContext.REQUEST_ATTRIBUTE_TENANT_ID, tenantId);
 
-        final UserPrincipal principal =
-                new UserPrincipal(userId, tenantId, email, roles, teamIds, managedTeamIds);
+        final UserPrincipal principal = new UserPrincipal(
+                userId, tenantId, email, roles, teamIds, managedTeamIds,
+                sessionIdOpt.orElse(null));
         final UsernamePasswordAuthenticationToken authentication =
                 new UsernamePasswordAuthenticationToken(
                         principal, null, principal.getAuthorities());

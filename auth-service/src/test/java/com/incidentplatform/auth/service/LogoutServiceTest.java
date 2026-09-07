@@ -36,6 +36,7 @@ class LogoutServiceTest {
 
     private static final String TENANT_ID = "test-tenant";
     private static final UUID USER_ID = UUID.randomUUID();
+    private static final UUID SESSION_ID = UUID.randomUUID();
     private static final String JTI = "550e8400-e29b-41d4-a716-446655440000";
     private static final String RAW_TOKEN = "raw.jwt.token";
 
@@ -56,8 +57,8 @@ class LogoutServiceTest {
     class LogoutSuccess {
 
         @Test
-        @DisplayName("revokes JWT and invalidates refresh tokens")
-        void revokesJwtAndRefreshTokens() {
+        @DisplayName("revokes JWT and invalidates only the current session's refresh token")
+        void revokesJwtAndCurrentSessionRefreshToken() {
             final UserPrincipal principal = buildPrincipal();
             given(jwtUtils.validateAndGetClaims(RAW_TOKEN))
                     .willReturn(java.util.Optional.of(claims));
@@ -71,7 +72,35 @@ class LogoutServiceTest {
             service.logout(RAW_TOKEN, principal);
 
             then(revocationService).should().revoke(eq(JTI), any());
-            then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
+            then(authTokenService).should()
+                    .invalidateRefreshTokenForSession(USER_ID, SESSION_ID);
+        }
+
+        /**
+         * The actual regression test for the sessionId architecture work.
+         * Before this fix, logout() called
+         * invalidateAllRefreshTokens(userId) — terminating every session
+         * the user had active, not just the one being logged out of, since
+         * there was previously no way to identify which refresh token
+         * belonged to this same login. Verifies the fix: the broad,
+         * every-session method is never called at all.
+         */
+        @Test
+        @DisplayName("does not invalidate every session — only the current one")
+        void doesNotInvalidateEverySession() {
+            final UserPrincipal principal = buildPrincipal();
+            given(jwtUtils.validateAndGetClaims(RAW_TOKEN))
+                    .willReturn(java.util.Optional.of(claims));
+            given(jwtUtils.extractJti(claims))
+                    .willReturn(java.util.Optional.of(JTI));
+            given(jwtUtils.extractExpiration(claims))
+                    .willReturn(java.util.Optional.of(
+                            java.util.Date.from(
+                                    java.time.Instant.now().plusSeconds(900))));
+
+            service.logout(RAW_TOKEN, principal);
+
+            then(authTokenService).should(never()).invalidateAllRefreshTokens(any());
         }
 
         @Test
@@ -125,6 +154,7 @@ class LogoutServiceTest {
     // ── helpers ───────────────────────────────────────────────────────────
 
     private UserPrincipal buildPrincipal() {
-        return new UserPrincipal(USER_ID, TENANT_ID, "user@example.com", List.of("ROLE_RESPONDER"), List.of());
+        return new UserPrincipal(USER_ID, TENANT_ID, "user@example.com",
+                List.of("ROLE_RESPONDER"), List.of(), List.of(), SESSION_ID);
     }
 }

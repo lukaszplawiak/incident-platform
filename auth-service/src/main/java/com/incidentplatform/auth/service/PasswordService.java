@@ -122,6 +122,21 @@ public class PasswordService {
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         userRepository.save(user);
 
+        // Fixed: previously did nothing here at all — an attacker with a
+        // stolen refresh token (but not the current password) would keep
+        // a working session even after the legitimate user proactively
+        // changed their password in response to suspecting compromise,
+        // undermining the whole point of allowing that defensive action.
+        // resetPassword() above already invalidates sessions on a
+        // password change; this brings changePassword() in line with it,
+        // but more precisely — leaves the session actively in use right
+        // now (the caller just proved their current password) alone,
+        // rather than forcing them to immediately re-log-in on their own
+        // device too. See AuthToken.sessionId's own Javadoc (migration
+        // V16) for the full account of what makes this precision possible.
+        authTokenService.invalidateAllRefreshTokensExceptSession(
+                principal.userId(), principal.sessionId());
+
         auditEventPublisher.publishAuth(
                 principal.userId(), principal.tenantId(),
                 AuditEventTypes.USER_PASSWORD_CHANGED,

@@ -142,7 +142,7 @@ class AuthTokenServiceTest {
             final ArgumentCaptor<AuthToken> captor =
                     ArgumentCaptor.forClass(AuthToken.class);
 
-            service.generateRefreshToken(user, TENANT_ID);
+            service.generateRefreshToken(user, TENANT_ID, UUID.randomUUID());
 
             then(tokenRepository).should().save(captor.capture());
             assertThat(captor.getValue().getType())
@@ -154,8 +154,24 @@ class AuthTokenServiceTest {
         void returnsNonBlankToken() {
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
 
-            final String token = service.generateRefreshToken(user, TENANT_ID);
+            final String token = service.generateRefreshToken(
+                    user, TENANT_ID, UUID.randomUUID());
             assertThat(token).isNotBlank();
+        }
+
+        @Test
+        @DisplayName("persists the given sessionId on the generated token")
+        void persistsGivenSessionId() {
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+            final UUID sessionId = UUID.randomUUID();
+
+            final ArgumentCaptor<AuthToken> captor =
+                    ArgumentCaptor.forClass(AuthToken.class);
+
+            service.generateRefreshToken(user, TENANT_ID, sessionId);
+
+            then(tokenRepository).should().save(captor.capture());
+            assertThat(captor.getValue().getSessionId()).isEqualTo(sessionId);
         }
     }
 
@@ -183,7 +199,7 @@ class AuthTokenServiceTest {
             given(tokenRepository.markUsedIfUnused(any(), any()))
                     .willReturn(1);
             given(jwtUtils.generateToken(any(), anyString(),
-                    anyString(), any(), any(), any()))
+                    anyString(), any(), any(), any(), any()))
                     .willReturn("new-access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
@@ -215,7 +231,7 @@ class AuthTokenServiceTest {
             given(tokenRepository.markUsedIfUnused(any(), any()))
                     .willReturn(1);
             given(jwtUtils.generateToken(any(), anyString(),
-                    anyString(), any(), any(), any()))
+                    anyString(), any(), any(), any(), any()))
                     .willReturn("new-access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));

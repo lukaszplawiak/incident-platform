@@ -77,7 +77,7 @@ public class AuthTokenService {
     @Transactional
     public String generateInviteToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.INVITE,
-                Duration.ofHours(INVITE_TTL_HOURS)).rawToken();
+                Duration.ofHours(INVITE_TTL_HOURS), null).rawToken();
     }
 
     /**
@@ -88,7 +88,7 @@ public class AuthTokenService {
     @Transactional
     public String generatePasswordResetToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.PASSWORD_RESET,
-                Duration.ofMinutes(RESET_TTL_MINUTES)).rawToken();
+                Duration.ofMinutes(RESET_TTL_MINUTES), null).rawToken();
     }
 
     /**
@@ -104,7 +104,7 @@ public class AuthTokenService {
     @Transactional
     public String generateMfaSessionToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.MFA_SESSION,
-                Duration.ofMinutes(MFA_SESSION_MINUTES)).rawToken();
+                Duration.ofMinutes(MFA_SESSION_MINUTES), null).rawToken();
     }
 
     /**
@@ -120,7 +120,7 @@ public class AuthTokenService {
     @Transactional
     public String generateMfaSetupRequiredToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.MFA_SETUP_REQUIRED,
-                Duration.ofMinutes(MFA_SETUP_REQUIRED_MINUTES)).rawToken();
+                Duration.ofMinutes(MFA_SETUP_REQUIRED_MINUTES), null).rawToken();
     }
 
     /**
@@ -152,71 +152,71 @@ public class AuthTokenService {
                 });
     }
 
-    /**
-     * Validates a token and marks it as used atomically.
-     *
-     * <h2>Fixed (backlog #53): load-mutate-save replaced with an atomic
-     * conditional UPDATE</h2>
-     * Previously: {@code findValidByHashAndType(...)} (confirms
-     * {@code usedAt IS NULL}), then separately {@code token.markUsed()}
-     * + {@code save(token)}. Nothing prevented two concurrent calls with
-     * the same raw token (a client double-submit, or a replayed request)
-     * from both passing the read check before either write committed —
-     * a single-use token could be consumed twice, with both callers
-     * proceeding to whatever action the token was meant to gate exactly
-     * once. See {@link AuthTokenRepository#markUsedIfUnused}'s own
-     * Javadoc for the full account of the fix and why a conditional
-     * UPDATE was chosen over adding {@code @Version} to {@link AuthToken}.
-     *
-     * <p>{@code claimed == 0} means some other concurrent call already
-     * won the race for this exact token between the read above and this
-     * UPDATE — treated identically to "token is invalid, expired, or
-     * already used", the same response already returned for the
-     * ordinary not-found case, since from the caller's perspective the
-     * two are indistinguishable and should be.
-     *
-     * @throws BusinessException 401 if the token is invalid, expired, or used
-     */
-    @Transactional
-    public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
-        final String hash = hash(rawToken);
+/**
+ * Validates a token and marks it as used atomically.
+ *
+ * <h2>Fixed (backlog #53): load-mutate-save replaced with an atomic
+ * conditional UPDATE</h2>
+ * Previously: {@code findValidByHashAndType(...)} (confirms
+ * {@code usedAt IS NULL}), then separately {@code token.markUsed()}
+ * + {@code save(token)}. Nothing prevented two concurrent calls with
+ * the same raw token (a client double-submit, or a replayed request)
+ * from both passing the read check before either write committed —
+ * a single-use token could be consumed twice, with both callers
+ * proceeding to whatever action the token was meant to gate exactly
+ * once. See {@link AuthTokenRepository#markUsedIfUnused}'s own
+ * Javadoc for the full account of the fix and why a conditional
+ * UPDATE was chosen over adding {@code @Version} to {@link AuthToken}.
+ *
+ * <p>{@code claimed == 0} means some other concurrent call already
+ * won the race for this exact token between the read above and this
+ * UPDATE — treated identically to "token is invalid, expired, or
+ * already used", the same response already returned for the
+ * ordinary not-found case, since from the caller's perspective the
+ * two are indistinguishable and should be.
+ *
+ * @throws BusinessException 401 if the token is invalid, expired, or used
+ */
+@Transactional
+public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
+    final String hash = hash(rawToken);
 
-        final AuthToken token = tokenRepository
-                .findValidByHashAndType(hash, expectedType, Instant.now())
-                .orElseThrow(() -> {
-                    log.warn("Invalid or expired {} token attempted",
-                            expectedType);
-                    return new BusinessException(
-                            ErrorCodes.UNAUTHORIZED,
-                            "Token is invalid, expired, or already used",
-                            HttpStatus.UNAUTHORIZED);
-                });
+    final AuthToken token = tokenRepository
+            .findValidByHashAndType(hash, expectedType, Instant.now())
+            .orElseThrow(() -> {
+                log.warn("Invalid or expired {} token attempted",
+                        expectedType);
+                return new BusinessException(
+                        ErrorCodes.UNAUTHORIZED,
+                        "Token is invalid, expired, or already used",
+                        HttpStatus.UNAUTHORIZED);
+            });
 
-        final int claimed = tokenRepository.markUsedIfUnused(
-                token.getId(), Instant.now());
+    final int claimed = tokenRepository.markUsedIfUnused(
+            token.getId(), Instant.now());
 
-        if (claimed == 0) {
-            log.warn("Token consumption lost a concurrent race — already " +
-                            "claimed by another request: type={}, tokenId={}",
-                    expectedType, token.getId());
-            throw new BusinessException(
-                    ErrorCodes.UNAUTHORIZED,
-                    "Token is invalid, expired, or already used",
-                    HttpStatus.UNAUTHORIZED);
-        }
-
-        // Keep the in-memory entity consistent with what was just
-        // persisted — no caller currently checks isUsed()/getUsedAt() on
-        // the returned token, but returning an object that still claims
-        // usedAt == null after this method's own name says otherwise
-        // would be a correctness trap waiting for the next caller that does.
-        token.markUsed();
-
-        log.info("Token consumed: type={}, userId={}, tenant={}",
-                expectedType, token.getUser().getId(), token.getTenantId());
-
-        return token;
+    if (claimed == 0) {
+        log.warn("Token consumption lost a concurrent race — already " +
+                        "claimed by another request: type={}, tokenId={}",
+                expectedType, token.getId());
+        throw new BusinessException(
+                ErrorCodes.UNAUTHORIZED,
+                "Token is invalid, expired, or already used",
+                HttpStatus.UNAUTHORIZED);
     }
+
+    // Keep the in-memory entity consistent with what was just
+    // persisted — no caller currently checks isUsed()/getUsedAt() on
+    // the returned token, but returning an object that still claims
+    // usedAt == null after this method's own name says otherwise
+    // would be a correctness trap waiting for the next caller that does.
+    token.markUsed();
+
+    log.info("Token consumed: type={}, userId={}, tenant={}",
+            expectedType, token.getUser().getId(), token.getTenantId());
+
+    return token;
+}
 
 
     /**
@@ -240,7 +240,7 @@ public class AuthTokenService {
     public GeneratedToken generateInviteTokenWithEntity(User user,
                                                         String tenantId) {
         return generate(user, tenantId, AuthToken.Type.INVITE,
-                Duration.ofHours(INVITE_TTL_HOURS));
+                Duration.ofHours(INVITE_TTL_HOURS), null);
     }
 
     /**
@@ -280,7 +280,7 @@ public class AuthTokenService {
     public GeneratedToken generatePasswordResetTokenWithEntity(User user,
                                                                String tenantId) {
         return generate(user, tenantId, AuthToken.Type.PASSWORD_RESET,
-                Duration.ofMinutes(RESET_TTL_MINUTES));
+                Duration.ofMinutes(RESET_TTL_MINUTES), null);
     }
 
     /**
@@ -292,12 +292,17 @@ public class AuthTokenService {
      * (httpOnly cookie or SecureStorage on mobile). Only the SHA-256 hash is
      * persisted in the database.
      *
+     * @param sessionId the same session identifier passed to
+     *                  {@code JwtUtils.generateToken}'s session-aware
+     *                  overload for the access token issued at this same
+     *                  login — see {@link AuthToken#sessionId}'s own
+     *                  Javadoc for the full account.
      * @return the raw (unhashed) refresh token
      */
     @Transactional
-    public String generateRefreshToken(User user, String tenantId) {
+    public String generateRefreshToken(User user, String tenantId, UUID sessionId) {
         return generate(user, tenantId, AuthToken.Type.REFRESH,
-                jwtUtils.getRefreshTokenTtl()).rawToken();
+                jwtUtils.getRefreshTokenTtl(), sessionId).rawToken();
     }
 
     /**
@@ -326,6 +331,13 @@ public class AuthTokenService {
         final User user        = oldToken.getUser();
         final String tenantId  = oldToken.getTenantId();
 
+        // Rotation continues the same logical session — carried forward
+        // onto both the new access token and the new refresh token below,
+        // not regenerated. See AuthToken.sessionId's own Javadoc: this is
+        // what lets LogoutService/PasswordService still recognize this
+        // session as "the same one" across any number of rotations.
+        final UUID sessionId = oldToken.getSessionId();
+
         // Load team memberships — must be fresh at rotation time
         final java.util.List<java.util.UUID> teamIds =
                 teamMemberRepository.findTeamIdsByUserIdAndTenantId(
@@ -337,7 +349,8 @@ public class AuthTokenService {
         // Generate new access token
         final String newAccessToken = jwtUtils.generateToken(
                 user.getId(), tenantId,
-                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds);
+                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds,
+                sessionId);
 
         final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());
@@ -345,7 +358,7 @@ public class AuthTokenService {
         // Generate new refresh token (rotation)
         final String newRawRefreshToken = generate(
                 user, tenantId, AuthToken.Type.REFRESH,
-                jwtUtils.getRefreshTokenTtl()).rawToken();
+                jwtUtils.getRefreshTokenTtl(), sessionId).rawToken();
 
         final Instant refreshExpiresAt = Instant.now()
                 .plus(jwtUtils.getRefreshTokenTtl());
@@ -360,24 +373,92 @@ public class AuthTokenService {
     }
 
     /**
-     * Invalidates all active refresh tokens for a user.
-     * Called by {@code LogoutService} to terminate all sessions.
+     * Invalidates all active refresh tokens for a user — terminates every
+     * session. Called by {@code LogoutService} (before this fix — see
+     * {@link #invalidateRefreshTokenForSession} for the precise, single-
+     * session alternative it now uses instead) and by
+     * {@code PasswordService.resetPassword()}, where "invalidate
+     * everything" is still correct — there's no session to preserve in a
+     * recovery flow, since the user isn't authenticated at all during it.
+     *
+     * <h2>Fixed: replaces a load-then-loop-then-save pattern</h2>
+     * Previously loaded every matching token, then called
+     * {@code token.markUsed()} + {@code tokenRepository.save(token)} for
+     * each one — N reads plus N writes for N active sessions. Now a
+     * single atomic bulk {@code UPDATE} via
+     * {@link AuthTokenRepository#invalidateAllRefreshTokens} — see that
+     * method's own Javadoc for the full account.
      */
     @Transactional
     public void invalidateAllRefreshTokens(UUID userId) {
-        final List<AuthToken> activeTokens =
-                tokenRepository.findValidByUserIdAndType(
-                        userId, AuthToken.Type.REFRESH, Instant.now());
+        final int count = tokenRepository.invalidateAllRefreshTokens(
+                userId, Instant.now());
 
-        for (final AuthToken token : activeTokens) {
-            token.markUsed();
-            tokenRepository.save(token);
-        }
-
-        if (!activeTokens.isEmpty()) {
+        if (count > 0) {
             log.info("Invalidated {} refresh token(s) for userId={}",
-                    activeTokens.size(), userId);
+                    count, userId);
         }
+    }
+
+    /**
+     * Invalidates exactly one session's refresh token, leaving every
+     * other session untouched. Used by {@code LogoutService}, which
+     * already revokes the current access token precisely (by its own
+     * {@code jti}, via {@code TokenRevocationService}/Redis) — this does
+     * the same for the paired refresh token.
+     *
+     * <p>{@code sessionId} may be null (a token issued with no session —
+     * service tokens, dev/test tokens, or access tokens issued before
+     * this claim existed): in that case there is no specific session to
+     * target, so this is a deliberate no-op rather than an attempt to
+     * match rows by a null value that would not identify anything
+     * specific. Logged at DEBUG, not WARN — an ordinary, expected
+     * outcome for those cases, not a problem.
+     */
+    @Transactional
+    public void invalidateRefreshTokenForSession(UUID userId, UUID sessionId) {
+        if (sessionId == null) {
+            log.debug("Logout with no sessionId on the access token — " +
+                    "nothing session-specific to invalidate: userId={}", userId);
+            return;
+        }
+
+        final int count = tokenRepository.invalidateRefreshTokenForSession(
+                userId, sessionId, Instant.now());
+
+        log.info("Invalidated {} refresh token(s) for userId={}, sessionId={}",
+                count, userId, sessionId);
+    }
+
+    /**
+     * Invalidates every session's refresh token EXCEPT the given one.
+     * Used by {@code PasswordService.changePassword()}: a defensive
+     * response to a possible compromise should terminate every other
+     * session while leaving the one actively, legitimately in use right
+     * now (the caller just proved their current password) alone.
+     *
+     * <p>{@code sessionId} may be null for the same reasons as
+     * {@link #invalidateRefreshTokenForSession} — in that case there is
+     * no "current session" to exempt, so this falls back to
+     * {@link #invalidateAllRefreshTokens} (invalidate everything) rather
+     * than silently leaving every session active because none could be
+     * matched as "the current one".
+     */
+    @Transactional
+    public void invalidateAllRefreshTokensExceptSession(UUID userId, UUID sessionId) {
+        if (sessionId == null) {
+            log.debug("Password change with no sessionId on the access token — " +
+                            "no current session to exempt, invalidating all: userId={}",
+                    userId);
+            invalidateAllRefreshTokens(userId);
+            return;
+        }
+
+        final int count = tokenRepository.invalidateAllRefreshTokensExceptSession(
+                userId, sessionId, Instant.now());
+
+        log.info("Invalidated {} other refresh token(s) for userId={}, " +
+                "excluding current sessionId={}", count, userId, sessionId);
     }
 
     /**
@@ -408,9 +489,14 @@ public class AuthTokenService {
      * returning {@link GeneratedToken} so both shapes of caller can be
      * satisfied from here: string-only callers take {@code .rawToken()},
      * entity-needing callers use the whole result.
+     *
+     * @param sessionId see {@link AuthToken#sessionId}'s own Javadoc —
+     *                  pass null for any type other than
+     *                  {@link AuthToken.Type#REFRESH}.
      */
     private GeneratedToken generate(User user, String tenantId,
-                                    AuthToken.Type type, Duration ttl) {
+                                    AuthToken.Type type, Duration ttl,
+                                    UUID sessionId) {
         final byte[] bytes = new byte[TOKEN_BYTES];
         secureRandom.nextBytes(bytes);
         final String rawToken = Base64.getUrlEncoder()
@@ -419,7 +505,7 @@ public class AuthTokenService {
 
         final AuthToken token = AuthToken.create(
                 user, tenantId, hash(rawToken), type,
-                Instant.now().plus(ttl));
+                Instant.now().plus(ttl), sessionId);
 
         tokenRepository.save(token);
 
