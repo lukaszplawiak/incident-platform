@@ -77,7 +77,7 @@ public class AuthTokenService {
     @Transactional
     public String generateInviteToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.INVITE,
-                Duration.ofHours(INVITE_TTL_HOURS));
+                Duration.ofHours(INVITE_TTL_HOURS)).rawToken();
     }
 
     /**
@@ -88,7 +88,7 @@ public class AuthTokenService {
     @Transactional
     public String generatePasswordResetToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.PASSWORD_RESET,
-                Duration.ofMinutes(RESET_TTL_MINUTES));
+                Duration.ofMinutes(RESET_TTL_MINUTES)).rawToken();
     }
 
     /**
@@ -104,7 +104,7 @@ public class AuthTokenService {
     @Transactional
     public String generateMfaSessionToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.MFA_SESSION,
-                Duration.ofMinutes(MFA_SESSION_MINUTES));
+                Duration.ofMinutes(MFA_SESSION_MINUTES)).rawToken();
     }
 
     /**
@@ -120,37 +120,37 @@ public class AuthTokenService {
     @Transactional
     public String generateMfaSetupRequiredToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.MFA_SETUP_REQUIRED,
-                Duration.ofMinutes(MFA_SETUP_REQUIRED_MINUTES));
+                Duration.ofMinutes(MFA_SETUP_REQUIRED_MINUTES)).rawToken();
     }
 
-/**
- * Non-destructive lookup — validates the token exists, matches the
- * expected type, and hasn't expired or been used, WITHOUT marking it
- * used.
- *
- * <p>Used by the forced-MFA-setup flow's setup step
- * (MfaService.setupMfaWithSetupToken), which may legitimately be
- * retried — e.g. the user's authenticator app didn't scan the QR
- * cleanly the first time — before the final enable step
- * (MfaService.enableMfaWithSetupToken) actually consumes the token via
- * {@link #consumeToken}.
- *
- * @throws BusinessException 401 if the token is invalid, expired, or used
- */
-@Transactional(readOnly = true)
-public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
-    final String hash = hash(rawToken);
+    /**
+     * Non-destructive lookup — validates the token exists, matches the
+     * expected type, and hasn't expired or been used, WITHOUT marking it
+     * used.
+     *
+     * <p>Used by the forced-MFA-setup flow's setup step
+     * (MfaService.setupMfaWithSetupToken), which may legitimately be
+     * retried — e.g. the user's authenticator app didn't scan the QR
+     * cleanly the first time — before the final enable step
+     * (MfaService.enableMfaWithSetupToken) actually consumes the token via
+     * {@link #consumeToken}.
+     *
+     * @throws BusinessException 401 if the token is invalid, expired, or used
+     */
+    @Transactional(readOnly = true)
+    public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
+        final String hash = hash(rawToken);
 
-    return tokenRepository
-            .findValidByHashAndType(hash, expectedType, Instant.now())
-            .orElseThrow(() -> {
-                log.warn("Invalid or expired {} token attempted (peek)", expectedType);
-                return new BusinessException(
-                        ErrorCodes.UNAUTHORIZED,
-                        "Invalid or expired token",
-                        HttpStatus.UNAUTHORIZED);
-            });
-}
+        return tokenRepository
+                .findValidByHashAndType(hash, expectedType, Instant.now())
+                .orElseThrow(() -> {
+                    log.warn("Invalid or expired {} token attempted (peek)", expectedType);
+                    return new BusinessException(
+                            ErrorCodes.UNAUTHORIZED,
+                            "Invalid or expired token",
+                            HttpStatus.UNAUTHORIZED);
+                });
+    }
 
     /**
      * Validates a token and marks it as used atomically.
@@ -228,34 +228,38 @@ public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
      * (to include in the email link). The raw token is stored temporarily
      * in {@code invite_email_outbox.raw_token} and NULLed after dispatch.
      *
+     * <h2>Fixed (backlog #82)</h2>
+     * Previously duplicated the private {@link #generate}'s entire
+     * byte-generation/encoding/{@code AuthToken.create}/save/log sequence
+     * inline instead of calling it — see that method's own Javadoc for
+     * the full account.
+     *
      * @return a record containing the raw token and the saved AuthToken entity
      */
     @Transactional
-    public InviteTokenResult generateInviteTokenWithEntity(User user,
-                                                           String tenantId) {
-        final byte[] bytes = new byte[TOKEN_BYTES];
-        secureRandom.nextBytes(bytes);
-        final String rawToken = Base64.getUrlEncoder()
-                .withoutPadding()
-                .encodeToString(bytes);
-
-        final AuthToken token = AuthToken.create(
-                user, tenantId, hash(rawToken), AuthToken.Type.INVITE,
-                Instant.now().plus(Duration.ofHours(INVITE_TTL_HOURS)));
-
-        tokenRepository.save(token);
-
-        log.info("Auth token generated: type=INVITE, userId={}, tenant={}, " +
-                "expiresAt={}", user.getId(), tenantId, token.getExpiresAt());
-
-        return new InviteTokenResult(rawToken, token);
+    public GeneratedToken generateInviteTokenWithEntity(User user,
+                                                        String tenantId) {
+        return generate(user, tenantId, AuthToken.Type.INVITE,
+                Duration.ofHours(INVITE_TTL_HOURS));
     }
 
     /**
-     * Result of {@link #generateInviteTokenWithEntity} — carries both the
-     * raw token (for the email link) and the saved entity (for the outbox FK).
+     * Result of {@link #generate} — carries both the raw token (for an
+     * email link, where applicable) and the saved entity (for an outbox
+     * FK, where applicable). Used for every token type this class
+     * generates, not just invites — see backlog #82: this record was
+     * originally named {@code InviteTokenResult}, added when
+     * {@link #generateInviteTokenWithEntity} was its only use; the name
+     * became inaccurate once {@link #generate} started returning it
+     * internally for every token type and
+     * {@link #generatePasswordResetTokenWithEntity} started returning it
+     * too. Renamed here, across every file that referenced it, rather
+     * than kept and documented as "despite the name, generic" — a
+     * misleading name is a real cost even when the fields themselves
+     * never change, and the rename itself is a pure identifier change
+     * with no behavior difference, not a risky refactor.
      */
-    public record InviteTokenResult(String rawToken, AuthToken token) {}
+    public record GeneratedToken(String rawToken, AuthToken token) {}
 
 
 
@@ -266,26 +270,17 @@ public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
      * <p>Analogous to {@link #generateInviteTokenWithEntity} — the outbox
      * needs both the entity (for the FK) and the raw token (for the email link).
      *
+     * <h2>Fixed (backlog #82)</h2>
+     * Same fix as {@link #generateInviteTokenWithEntity} — see that
+     * method's own Javadoc, and {@link #generate}'s, for the full account.
+     *
      * @return a record containing the raw token and the saved AuthToken entity
      */
     @Transactional
-    public InviteTokenResult generatePasswordResetTokenWithEntity(User user,
-                                                                  String tenantId) {        final byte[] bytes = new byte[TOKEN_BYTES];
-        secureRandom.nextBytes(bytes);
-        final String rawToken = Base64.getUrlEncoder()
-                .withoutPadding()
-                .encodeToString(bytes);
-
-        final AuthToken token = AuthToken.create(
-                user, tenantId, hash(rawToken), AuthToken.Type.PASSWORD_RESET,
-                Instant.now().plus(Duration.ofMinutes(RESET_TTL_MINUTES)));
-
-        tokenRepository.save(token);
-
-        log.info("Auth token generated: type=PASSWORD_RESET, userId={}, tenant={}, " +
-                "expiresAt={}", user.getId(), tenantId, token.getExpiresAt());
-
-        return new InviteTokenResult(rawToken, token);
+    public GeneratedToken generatePasswordResetTokenWithEntity(User user,
+                                                               String tenantId) {
+        return generate(user, tenantId, AuthToken.Type.PASSWORD_RESET,
+                Duration.ofMinutes(RESET_TTL_MINUTES));
     }
 
     /**
@@ -302,7 +297,7 @@ public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
     @Transactional
     public String generateRefreshToken(User user, String tenantId) {
         return generate(user, tenantId, AuthToken.Type.REFRESH,
-                jwtUtils.getRefreshTokenTtl());
+                jwtUtils.getRefreshTokenTtl()).rawToken();
     }
 
     /**
@@ -350,7 +345,7 @@ public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
         // Generate new refresh token (rotation)
         final String newRawRefreshToken = generate(
                 user, tenantId, AuthToken.Type.REFRESH,
-                jwtUtils.getRefreshTokenTtl());
+                jwtUtils.getRefreshTokenTtl()).rawToken();
 
         final Instant refreshExpiresAt = Instant.now()
                 .plus(jwtUtils.getRefreshTokenTtl());
@@ -399,8 +394,23 @@ public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
 
     // ── private ───────────────────────────────────────────────────────────
 
-    private String generate(User user, String tenantId,
-                            AuthToken.Type type, Duration ttl) {
+    /**
+     * Fixed (backlog #82): previously only this method existed for the
+     * "raw token string only" callers ({@link #generateInviteToken},
+     * {@link #generatePasswordResetToken}, {@link #generateMfaSessionToken},
+     * {@link #generateMfaSetupRequiredToken}, {@link #generateRefreshToken},
+     * {@link #rotateRefreshToken}) — {@link #generateInviteTokenWithEntity}
+     * and {@link #generatePasswordResetTokenWithEntity} (which also need
+     * the saved {@link AuthToken} entity, for the outbox FK) each
+     * independently duplicated the exact same byte-generation/encoding/
+     * {@code AuthToken.create}/save/log sequence inline, rather than
+     * calling this method. Now the one place that does the actual work,
+     * returning {@link GeneratedToken} so both shapes of caller can be
+     * satisfied from here: string-only callers take {@code .rawToken()},
+     * entity-needing callers use the whole result.
+     */
+    private GeneratedToken generate(User user, String tenantId,
+                                    AuthToken.Type type, Duration ttl) {
         final byte[] bytes = new byte[TOKEN_BYTES];
         secureRandom.nextBytes(bytes);
         final String rawToken = Base64.getUrlEncoder()
@@ -416,7 +426,7 @@ public AuthToken peekToken(String rawToken, AuthToken.Type expectedType) {
         log.info("Auth token generated: type={}, userId={}, tenant={}, " +
                 "expiresAt={}", type, user.getId(), tenantId, token.getExpiresAt());
 
-        return rawToken;
+        return new GeneratedToken(rawToken, token);
     }
 
     private String hash(String rawToken) {

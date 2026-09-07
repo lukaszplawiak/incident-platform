@@ -6,7 +6,7 @@ import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -118,7 +118,7 @@ public class ForgotPasswordService {
         }
 
         // Generate token — 15-minute TTL (AuthTokenService.RESET_TTL_MINUTES)
-        final InviteTokenResult tokenResult =
+        final GeneratedToken tokenResult =
                 authTokenService.generatePasswordResetTokenWithEntity(user, tenantId);
 
         // Write outbox entry — AuthEmailScheduler sends the email within 30s

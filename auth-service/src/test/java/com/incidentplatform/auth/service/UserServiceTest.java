@@ -8,7 +8,7 @@ import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
@@ -172,7 +172,7 @@ class UserServiceTest {
 
             given(authTokenService.generateInviteTokenWithEntity(
                     any(User.class), anyString()))
-                    .willReturn(new InviteTokenResult("raw-invite-token", mockToken));
+                    .willReturn(new GeneratedToken("raw-invite-token", mockToken));
 
             given(outboxRepository.save(any(AuthEmailOutbox.class)))
                     .willAnswer(inv -> inv.getArgument(0));
@@ -248,7 +248,7 @@ class UserServiceTest {
 
             given(authTokenService.generateInviteTokenWithEntity(
                     any(User.class), anyString()))
-                    .willReturn(new InviteTokenResult("token", mockToken));
+                    .willReturn(new GeneratedToken("token", mockToken));
             given(outboxRepository.save(any()))
                     .willAnswer(inv -> inv.getArgument(0));
 
