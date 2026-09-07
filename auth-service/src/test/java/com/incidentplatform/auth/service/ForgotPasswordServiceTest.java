@@ -7,7 +7,7 @@ import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -227,11 +227,11 @@ class ForgotPasswordServiceTest {
                 "bcrypt-hash", true, List.of("ROLE_RESPONDER"));
     }
 
-    private InviteTokenResult buildTokenResult(User user) {
+    private GeneratedToken buildTokenResult(User user) {
         final AuthToken token = AuthToken.create(
                 user, TENANT_ID, "hash",
                 AuthToken.Type.PASSWORD_RESET,
                 Instant.now().plusSeconds(900));
-        return new InviteTokenResult("raw-reset-token", token);
+        return new GeneratedToken("raw-reset-token", token);
     }
 }

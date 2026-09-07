@@ -8,7 +8,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -274,7 +274,7 @@ class ResendInviteServiceTest {
                 AuthToken.Type.INVITE,
                 Instant.now().plusSeconds(3600 * 168));
         given(authTokenService.generateInviteTokenWithEntity(any(), anyString()))
-                .willReturn(new InviteTokenResult("new-raw-token", token));
+                .willReturn(new GeneratedToken("new-raw-token", token));
     }
 
     private AuthEmailOutbox buildOutboxEntry(User user,

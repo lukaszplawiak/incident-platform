@@ -9,7 +9,7 @@ import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.TenantContext;
@@ -105,7 +105,7 @@ public class UserService {
 
         // Generate invite token — returns both rawToken and the saved entity.
         // We need the entity for the outbox FK and the rawToken for the email link.
-        final InviteTokenResult tokenResult =
+        final GeneratedToken tokenResult =
                 authTokenService.generateInviteTokenWithEntity(user, tenantId);
 
         // Write outbox entry — rawToken stored temporarily until scheduler sends email.

@@ -8,7 +8,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.InviteTokenResult;
+import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -137,7 +137,7 @@ public class ResendInviteService {
         }
 
         // Generate fresh token with new 7-day TTL
-        final InviteTokenResult tokenResult =
+        final GeneratedToken tokenResult =
                 authTokenService.generateInviteTokenWithEntity(user, tenantId);
 
         // Write new PENDING outbox entry — scheduler sends within 30s
