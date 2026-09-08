@@ -113,7 +113,9 @@ public class ApiKeyLookupServiceImpl
                 List.of(), // managedTeamIds — not applicable to API key principals,
                 // same reasoning as teamIds/scopes for machine-to-machine calls
                 true,
-                apiKey.getScopes()
+                apiKey.getScopes(),
+                null // sessionId — not applicable; API keys authenticate
+                // machine-to-machine calls, not a human login session
         );
     }
 

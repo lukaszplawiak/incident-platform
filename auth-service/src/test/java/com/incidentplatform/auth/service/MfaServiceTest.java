@@ -210,11 +210,11 @@ class MfaServiceTest {
                     .willReturn(List.of());
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(List.of());
-            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
                     .willReturn("refresh-token");
 
             final LoginResponse response =
@@ -361,11 +361,11 @@ class MfaServiceTest {
                     .willReturn(List.of());
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(List.of());
-            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
                     .willReturn("refresh-token");
 
             final LoginResponse response =
@@ -410,11 +410,11 @@ class MfaServiceTest {
                     .willReturn(List.of());
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(List.of());
-            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
                     .willReturn("refresh-token");
 
             final LoginResponse response =
@@ -624,11 +624,11 @@ class MfaServiceTest {
                     .willReturn(List.of());
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(List.of());
-            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any()))
+            given(jwtUtils.generateToken(any(), anyString(), anyString(), any(), any(), any(), any()))
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
                     .willReturn("refresh-token");
             given(totpService.generateBackupCodes())
                     .willReturn(List.of("aaaa1111", "bbbb2222"));

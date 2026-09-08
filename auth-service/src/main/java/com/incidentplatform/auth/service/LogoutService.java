@@ -67,8 +67,16 @@ public class LogoutService {
 
         revocationService.revoke(jti, expiresAt);
 
-        // Invalidate all active refresh tokens — terminates all sessions.
-        authTokenService.invalidateAllRefreshTokens(principal.userId());
+        // Fixed: previously called invalidateAllRefreshTokens(userId) —
+        // terminating every session, not just this one, because there
+        // was no way to identify which refresh token belonged to this
+        // same login. See AuthToken.sessionId's own Javadoc (auth-service
+        // migration V16) for the full account. Now precisely mirrors
+        // what the line above already does for the access token: revoke
+        // exactly this one session, leave every other session the user
+        // has active untouched.
+        authTokenService.invalidateRefreshTokenForSession(
+                principal.userId(), principal.sessionId());
 
         auditEventPublisher.publishAuth(
                 principal.userId(), principal.tenantId(),

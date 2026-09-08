@@ -79,17 +79,42 @@ public class AuthToken {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
+    /**
+     * Links this refresh token to the access token issued at the same
+     * login — see migration V16's own comment for the full account of
+     * why this exists (LogoutService/PasswordService both needed a way
+     * to distinguish "this one session" from "every other session" and
+     * previously had no way to). Null for every token type except
+     * REFRESH — INVITE, PASSWORD_RESET, MFA_SESSION, and
+     * MFA_SETUP_REQUIRED are issued outside of (or before) an
+     * established login session.
+     */
+    @Column(name = "session_id")
+    private UUID sessionId;
+
     protected AuthToken() {}
 
     public static AuthToken create(User user, String tenantId,
                                    String tokenHash, Type type,
                                    Instant expiresAt) {
+        return create(user, tenantId, tokenHash, type, expiresAt, null);
+    }
+
+    /**
+     * @param sessionId see this class's own {@link #sessionId} field
+     *                  Javadoc — pass null for any type other than
+     *                  {@link Type#REFRESH}.
+     */
+    public static AuthToken create(User user, String tenantId,
+                                   String tokenHash, Type type,
+                                   Instant expiresAt, UUID sessionId) {
         final AuthToken token = new AuthToken();
         token.user = user;
         token.tenantId = tenantId;
         token.tokenHash = tokenHash;
         token.type = type;
         token.expiresAt = expiresAt;
+        token.sessionId = sessionId;
         return token;
     }
 
@@ -127,4 +152,5 @@ public class AuthToken {
     public Type getType() { return type; }
     public Instant getExpiresAt() { return expiresAt; }
     public Instant getUsedAt() { return usedAt; }
+    public UUID getSessionId() { return sessionId; }
 }

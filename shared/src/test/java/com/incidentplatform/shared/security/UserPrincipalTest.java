@@ -52,6 +52,40 @@ class UserPrincipalTest {
     }
 
     @Nested
+    @DisplayName("sessionId")
+    class SessionId {
+
+        @Test
+        @DisplayName("should default to null via the 5-argument convenience constructor")
+        void shouldDefaultToNullViaFiveArgConstructor() {
+            final UserPrincipal principal =
+                    new UserPrincipal(USER_ID, TENANT, EMAIL, List.of(), List.of());
+
+            assertThat(principal.sessionId()).isNull();
+        }
+
+        @Test
+        @DisplayName("should default to null via the 6-argument convenience constructor")
+        void shouldDefaultToNullViaSixArgConstructor() {
+            final UserPrincipal principal = new UserPrincipal(
+                    USER_ID, TENANT, EMAIL, List.of(), List.of(), List.of());
+
+            assertThat(principal.sessionId()).isNull();
+        }
+
+        @Test
+        @DisplayName("should carry a real value via the session-aware 7-argument constructor")
+        void shouldCarryRealValueViaSevenArgConstructor() {
+            final UUID sessionId = UUID.randomUUID();
+
+            final UserPrincipal principal = new UserPrincipal(
+                    USER_ID, TENANT, EMAIL, List.of(), List.of(), List.of(), sessionId);
+
+            assertThat(principal.sessionId()).isEqualTo(sessionId);
+        }
+    }
+
+    @Nested
     @DisplayName("getAuthorities")
     class GetAuthorities {
 

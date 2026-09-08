@@ -102,14 +102,14 @@ class AuthServiceTest {
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
             given(jwtUtils.generateToken(eq(user.getId()), eq(TENANT_ID),
-                    eq(EMAIL), anyList(), any(), any())).willReturn("jwt-token");
+                    eq(EMAIL), anyList(), any(), any(), any())).willReturn("jwt-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
             given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
                     any(), anyString())).willReturn(List.of());
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                     any(), anyString())).willReturn(List.of());
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
                     .willReturn("raw-refresh-token");
 
             final LoginResponse response =
@@ -134,7 +134,7 @@ class AuthServiceTest {
 
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(jwtUtils.generateToken(any(), any(), any(), any(), any(), any()))
+            given(jwtUtils.generateToken(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn("token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(Duration.ofMinutes(15));
             given(teamMemberRepository.findTeamIdsByUserIdAndTenantId(
@@ -142,7 +142,7 @@ class AuthServiceTest {
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                     any(), anyString())).willReturn(List.of());
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
                     .willReturn("raw-refresh-token");
 
             authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID);

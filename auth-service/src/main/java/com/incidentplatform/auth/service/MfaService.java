@@ -589,12 +589,21 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
                 teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                         user.getId(), tenantId);
 
+        // Generated once per completed login, shared by the access token
+        // (claim) and the refresh token (column) issued together below —
+        // same reasoning as AuthService.login()'s identical sessionId
+        // generation; see AuthToken.sessionId's own Javadoc for the full
+        // account.
+        final UUID sessionId = UUID.randomUUID();
+
         final String accessToken = jwtUtils.generateToken(
                 user.getId(), tenantId,
-                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds);
+                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds,
+                sessionId);
 
         final Instant accessExpiresAt  = Instant.now().plus(jwtUtils.getAccessTokenTtl());
-        final String rawRefreshToken   = authTokenService.generateRefreshToken(user, tenantId);
+        final String rawRefreshToken   =
+                authTokenService.generateRefreshToken(user, tenantId, sessionId);
         final Instant refreshExpiresAt = Instant.now().plus(jwtUtils.getRefreshTokenTtl());
 
         auditEventPublisher.publishAuth(

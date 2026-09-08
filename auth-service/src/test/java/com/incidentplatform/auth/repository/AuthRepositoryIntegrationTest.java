@@ -404,6 +404,130 @@ class AuthRepositoryIntegrationTest {
             assertThat(authTokenRepository.findById(expired.getId())).isEmpty();
             assertThat(authTokenRepository.findById(used.getId())).isEmpty();
         }
+
+        @Test
+        @DisplayName("invalidateAllRefreshTokens invalidates every valid REFRESH " +
+                "token for the user, leaves other types and other users alone")
+        void invalidateAllRefreshTokensInvalidatesOnlyThatUsersRefreshTokens() {
+            final User user = persistUser("logout-all@example.com", List.of("ROLE_RESPONDER"));
+            final User otherUser = persistUser("other-user@example.com", List.of("ROLE_RESPONDER"));
+            final AuthToken refresh1 = AuthToken.create(
+                    user, TENANT_ID, "hash-refresh-1", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600));
+            final AuthToken refresh2 = AuthToken.create(
+                    user, TENANT_ID, "hash-refresh-2", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600));
+            final AuthToken inviteToken = AuthToken.create(
+                    user, TENANT_ID, "hash-invite-untouched", AuthToken.Type.INVITE,
+                    Instant.now().plusSeconds(3600));
+            final AuthToken otherUsersRefresh = AuthToken.create(
+                    otherUser, TENANT_ID, "hash-other-user-refresh", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600));
+            authTokenRepository.saveAndFlush(refresh1);
+            authTokenRepository.saveAndFlush(refresh2);
+            authTokenRepository.saveAndFlush(inviteToken);
+            authTokenRepository.saveAndFlush(otherUsersRefresh);
+
+            final int invalidated = authTokenRepository.invalidateAllRefreshTokens(
+                    user.getId(), Instant.now());
+
+            assertThat(invalidated).isEqualTo(2);
+            assertThat(authTokenRepository.findById(refresh1.getId())
+                    .orElseThrow().isUsed()).isTrue();
+            assertThat(authTokenRepository.findById(refresh2.getId())
+                    .orElseThrow().isUsed()).isTrue();
+            assertThat(authTokenRepository.findById(inviteToken.getId())
+                    .orElseThrow().isUsed())
+                    .as("non-REFRESH tokens must be untouched")
+                    .isFalse();
+            assertThat(authTokenRepository.findById(otherUsersRefresh.getId())
+                    .orElseThrow().isUsed())
+                    .as("a different user's REFRESH token must be untouched")
+                    .isFalse();
+        }
+
+        @Test
+        @DisplayName("invalidateRefreshTokenForSession invalidates only the " +
+                "matching session, leaves other sessions for the same user alone")
+        void invalidateRefreshTokenForSessionInvalidatesOnlyThatSession() {
+            final User user = persistUser("logout-one-session@example.com",
+                    List.of("ROLE_RESPONDER"));
+            final UUID targetSession = UUID.randomUUID();
+            final UUID otherSession = UUID.randomUUID();
+            final AuthToken targetToken = AuthToken.create(
+                    user, TENANT_ID, "hash-target-session", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600), targetSession);
+            final AuthToken otherToken = AuthToken.create(
+                    user, TENANT_ID, "hash-other-session", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600), otherSession);
+            authTokenRepository.saveAndFlush(targetToken);
+            authTokenRepository.saveAndFlush(otherToken);
+
+            final int invalidated = authTokenRepository.invalidateRefreshTokenForSession(
+                    user.getId(), targetSession, Instant.now());
+
+            assertThat(invalidated).isEqualTo(1);
+            assertThat(authTokenRepository.findById(targetToken.getId())
+                    .orElseThrow().isUsed()).isTrue();
+            assertThat(authTokenRepository.findById(otherToken.getId())
+                    .orElseThrow().isUsed())
+                    .as("a different session's token must be untouched")
+                    .isFalse();
+        }
+
+        /**
+         * The actual regression coverage for the NULL-safety concern
+         * documented on {@code invalidateAllRefreshTokensExceptSession}'s
+         * own Javadoc — the same class of gap already found and fixed in
+         * oncall-service's own schedule-overlap query. A plain
+         * {@code t.sessionId <> :sessionId} would evaluate to UNKNOWN
+         * (not TRUE) for a row where {@code session_id} is NULL under
+         * SQL's three-valued logic, silently exempting that row from
+         * ever being invalidated by this "invalidate everything except"
+         * query. Only a real database can catch this — Mockito has no
+         * SQL NULL semantics to get wrong in the first place.
+         */
+        @Test
+        @DisplayName("invalidateAllRefreshTokensExceptSession invalidates a token " +
+                "with a NULL sessionId too — NULL-safety regression coverage")
+        void invalidateAllRefreshTokensExceptSessionHandlesNullSessionIdCorrectly() {
+            final User user = persistUser("change-password@example.com",
+                    List.of("ROLE_RESPONDER"));
+            final UUID currentSession = UUID.randomUUID();
+            final UUID otherSession = UUID.randomUUID();
+            final AuthToken currentSessionToken = AuthToken.create(
+                    user, TENANT_ID, "hash-current-session", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600), currentSession);
+            final AuthToken otherSessionToken = AuthToken.create(
+                    user, TENANT_ID, "hash-other-session-except", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600), otherSession);
+            // A token with no sessionId at all — e.g. issued before this
+            // claim existed, or via a code path that forgot to set it.
+            final AuthToken noSessionToken = AuthToken.create(
+                    user, TENANT_ID, "hash-null-session", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(3600), null);
+            authTokenRepository.saveAndFlush(currentSessionToken);
+            authTokenRepository.saveAndFlush(otherSessionToken);
+            authTokenRepository.saveAndFlush(noSessionToken);
+
+            final int invalidated = authTokenRepository
+                    .invalidateAllRefreshTokensExceptSession(
+                            user.getId(), currentSession, Instant.now());
+
+            assertThat(invalidated).isEqualTo(2);
+            assertThat(authTokenRepository.findById(currentSessionToken.getId())
+                    .orElseThrow().isUsed())
+                    .as("the current session's own token must survive")
+                    .isFalse();
+            assertThat(authTokenRepository.findById(otherSessionToken.getId())
+                    .orElseThrow().isUsed())
+                    .as("a genuinely different session must be invalidated")
+                    .isTrue();
+            assertThat(authTokenRepository.findById(noSessionToken.getId())
+                    .orElseThrow().isUsed())
+                    .as("a NULL-sessionId token must NOT be silently exempted")
+                    .isTrue();
+        }
     }
 
     @Nested

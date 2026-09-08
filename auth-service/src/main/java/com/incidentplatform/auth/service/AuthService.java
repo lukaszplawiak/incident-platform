@@ -162,15 +162,24 @@ public class AuthService {
                 teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                         user.getId(), tenantId);
 
+        // Generated once per login, shared by the access token (claim)
+        // and the refresh token (column) issued together below — see
+        // AuthToken.sessionId's own Javadoc for the full account of why
+        // this exists: without a shared identifier, no code path could
+        // ever distinguish "this one session" from every other session
+        // the user has active.
+        final java.util.UUID sessionId = java.util.UUID.randomUUID();
+
         final String accessToken = jwtUtils.generateToken(
                 user.getId(), tenantId,
-                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds);
+                user.getEmail(), user.getRoleNames(), teamIds, managedTeamIds,
+                sessionId);
 
         final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());
 
         final String rawRefreshToken =
-                authTokenService.generateRefreshToken(user, tenantId);
+                authTokenService.generateRefreshToken(user, tenantId, sessionId);
 
         final Instant refreshExpiresAt = Instant.now()
                 .plus(jwtUtils.getRefreshTokenTtl());

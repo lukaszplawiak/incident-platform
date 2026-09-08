@@ -162,6 +162,29 @@ class JwtUtilsTest {
     }
 
     @Test
+    @DisplayName("should extract sessionId from claims when generated with one")
+    void shouldExtractSessionId() {
+        final UUID sessionId = UUID.randomUUID();
+        final String token = jwtUtils.generateToken(
+                UUID.randomUUID(), "acme-corp", "user@acme.com",
+                List.of(), List.of(), List.of(), sessionId);
+        final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
+
+        assertThat(jwtUtils.extractSessionId(claims)).isPresent().contains(sessionId);
+    }
+
+    @Test
+    @DisplayName("should return empty sessionId for a token generated with no session " +
+            "(the 6-argument overload)")
+    void shouldReturnEmptySessionIdWhenNoneGenerated() {
+        final String token = jwtUtils.generateToken(
+                UUID.randomUUID(), "acme-corp", "user@acme.com", List.of(), List.of(), List.of());
+        final Claims claims = jwtUtils.validateAndGetClaims(token).orElseThrow();
+
+        assertThat(jwtUtils.extractSessionId(claims)).isEmpty();
+    }
+
+    @Test
     @DisplayName("should extract roles from claims")
     void shouldExtractRoles() {
         final List<String> roles =

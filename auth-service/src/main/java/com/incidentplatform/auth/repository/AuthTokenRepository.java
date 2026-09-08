@@ -100,6 +100,102 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
     int markUsedIfUnused(@Param("id") UUID id, @Param("now") Instant now);
 
     /**
+     * Bulk-invalidates every valid REFRESH token for a user — used by
+     * {@code PasswordService.resetPassword()} (no session to preserve;
+     * the user isn't authenticated during a recovery flow) and by
+     * {@code AuthTokenService.invalidateAllRefreshTokens()}, this
+     * repository method's own only caller.
+     *
+     * <h2>Fixed: replaces a load-then-loop-then-save pattern</h2>
+     * {@code AuthTokenService.invalidateAllRefreshTokens} previously
+     * loaded every matching token, then called {@code token.markUsed()}
+     * + {@code tokenRepository.save(token)} for each one individually —
+     * N reads plus N writes for N active sessions. A single bulk
+     * {@code UPDATE} does the same work as one SQL statement, matching
+     * the same pattern already established for
+     * {@link #markUsedIfUnused}/{@link #deleteExpiredAndUsed} in this
+     * same repository — introduced here as a natural side effect of
+     * adding the two session-aware variants below with the correct,
+     * efficient style, rather than leaving this one as the odd one out.
+     *
+     * @return the number of tokens invalidated
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("""
+            UPDATE AuthToken t
+            SET t.usedAt = :now
+            WHERE t.user.id = :userId
+              AND t.type = 'REFRESH'
+              AND t.usedAt IS NULL
+            """)
+    int invalidateAllRefreshTokens(@Param("userId") UUID userId, @Param("now") Instant now);
+
+    /**
+     * Invalidates exactly one session's REFRESH token — the precise
+     * counterpart to {@link #markUsedIfUnused}'s single-token precision,
+     * but scoped by session rather than by token ID. Used by
+     * {@code LogoutService}, which already revokes the current access
+     * token precisely (by its own {@code jti}, via
+     * {@code TokenRevocationService}/Redis) — this does the same for the
+     * paired refresh token, rather than invalidating every session the
+     * user has, as the pre-{@code sessionId} code had to.
+     *
+     * @return the number of tokens invalidated (0 or 1 in practice, since
+     *         a session has at most one active refresh token at a time)
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("""
+            UPDATE AuthToken t
+            SET t.usedAt = :now
+            WHERE t.user.id = :userId
+              AND t.type = 'REFRESH'
+              AND t.usedAt IS NULL
+              AND t.sessionId = :sessionId
+            """)
+    int invalidateRefreshTokenForSession(
+            @Param("userId") UUID userId,
+            @Param("sessionId") UUID sessionId,
+            @Param("now") Instant now);
+
+    /**
+     * Invalidates every session's REFRESH token EXCEPT the given one —
+     * used by {@code PasswordService.changePassword()}: a defensive
+     * response to a possible compromise should terminate every other
+     * session while leaving the one the user is actively, legitimately
+     * using right now (they just proved their current password) alone.
+     *
+     * <h2>{@code t.sessionId IS NULL OR t.sessionId <> :sessionId}, not a
+     * plain {@code <>}</h2>
+     * SQL's three-valued logic means {@code NULL <> :sessionId} evaluates
+     * to UNKNOWN, not TRUE, for any row where {@code session_id} is
+     * NULL — such a row would silently, incorrectly be excluded from
+     * this "invalidate everything except" query, exempting it from ever
+     * being invalidated by this method. In practice every new REFRESH
+     * token going forward always has a session_id (set at generation
+     * time in {@code AuthTokenService}), but this defends against ever
+     * silently exempting a token from invalidation if some future code
+     * path ever forgot to set it — the same class of NULL-safety gap
+     * already found and fixed in oncall-service's own schedule-overlap
+     * query, applied here as the same defensive habit rather than
+     * relying on an application-level invariant alone.
+     *
+     * @return the number of tokens invalidated
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("""
+            UPDATE AuthToken t
+            SET t.usedAt = :now
+            WHERE t.user.id = :userId
+              AND t.type = 'REFRESH'
+              AND t.usedAt IS NULL
+              AND (t.sessionId IS NULL OR t.sessionId <> :sessionId)
+            """)
+    int invalidateAllRefreshTokensExceptSession(
+            @Param("userId") UUID userId,
+            @Param("sessionId") UUID sessionId,
+            @Param("now") Instant now);
+
+    /**
      * Deletes all expired or used tokens — intended for scheduled cleanup.
      * Keeps the table lean without touching active tokens.
      *

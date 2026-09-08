@@ -57,6 +57,7 @@ public class JwtUtils {
     public static final String CLAIM_SERVICE_NAME = "serviceName";
     public static final String CLAIM_TEAM_IDS     = "teamIds";
     public static final String CLAIM_MANAGED_TEAM_IDS = "managedTeamIds";
+    public static final String CLAIM_SESSION_ID   = "sessionId";
 
     private static final int MIN_SECRET_BYTES = 64;
 
@@ -127,6 +128,22 @@ public class JwtUtils {
     // ── token generation ──────────────────────────────────────────────────
 
     /**
+     * Generates an access token for a human operator, with no associated
+     * login session — see {@link #generateToken(UUID, String, String,
+     * List, List, List, UUID)}'s own Javadoc for when a real
+     * {@code sessionId} is needed instead. Used by test code and
+     * {@code DevTokenController} (a local-development-only tool that
+     * issues standalone test tokens with no real login, and therefore no
+     * real session, behind them).
+     */
+    public String generateToken(UUID userId, String tenantId,
+                                String email, List<String> roles,
+                                List<UUID> teamIds, List<UUID> managedTeamIds) {
+        return generateToken(userId, tenantId, email, roles,
+                teamIds, managedTeamIds, null);
+    }
+
+    /**
      * Generates an access token for a human operator.
      * TTL controlled by {@code jwt.access-token-ttl} (default PT15M).
      *
@@ -136,14 +153,25 @@ public class JwtUtils {
      *                       {@code oncall-service}/{@code auth-service} can
      *                       authorize team-scoped actions without a
      *                       cross-service call back to auth-service's DB.
+     * @param sessionId links this access token to the {@code AuthToken}
+     *                  (REFRESH type) issued at the same login — see
+     *                  migration V16's own comment (auth-service) for the
+     *                  full account. Pass the same {@code sessionId} used
+     *                  when generating that refresh token
+     *                  ({@code AuthTokenService.generateRefreshToken}), or
+     *                  the one carried forward by
+     *                  {@code AuthTokenService.rotateRefreshToken}. Null
+     *                  for tokens with no associated session — see the
+     *                  6-argument overload of this method.
      */
     public String generateToken(UUID userId, String tenantId,
                                 String email, List<String> roles,
-                                List<UUID> teamIds, List<UUID> managedTeamIds) {
+                                List<UUID> teamIds, List<UUID> managedTeamIds,
+                                UUID sessionId) {
         final Instant now        = Instant.now();
         final Instant expiration = now.plus(properties.accessTokenTtl());
 
-        final String token = Jwts.builder()
+        final var builder = Jwts.builder()
                 .id(UUID.randomUUID().toString())   // jti — unique ID for revocation
                 .subject(userId.toString())
                 .claim(CLAIM_TENANT_ID, tenantId)
@@ -154,7 +182,13 @@ public class JwtUtils {
                         .toList())
                 .claim(CLAIM_MANAGED_TEAM_IDS, managedTeamIds.stream()
                         .map(java.util.UUID::toString)
-                        .toList())
+                        .toList());
+
+        if (sessionId != null) {
+            builder.claim(CLAIM_SESSION_ID, sessionId.toString());
+        }
+
+        final String token = builder
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(expiration))
                 .signWith(secretKey)
@@ -315,6 +349,26 @@ public class JwtUtils {
 
     public Optional<String> extractEmail(Claims claims) {
         return Optional.ofNullable(claims.get(CLAIM_EMAIL, String.class));
+    }
+
+    /**
+     * Extracts the {@code sessionId} claim — present only on access
+     * tokens generated with a session (see the 7-argument overload of
+     * {@link #generateToken}). Empty for tokens with no associated
+     * session (service tokens, dev/test tokens, or any access token
+     * issued before this claim existed).
+     */
+    public Optional<UUID> extractSessionId(Claims claims) {
+        final String raw = claims.get(CLAIM_SESSION_ID, String.class);
+        if (raw == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(UUID.fromString(raw));
+        } catch (IllegalArgumentException e) {
+            log.warn("Invalid sessionId format in JWT claim: {}", raw);
+            return Optional.empty();
+        }
     }
 
     @SuppressWarnings("unchecked")
