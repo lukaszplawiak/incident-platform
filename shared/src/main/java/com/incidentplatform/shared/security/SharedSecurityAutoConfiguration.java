@@ -1,9 +1,11 @@
 package com.incidentplatform.shared.security;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -55,6 +57,11 @@ import java.util.List;
  *   <li>Duplicate public-path list between {@link JwtAuthFilter#shouldNotFilter}
  *       and per-service {@code SecurityConfig} — now defined once here and
  *       replicated in the filter via the same constant set
+ *   <li>CORS preflight (OPTIONS) requests getting 401 — see
+ *       {@link #buildCommonSecurity}'s own comment on its
+ *       {@code requestMatchers(HttpMethod.OPTIONS, "/**")} rule for the
+ *       full account. Affected every service, since none had an explicit
+ *       exemption for it.
  * </ul>
  */
 @AutoConfiguration
@@ -79,7 +86,7 @@ public class SharedSecurityAutoConfiguration {
      * </ul>
      */
     public SharedSecurityAutoConfiguration(
-            @org.springframework.beans.factory.annotation.Value(
+            @Value(
                     "${security.cors.allowed-origins}")
             List<String> allowedOrigins) {
         this.allowedOrigins = allowedOrigins;
@@ -103,20 +110,6 @@ public class SharedSecurityAutoConfiguration {
     };
 
     /**
-     * Default {@link SecurityFilterChain} applied to every service that does
-     * not declare its own. A service with additional rules should declare
-     * its own {@code SecurityFilterChain} bean — this auto-configuration
-     * will then back off.
-     */
-    /**
-     * Default JwtAuthFilter bean with no-op revocation checker.
-     * Used by all services except auth-service which overrides this bean
-     * with @Primary and wires in TokenRevocationService::isRevoked.
-     *
-     * <p>@ConditionalOnMissingBean ensures auth-service's @Primary bean wins
-     * without conflict.
-     */
-    /**
      * No-op API key lookup — used by all services except auth-service.
      * auth-service provides its own {@code ApiKeyLookupServiceImpl} bean
      * which overrides this via {@code @ConditionalOnMissingBean}.
@@ -137,12 +130,26 @@ public class SharedSecurityAutoConfiguration {
         return new ApiKeyAuthFilter(lookupService);
     }
 
+    /**
+     * Default JwtAuthFilter bean with no-op revocation checker.
+     * Used by all services except auth-service which overrides this bean
+     * with @Primary and wires in TokenRevocationService::isRevoked.
+     *
+     * <p>@ConditionalOnMissingBean ensures auth-service's @Primary bean wins
+     * without conflict.
+     */
     @Bean
     @ConditionalOnMissingBean(JwtAuthFilter.class)
     public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
         return new JwtAuthFilter(jwtUtils); // no-op revocation: jti -> false
     }
 
+    /**
+     * Default {@link SecurityFilterChain} applied to every service that does
+     * not declare its own. A service with additional rules should declare
+     * its own {@code SecurityFilterChain} bean — this auto-configuration
+     * will then back off.
+     */
     @Bean
     @ConditionalOnMissingBean(SecurityFilterChain.class)
     public SecurityFilterChain defaultSecurityFilterChain(
@@ -202,6 +209,41 @@ public class SharedSecurityAutoConfiguration {
                         .referrerPolicy(referrer -> referrer
                                 .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy
                                         .STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
+                )
+                // Fixed: CORS preflight (OPTIONS) requests were previously
+                // subject to the same authentication requirement as every
+                // other request. The browser never attaches an Authorization
+                // header to a preflight — it isn't a real operation, just
+                // asking "is this cross-origin request allowed?" — so with
+                // no explicit rule for it, every preflight fell through to
+                // .anyRequest().authenticated() (added later by each
+                // caller's own authorizeHttpRequests block) and got 401.
+                // Seeing anything other than a success response to the
+                // preflight, the browser then refuses to send the real
+                // request at all — surfacing to the frontend as a generic
+                // network failure (status 0, "Cannot connect to the
+                // server"), not as an actual 401, making this easy to
+                // mistake for a CORS misconfiguration when the CORS origin
+                // list itself (security.cors.allowed-origins) was already
+                // correct. Safe to exempt unconditionally: an OPTIONS
+                // request never reads or writes any data — it carries no
+                // request body Spring processes — so this grants no access
+                // to anything, it just lets the negotiation complete. The
+                // real request that follows a successful preflight is
+                // completely unaffected and still goes through full
+                // authorization normally.
+                //
+                // Added here in the shared helper, not in each service's
+                // own authorizeHttpRequests block, so every service that
+                // calls buildCommonSecurity (directly, or via this class's
+                // own defaultSecurityFilterChain bean) is fixed by this one
+                // change. Spring Security's authorizeHttpRequests can be
+                // called more than once on the same HttpSecurity — each
+                // call appends to one ordered rule list rather than
+                // replacing it — so this rule, added first, is evaluated
+                // before any caller's own .anyRequest().authenticated().
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 )
                 .addFilterBefore(jwtAuthFilter,
                         UsernamePasswordAuthenticationFilter.class);
