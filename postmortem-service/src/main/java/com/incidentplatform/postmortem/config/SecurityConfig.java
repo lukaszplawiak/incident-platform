@@ -9,6 +9,7 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.web.cors.CorsConfigurationSource;
 
 /**
  * postmortem-service security configuration.
@@ -29,6 +30,15 @@ import org.springframework.security.web.SecurityFilterChain;
  *       tokens with {@code ROLE_RESPONDER} or {@code ROLE_ADMIN} may access
  *       postmortem endpoints. Wrong-role requests receive {@code 403 Forbidden}.</li>
  * </ul>
+ *
+ * <h2>Fixed: CORS was never actually enabled</h2>
+ * This class's own {@code securityFilterChain} never called
+ * {@code .cors(cors -> cors.configurationSource(...))} on the
+ * {@code HttpSecurity} builder — see {@code auth-service}'s own
+ * {@code SecurityConfig} class Javadoc for the full account of why a
+ * {@code CorsConfigurationSource} bean existing in the application
+ * context isn't enough on its own, and why every cross-origin request
+ * was rejected with a generic "Invalid CORS request" 403 as a result.
  */
 @Configuration
 @EnableWebSecurity
@@ -38,10 +48,12 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthFilter jwtAuthFilter,
+                                                   CorsConfigurationSource corsConfigurationSource,
                                                    UnauthorizedEntryPoint unauthorizedEntryPoint)
             throws Exception {
         return SharedSecurityAutoConfiguration.buildCommonSecurity(
                         http, jwtAuthFilter, unauthorizedEntryPoint)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
                         .anyRequest().authenticated()

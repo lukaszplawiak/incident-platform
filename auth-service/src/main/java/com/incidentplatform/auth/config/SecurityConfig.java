@@ -1,6 +1,5 @@
 package com.incidentplatform.auth.config;
 
-import com.incidentplatform.auth.service.ApiKeyLookupServiceImpl;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
@@ -9,7 +8,6 @@ import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpMethod;
-import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -17,8 +15,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
-
-import java.util.Optional;
+import org.springframework.web.cors.CorsConfigurationSource;
 
 /**
  * auth-service security configuration.
@@ -32,6 +29,26 @@ import java.util.Optional;
  * {@link SharedSecurityAutoConfiguration#PUBLIC_PATHS} because that constant
  * is shared across all services. The login endpoint is specific to auth-service
  * and has no meaning in other services.
+ *
+ * <h2>Fixed: CORS was never actually enabled</h2>
+ * {@code SharedSecurityAutoConfiguration} declares a {@code CorsConfigurationSource}
+ * bean, but Spring Security does not automatically wire a bean like that into
+ * the filter chain just because it exists in the application context — it must
+ * be attached explicitly via {@code .cors(cors -> cors.configurationSource(...))}
+ * on the {@code HttpSecurity} builder. This class's own
+ * {@code securityFilterChain} previously never called {@code .cors(...)} at
+ * all, so Spring's CORS support was effectively disabled here regardless of
+ * how {@code security.cors.allowed-origins} was configured — every
+ * cross-origin request (including the browser's own preflight OPTIONS,
+ * separately fixed in {@code SharedSecurityAutoConfiguration
+ * .buildCommonSecurity}) was rejected with a generic "Invalid CORS request"
+ * 403, with no CORS response headers at all. Found while trying to log in
+ * from the frontend against a locally running stack — curl against the same
+ * endpoint worked (curl doesn't perform CORS preflight/enforcement, only
+ * browsers do), which is what made this reproducible only from an actual
+ * browser. {@code incident-service}/{@code ingestion-service} already wired
+ * this correctly; {@code oncall-service}, {@code notification-service}, and
+ * {@code postmortem-service} had the identical gap, fixed the same way.
  */
 @Configuration
 @EnableWebSecurity
@@ -86,11 +103,13 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthFilter jwtAuthFilter,
+                                                   CorsConfigurationSource corsConfigurationSource,
                                                    UnauthorizedEntryPoint unauthorizedEntryPoint,
                                                    ApiKeyAuthFilter apiKeyAuthFilter)
             throws Exception {
         return SharedSecurityAutoConfiguration
                 .buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .addFilterBefore(apiKeyAuthFilter, JwtAuthFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
