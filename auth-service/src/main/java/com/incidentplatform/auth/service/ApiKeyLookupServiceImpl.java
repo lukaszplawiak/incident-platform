@@ -24,8 +24,11 @@ import java.util.UUID;
  *
  * <h2>Principal construction</h2>
  * <ul>
- *   <li><b>TENANT key</b> — principal has tenant-level ADMIN role
- *       (configurable) and granted scopes. No userId.</li>
+ *   <li><b>TENANT key</b> — principal has {@code ROLE_RESPONDER} and
+ *       granted scopes. {@code userId} is the API key's own ID (there is
+ *       no real human user behind a tenant key) — see
+ *       {@link ApiKeyService#createApiKey} for the separate, ADMIN-only
+ *       restriction on who may create a TENANT key in the first place.</li>
  *   <li><b>PERSONAL key</b> — principal inherits owner's roles and
  *       has granted scopes. userId = owner's UUID.</li>
  * </ul>
