@@ -42,6 +42,7 @@ import static org.mockito.BDDMockito.then;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -749,6 +750,42 @@ class UserControllerSecurityTest {
             mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID)
                             .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isConflict());
+        }
+    }
+
+    // ── CORS preflight (OPTIONS) ─────────────────────────────────────────────
+
+    /**
+     * The actual regression coverage for the shared fix in
+     * SharedSecurityAutoConfiguration.buildCommonSecurity — see that
+     * method's own comment for the full account. Before this fix, an
+     * OPTIONS request (the browser's CORS preflight, sent with no
+     * Authorization header since it isn't a real operation) fell through
+     * to .anyRequest().authenticated() and got 401 — the browser then
+     * refused to send the real request at all, surfacing to the frontend
+     * as a generic network failure rather than an actual 401. Verified
+     * against a genuinely protected endpoint (POST /users, ROLE_ADMIN
+     * only) with no Authentication in the test request at all, to prove
+     * OPTIONS is exempt regardless of what the underlying endpoint
+     * requires — not just for endpoints that already permit anonymous
+     * access.
+     */
+    @Nested
+    @DisplayName("OPTIONS preflight")
+    class CorsPreflight {
+
+        @Test
+        @DisplayName("is not blocked by authentication, even on an admin-only endpoint")
+        void optionsRequestIsNotBlockedByAuthentication() throws Exception {
+            mockMvc.perform(options("/api/v1/users"))
+                    .andExpect(result -> {
+                        final int status = result.getResponse().getStatus();
+                        org.assertj.core.api.Assertions.assertThat(status)
+                                .as("OPTIONS preflight must not be rejected by " +
+                                        "authentication — got status %d", status)
+                                .isNotEqualTo(401)
+                                .isNotEqualTo(403);
+                    });
         }
     }
 
