@@ -290,6 +290,21 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # Kafka — audit event publishing (AuditEventPublisher/AuditEventKafkaSender)
+      # Fixed: this variable was missing entirely, so Spring fell back to
+      # its own default (localhost:9092) — inside this container, localhost
+      # refers to the auth-service container itself, not the kafka
+      # container, so every KafkaProducer.send() call blocked for the full
+      # default max.block.ms (60s) waiting on cluster metadata that could
+      # never arrive, before AuditEventPublisher's own catch (Exception e)
+      # swallowed the resulting failure and let login complete anyway --
+      # surfacing as a login that "succeeds" but takes about a minute,
+      # every time, not just on first use. kafka:9094 is the INTERNAL
+      # listener (see the kafka service's own KAFKA_ADVERTISED_LISTENERS),
+      # meant for exactly this kind of inter-container traffic --
+      # matching ingestion-service/incident-service/notification-service/
+      # escalation-service/postmortem-service's own identical setting.
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       # MFA
       MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY}
       MFA_TOTP_ISSUER: ${MFA_TOTP_ISSUER:-IncidentPlatform}
@@ -306,6 +321,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     healthcheck:
       test: [ "CMD", "wget", "--quiet", "--tries=1", "-O", "/dev/null",
