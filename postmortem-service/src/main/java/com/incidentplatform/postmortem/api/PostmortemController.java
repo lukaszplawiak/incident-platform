@@ -46,7 +46,7 @@ public class PostmortemController {
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "List postmortems for the current tenant (paginated)")
     @ApiResponses({
             @ApiResponse(responseCode = "200",
@@ -69,7 +69,7 @@ public class PostmortemController {
             value = "/incident/{incidentId}",
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Get postmortem for a specific incident")
     @ApiResponses({
             @ApiResponse(responseCode = "200",
@@ -95,7 +95,7 @@ public class PostmortemController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Update postmortem content")
     @ApiResponses({
             @ApiResponse(responseCode = "200",
@@ -132,7 +132,7 @@ public class PostmortemController {
             value = "/incident/{incidentId}/review",
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_RESPONDER') or hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('RESPONDER') or hasRole('ADMIN')")
     @Operation(summary = "Mark a postmortem as reviewed",
             description = "Confirms an engineer has read and approved the " +
                     "postmortem content. Only a DRAFT postmortem can be reviewed.")

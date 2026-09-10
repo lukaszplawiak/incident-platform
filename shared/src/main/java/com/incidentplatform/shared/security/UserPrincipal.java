@@ -142,6 +142,16 @@ public record UserPrincipal(
                 .toList();
     }
 
+    /**
+     * Plain {@code List.contains(String)} check against this principal's
+     * roles — entirely unrelated to Spring Security's own
+     * {@code hasRole()}/{@code hasAnyRole()} (used in {@code @PreAuthorize}
+     * and {@code SecurityFilterChain} rules) despite the shared method name.
+     * Spring's version adds a {@code ROLE_} prefix automatically; this one
+     * does not, so callers must pass the full, prefixed role string — see
+     * {@link SecurityRoles}'s own Javadoc for the full account of the
+     * distinction between the two forms.
+     */
     public boolean hasRole(String role) {
         return roles.contains(role);
     }

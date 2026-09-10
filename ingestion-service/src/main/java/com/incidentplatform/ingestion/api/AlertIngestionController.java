@@ -83,8 +83,8 @@ public class AlertIngestionController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN') "
-            + "or hasRole('ROLE_SERVICE')"
+    @PreAuthorize("hasRole('INGESTOR') or hasRole('ADMIN') "
+            + "or hasRole('SERVICE')"
             + "or (principal instanceof T(com.incidentplatform.shared.security.UserPrincipal) "
             + "and principal.hasScope(T(com.incidentplatform.shared.security.ApiScopes).ALERTS_INGEST))")
     @Operation(
@@ -213,8 +213,8 @@ public class AlertIngestionController {
             value = "/sources",
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_INGESTOR') or hasRole('ROLE_ADMIN') " +
-            "or hasRole('ROLE_RESPONDER')")
+    @PreAuthorize("hasRole('INGESTOR') or hasRole('ADMIN') " +
+            "or hasRole('RESPONDER')")
     @Operation(
             summary = "List available alert sources",
             description = "Returns list of registered alert normalizers"
