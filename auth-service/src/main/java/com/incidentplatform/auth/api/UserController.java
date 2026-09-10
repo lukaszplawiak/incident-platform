@@ -70,7 +70,7 @@ public class UserController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Create a new user and generate invite token",
             description = """
                     Creates a new user account without a password.
@@ -102,7 +102,7 @@ public class UserController {
     // ── GET /users ────────────────────────────────────────────────────────
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "List all users in tenant (paginated)")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "User list returned"),
@@ -135,7 +135,7 @@ public class UserController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Replace user roles",
             description = """
                     Replaces all current roles with the provided set (atomic - not additive).
@@ -161,7 +161,7 @@ public class UserController {
             consumes = MediaType.APPLICATION_JSON_VALUE,
             produces = MediaType.APPLICATION_JSON_VALUE
     )
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(summary = "Activate or deactivate a user",
             description = """
                     Sets the user's active flag. Deactivated users cannot log in.
@@ -184,7 +184,7 @@ public class UserController {
     // ── POST /users/{id}/resend-invite ───────────────────────────────────
 
     @PostMapping(value = "/{id}/resend-invite")
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(
             summary = "Resend invite email",
             description = """
@@ -213,7 +213,7 @@ public class UserController {
     // ── DELETE /users/{id} ────────────────────────────────────────────────
 
     @DeleteMapping(value = "/{id}")
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(
             summary = "Archive a user",
             description = """
@@ -269,7 +269,7 @@ public class UserController {
     }
 
     @PostMapping(value = "/{id}/restore")
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(
             summary = "Restore an archived user",
             description = """
@@ -292,7 +292,7 @@ public class UserController {
     }
 
     @PostMapping(value = "/{id}/anonymize")
-    @PreAuthorize("hasRole('ROLE_ADMIN')")
+    @PreAuthorize("hasRole('ADMIN')")
     @Operation(
             summary = "Anonymize a user (GDPR erasure) — IRREVERSIBLE",
             description = """

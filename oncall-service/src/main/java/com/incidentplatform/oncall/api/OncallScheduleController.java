@@ -334,7 +334,7 @@ public class OncallScheduleController {
      * <p>No {@code @PreAuthorize} — this endpoint is called by
      * {@code notification-service} using a service token ({@code ROLE_SERVICE}).
      * {@code ROLE_SERVICE} is not granted {@code ROLE_RESPONDER} or
-     * {@code ROLE_ADMIN}, so adding {@code @PreAuthorize("hasRole('ROLE_RESPONDER')")}
+     * {@code ROLE_ADMIN}, so adding {@code @PreAuthorize("hasRole('RESPONDER')")}
      * would break the inter-service call. The endpoint is protected by
      * {@code anyRequest().authenticated()} at the URL level — only a valid
      * JWT (service or user token) can reach it.
