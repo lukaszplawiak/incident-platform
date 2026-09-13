@@ -85,6 +85,36 @@ class UserPrincipalTest {
         }
     }
 
+    /**
+     * The actual regression coverage for the {@code implements Principal}
+     * addition — {@code getName()} is what makes this record usable as a
+     * STOMP session's {@link java.security.Principal} (via
+     * {@code StompHeaderAccessor#setUser}) in
+     * {@code StompAuthChannelInterceptor} (incident-service).
+     */
+    @Nested
+    @DisplayName("getName (Principal)")
+    class GetNamePrincipal {
+
+        @Test
+        @DisplayName("returns the userId as a string")
+        void returnsUserIdAsString() {
+            final UserPrincipal principal = new UserPrincipal(
+                    USER_ID, TENANT, EMAIL, List.of(), List.of());
+
+            assertThat(principal.getName()).isEqualTo(USER_ID.toString());
+        }
+
+        @Test
+        @DisplayName("is usable as a java.security.Principal reference")
+        void isUsableAsPrincipal() {
+            final java.security.Principal principal = new UserPrincipal(
+                    USER_ID, TENANT, EMAIL, List.of(), List.of());
+
+            assertThat(principal.getName()).isEqualTo(USER_ID.toString());
+        }
+    }
+
     @Nested
     @DisplayName("getAuthorities")
     class GetAuthorities {

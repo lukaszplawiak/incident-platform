@@ -17,6 +17,11 @@ import org.springframework.web.cors.CorsConfigurationSource;
  * <p>Extends the platform baseline from
  * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} with a
  * service-specific public path for WebSocket connections ({@code /ws/**}).
+ * That public path is only the HTTP-level handshake — a second,
+ * independent authentication layer for the actual STOMP traffic exists
+ * in {@code StompAuthChannelInterceptor} (registered via
+ * {@code WebSocketConfig.configureClientInboundChannel}); see that
+ * class's own Javadoc for the full account.
  *
  * <p>Note: the duplicate {@code JwtAuthFilter @Bean} that previously existed
  * in this class has been removed. {@link JwtAuthFilter} is a {@code @Component}
@@ -41,7 +46,18 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
-                        // WebSocket handshake endpoint — auth handled inside STOMP protocol
+                        // WebSocket handshake endpoint — a browser's native
+                        // WebSocket handshake cannot carry a custom
+                        // Authorization header, so this HTTP-level permitAll()
+                        // is correct and necessary. Authentication genuinely
+                        // happens afterward, at the STOMP frame level, via
+                        // StompAuthChannelInterceptor (registered in
+                        // WebSocketConfig.configureClientInboundChannel) —
+                        // see that class's own Javadoc for the full account
+                        // of the gap this closed: this exact comment used to
+                        // claim the same thing while no such mechanism
+                        // actually existed, leaving /ws/** fully
+                        // unauthenticated end to end.
                         .requestMatchers("/ws/**").permitAll()
                         .anyRequest().authenticated()
                 )

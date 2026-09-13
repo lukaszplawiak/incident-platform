@@ -3,6 +3,7 @@ package com.incidentplatform.shared.security;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
+import java.security.Principal;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -90,7 +91,7 @@ public record UserPrincipal(
          */
         UUID sessionId
 
-) {
+) implements Principal {
 
     public UserPrincipal {
         roles          = roles          != null ? List.copyOf(roles)          : List.of();
@@ -184,5 +185,20 @@ public record UserPrincipal(
      */
     public boolean hasScope(String scope) {
         return scopes.contains(scope);
+    }
+
+    /**
+     * Implements {@link Principal#getName()} — added so this record can be
+     * set directly as a STOMP session's {@link Principal} (via
+     * {@code StompHeaderAccessor#setUser}) for WebSocket authentication,
+     * reusing the same principal type already used for HTTP requests
+     * rather than introducing a parallel one. Returns {@link #userId} as
+     * a string, matching the JWT's own {@code sub} claim — see
+     * {@code StompAuthChannelInterceptor} (incident-service) for where
+     * this is actually used.
+     */
+    @Override
+    public String getName() {
+        return userId.toString();
     }
 }
