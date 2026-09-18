@@ -21,6 +21,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
 import java.util.List;
@@ -926,5 +929,47 @@ class OncallScheduleServiceTest {
 
         // then
         assertThat(result.teamId()).isEqualTo(teamId);
+    }
+
+    /**
+     * Covers backlog #10 — status filtering on GET /schedules. The
+     * actual regression coverage: status is passed through to the
+     * repository unchanged, including when null, rather than this
+     * service silently defaulting to ACTIVE itself — that decision
+     * belongs to the caller (the controller's own query parameter, in
+     * turn decided by the frontend — see OncallScheduleController
+     * .getSchedules's own comment), not this method.
+     */
+    @Nested
+    @DisplayName("getSchedules")
+    class GetSchedules {
+
+        @Test
+        @DisplayName("passes a null status through unchanged — no filter")
+        void passesNullStatusThrough() {
+            final Pageable pageable = PageRequest.of(0, 20);
+            given(repository.findByTenantIdAndOptionalStatus(
+                    eq(TENANT_ID), isNull(), eq(pageable)))
+                    .willReturn(Page.empty());
+
+            service.getSchedules(TENANT_ID, null, pageable);
+
+            then(repository).should().findByTenantIdAndOptionalStatus(
+                    eq(TENANT_ID), isNull(), eq(pageable));
+        }
+
+        @Test
+        @DisplayName("passes a specific status through unchanged")
+        void passesSpecificStatusThrough() {
+            final Pageable pageable = PageRequest.of(0, 20);
+            given(repository.findByTenantIdAndOptionalStatus(
+                    eq(TENANT_ID), eq(OncallScheduleStatus.ACTIVE), eq(pageable)))
+                    .willReturn(Page.empty());
+
+            service.getSchedules(TENANT_ID, OncallScheduleStatus.ACTIVE, pageable);
+
+            then(repository).should().findByTenantIdAndOptionalStatus(
+                    eq(TENANT_ID), eq(OncallScheduleStatus.ACTIVE), eq(pageable));
+        }
     }
 }
