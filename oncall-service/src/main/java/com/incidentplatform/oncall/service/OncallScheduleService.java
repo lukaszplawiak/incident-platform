@@ -2,6 +2,7 @@ package com.incidentplatform.oncall.service;
 
 import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.domain.OncallSchedule;
+import com.incidentplatform.oncall.domain.OncallScheduleStatus;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
@@ -324,8 +325,9 @@ public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
      */
     @Transactional(readOnly = true)
     public Page<OncallScheduleDto> getSchedules(String tenantId,
+                                                OncallScheduleStatus status,
                                                 Pageable pageable) {
-        return repository.findByTenantIdOrderByStartsAtDesc(tenantId, pageable)
+        return repository.findByTenantIdAndOptionalStatus(tenantId, status, pageable)
                 .map(OncallScheduleDto::from);
     }
 

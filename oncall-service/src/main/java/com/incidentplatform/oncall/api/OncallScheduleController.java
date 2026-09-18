@@ -1,5 +1,6 @@
 package com.incidentplatform.oncall.api;
 
+import com.incidentplatform.oncall.domain.OncallScheduleStatus;
 import com.incidentplatform.oncall.dto.CreateOncallScheduleRequest;
 import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
@@ -156,13 +157,32 @@ public class OncallScheduleController {
             @ApiResponse(responseCode = "403",
                     description = "Insufficient permissions — ROLE_RESPONDER or ROLE_ADMIN required")
     })
+    /*
+     * Fixed: this endpoint had no way to filter by status at all, while
+     * OncallScheduleStatus rows (SUPERSEDED, CANCELLED) are kept
+     * indefinitely for history rather than purged — see that enum's own
+     * Javadoc. With no filter and no way to add one, this page (default
+     * size 20, sorted by startsAt) would fill up more and more with
+     * historical noise as schedules get updated (supersede) or removed
+     * (cancel) over time, pushing genuinely ACTIVE entries further and
+     * further past the first page — a real, worsening pagination bug,
+     * not just a missing filter option. status is optional and
+     * null-by-default (no filter) to match IncidentController's own
+     * convention for the exact same kind of parameter
+     * (IncidentSpecification treats a null filter field as "don't
+     * filter on this," not as "match nothing") — the frontend is
+     * expected to pass status=ACTIVE explicitly for its default view,
+     * the same way it already treats other default filters as its own
+     * choice rather than the backend's.
+     */
     public ResponseEntity<PagedResponse<OncallScheduleDto>> getSchedules(
+            @RequestParam(required = false) OncallScheduleStatus status,
             @PageableDefault(size = 20, sort = "startsAt") Pageable pageable) {
         final String tenantId = TenantContext.get();
-        log.debug("GET /api/v1/oncall/schedules, tenant={}, page={}",
-                tenantId, pageable.getPageNumber());
+        log.debug("GET /api/v1/oncall/schedules, tenant={}, status={}, page={}",
+                tenantId, status, pageable.getPageNumber());
         final Page<OncallScheduleDto> page =
-                service.getSchedules(tenantId, pageable);
+                service.getSchedules(tenantId, status, pageable);
         return ResponseEntity.ok(PagedResponse.of(page));
     }
 

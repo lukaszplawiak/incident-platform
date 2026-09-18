@@ -2,6 +2,7 @@ package com.incidentplatform.oncall.repository;
 
 import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.domain.OncallSchedule;
+import com.incidentplatform.oncall.domain.OncallScheduleStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -103,12 +104,25 @@ public interface OncallScheduleRepository
             @Param("now") Instant now);
 
     /**
-     * Returns a paginated list of all schedules for the given tenant,
-     * ordered by most recent first. Replaces the previous unbounded
-     * {@code List<OncallSchedule>} variant — see Problem 8 fix.
+     * Fixed: replaces findByTenantIdOrderByStartsAtDesc, which had no way
+     * to filter by status — see OncallScheduleController.getSchedules's
+     * own comment for the pagination-degradation problem this caused as
+     * SUPERSEDED/CANCELLED rows (kept indefinitely for history) piled up
+     * alongside ACTIVE ones. status is nullable — null means no filter,
+     * matching this file's own established (:teamId IS NULL OR ...)
+     * pattern for an optional parameter (see existsOverlappingForCreate),
+     * and IncidentSpecification's identical convention in incident-service.
      */
-    Page<OncallSchedule> findByTenantIdOrderByStartsAtDesc(String tenantId,
-                                                           Pageable pageable);
+    @Query("""
+            SELECT s FROM OncallSchedule s
+            WHERE s.tenantId = :tenantId
+            AND (:status IS NULL OR s.status = :status)
+            ORDER BY s.startsAt DESC
+            """)
+    Page<OncallSchedule> findByTenantIdAndOptionalStatus(
+            @Param("tenantId") String tenantId,
+            @Param("status") OncallScheduleStatus status,
+            Pageable pageable);
 
     Optional<OncallSchedule> findByIdAndTenantId(UUID id, String tenantId);
 

@@ -335,7 +335,7 @@ class OncallScheduleControllerSecurityTest {
         @Test
         @DisplayName("GET /schedules — 200 for RESPONDER")
         void getSchedules_returns200() throws Exception {
-            given(service.getSchedules(any(), any(Pageable.class)))
+            given(service.getSchedules(any(), any(), any(Pageable.class)))
                     .willReturn(Page.empty());
 
             mockMvc.perform(get("/api/v1/oncall/schedules")
@@ -412,7 +412,7 @@ class OncallScheduleControllerSecurityTest {
         @Test
         @DisplayName("GET /schedules — 200 for ADMIN")
         void getSchedules_returns200() throws Exception {
-            given(service.getSchedules(any(), any(Pageable.class)))
+            given(service.getSchedules(any(), any(), any(Pageable.class)))
                     .willReturn(Page.empty());
 
             mockMvc.perform(get("/api/v1/oncall/schedules")
