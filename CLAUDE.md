@@ -114,3 +114,7 @@ Security scans (OWASP Dependency-Check, Snyk) run in separate workflows. Unfixab
 - **Don't guess silently on ambiguity.** If a request could reasonably mean two
   different things (which service, which layer, whether to touch the DB schema),
   ask rather than assuming the simpler interpretation.
+- **Delete the branch after every merge.** Once a PR is merged, delete its branch
+  both on `origin` (`git push origin --delete <branch>`) and locally
+  (`git branch -d <branch>`), after switching back to `main` and pulling. Don't let
+  merged branches accumulate.
