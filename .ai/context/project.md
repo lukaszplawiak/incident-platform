@@ -187,7 +187,7 @@ still resolves the recipient from the PRIMARY on-call for every event type, so e
 notifications currently go to the PRIMARY's addresses (or the configured fallback addresses).
 Fixing it means resolving the contact for `escalateTo`; that lookup must be scoped to the
 entry's tenant as well as the user id, because `escalateTo` is an unverified id from a Kafka
-payload.
+payload. Tracked as backlog #0-1 in `BACKLOG.md`.
 
 ### Notification idempotency is keyed on tenant and escalation level
 
