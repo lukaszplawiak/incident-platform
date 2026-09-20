@@ -131,17 +131,49 @@ public class SharedSecurityAutoConfiguration {
     }
 
     /**
-     * Default JwtAuthFilter bean with no-op revocation checker.
-     * Used by all services except auth-service which overrides this bean
-     * with @Primary and wires in TokenRevocationService::isRevoked.
+     * Default no-op {@link TokenRevocationChecker} — used by every service
+     * except auth-service, whose Redis-backed {@code TokenRevocationService}
+     * is a bean of the same type and makes this one back off via
+     * {@code @ConditionalOnMissingBean}.
      *
-     * <p>@ConditionalOnMissingBean ensures auth-service's @Primary bean wins
-     * without conflict.
+     * <h2>Fixed: the documented no-op bean did not exist</h2>
+     * {@link TokenRevocationChecker} and {@link JwtAuthFilter} both documented
+     * that this auto-configuration provides a no-op checker bean, but it only
+     * ever hard-coded {@code jti -> false} inside the default
+     * {@link JwtAuthFilter} constructor — no {@code TokenRevocationChecker}
+     * bean was registered. That was harmless until incident-service's
+     * {@code StompAuthChannelInterceptor} started constructor-injecting a
+     * {@link TokenRevocationChecker}: with no bean available,
+     * incident-service failed at startup ({@code UnsatisfiedDependencyException}
+     * through {@code WebSocketConfig}), which the docker-compose smoke test
+     * caught. Its unit test mocks the checker, so nothing else did.
+     *
+     * <p>Consequence to be aware of: outside auth-service revocation is a
+     * no-op, for HTTP requests and STOMP {@code CONNECT} alike — a revoked
+     * access token stays usable on other services until it expires. That is
+     * the existing design; enforcing revocation platform-wide is a separate
+     * decision, not something this default changes.
+     */
+    @Bean
+    @ConditionalOnMissingBean(TokenRevocationChecker.class)
+    public TokenRevocationChecker noOpTokenRevocationChecker() {
+        return jti -> false;
+    }
+
+    /**
+     * Default JwtAuthFilter bean, built with whichever
+     * {@link TokenRevocationChecker} bean is present: the no-op default
+     * above, or a service's own implementation.
+     *
+     * <p>auth-service declares its own {@code JwtAuthFilter} bean in its
+     * {@code SecurityConfig}; {@code @ConditionalOnMissingBean} makes this one
+     * back off so the two never conflict.
      */
     @Bean
     @ConditionalOnMissingBean(JwtAuthFilter.class)
-    public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
-        return new JwtAuthFilter(jwtUtils); // no-op revocation: jti -> false
+    public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils,
+                                       TokenRevocationChecker revocationChecker) {
+        return new JwtAuthFilter(jwtUtils, revocationChecker);
     }
 
     /**
