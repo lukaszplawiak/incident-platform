@@ -98,6 +98,16 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Test-only: JwtProperties is @Validated, so booting
+             SharedSecurityAutoConfiguration in a context test needs a Bean
+             Validation provider. Services already get one from their own
+             spring-boot-starter-validation; shared only has the API. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>jakarta.servlet</groupId>
             <artifactId>jakarta.servlet-api</artifactId>
