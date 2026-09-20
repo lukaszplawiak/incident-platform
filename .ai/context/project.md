@@ -157,6 +157,37 @@ The system must preserve:
 
 ---
 
+## Known Invariants and Limitations
+
+Knowledge that cannot be reliably inferred from source code.
+Keep entries to *why* and *constraints*; the code and README hold the rest.
+
+### Escalation is an attribute, not a lifecycle state
+
+`IncidentStatus` has exactly four states: `OPEN → ACKNOWLEDGED → RESOLVED → CLOSED`.
+Escalation is tracked separately as `Incident.escalationLevel`, so an incident can be
+escalated while `ACKNOWLEDGED`. Do not add an `ESCALATED` status — the level is updated
+by `IncidentEscalationEventConsumer` (from `IncidentEscalatedEvent` on
+`incidents.lifecycle`) without going through `IncidentFsm`.
+
+### Rate limiting is Redis-backed (decision reversed, backlog #67)
+
+ingestion-service rate limiting uses bucket4j with a Redis `ProxyManager`, protected by
+`@CircuitBreaker` and failing open. The earlier in-memory design was reversed because its
+buckets were per-pod (effective limit = limit × replicas) and lived in unbounded maps keyed
+by the caller-controlled `X-Forwarded-For` header. Do not reintroduce in-memory per-key state.
+
+### Known limitation: escalation notifications reach the PRIMARY on-call
+
+escalation-service resolves the SECONDARY / MANAGER user and sends it in
+`IncidentEscalatedEvent.escalateTo`, but notification-service does not read `escalateTo`.
+`NotificationRouter` resolves the recipient from the PRIMARY on-call for every event type,
+so escalation notifications currently go to the PRIMARY's addresses (or the configured
+fallback addresses). No backlog item exists yet; fixing it means teaching the router to
+honour `escalateTo`.
+
+---
+
 ## Current Development Phase
 
 The project is currently implementing the classic
