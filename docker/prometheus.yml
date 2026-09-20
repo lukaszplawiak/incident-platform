@@ -16,8 +16,10 @@ alerting:
 scrape_configs:
   # ----------------------------------------------------------------
   # Incident Platform — Spring Boot services
-  # Every service serve metrics on ports (8091-8096)
-  # by endpoint /actuator/prometheus
+  # Every service serves metrics on its own management port
+  # (8091-8097) at /actuator/prometheus. Targets are reached through
+  # host.docker.internal, i.e. the management ports published by
+  # docker-compose (or by services run locally with Maven).
   # ----------------------------------------------------------------
 
   - job_name: 'ingestion-service'
@@ -61,6 +63,15 @@ scrape_configs:
       - targets: ['host.docker.internal:8096']
         labels:
           service: 'oncall-service'
+
+  # auth-service's management port is 8097 (API port 8087) — it was
+  # missing from this file, so its metrics were never scraped.
+  - job_name: 'auth-service'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['host.docker.internal:8097']
+        labels:
+          service: 'auth-service'
 
   # ----------------------------------------------------------------
   # Kafka Exporter -- consumer group lag and topic metrics
