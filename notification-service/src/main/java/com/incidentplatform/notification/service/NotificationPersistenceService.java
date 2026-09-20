@@ -88,20 +88,21 @@ public class NotificationPersistenceService {
 
     @Transactional
     public void recordChannelSent(UUID incidentId, String tenantId,
-                                  String eventType, String channelName,
-                                  String recipient, String subject,
-                                  String message) {
+                                  String eventType, int escalationLevel,
+                                  String channelName, String recipient,
+                                  String subject, String message) {
         logRepository.save(NotificationLog.sent(
-                incidentId, tenantId, eventType, channelName,
-                recipient, subject, message));
+                incidentId, tenantId, eventType, escalationLevel,
+                channelName, recipient, subject, message));
     }
 
     @Transactional
     public void recordChannelFailed(UUID incidentId, String tenantId,
-                                    String eventType, String channelName,
-                                    String recipient, String errorMessage) {
+                                    String eventType, int escalationLevel,
+                                    String channelName, String recipient,
+                                    String errorMessage) {
         logRepository.save(NotificationLog.failed(
-                incidentId, tenantId, eventType, channelName,
-                recipient, errorMessage));
+                incidentId, tenantId, eventType, escalationLevel,
+                channelName, recipient, errorMessage));
     }
 }

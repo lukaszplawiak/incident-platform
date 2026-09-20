@@ -76,6 +76,25 @@
 			<artifactId>wiremock-standalone</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Testcontainers — real Postgres for NotificationEscalationSchemaIntegrationTest:
+		     the V5 migration applying cleanly, ddl-auto=validate accepting the new
+		     entity columns, and the escalation-level-aware unique index. Same setup
+		     as oncall-service and auth-service. -->
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>postgresql</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.testcontainers</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-testcontainers</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<dependency>
 			<groupId>com.incidentplatform</groupId>
 			<artifactId>shared</artifactId>

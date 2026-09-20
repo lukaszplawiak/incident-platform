@@ -43,6 +43,16 @@ public class NotificationLog {
     @Column(name = "event_type", nullable = false, updatable = false)
     private String eventType;
 
+    /**
+     * Escalation level of the event this row belongs to ({@code 0} for
+     * events that are not escalations). Part of the per-channel
+     * idempotency key — without it a level-2 escalation's Slack/Email/SMS
+     * send is treated as already sent because level 1 used the same
+     * channel for the same incident and event type.
+     */
+    @Column(name = "escalation_level", nullable = false, updatable = false)
+    private int escalationLevel;
+
     @NotBlank
     @Column(name = "channel", nullable = false, updatable = false)
     private String channel;
@@ -72,13 +82,15 @@ public class NotificationLog {
     protected NotificationLog() {}
 
     private NotificationLog(UUID incidentId, String tenantId, String eventType,
-                            String channel, String recipient, String subject,
+                            int escalationLevel, String channel,
+                            String recipient, String subject,
                             String message, NotificationLogStatus status,
                             String errorMessage) {
         this.id = UUID.randomUUID();
         this.incidentId = incidentId;
         this.tenantId = tenantId;
         this.eventType = eventType;
+        this.escalationLevel = escalationLevel;
         this.channel = channel;
         this.recipient = recipient;
         this.subject = subject;
@@ -89,27 +101,29 @@ public class NotificationLog {
     }
 
     public static NotificationLog sent(UUID incidentId, String tenantId,
-                                       String eventType, String channel,
-                                       String recipient, String subject,
-                                       String message) {
+                                       String eventType, int escalationLevel,
+                                       String channel, String recipient,
+                                       String subject, String message) {
         return new NotificationLog(incidentId, tenantId, eventType,
-                channel, recipient, subject, message,
+                escalationLevel, channel, recipient, subject, message,
                 NotificationLogStatus.SENT, null);
     }
 
     public static NotificationLog failed(UUID incidentId, String tenantId,
-                                         String eventType, String channel,
-                                         String recipient, String errorMessage) {
+                                         String eventType, int escalationLevel,
+                                         String channel, String recipient,
+                                         String errorMessage) {
         return new NotificationLog(incidentId, tenantId, eventType,
-                channel, recipient, null, null,
+                escalationLevel, channel, recipient, null, null,
                 NotificationLogStatus.FAILED, errorMessage);
     }
 
     public static NotificationLog skipped(UUID incidentId, String tenantId,
-                                          String eventType, String channel,
-                                          String recipient, String reason) {
+                                          String eventType, int escalationLevel,
+                                          String channel, String recipient,
+                                          String reason) {
         return new NotificationLog(incidentId, tenantId, eventType,
-                channel, recipient, null, null,
+                escalationLevel, channel, recipient, null, null,
                 NotificationLogStatus.SKIPPED, reason);
     }
 
@@ -117,6 +131,7 @@ public class NotificationLog {
     public UUID getIncidentId()              { return incidentId; }
     public String getTenantId()              { return tenantId; }
     public String getEventType()             { return eventType; }
+    public int getEscalationLevel()          { return escalationLevel; }
     public String getChannel()               { return channel; }
     public String getRecipient()             { return recipient; }
     public String getSubject()               { return subject; }

@@ -77,6 +77,39 @@ public class NotificationQueueEntry {
     @Column(name = "title", nullable = false, updatable = false, length = 500)
     private String title;
 
+    /**
+     * Escalation level of an {@code IncidentEscalatedEvent} (1, 2, ...);
+     * {@code 0} for every other event type.
+     *
+     * <h2>Fixed: level-2 escalation notifications were dropped</h2>
+     * Idempotency used to be keyed on {@code (incidentId, eventType)} only,
+     * and every escalation is an {@code IncidentEscalatedEvent} for the same
+     * incident — so once the level-1 entry existed, the level-2 (MANAGER)
+     * entry was discarded as a duplicate and never sent. The level is now
+     * part of the key ({@code uq_notification_queue_incident_tenant_event_level}).
+     */
+    @Column(name = "escalation_level", nullable = false, updatable = false)
+    private int escalationLevel;
+
+    /**
+     * The user the escalation is addressed to
+     * ({@code IncidentEscalatedEvent.escalateTo}), or {@code null} for
+     * non-escalation events and escalations published without a target.
+     *
+     * <p>Stored because the recipient is resolved at send time by the
+     * scheduler, not by the consumer that wrote this entry. Carried through
+     * the outbox but not used to pick the recipient yet.
+     *
+     * <p><b>Constraint for whoever starts using it:</b> this is a bare user
+     * id taken from a Kafka payload, with no proof it belongs to
+     * {@link #tenantId}. Any lookup by it must be scoped to the entry's
+     * tenant on the oncall-service side (tenant + user id together), or a
+     * crafted event could send one tenant's incident details to another
+     * tenant's user.
+     */
+    @Column(name = "escalate_to", updatable = false)
+    private UUID escalateTo;
+
     @NotNull
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
@@ -103,6 +136,24 @@ public class NotificationQueueEntry {
                                                  String eventType,
                                                  Severity severity,
                                                  String title) {
+        return pending(incidentId, tenantId, eventType, severity, title,
+                0, null);
+    }
+
+    /**
+     * Creates a new PENDING outbox entry carrying escalation context.
+     *
+     * @param escalationLevel the escalation level, {@code 0} for events
+     *                        that are not escalations
+     * @param escalateTo      the escalation target, or {@code null}
+     */
+    public static NotificationQueueEntry pending(UUID incidentId,
+                                                 String tenantId,
+                                                 String eventType,
+                                                 Severity severity,
+                                                 String title,
+                                                 int escalationLevel,
+                                                 UUID escalateTo) {
         final NotificationQueueEntry entry = new NotificationQueueEntry();
         entry.id = UUID.randomUUID();
         entry.incidentId = incidentId;
@@ -110,6 +161,8 @@ public class NotificationQueueEntry {
         entry.eventType = eventType;
         entry.severity = severity;
         entry.title = title;
+        entry.escalationLevel = escalationLevel;
+        entry.escalateTo = escalateTo;
         entry.status = NotificationQueueStatus.PENDING;
         entry.createdAt = Instant.now();
         return entry;
@@ -138,6 +191,8 @@ public class NotificationQueueEntry {
     public String getEventType()                 { return eventType; }
     public Severity getSeverity()                { return severity; }
     public String getTitle()                     { return title; }
+    public int getEscalationLevel()              { return escalationLevel; }
+    public UUID getEscalateTo()                  { return escalateTo; }
     public NotificationQueueStatus getStatus()   { return status; }
     public String getErrorMessage()              { return errorMessage; }
     public Instant getCreatedAt()                { return createdAt; }

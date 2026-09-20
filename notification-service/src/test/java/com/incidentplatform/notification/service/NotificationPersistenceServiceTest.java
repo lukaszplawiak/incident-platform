@@ -78,7 +78,7 @@ class NotificationPersistenceServiceTest {
     @DisplayName("recordChannelSent persists a SENT NotificationLog with the given fields")
     void recordsChannelSent() {
         persistenceService.recordChannelSent(
-                INCIDENT_ID, TENANT_ID, EVENT_TYPE, "EMAIL",
+                INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL",
                 "oncall@example.com", "[CRITICAL] High CPU", "Body text");
 
         final ArgumentCaptor<NotificationLog> captor =
@@ -90,13 +90,27 @@ class NotificationPersistenceServiceTest {
         assertThat(saved.getIncidentId()).isEqualTo(INCIDENT_ID);
         assertThat(saved.getChannel()).isEqualTo("EMAIL");
         assertThat(saved.getRecipient()).isEqualTo("oncall@example.com");
+        assertThat(saved.getEscalationLevel()).isZero();
+    }
+
+    @Test
+    @DisplayName("recordChannelSent stores the escalation level so level 2 is not mistaken for level 1")
+    void recordsChannelSentWithEscalationLevel() {
+        persistenceService.recordChannelSent(
+                INCIDENT_ID, TENANT_ID, "IncidentEscalatedEvent", 2, "EMAIL",
+                "manager@example.com", "[ESCALATED] High CPU", "Body text");
+
+        final ArgumentCaptor<NotificationLog> captor =
+                ArgumentCaptor.forClass(NotificationLog.class);
+        then(logRepository).should().save(captor.capture());
+        assertThat(captor.getValue().getEscalationLevel()).isEqualTo(2);
     }
 
     @Test
     @DisplayName("recordChannelFailed persists a FAILED NotificationLog with the error message")
     void recordsChannelFailed() {
         persistenceService.recordChannelFailed(
-                INCIDENT_ID, TENANT_ID, EVENT_TYPE, "EMAIL",
+                INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL",
                 "oncall@example.com", "SMTP connection refused");
 
         final ArgumentCaptor<NotificationLog> captor =

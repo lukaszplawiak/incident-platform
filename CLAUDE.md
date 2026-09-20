@@ -71,7 +71,7 @@ All services share one PostgreSQL database (`incidentdb`) but each owns its tabl
 
 ### Patterns already decided
 
-Transactional outbox for `incidents.lifecycle` (`IncidentEventOutbox` + scheduler, backlog #36); ShedLock on every `@Scheduled` job so replicas don't double-fire; optimistic locking (`@Version`) on mutable entities; idempotency checks before any outbound notification; 5-layer alert dedup (Redis SETNX/EXPIRE/DEL/AOF + Postgres fingerprint). Rate limiting is bucket4j backed by Redis (`ProxyManager`, `@CircuitBreaker`, fail-open — backlog #67); the earlier in-memory design was reversed. The README's "Design Decisions" section records why alternatives (Spring State Machine, Kafka Streams, full CQRS, RS256/Keycloak) were rejected — read it before proposing one of them.
+Transactional outbox for `incidents.lifecycle` (`IncidentEventOutbox` + scheduler, backlog #36); ShedLock on every `@Scheduled` job so replicas don't double-fire; optimistic locking (`@Version`) on mutable entities; idempotency checks before any outbound notification (keyed on incident + tenant + event type + escalation level, see `.ai/context/project.md`); 5-layer alert dedup (Redis SETNX/EXPIRE/DEL/AOF + Postgres fingerprint). Rate limiting is bucket4j backed by Redis (`ProxyManager`, `@CircuitBreaker`, fail-open — backlog #67); the earlier in-memory design was reversed. The README's "Design Decisions" section records why alternatives (Spring State Machine, Kafka Streams, full CQRS, RS256/Keycloak) were rejected — read it before proposing one of them.
 
 ## Conventions
 

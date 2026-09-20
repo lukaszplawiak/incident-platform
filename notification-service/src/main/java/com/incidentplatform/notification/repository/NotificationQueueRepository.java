@@ -30,7 +30,17 @@ public interface NotificationQueueRepository
 
     /**
      * Idempotency check — prevents duplicate queue entries for the same
-     * incident + event combination. Called by the consumer before enqueue.
+     * incident + event + escalation level combination. Called by the
+     * consumer before enqueue.
+     *
+     * <p>{@code escalationLevel} is part of the key because every
+     * escalation is an {@code IncidentEscalatedEvent} for the same
+     * incident; keyed on incident + event type alone, the level-2 entry was
+     * discarded as a duplicate of level 1. It is {@code 0} for every event
+     * type that is not an escalation. {@code tenantId} keeps the check
+     * tenant-scoped like every other query in this service.
      */
-    boolean existsByIncidentIdAndEventType(UUID incidentId, String eventType);
+    boolean existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+            UUID incidentId, String tenantId, String eventType,
+            int escalationLevel);
 }
