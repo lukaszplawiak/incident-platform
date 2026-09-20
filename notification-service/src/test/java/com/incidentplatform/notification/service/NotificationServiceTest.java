@@ -24,6 +24,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
@@ -58,6 +59,7 @@ class NotificationServiceTest {
     private static final String TENANT_ID = "test-tenant";
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final String EVENT_TYPE = "IncidentOpenedEvent";
+    private static final String ESCALATED_EVENT_TYPE = "IncidentEscalatedEvent";
 
     @BeforeEach
     void setUp() {
@@ -75,13 +77,13 @@ class NotificationServiceTest {
         @Test
         @DisplayName("should write PENDING queue entry")
         void shouldWritePendingEntry() {
-            given(queueRepository.existsByIncidentIdAndEventType(
-                    INCIDENT_ID, EVENT_TYPE)).willReturn(false);
+            given(queueRepository.existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                    INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0)).willReturn(false);
             given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             notificationService.enqueue(
                     EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU");
+                    Severity.CRITICAL, "High CPU", 0, null);
 
             final ArgumentCaptor<NotificationQueueEntry> captor =
                     ArgumentCaptor.forClass(NotificationQueueEntry.class);
@@ -98,12 +100,69 @@ class NotificationServiceTest {
         @Test
         @DisplayName("should be idempotent — skip if already queued")
         void shouldSkipIfAlreadyQueued() {
-            given(queueRepository.existsByIncidentIdAndEventType(
-                    INCIDENT_ID, EVENT_TYPE)).willReturn(true);
+            given(queueRepository.existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                    INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0)).willReturn(true);
 
             notificationService.enqueue(
                     EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU");
+                    Severity.CRITICAL, "High CPU", 0, null);
+
+            then(queueRepository).should(never()).save(any());
+        }
+
+        @Test
+        @DisplayName("should store the escalation level and target on the entry")
+        void shouldStoreEscalationContext() {
+            final UUID escalateTo = UUID.randomUUID();
+            given(queueRepository.existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                    INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE, 2)).willReturn(false);
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            notificationService.enqueue(
+                    ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", 2, escalateTo);
+
+            final ArgumentCaptor<NotificationQueueEntry> captor =
+                    ArgumentCaptor.forClass(NotificationQueueEntry.class);
+            then(queueRepository).should().save(captor.capture());
+            assertThat(captor.getValue().getEscalationLevel()).isEqualTo(2);
+            assertThat(captor.getValue().getEscalateTo()).isEqualTo(escalateTo);
+        }
+
+        /**
+         * Regression test: idempotency used to be keyed on
+         * (incidentId, eventType) only, so once the level-1 escalation was
+         * queued the level-2 (MANAGER) escalation for the same incident was
+         * discarded as a duplicate and never sent.
+         */
+        @Test
+        @DisplayName("should queue a level-2 escalation even though level 1 already exists")
+        void shouldQueueLevel2EvenWhenLevel1Exists() {
+            // Level 1 is already queued for this incident, but the idempotency
+            // check must only consider the entry's own level (2).
+            given(queueRepository.existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                    INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE, 2)).willReturn(false);
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            notificationService.enqueue(
+                    ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", 2, null);
+
+            then(queueRepository).should().save(any());
+            then(queueRepository).should(never())
+                    .existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                            INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE, 1);
+        }
+
+        @Test
+        @DisplayName("should still skip a redelivered escalation of the same level")
+        void shouldSkipRedeliveredEscalationOfSameLevel() {
+            given(queueRepository.existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                    INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE, 1)).willReturn(true);
+
+            notificationService.enqueue(
+                    ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", 1, null);
 
             then(queueRepository).should(never()).save(any());
         }
@@ -111,13 +170,13 @@ class NotificationServiceTest {
         @Test
         @DisplayName("should not call router or channels — fast path only")
         void shouldNotCallRouterOrChannels() {
-            given(queueRepository.existsByIncidentIdAndEventType(
-                    INCIDENT_ID, EVENT_TYPE)).willReturn(false);
+            given(queueRepository.existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                    INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0)).willReturn(false);
             given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
 
             notificationService.enqueue(
                     EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU");
+                    Severity.CRITICAL, "High CPU", 0, null);
 
             then(router).shouldHaveNoInteractions();
             then(emailChannel).shouldHaveNoInteractions();
@@ -166,7 +225,7 @@ class NotificationServiceTest {
             notificationService.processEntry(entry);
 
             then(persistenceService).should().recordChannelSent(
-                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq("EMAIL"),
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("EMAIL"),
                     eq(request.recipient()), eq(request.subject()), eq(request.message()));
         }
 
@@ -207,10 +266,10 @@ class NotificationServiceTest {
             then(slackChannel).should(times(1)).send(slackRequest);
 
             then(persistenceService).should().recordChannelFailed(
-                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq("EMAIL"),
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("EMAIL"),
                     eq(emailRequest.recipient()), eq("SMTP connection failed"));
             then(persistenceService).should().recordChannelSent(
-                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq("SLACK"),
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("SLACK"),
                     eq(slackRequest.recipient()), any(), any());
 
             // Queue entry still marked SENT — individual failures recorded in log
@@ -226,14 +285,43 @@ class NotificationServiceTest {
             given(router.route(any(), any(), any(), any(), any()))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request)));
-            given(logRepository.existsByIncidentIdAndEventTypeAndChannel(
-                    INCIDENT_ID, EVENT_TYPE, "EMAIL")).willReturn(true);
+            given(logRepository
+                    .existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevelAndChannel(
+                            INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL")).willReturn(true);
 
             notificationService.processEntry(entry);
 
             then(emailChannel).should(never()).send(any());
             then(persistenceService).should(never())
-                    .recordChannelSent(any(), any(), any(), any(), any(), any(), any());
+                    .recordChannelSent(any(), any(), any(), anyInt(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("should send a level-2 escalation on a channel already used by level 1")
+        void shouldSendLevel2OnChannelUsedByLevel1() {
+            final NotificationQueueEntry entry = buildEscalationEntry(2);
+            final NotificationRequest request = buildRequest("EMAIL");
+            given(emailChannel.channelName()).willReturn("EMAIL");
+            given(router.route(any(), any(), any(), any(), any()))
+                    .willReturn(List.of(
+                            new NotificationRouter.ChannelRequest(emailChannel, request)));
+            // Level 1 already sent EMAIL for this incident + event type, but
+            // the idempotency check only looks at this entry's own level (2).
+            given(logRepository
+                    .existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevelAndChannel(
+                            INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE, 2, "EMAIL"))
+                    .willReturn(false);
+
+            notificationService.processEntry(entry);
+
+            then(logRepository).should(never())
+                    .existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevelAndChannel(
+                            INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE, 1, "EMAIL");
+            then(emailChannel).should().send(request);
+            then(persistenceService).should().recordChannelSent(
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(ESCALATED_EVENT_TYPE),
+                    eq(2), eq("EMAIL"), eq(request.recipient()),
+                    eq(request.subject()), eq(request.message()));
         }
 
         @Test
@@ -280,6 +368,12 @@ class NotificationServiceTest {
         return NotificationQueueEntry.pending(
                 INCIDENT_ID, TENANT_ID, EVENT_TYPE,
                 Severity.CRITICAL, "High CPU");
+    }
+
+    private NotificationQueueEntry buildEscalationEntry(int escalationLevel) {
+        return NotificationQueueEntry.pending(
+                INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE,
+                Severity.CRITICAL, "High CPU", escalationLevel, null);
     }
 
     private NotificationRequest buildRequest(String channel) {

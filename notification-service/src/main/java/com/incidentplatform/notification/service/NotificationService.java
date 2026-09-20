@@ -84,34 +84,56 @@ public class NotificationService {
      * no channel routing, no oncall lookup. Just one DB INSERT.
      *
      * <p>Idempotent — if an entry already exists for this
-     * {@code incidentId + eventType} combination (e.g. Kafka redeliver),
-     * the existing entry is left unchanged and this call is a no-op.
+     * {@code incidentId + tenantId + eventType + escalationLevel}
+     * combination (e.g. Kafka redeliver), the existing entry is left
+     * unchanged and this call is a no-op.
      *
-     * @param eventType  the incident lifecycle event type
-     * @param incidentId the incident UUID
-     * @param tenantId   the tenant that owns the incident
-     * @param severity   the incident severity at the time of the event
-     * @param title      the incident title for notification content
+     * <h2>Fixed: level-2 escalation notifications were dropped</h2>
+     * The key used to be {@code incidentId + eventType} only. Every
+     * escalation — level 1 (SECONDARY) and level 2 (MANAGER) — is an
+     * {@code IncidentEscalatedEvent} for the same incident, so everything
+     * after the first was discarded here as a "duplicate" and never sent.
+     * {@code escalationLevel} is now part of the key; it is {@code 0} for
+     * every event type that is not an escalation, so their behaviour is
+     * unchanged. A repeat escalation at the <em>same</em> level is still
+     * deduplicated on purpose.
+     *
+     * @param eventType       the incident lifecycle event type
+     * @param incidentId      the incident UUID
+     * @param tenantId        the tenant that owns the incident
+     * @param severity        the incident severity at the time of the event
+     * @param title           the incident title for notification content
+     * @param escalationLevel the escalation level, {@code 0} if the event is
+     *                        not an escalation
+     * @param escalateTo      the user the escalation is addressed to, or
+     *                        {@code null}; stored on the entry because the
+     *                        recipient is resolved at send time
      */
     @Transactional
     public void enqueue(String eventType,
                         UUID incidentId,
                         String tenantId,
                         Severity severity,
-                        String title) {
-        if (queueRepository.existsByIncidentIdAndEventType(incidentId, eventType)) {
+                        String title,
+                        int escalationLevel,
+                        UUID escalateTo) {
+        if (queueRepository
+                .existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                        incidentId, tenantId, eventType, escalationLevel)) {
             log.debug("Notification already queued (idempotency): " +
-                            "incidentId={}, eventType={}",
-                    incidentId, eventType);
+                            "incidentId={}, eventType={}, escalationLevel={}",
+                    incidentId, eventType, escalationLevel);
             return;
         }
 
         final NotificationQueueEntry entry = NotificationQueueEntry.pending(
-                incidentId, tenantId, eventType, severity, title);
+                incidentId, tenantId, eventType, severity, title,
+                escalationLevel, escalateTo);
         queueRepository.save(entry);
 
-        log.info("Notification queued: incidentId={}, eventType={}, tenant={}",
-                incidentId, eventType, tenantId);
+        log.info("Notification queued: incidentId={}, eventType={}, " +
+                        "escalationLevel={}, tenant={}",
+                incidentId, eventType, escalationLevel, tenantId);
     }
 
     /**
@@ -137,6 +159,7 @@ public class NotificationService {
         final UUID incidentId = entry.getIncidentId();
         final String tenantId = entry.getTenantId();
         final String eventType = entry.getEventType();
+        final int escalationLevel = entry.getEscalationLevel();
 
         // Ensure TenantContext is set — scheduler sets it per-entry but
         // this method may also be called directly in tests.
@@ -169,11 +192,15 @@ public class NotificationService {
             // transaction — gets its own short, auto-committing one from
             // Spring Data JPA, same as every other read-only repository
             // call in this codebase's schedulers.
-            if (logRepository.existsByIncidentIdAndEventTypeAndChannel(
-                    incidentId, eventType, channel.channelName())) {
+            if (logRepository
+                    .existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevelAndChannel(
+                            incidentId, tenantId, eventType, escalationLevel,
+                            channel.channelName())) {
                 log.info("Notification already sent (idempotency check): " +
-                                "channel={}, incidentId={}, eventType={}",
-                        channel.channelName(), incidentId, eventType);
+                                "channel={}, incidentId={}, eventType={}, " +
+                                "escalationLevel={}",
+                        channel.channelName(), incidentId, eventType,
+                        escalationLevel);
                 continue;
             }
 
@@ -181,8 +208,9 @@ public class NotificationService {
                 channel.send(request);
 
                 persistenceService.recordChannelSent(
-                        incidentId, tenantId, eventType, channel.channelName(),
-                        request.recipient(), request.subject(), request.message());
+                        incidentId, tenantId, eventType, escalationLevel,
+                        channel.channelName(), request.recipient(),
+                        request.subject(), request.message());
 
                 log.info("Notification sent: channel={}, recipient={}, " +
                                 "incidentId={}, tenant={}",
@@ -201,8 +229,9 @@ public class NotificationService {
 
             } catch (NotificationException e) {
                 persistenceService.recordChannelFailed(
-                        incidentId, tenantId, eventType, channel.channelName(),
-                        request.recipient(), e.getMessage());
+                        incidentId, tenantId, eventType, escalationLevel,
+                        channel.channelName(), request.recipient(),
+                        e.getMessage());
 
                 log.error("Notification failed: channel={}, recipient={}, " +
                                 "incidentId={}, error={}",
@@ -222,8 +251,9 @@ public class NotificationService {
 
             } catch (Exception e) {
                 persistenceService.recordChannelFailed(
-                        incidentId, tenantId, eventType, channel.channelName(),
-                        request.recipient(), "Unexpected error: " + e.getMessage());
+                        incidentId, tenantId, eventType, escalationLevel,
+                        channel.channelName(), request.recipient(),
+                        "Unexpected error: " + e.getMessage());
 
                 log.error("Unexpected error sending notification: " +
                                 "channel={}, incidentId={}",

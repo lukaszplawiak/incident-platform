@@ -180,11 +180,31 @@ by the caller-controlled `X-Forwarded-For` header. Do not reintroduce in-memory 
 ### Known limitation: escalation notifications reach the PRIMARY on-call
 
 escalation-service resolves the SECONDARY / MANAGER user and sends it in
-`IncidentEscalatedEvent.escalateTo`, but notification-service does not read `escalateTo`.
-`NotificationRouter` resolves the recipient from the PRIMARY on-call for every event type,
-so escalation notifications currently go to the PRIMARY's addresses (or the configured
-fallback addresses). No backlog item exists yet; fixing it means teaching the router to
-honour `escalateTo`.
+`IncidentEscalatedEvent.escalateTo`. notification-service reads `escalateTo` and the
+escalation level and stores both on its outbox entry (`escalate_to` is stored because the
+scheduler, not the consumer, resolves the recipient at send time), but `NotificationRouter`
+still resolves the recipient from the PRIMARY on-call for every event type, so escalation
+notifications currently go to the PRIMARY's addresses (or the configured fallback addresses).
+Fixing it means resolving the contact for `escalateTo`; that lookup must be scoped to the
+entry's tenant as well as the user id, because `escalateTo` is an unverified id from a Kafka
+payload.
+
+### Notification idempotency is keyed on tenant and escalation level
+
+The `notification_queue` unique index and the `notification_log` per-channel check are keyed on
+incident + tenant + event type + **escalation level** (+ channel for the log). Do not drop the
+level: every escalation is an `IncidentEscalatedEvent` for the same incident, and without the
+level the level-2 (MANAGER) notification is discarded as a duplicate of level 1. Do not drop the
+tenant either — idempotency, like every other query, is tenant-scoped.
+
+- A repeat escalation at the **same** level is deduplicated on purpose.
+- Escalation rows written before migration `V5` are stored at level 0 and cannot be corrected, so a
+  replay of an old escalation event is not deduplicated; during a rolling deploy, old pods also
+  still write level 0 for every event.
+- `escalationLevel` is required on `IncidentEscalatedEvent` and must be an integer in
+  `1..2` (the two levels `EscalationTask` creates); anything else is dead-lettered, not coerced
+  to `0` (`0` means "not an escalation"). Raise `MAX_ESCALATION_LEVEL` in
+  notification-service's `IncidentEventConsumer` together with the escalation chain.
 
 ---
 

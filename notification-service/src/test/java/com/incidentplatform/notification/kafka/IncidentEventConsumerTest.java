@@ -27,8 +27,10 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.then;
 
 @ExtendWith(MockitoExtension.class)
@@ -130,6 +132,18 @@ class IncidentEventConsumerTest {
                 }""", INCIDENT_ID, TENANT_ID);
     }
 
+    private String escalatedEvent(int level, String escalateToJson) {
+        return String.format("""
+                {
+                  "incidentId": "%s",
+                  "tenantId": "%s",
+                  "escalateTo": %s,
+                  "escalationLevel": %d,
+                  "title": "High CPU",
+                  "severity": "CRITICAL"
+                }""", INCIDENT_ID, TENANT_ID, escalateToJson, level);
+    }
+
     @Nested
     @DisplayName("tenant context management")
     class TenantContextManagement {
@@ -157,7 +171,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    any(), any(), tenantCaptor.capture(), any(), any());
+                    any(), any(), tenantCaptor.capture(), any(), any(), anyInt(), any());
             assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
         }
 
@@ -184,7 +198,7 @@ class IncidentEventConsumerTest {
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
                     .given(notificationService)
-                    .enqueue(any(), any(), any(), any(), any());
+                    .enqueue(any(), any(), any(), any(), any(), anyInt(), any());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -211,7 +225,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should(org.mockito.Mockito.times(2))
-                    .enqueue(any(), any(), tenantCaptor.capture(), any(), any());
+                    .enqueue(any(), any(), tenantCaptor.capture(), any(), any(), anyInt(), any());
 
             assertThat(tenantCaptor.getAllValues())
                     .containsExactly("tenant-a", "tenant-b");
@@ -238,7 +252,9 @@ class IncidentEventConsumerTest {
                     eq(INCIDENT_ID),
                     eq(TENANT_ID),
                     eq(Severity.CRITICAL),
-                    eq("High CPU")
+                    eq("High CPU"),
+                    eq(0),
+                    isNull()
             );
         }
 
@@ -254,7 +270,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    eq(IncidentEventTypes.INCIDENT_ACKNOWLEDGED), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_ACKNOWLEDGED), any(), any(), any(), any(), anyInt(), any());
         }
 
         @Test
@@ -269,7 +285,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    eq(IncidentEventTypes.INCIDENT_RESOLVED), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_RESOLVED), any(), any(), any(), any(), anyInt(), any());
         }
 
         @Test
@@ -299,7 +315,156 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(), any(), any());
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(), any(), any(), anyInt(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("escalation context")
+    class EscalationContext {
+
+        @Test
+        @DisplayName("should pass the escalation level and target of an IncidentEscalatedEvent")
+        void shouldPassEscalationLevelAndTarget() {
+            final UUID escalateTo = UUID.randomUUID();
+            final ConsumerRecord<String, String> record = buildRecord(
+                    escalatedEvent(2, "\"" + escalateTo + "\""), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_ESCALATED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED), eq(INCIDENT_ID),
+                    eq(TENANT_ID), eq(Severity.CRITICAL), eq("High CPU"),
+                    eq(2), eq(escalateTo));
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("should pass a null target when escalateTo is JSON null")
+        void shouldPassNullTargetWhenEscalateToIsNull() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    escalatedEvent(1, "null"), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_ESCALATED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(),
+                    any(), any(), eq(1), isNull());
+        }
+
+        @Test
+        @DisplayName("should pass a null target when escalateTo is absent")
+        void shouldPassNullTargetWhenEscalateToIsAbsent() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    escalatedEvent(), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_ESCALATED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(),
+                    any(), any(), eq(1), isNull());
+        }
+
+        /**
+         * escalateTo is an optional hint. A malformed value must not turn
+         * the whole escalation into a poison pill (which would drop an
+         * alert that can still be delivered) — it is ignored and the
+         * notification is still enqueued and acknowledged.
+         */
+        @Test
+        @DisplayName("should still enqueue and acknowledge when escalateTo is not a UUID")
+        void shouldIgnoreMalformedEscalateTo() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    escalatedEvent(2, "\"not-a-uuid\""), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_ESCALATED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(),
+                    any(), any(), eq(2), isNull());
+            then(deadLetterPublisher).shouldHaveNoInteractions();
+            then(acknowledgment).should().acknowledge();
+        }
+
+        /**
+         * escalationLevel is part of the idempotency key, so a missing or
+         * out-of-range value must be rejected, not coerced: {@code asInt(0)}
+         * would key every malformed escalation of an incident as level 0 and
+         * silently discard all but the first, while an unbounded value lets a
+         * producer mint a fresh key (and fresh notifications) per replay.
+         */
+        @org.junit.jupiter.params.ParameterizedTest(name = "escalationLevel={0} is a poison pill")
+        @org.junit.jupiter.params.provider.ValueSource(strings = {
+                "0", "-1", "3", "1000000", "\"abc\"", "1.5", "null"})
+        @DisplayName("should dead-letter an escalation whose level is invalid")
+        void shouldDeadLetterInvalidEscalationLevel(String levelJson) {
+            final String payload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "escalationLevel": %s,
+                      "title": "High CPU",
+                      "severity": "CRITICAL"
+                    }""", INCIDENT_ID, TENANT_ID, levelJson);
+            final ConsumerRecord<String, String> record = buildRecord(
+                    payload, TENANT_ID, IncidentEventTypes.INCIDENT_ESCALATED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().publish(
+                    eq(payload), eq(TOPIC), eq(TENANT_ID), anyString());
+            then(acknowledgment).should().acknowledge();
+            then(notificationService).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("should dead-letter an escalation with no escalationLevel at all")
+        void shouldDeadLetterMissingEscalationLevel() {
+            final String payload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "CRITICAL"
+                    }""", INCIDENT_ID, TENANT_ID);
+            final ConsumerRecord<String, String> record = buildRecord(
+                    payload, TENANT_ID, IncidentEventTypes.INCIDENT_ESCALATED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().publish(
+                    eq(payload), eq(TOPIC), eq(TENANT_ID), anyString());
+            then(acknowledgment).should().acknowledge();
+            then(notificationService).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("should use level 0 and no target for events that are not escalations")
+        void shouldUseLevelZeroForNonEscalationEvents() {
+            // Even if a non-escalation payload happened to contain these
+            // fields, they must not change how its notification is keyed.
+            final String openedWithStrayFields = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "CRITICAL",
+                      "escalationLevel": 3,
+                      "escalateTo": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, UUID.randomUUID());
+            final ConsumerRecord<String, String> record = buildRecord(
+                    openedWithStrayFields, TENANT_ID,
+                    IncidentEventTypes.INCIDENT_OPENED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_OPENED), any(), any(),
+                    any(), any(), eq(0), isNull());
         }
     }
 
@@ -332,7 +497,7 @@ class IncidentEventConsumerTest {
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("Slack API down"))
                     .given(notificationService)
-                    .enqueue(any(), any(), any(), any(), any());
+                    .enqueue(any(), any(), any(), any(), any(), anyInt(), any());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);

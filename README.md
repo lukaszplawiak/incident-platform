@@ -229,7 +229,7 @@ T+10m*: Still no ACK   → Level 2 (MANAGER)   IncidentEscalatedEvent → Email 
 
 The channel set is chosen by **event type**, not by escalation level (`NotificationRouter`): `INCIDENT_OPENED` → Email + Slack, `INCIDENT_ESCALATED` → Email + Slack + SMS, `INCIDENT_ACKNOWLEDGED` → Slack, `INCIDENT_RESOLVED` → Email + Slack, `INCIDENT_CLOSED` → Email.
 
-escalation-service resolves the SECONDARY (level 1) or MANAGER (level 2) on-call user through oncall-service and puts that user in `IncidentEscalatedEvent.escalateTo`. **Current limitation:** notification-service does not read `escalateTo` yet — `NotificationRouter` resolves the recipient from the PRIMARY on-call for every event type (falling back to the configured fallback addresses when none is found), so escalation notifications currently go to the PRIMARY on-call's addresses, not to the SECONDARY/MANAGER.
+escalation-service resolves the SECONDARY (level 1) or MANAGER (level 2) on-call user through oncall-service and puts that user in `IncidentEscalatedEvent.escalateTo`. **Current limitation:** notification-service stores `escalateTo` and the escalation level on its outbox entry, and each escalation level is now queued and sent at most once per channel (idempotency is keyed on incident + tenant + event type + escalation level, so the level-2 notification is no longer discarded as a duplicate of level 1). `escalationLevel` is required and must be an integer in 1..2; anything else is routed to `notification.dead-letter` rather than queued. A malformed `escalateTo` is ignored with a warning, not dead-lettered. It does not use `escalateTo` to pick the recipient yet — `NotificationRouter` still resolves the recipient from the PRIMARY on-call for every event type (falling back to the configured fallback addresses when none is found), so escalation notifications currently go to the PRIMARY on-call's addresses, not to the SECONDARY/MANAGER.
 
 Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK at any point cancels all pending tasks. ShedLock prevents duplicate job execution across multiple replicas. The escalation level is written back to the incident by incident-service, which consumes `IncidentEscalatedEvent` from `incidents.lifecycle`.
 
@@ -257,7 +257,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 ### Concurrency Safety
 
 - **Optimistic locking**: `@Version` on `Incident` entity — concurrent PATCH requests return `HTTP 409 Conflict` instead of silently overwriting
-- **Notification idempotency**: `notification-service` checks `notification_log` before sending — Kafka at-least-once delivery never causes duplicate Slack messages or emails
+- **Notification idempotency**: `notification-service` checks `notification_queue` (incident + tenant + event type + escalation level) before enqueueing and `notification_log` (same key + channel) before sending — Kafka at-least-once delivery never causes duplicate Slack messages or emails
 - **Audit event resilience**: `AuditEventPublisher` uses `@Retryable` (3 attempts, exponential backoff) — business flow is never blocked by observability infrastructure
 
 ### Multi-Tenant Kafka — Per-Record Isolation
@@ -1013,7 +1013,8 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `IncidentKafkaConsumerTest` | Per-record tenant isolation, TenantContext cleanup in `finally`, no cross-tenant leaks |
 | `NotificationServiceTest` | Orchestration, fault isolation between channels, idempotency |
 | `NotificationRouterTest` | Routing for all 5 event types, fallback when oncall-service unavailable |
-| `IncidentEventConsumerTest` (notification-service) | Header-based tenant resolution, TenantContext lifecycle |
+| `IncidentEventConsumerTest` (notification-service) | Header-based tenant resolution, TenantContext lifecycle, escalation level/target parsing, dead-lettering of invalid levels |
+| `NotificationEscalationSchemaIntegrationTest` | V5 migration, `ddl-auto: validate`, tenant- and level-aware unique index and CHECK constraints (Testcontainers, needs Docker) |
 | `EscalationServiceTest` | Level 1/2 scheduling, ACK cancellation, idempotency, severity timeouts |
 | `EscalationSchedulerTest` | Timer logic, level 2 scheduling after level 1, fault isolation |
 | `IncidentEventConsumerTest` (escalation-service) | Per-record tenant isolation, sequential records without leaks |
