@@ -19,7 +19,7 @@ A production-oriented microservices backend that automates the full lifecycle of
 
 ## Overview
 
-When a monitoring system detects a problem — high CPU, a security breach, a failed service — the platform ingests the alert, normalizes it from multiple sources, and deduplicates it to prevent noise. It then creates an actionable incident, tracks its full lifecycle from detection to resolution, and automatically notifies the on-call engineer via Slack DM, email, and SMS. If no one responds in time, the incident escalates automatically through a configurable chain. Every state change is recorded in a centralized audit log, and resolved incidents trigger an AI-generated postmortem draft.
+When a monitoring system detects a problem — high CPU, a security breach, a failed service — the platform ingests the alert, normalizes it from multiple sources, and deduplicates it to prevent noise. It then creates an actionable incident, tracks its full lifecycle from detection to resolution, and automatically notifies the on-call engineer via Slack DM and email (SMS is added on escalation). If no one responds in time, the incident escalates automatically through a configurable chain. Every state change is recorded in a centralized audit log, and resolved incidents trigger an AI-generated postmortem draft.
 
 **The goal**: reduce the time between "something broke" and "someone is fixing it."
 
@@ -28,8 +28,8 @@ The system is built for **multiple tenants** — each organization's data is ful
 ### What the platform covers
 
 - **Alert ingestion** from Prometheus, Wazuh, and generic sources with normalization and 5-layer deduplication
-- **Incident lifecycle** managed by a finite state machine: `OPEN → ACKNOWLEDGED → ESCALATED → RESOLVED → CLOSED`
-- **Automatic escalation** through a severity-calibrated chain: PRIMARY → SECONDARY → MANAGER
+- **Incident lifecycle** managed by a finite state machine: `OPEN → ACKNOWLEDGED → RESOLVED → CLOSED` (escalation is tracked separately as an `escalationLevel` attribute, not as a lifecycle state — an incident can be escalated while `ACKNOWLEDGED`)
+- **Automatic escalation** through a severity-calibrated chain: PRIMARY → SECONDARY → MANAGER (see "Current limitation" under [Escalation Chain](#escalation-chain))
 - **Multi-channel notifications** via Slack Bot Token (direct messages), email (Mailtrap SMTP), and SMS
 - **AI-generated postmortems** via Gemini API triggered automatically on incident resolution
 - **Centralized audit log** — every event across all services assembled into a single chronological timeline per incident
@@ -57,6 +57,7 @@ Prometheus / Wazuh / Generic
   ┌─────────────────────┐
   │   incident-service   │  port 8082
   │                     │  FSM-based lifecycle, PostgreSQL, CQRS
+  │                     │  Transactional outbox → incidents.lifecycle
   │                     │  WebSocket real-time updates
   │                     │  Centralized audit log consumer
   └──────────┬──────────┘
@@ -118,9 +119,13 @@ Prometheus / Wazuh / Generic
 |---|---|---|
 | `alerts.raw` | ingestion-service | incident-service |
 | `alerts.resolved` | ingestion-service | incident-service |
-| `incidents.lifecycle` | incident-service | notification-service, escalation-service, postmortem-service, ingestion-service |
+| `incidents.lifecycle` | incident-service (via transactional outbox); escalation-service (`IncidentEscalatedEvent` on automatic escalation) | notification-service, escalation-service, postmortem-service, ingestion-service, incident-service (reads `IncidentEscalatedEvent` back to update `escalationLevel`) |
 | `audit.events` | all services | incident-service (audit consumer) |
 | `alerts.dead-letter` | ingestion-service | — |
+| `incidents.dead-letter` | incident-service | — |
+| `escalation.dead-letter` | escalation-service | — |
+| `notification.dead-letter` | notification-service | — |
+| `postmortem.dead-letter` | postmortem-service | — |
 
 ---
 
@@ -142,7 +147,7 @@ Using the raw HTTP API via `RestClient` through a `GeminiClient` interface keeps
 HS512 with a shared secret is sufficient for a controlled environment where all services are owned by the same team. `ServiceTokenProvider` is abstracted behind an interface — migrating to RS256 or Keycloak requires changing one class per service. The tradeoff is documented and understood.
 
 **Why Slack Bot Token instead of Incoming Webhook?**
-Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` supports both direct messages to the on-call engineer's Slack User ID and channel posts with a single API. Bot Token also enables future ACK-via-Slack (Interactive Components) without architectural changes.
+Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` supports both direct messages to the on-call engineer's Slack User ID and channel posts with a single API. Bot Token also enables ACK-via-Slack: Interactive Components post to `/api/v1/slack/actions` on notification-service (request signature verified with `SLACK_SIGNING_SECRET` by `SlackSignatureVerifier`), which acknowledges the incident through `IncidentAckClient`.
 
 **Why a centralized audit log via Kafka instead of per-service history tables?**
 Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident view. The `audit.events` topic acts as a single audit stream — any service publishes events and the consumer assembles them into a unified chronological view via one API endpoint.
@@ -156,9 +161,8 @@ The notification consumer deserializes Kafka messages to `JsonNode` and extracts
 **Why separate DLQ strategies for ingestion vs. incident?**
 `ingestion-service` processes batches — one bad alert must not block the rest, so it uses a custom `DeadLetterPublisher`. `incident-service` processes single messages where Spring Kafka's built-in DLT handles retries correctly.
 
-**Why bucket4j in-memory instead of Redis-backed rate limiting?**
-In-memory rate limiting is sufficient for a single instance. The tradeoff is documented: each instance maintains independent counters in a load-balanced deployment. Migration to bucket4j-redis requires changing one class — `RateLimitingService`.
-
+**Why bucket4j backed by Redis instead of in-memory rate limiting?**
+This reverses an earlier in-memory design. In-memory buckets were per-pod (each replica kept independent counters, so the effective limit multiplied with the replica count) and were held in unbounded maps keyed by tenant and IP — a memory-exhaustion vector, since the client IP comes from the caller-controlled `X-Forwarded-For` header. `RateLimitingService` now keeps bucket state in Redis through bucket4j's `ProxyManager` (`bucket4j-redis`): state is shared across replicas and expires automatically. The Redis call is protected by `@CircuitBreaker` (backlog #67) and fails open, matching the dedup layer's policy for the same dependency.
 
 **Why auth-service is a modular monolith rather than split into auth + identity?**
 All identity concerns (users, teams, API keys, integrations) are colocated with authentication to avoid distributed transaction complexity and HTTP latency on the login hot path. `AuthService.login()` reads `User` credentials in the same database transaction — after splitting this would require a Redis credential cache (Wzorzec B) and Outbox Pattern for invite flow. This is documented as a future backlog item in `AuthServiceApplication.java` with the exact migration plan.
@@ -186,10 +190,10 @@ On-call schedule management is a distinct bounded context. A separate service al
 | Security | Spring Security + JWT (HS512) | Stateless auth, service-to-service tokens |
 | Real-time | WebSocket (STOMP) | Live incident dashboard updates |
 | Email | Spring Mail + Mailtrap SMTP | Real SMTP integration, safe sandbox |
-| Slack | Bot Token + chat.postMessage | DM + channel posts, future Interactive Components |
+| Slack | Bot Token + chat.postMessage | DM + channel posts, Interactive Components for ACK-via-Slack |
 | AI | Gemini API via RestClient | Vendor-neutral, no SDK lock-in |
-| Resilience | Resilience4j | Circuit breaker on Redis and Gemini, retry with backoff |
-| Rate Limiting | bucket4j | Per-tenant + per-IP, in-memory, production-replaceable |
+| Resilience | Resilience4j | Circuit breakers on Redis, Gemini and inter-service HTTP clients (oncall-service, incident ACK), retry with backoff |
+| Rate Limiting | bucket4j + Redis | Per-tenant + per-IP, state shared across replicas via `bucket4j-redis` |
 | API Docs | SpringDoc OpenAPI 3 | Auto-generated, available at `/swagger-ui.html` |
 | Build | Maven multi-module | Shared dependency management, incremental builds |
 | Observability | Micrometer + Prometheus + Grafana | HTTP metrics, JVM, Kafka lag, rate limit rejections |
@@ -217,13 +221,17 @@ No single layer failure results in duplicate incidents. Each layer independently
 When an incident is not acknowledged, escalation follows a structured chain with timeouts calibrated to severity:
 
 ```
-T+0:    Incident OPEN  → PRIMARY on-call:   Slack DM + Email
-T+5m*:  No ACK         → Level 1 SECONDARY: Slack DM + SMS
-T+10m*: Still no ACK   → Level 2 MANAGER:   Email + SMS
-        (* CRITICAL — HIGH=15m, MEDIUM=30m, LOW=60m)
+T+0:    Incident OPEN  → IncidentOpenedEvent                      → Email + Slack
+T+5m*:  No ACK         → Level 1 (SECONDARY) IncidentEscalatedEvent → Email + Slack + SMS
+T+10m*: Still no ACK   → Level 2 (MANAGER)   IncidentEscalatedEvent → Email + Slack + SMS
+        (* CRITICAL — HIGH=15m, MEDIUM=30m, LOW=60m per level)
 ```
 
-Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK at any point cancels all pending tasks. ShedLock prevents duplicate job execution across multiple replicas.
+The channel set is chosen by **event type**, not by escalation level (`NotificationRouter`): `INCIDENT_OPENED` → Email + Slack, `INCIDENT_ESCALATED` → Email + Slack + SMS, `INCIDENT_ACKNOWLEDGED` → Slack, `INCIDENT_RESOLVED` → Email + Slack, `INCIDENT_CLOSED` → Email.
+
+escalation-service resolves the SECONDARY (level 1) or MANAGER (level 2) on-call user through oncall-service and puts that user in `IncidentEscalatedEvent.escalateTo`. **Current limitation:** notification-service does not read `escalateTo` yet — `NotificationRouter` resolves the recipient from the PRIMARY on-call for every event type (falling back to the configured fallback addresses when none is found), so escalation notifications currently go to the PRIMARY on-call's addresses, not to the SECONDARY/MANAGER.
+
+Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK at any point cancels all pending tasks. ShedLock prevents duplicate job execution across multiple replicas. The escalation level is written back to the incident by incident-service, which consumes `IncidentEscalatedEvent` from `incidents.lifecycle`.
 
 ### Multi-Layer DDoS Protection
 
@@ -239,8 +247,8 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 
 - **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set explicitly
 - **Service-to-service auth**: `ServiceTokenProvider` generates and caches JWT tokens with `ROLE_SERVICE` — not exposed to end users
-- **Dev endpoints**: `DevTokenController` gated with `@Profile("local")` — never available in production
-- **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8096) — never co-located with the business API
+- **Dev endpoints**: `DevTokenController` gated with `@Profile({"local", "dev"})` plus a fail-fast startup guard as a second line of defence — never available in production
+- **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8097) — never co-located with the business API
 - **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in access logs
 - **Sensitive field redaction**: `GlobalExceptionHandler` redacts `password`, `secret`, `token`, `apiKey` from validation error responses
 - **Slack Bot Token**: Minimal OAuth scopes (`chat:write`, `im:write`) — principle of least privilege
@@ -262,7 +270,7 @@ All Kafka topics are multi-tenant. `TenantKafkaProducerInterceptor` adds `X-Tena
 
 ### Metrics — Micrometer + Prometheus + Grafana
 
-All services expose metrics via `/actuator/prometheus` on the management port (8091–8096). Prometheus scrapes every 15 seconds. Grafana dashboards cover:
+All services expose metrics via `/actuator/prometheus` on the management port (8091–8097), and the bundled `docker/prometheus.yml` has one scrape job per service — including auth-service on 8097. Prometheus scrapes every 15 seconds. Grafana dashboards cover:
 
 - HTTP request rate and error rate per service
 - JVM heap, non-heap memory, GC activity
@@ -287,7 +295,7 @@ Health and metrics endpoints run on a dedicated port per service, never mixed wi
 
 | Service | API Port | Management Port |
 |---|---|---|
-| auth-service | 8087 | 8087 (shared) |
+| auth-service | 8087 | 8097 |
 | ingestion-service | 8081 | 8091 |
 | incident-service | 8082 | 8092 |
 | notification-service | 8083 | 8093 |
@@ -314,19 +322,34 @@ Checkout → Java 21 setup (Temurin) → Compile → Run tests with JaCoCo → U
 - On pull requests: JaCoCo report posted as a PR comment with per-file coverage breakdown
 - Minimum coverage gate: **60%** overall and per changed file
 
-### Job 2 — Build Docker Images
+### Job 2 — Detect Changes
 
-Runs only on merge to `main`, after Job 1 passes:
+A path filter (`dorny/paths-filter`) decides what the expensive downstream jobs must do:
+
+- **`services`** — which service images need building. A change under one service's directory rebuilds only that service; a change to `shared/**`, `service-parent/**` or the root `pom.xml` rebuilds all 7, and every push to `main` builds all 7 as a safety net.
+- **`infra`** — whether anything changed that could break the compose stack (`docker/**`, Dockerfiles, `k8s/**`, `application*.yml`, the root `pom.xml` and each service's `pom.xml`).
+
+### Job 3 — Build Docker Images
+
+Runs after Jobs 1 and 2 whenever the computed `services` list is non-empty (on pull requests as well as on pushes to `main`):
 
 ```
-Build Docker image (matrix: 6 services in parallel) → GitHub Actions cache (layer reuse)
+Build Docker image (dynamic matrix: only the changed services, up to all 7) → GitHub Actions cache (layer reuse)
 ```
 
-- Builds all 6 service images in a matrix strategy (`fail-fast: false` — one failure doesn't cancel others)
+- Matrix strategy with `fail-fast: false` — one failure doesn't cancel others
 - Uses `docker/build-push-action` with GitHub Actions cache for fast layer reuse
-- Images are validated but not pushed — no registry configured yet (next step: GitHub Container Registry)
+- Images are validated but not pushed (`push: false`) — no registry configured yet (next step: GitHub Container Registry)
 
-### Job 3 — Security Scanning
+### Job 4 — Validate Kubernetes Manifests
+
+Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the real Kubernetes API schemas. It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base.
+
+### Job 5 — Docker Compose Smoke Test
+
+Boots PostgreSQL, Redis, Kafka and all 7 services with `docker compose up` and curls each service's health endpoint. Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed.
+
+### Security Scanning
 
 Two dedicated workflows run independently from the main CI pipeline — security scans are slow
 (NVD database download takes 2–15 minutes) and should not block every feature build.
@@ -547,7 +570,7 @@ docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafan
 | Alertmanager | http://localhost:9093 | — |
 | Grafana | http://localhost:3000 | admin / admin |
 
-> The monitoring stack is optional for local development — all 6 services run and process
+> The monitoring stack is optional for local development — all 7 services run and process
 > alerts without it. Start it when you want to observe metrics dashboards or test real
 > Alertmanager → ingestion-service alert routing.
 >
@@ -556,13 +579,10 @@ docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafan
 ### Step 6 — Verify all services are up
 
 ```bash
-for port in 8091 8092 8093 8094 8095 8096; do
+for port in 8091 8092 8093 8094 8095 8096 8097; do
   echo -n "Port $port: "
   curl -s http://localhost:$port/actuator/health | jq -r .status
 done
-# auth-service uses its main port for health (no separate management port configured)
-echo -n "Port 8087: "
-curl -s http://localhost:8087/actuator/health | jq -r .status
 ```
 
 Expected:
@@ -573,7 +593,7 @@ Port 8093: UP
 Port 8094: UP
 Port 8095: UP
 Port 8096: UP
-Port 8087: UP
+Port 8097: UP
 ```
 
 ### Infrastructure URLs
@@ -626,7 +646,7 @@ eval $(minikube docker-env)
 ### Step 3 — Build all Docker images
 
 ```bash
-for service in ingestion-service incident-service notification-service escalation-service postmortem-service oncall-service; do
+for service in auth-service ingestion-service incident-service notification-service escalation-service postmortem-service oncall-service; do
   echo "Building $service..."
   docker build -t $service:dev -f $service/Dockerfile .
 done
@@ -637,7 +657,7 @@ First run takes 20–40 minutes — Maven downloads all dependencies. Subsequent
 Verify:
 ```bash
 docker images | grep ":dev"
-# Expected: 6 images listed
+# Expected: 7 images listed
 ```
 
 ### Step 4 — Configure secrets
@@ -679,12 +699,13 @@ metadata:
 type: Opaque
 data:
   JWT_SECRET: <base64-encoded-value>
+  MFA_ENCRYPTION_KEY: <base64-encoded-value>    # auth-service — 32-byte AES-256-GCM key (the dev overlay ships a ready-made one)
   GEMINI_API_KEY: <base64-encoded-value>        # optional — postmortems disabled if missing
   SLACK_BOT_TOKEN: <base64-encoded-value>       # optional — Slack notifications disabled if missing
   SLACK_SIGNING_SECRET: <base64-encoded-value>  # optional — Slack notifications disabled if missing
 ```
 
-> **Minimum setup**: only `JWT_SECRET` is required to run the full incident lifecycle
+> **Minimum setup**: only `JWT_SECRET` needs replacing to run the full incident lifecycle
 > (ingestion → incident → escalation → audit log). Slack and Gemini are optional — the
 > platform works without them, notifications fall back to logs.
 
@@ -704,6 +725,7 @@ Wait until all pods show `1/1 Running`. Init containers wait for PostgreSQL and 
 
 Expected:
 ```
+auth-service-xxx           1/1   Running   ...
 escalation-service-xxx     1/1   Running   ...
 incident-service-xxx       1/1   Running   ...
 ingestion-service-xxx      1/1   Running   ...
@@ -752,7 +774,7 @@ Key features of the base configuration:
 - **Rolling updates** — `maxUnavailable: 0`, `maxSurge: 1` — zero downtime deployments
 - **Init containers** — each service waits for PostgreSQL and Kafka before starting
 - **Health probes** — readiness and liveness on the management port (never the API port)
-- **HorizontalPodAutoscaler** — CPU 70% and memory 80% targets, 1–3 replicas
+- **HorizontalPodAutoscaler** — CPU 70% and memory 80% targets; 1–3 replicas for auth, ingestion and incident-service, 1–2 for notification, escalation, postmortem and oncall-service
 - **ShedLock** — prevents duplicate scheduled job execution across replicas
 
 ---
@@ -863,7 +885,7 @@ Expected:
   "status": "OPEN",
   "title": "CPU usage above 90%",
   "severity": "CRITICAL",
-  "allowedTransitions": ["ACKNOWLEDGED", "ESCALATED"]
+  "allowedTransitions": ["ACKNOWLEDGED"]
 }
 ```
 
@@ -958,11 +980,15 @@ make dev-down        # Stop all containers
 make dev-reset       # Stop + remove volumes (clean database)
 make build           # Build all modules (skip tests)
 make test            # Run all tests
-make run-auth        # Start auth-service locally (profile=local)
-make run-ingestion   # Start ingestion-service locally
+make run-ingestion   # Start ingestion-service locally (profile=local)
 make run-incident    # Start incident-service locally
-# ... etc for each service
+make run-escalation  # Start escalation-service locally
+make run-notification # Start notification-service locally
+make run-postmortem  # Start postmortem-service locally
 ```
+
+There is no `make` target for auth-service or oncall-service — start those with
+`./mvnw spring-boot:run -pl auth-service -Dspring-boot.run.profiles=local` (or `oncall-service`).
 
 ---
 
@@ -987,13 +1013,13 @@ make run-incident    # Start incident-service locally
 | `IncidentKafkaConsumerTest` | Per-record tenant isolation, TenantContext cleanup in `finally`, no cross-tenant leaks |
 | `NotificationServiceTest` | Orchestration, fault isolation between channels, idempotency |
 | `NotificationRouterTest` | Routing for all 5 event types, fallback when oncall-service unavailable |
-| `NotificationIncidentEventConsumerTest` | Header-based tenant resolution, TenantContext lifecycle |
+| `IncidentEventConsumerTest` (notification-service) | Header-based tenant resolution, TenantContext lifecycle |
 | `EscalationServiceTest` | Level 1/2 scheduling, ACK cancellation, idempotency, severity timeouts |
 | `EscalationSchedulerTest` | Timer logic, level 2 scheduling after level 1, fault isolation |
-| `EscalationIncidentEventConsumerTest` | Per-record tenant isolation, sequential records without leaks |
+| `IncidentEventConsumerTest` (escalation-service) | Per-record tenant isolation, sequential records without leaks |
 | `PostmortemServiceTest` | Generation, Gemini failure handling, CRUD, audit event publishing |
 | `PostmortemRetrySchedulerTest` | Retry logic for FAILED postmortems, max retry limit |
-| `PostmortemIncidentEventConsumerTest` | Header tenant wins over payload tenant, ignored event types |
+| `IncidentEventConsumerTest` (postmortem-service) | Header tenant wins over payload tenant, ignored event types |
 | `JwtUtilsTest` | Token generation, validation, expiry, secret length validation |
 | `TenantContextTest` | ThreadLocal isolation between threads, TenantAwareTaskDecorator propagation |
 | `OncallScheduleServiceTest` | Schedule creation, overlap detection, current on-call resolution |
@@ -1006,11 +1032,15 @@ make run-incident    # Start incident-service locally
 incident-platform/
 ├── shared/                        # Shared library (jar, not a runnable service)
 │   └── src/main/java/
-│       ├── dto/                   # Shared DTOs: ErrorResponse, PageResponse
-│       ├── events/                # Kafka event records: IncidentOpenedEvent, AuditEventMessage, ...
+│       ├── audit/                 # AuditEventPublisher, AuditEventKafkaSender, AuditEventTypes
+│       ├── domain/                # Severity
+│       ├── dto/                   # Shared DTOs: ErrorResponse, PagedResponse, AuditEventMessage
+│       ├── events/                # Kafka event records: IncidentOpenedEvent, IncidentEscalatedEvent, ...
 │       ├── exception/             # GlobalExceptionHandler, BusinessException, ResourceNotFoundException
-│       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, ServiceTokenProvider
-│           └── kafka/             # TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor
+│       ├── kafka/                 # TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor,
+│       │                          # TenantKafkaRecordResolver, DeadLetterPublisher
+│       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, TenantAwareTaskDecorator,
+│                                  # ServiceTokenProvider
 │
 ├── auth-service/                  # port 8087 — identity and access management
 │   └── src/main/java/
@@ -1023,47 +1053,42 @@ incident-platform/
 │       │                          # AuthToken, MfaBackupCode, TenantSettings
 │       └── repository/            # JPA repositories for all domain entities
 │
-├── shared/                        # Shared library (jar, not a runnable service)
-│   └── src/main/java/
-│       ├── dto/                   # Shared DTOs: ErrorResponse, PageResponse
-│       ├── events/                # Kafka event records: IncidentOpenedEvent, AuditEventMessage, ...
-│       ├── exception/             # GlobalExceptionHandler, BusinessException, ResourceNotFoundException
-│       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, ServiceTokenProvider
-│           └── kafka/             # TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor
-│
 ├── ingestion-service/             # port 8081 — alert ingestion
 │   └── src/main/java/
-│       ├── api/                   # AlertController (Prometheus, Wazuh, Generic endpoints)
-│       ├── service/               # AlertIngestionService, DeduplicationService, RateLimitingService
+│       ├── api/                   # AlertIngestionController (Prometheus, Wazuh, Generic endpoints)
+│       ├── service/               # AlertIngestionService, DeduplicationService
+│       ├── ratelimit/             # RateLimitingService (bucket4j + Redis), RateLimitingConfig, RedisRateLimitConfig
 │       ├── normalizer/            # PrometheusNormalizer, WazuhNormalizer, GenericNormalizer
 │       └── alertmanager/          # AlertManagerTokenRefresher (generates ingestor JWT on startup)
 │
 ├── incident-service/              # port 8082 — incident lifecycle
 │   └── src/main/java/
 │       ├── api/                   # IncidentController, IncidentAuditController, DevTokenController
-│       ├── service/               # IncidentCommandService, IncidentQueryService, IncidentFsm
-│       ├── consumer/              # IncidentKafkaConsumer, AuditEventConsumer
+│       ├── service/               # IncidentCommandService, IncidentQueryService, IncidentEventPublisher
+│       ├── domain/                # Incident, IncidentStatus, IncidentFsm, IncidentEventOutbox
+│       ├── kafka/                 # IncidentKafkaConsumer, IncidentEscalationEventConsumer, AuditEventConsumer
 │       └── config/                # WebSocketConfig, WebSocketProperties, SecurityConfig
 │
 ├── notification-service/          # port 8083 — multi-channel notifications
 │   └── src/main/java/
 │       ├── channel/               # SlackNotificationChannel, EmailNotificationChannel, SmsNotificationChannel
 │       ├── router/                # NotificationRouter (maps event types to channels)
-│       ├── client/                # OncallClient (queries oncall-service for current on-call)
-│       └── consumer/              # NotificationIncidentEventConsumer
+│       ├── client/                # OncallClient (queries oncall-service), IncidentAckClient (ACK via Slack)
+│       ├── slack/                 # SlackActionService, SlackSignatureVerifier, SlackMessageStore
+│       └── kafka/                 # IncidentEventConsumer
 │
 ├── escalation-service/            # port 8084 — auto-escalation
 │   └── src/main/java/
 │       ├── service/               # EscalationService (task scheduling and cancellation)
 │       ├── scheduler/             # EscalationScheduler (ShedLock @Scheduled)
-│       └── consumer/              # EscalationIncidentEventConsumer
+│       └── kafka/                 # IncidentEventConsumer
 │
 ├── postmortem-service/            # port 8085 — AI postmortem generation
 │   └── src/main/java/
-│       ├── client/                # GeminiClient interface + GeminiRestClient implementation
+│       ├── client/                # GeminiClient interface + GeminiClientImpl implementation
 │       ├── service/               # PostmortemService
 │       ├── scheduler/             # PostmortemRetryScheduler (retries FAILED postmortems)
-│       └── consumer/              # PostmortemIncidentEventConsumer
+│       └── kafka/                 # IncidentEventConsumer
 │
 ├── oncall-service/                # port 8086 — on-call schedule management
 │   └── src/main/java/
@@ -1074,9 +1099,9 @@ incident-platform/
 │   └── generate-alertmanager-token.sh  # Generates JWT token for Alertmanager — run once before starting the stack
 │
 ├── docker/
-│   ├── docker-compose.yml         # Full stack: infrastructure + all 8 application services
+│   ├── docker-compose.yml         # Full stack: infrastructure + all 7 application services
 │   ├── .env.example               # Environment variable template — copy to .env and fill in
-│   ├── prometheus.yml             # Scrape config for all 6 management ports + kafka-exporter
+│   ├── prometheus.yml             # Scrape config for all 7 services (management ports 8091-8097) + kafka-exporter
 │   ├── prometheus.rules.yml       # Alert rules: infrastructure, ingestion, incident-service, Kafka lag, JVM
 │   ├── alertmanager.yml           # Alert routing to ingestion-service webhook, credentials_file auth
 │   └── grafana/

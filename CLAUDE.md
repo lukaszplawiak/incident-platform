@@ -19,7 +19,8 @@ make dev-reset              # stop + wipe volumes (clean DB)
 
 # Run a service locally (needs `make dev-up` and application-local.yml first)
 ./mvnw spring-boot:run -pl incident-service -Dspring-boot.run.profiles=local
-make run-incident           # same thing; run-auth / run-ingestion / ... also exist
+make run-incident           # same thing; run-ingestion / run-escalation / run-notification / run-postmortem also exist
+                            # (no run-auth or run-oncall target — use ./mvnw spring-boot:run -pl <service> ...)
 
 # Validate k8s manifests the way CI does
 kubectl kustomize k8s/overlays/dev | kubeconform -strict -summary -
@@ -45,9 +46,7 @@ Maven multi-module: `shared` (library) + `service-parent` (POM-only) + 7 runnabl
 | postmortem-service | 8085 | 8095 | Gemini-generated postmortems |
 | oncall-service | 8086 | 8096 | on-call schedules |
 
-(The README's port table still lists auth-service management as 8087; the code and CI use 8097.)
-
-Event flow: `alerts.raw`/`alerts.resolved` (ingestion → incident) → `incidents.lifecycle` (incident → notification, escalation, postmortem, ingestion) ; every service produces to `audit.events`, consumed only by incident-service's `AuditEventConsumer`.
+Event flow: `alerts.raw`/`alerts.resolved` (ingestion → incident) → `incidents.lifecycle` (incident → notification, escalation, postmortem, ingestion; escalation-service also publishes `IncidentEscalatedEvent` back onto it, which incident-service's `IncidentEscalationEventConsumer` reads to update `escalationLevel`) ; every service produces to `audit.events`, consumed only by incident-service's `AuditEventConsumer`. Each service that dead-letters has its own topic (`alerts.dead-letter`, `incidents.dead-letter`, `escalation.dead-letter`, `notification.dead-letter`, `postmortem.dead-letter`).
 
 ### `shared` is platform-wide policy, not a utility bag
 
@@ -72,7 +71,7 @@ All services share one PostgreSQL database (`incidentdb`) but each owns its tabl
 
 ### Patterns already decided
 
-Transactional outbox for `incidents.lifecycle` (`IncidentEventOutbox` + scheduler, backlog #36); ShedLock on every `@Scheduled` job so replicas don't double-fire; optimistic locking (`@Version`) on mutable entities; idempotency checks before any outbound notification; 5-layer alert dedup (Redis SETNX/EXPIRE/DEL/AOF + Postgres fingerprint). The README's "Design Decisions" section records why alternatives (Spring State Machine, Kafka Streams, full CQRS, RS256/Keycloak, Redis-backed rate limiting) were rejected — read it before proposing one of them.
+Transactional outbox for `incidents.lifecycle` (`IncidentEventOutbox` + scheduler, backlog #36); ShedLock on every `@Scheduled` job so replicas don't double-fire; optimistic locking (`@Version`) on mutable entities; idempotency checks before any outbound notification; 5-layer alert dedup (Redis SETNX/EXPIRE/DEL/AOF + Postgres fingerprint). Rate limiting is bucket4j backed by Redis (`ProxyManager`, `@CircuitBreaker`, fail-open — backlog #67); the earlier in-memory design was reversed. The README's "Design Decisions" section records why alternatives (Spring State Machine, Kafka Streams, full CQRS, RS256/Keycloak) were rejected — read it before proposing one of them.
 
 ## Conventions
 
