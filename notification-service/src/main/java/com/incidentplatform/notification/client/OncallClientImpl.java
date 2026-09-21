@@ -166,6 +166,57 @@ public class OncallClientImpl implements OncallClient {
         return Optional.empty();
     }
 
+    @Retry(name = "oncall")
+    @CircuitBreaker(name = "oncall", fallbackMethod = "findCurrentByUserIdFallback")
+    @Override
+    public Optional<OncallInfo> findCurrentByUserId(String tenantId, String userId) {
+        log.debug("Fetching current oncall by user: userId={}, tenantId={}",
+                userId, tenantId);
+
+        // userId is a template variable, not concatenated into the string:
+        // RestClient encodes it as one path segment, so an id containing '/',
+        // '?', '#' or '..' cannot change the path or the query.
+        final String responseBody = restClient.get()
+                .uri(oncallServiceBaseUrl + "/api/v1/oncall/current/by-user/{userId}",
+                        userId)
+                .header("Authorization",
+                        "Bearer " + serviceTokenProvider.getToken(tenantId, ServiceNames.ONCALL_SERVICE))
+                .header("X-Tenant-Id", tenantId)
+                .retrieve()
+                .body(String.class);
+
+        if (responseBody == null || responseBody.isBlank()) {
+            // 204: the user is not on call right now
+            return Optional.empty();
+        }
+
+        final OncallInfo info = parseOncallInfo(responseBody);
+
+        // Defence in depth: oncall-service matches tenant and user id together,
+        // so this cannot happen today. If a regression there ever returned
+        // another user's entry, notifying that person would leak the incident
+        // to someone who was never escalated to; treat it as "not found".
+        if (!userId.equals(info.userId())) {
+            log.warn("oncall-service returned a different user than requested — " +
+                            "ignoring the response: tenantId={}, requested={}, returned={}",
+                    tenantId, userId, info.userId());
+            return Optional.empty();
+        }
+
+        return Optional.of(info);
+    }
+
+    /** Resilience4j fallback for {@link #findCurrentByUserId} — see {@link #getCurrentOncallFallback}. */
+    @SuppressWarnings("unused")
+    Optional<OncallInfo> findCurrentByUserIdFallback(String tenantId, String userId,
+                                                     Exception e) {
+        log.warn("oncall-service unavailable — findCurrentByUserId fallback: " +
+                        "userId={}, tenantId={}, error={}",
+                userId, tenantId, e.getMessage());
+        fallbackMetrics.record("oncall", "oncall-service", e);
+        return Optional.empty();
+    }
+
     private OncallInfo parseOncallInfo(String responseBody) {
         final JsonNode json = parseJson(responseBody);
         return new OncallInfo(

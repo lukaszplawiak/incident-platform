@@ -67,11 +67,49 @@ public class NotificationRouter {
                 channelsByName.keySet());
     }
 
+    /**
+     * Builds the per-channel requests for one notification.
+     *
+     * <h2>Fixed (backlog #0-1): escalations go to the escalation target</h2>
+     * The recipient used to be the PRIMARY on-call for every event type, so an
+     * escalation notified the person who had already been alerted instead of
+     * the SECONDARY or MANAGER escalation-service chose. For
+     * {@code INCIDENT_ESCALATED} the recipient is now the user in
+     * {@code escalateTo}, resolved through oncall-service by tenant and user
+     * id together.
+     *
+     * <p>If there is no target, or the lookup finds nobody (not on call any
+     * more, or oncall-service unavailable), the escalation goes to the
+     * tenant's PRIMARY on-call, exactly as before this change, and only if
+     * there is none either to the configured fallback addresses. An earlier
+     * draft of this change dropped the {@code getCurrentOncall(tenantId,
+     * PRIMARY)} step for escalations and went straight to the fallback
+     * addresses; review showed that reversed a safe default: those addresses
+     * are platform-wide, not tenant-scoped, so every escalation without a
+     * target would have sent that tenant's incident text to a shared
+     * destination, and where they are unconfigured it would have reached
+     * nobody. The PRIMARY lookup is scoped to the tenant (though tenant-wide
+     * across its teams until backlog #0-12, so in a multi-team tenant it can
+     * be another team's PRIMARY), and a repeat notification to a PRIMARY who
+     * was already alerted is a lesser evil than a lost or misdirected
+     * escalation.
+     *
+     * <p>Known limitation, not fixed here (backlog #0-18): the fallback
+     * addresses are still used, for every event type, when no on-call is
+     * found, and the message carries the incident title. That is not
+     * acceptable for a multi-tenant SaaS and is tracked as a high-priority
+     * follow-up. Every other event type keeps the PRIMARY lookup (which is
+     * tenant-wide until backlog #0-12 adds the team).
+     *
+     * @param escalateTo the user an incident was escalated to; only read for
+     *                   {@code INCIDENT_ESCALATED}, may be null
+     */
     public List<ChannelRequest> route(String eventType,
                                       UUID incidentId,
                                       String tenantId,
                                       Severity severity,
-                                      String title) {
+                                      String title,
+                                      UUID escalateTo) {
 
         final Set<String> targetChannels = EVENT_TO_CHANNELS
                 .getOrDefault(eventType, Set.of());
@@ -81,17 +119,8 @@ public class NotificationRouter {
             return List.of();
         }
 
-        final OncallClient.OncallInfo oncall = oncallClient
-                .getCurrentOncall(tenantId, PRIMARY_ONCALL_ROLE)
-                .orElse(null);
-
-        if (oncall != null) {
-            log.debug("Routing to oncall: tenantId={}, userId={}, userName={}",
-                    tenantId, oncall.userId(), oncall.userName());
-        } else {
-            log.warn("No oncall found for tenantId={} — using fallback addresses",
-                    tenantId);
-        }
+        final OncallClient.OncallInfo oncall =
+                resolveOncall(eventType, incidentId, tenantId, escalateTo);
 
         return targetChannels.stream()
                 .map(channelName -> {
@@ -122,6 +151,55 @@ public class NotificationRouter {
                 })
                 .filter(Objects::nonNull)
                 .toList();
+    }
+
+    /**
+     * Resolves whose contact details this notification goes to. For
+     * {@code INCIDENT_ESCALATED} that is the escalation target when there is
+     * one and it can be found; otherwise, and for every other event type, the
+     * tenant's PRIMARY on-call. Returns null when nobody was found, which
+     * makes {@link #resolveRecipient} use the fallback addresses.
+     */
+    private OncallClient.OncallInfo resolveOncall(String eventType,
+                                                  UUID incidentId,
+                                                  String tenantId,
+                                                  UUID escalateTo) {
+        if (INCIDENT_ESCALATED.equals(eventType)) {
+            if (escalateTo == null) {
+                log.warn("Escalation without a target user — falling back to " +
+                                "the PRIMARY on-call: incidentId={}, tenantId={}",
+                        incidentId, tenantId);
+            } else {
+                final OncallClient.OncallInfo target = oncallClient
+                        .findCurrentByUserId(tenantId, escalateTo.toString())
+                        .orElse(null);
+
+                if (target != null) {
+                    log.debug("Routing escalation to target: tenantId={}, " +
+                                    "userId={}, userName={}",
+                            tenantId, target.userId(), target.userName());
+                    return target;
+                }
+                log.warn("Escalation target not found (not on call, or " +
+                                "oncall-service unavailable) — falling back to " +
+                                "the PRIMARY on-call: incidentId={}, tenantId={}, " +
+                                "escalateTo={}",
+                        incidentId, tenantId, escalateTo);
+            }
+        }
+
+        final OncallClient.OncallInfo oncall = oncallClient
+                .getCurrentOncall(tenantId, PRIMARY_ONCALL_ROLE)
+                .orElse(null);
+
+        if (oncall != null) {
+            log.debug("Routing to oncall: tenantId={}, userId={}, userName={}",
+                    tenantId, oncall.userId(), oncall.userName());
+        } else {
+            log.warn("No oncall found for tenantId={} — using fallback addresses",
+                    tenantId);
+        }
+        return oncall;
     }
 
     private String resolveRecipient(String channelName,

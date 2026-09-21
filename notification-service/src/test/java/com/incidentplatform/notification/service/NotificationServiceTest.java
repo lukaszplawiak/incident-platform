@@ -200,7 +200,7 @@ class NotificationServiceTest {
             given(emailChannel.channelName()).willReturn("EMAIL");
             given(slackChannel.channelName()).willReturn("SLACK");
             given(router.route(EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU"))
+                    Severity.CRITICAL, "High CPU", null))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
                             new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
@@ -218,7 +218,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any()))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request)));
 
@@ -233,7 +233,7 @@ class NotificationServiceTest {
         @DisplayName("should mark queue entry SENT after processing, via persistenceService")
         void shouldMarkQueueEntrySent() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(router.route(any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any()))
                     .willReturn(List.of());
 
             notificationService.processEntry(entry);
@@ -250,7 +250,7 @@ class NotificationServiceTest {
 
             given(emailChannel.channelName()).willReturn("EMAIL");
             given(slackChannel.channelName()).willReturn("SLACK");
-            given(router.route(any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any()))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
                             new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
@@ -282,7 +282,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any()))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request)));
             given(logRepository
@@ -297,12 +297,27 @@ class NotificationServiceTest {
         }
 
         @Test
+        @DisplayName("should pass the entry's escalateTo to the router (backlog #0-1)")
+        void shouldPassEscalateToToRouter() {
+            final UUID escalateTo = UUID.randomUUID();
+            final NotificationQueueEntry entry = buildEscalationEntry(1, escalateTo);
+            given(router.route(ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", escalateTo))
+                    .willReturn(List.of());
+
+            notificationService.processEntry(entry);
+
+            then(router).should().route(ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", escalateTo);
+        }
+
+        @Test
         @DisplayName("should send a level-2 escalation on a channel already used by level 1")
         void shouldSendLevel2OnChannelUsedByLevel1() {
             final NotificationQueueEntry entry = buildEscalationEntry(2);
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any()))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request)));
             // Level 1 already sent EMAIL for this incident + event type, but
@@ -328,7 +343,7 @@ class NotificationServiceTest {
         @DisplayName("should mark SENT and not call channels when router returns empty")
         void shouldMarkSentWhenNoChannels() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(router.route(any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any()))
                     .willReturn(List.of());
 
             notificationService.processEntry(entry);
@@ -351,7 +366,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any()))
                     .willReturn(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request)));
 
@@ -371,9 +386,13 @@ class NotificationServiceTest {
     }
 
     private NotificationQueueEntry buildEscalationEntry(int escalationLevel) {
+        return buildEscalationEntry(escalationLevel, null);
+    }
+
+    private NotificationQueueEntry buildEscalationEntry(int escalationLevel, UUID escalateTo) {
         return NotificationQueueEntry.pending(
                 INCIDENT_ID, TENANT_ID, ESCALATED_EVENT_TYPE,
-                Severity.CRITICAL, "High CPU", escalationLevel, null);
+                Severity.CRITICAL, "High CPU", escalationLevel, escalateTo);
     }
 
     private NotificationRequest buildRequest(String channel) {
