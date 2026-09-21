@@ -1,6 +1,8 @@
 package com.incidentplatform.notification.scheduler;
 
+import com.incidentplatform.notification.client.OncallLookupUnavailableException;
 import com.incidentplatform.notification.config.NotificationSchedulerProperties;
+import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.service.NotificationPersistenceService;
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -56,7 +59,7 @@ class NotificationSchedulerTest {
     @BeforeEach
     void setUp() {
         final NotificationSchedulerProperties properties =
-                new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7));
+                new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMinutes(3), 200);
         scheduler = new NotificationScheduler(
                 queueRepository, notificationService, persistenceService,
                 messageStore, properties);
@@ -73,6 +76,210 @@ class NotificationSchedulerTest {
                 Severity.CRITICAL, "High CPU");
     }
 
+    /**
+     * Backlog #0-19: an oncall-service outage is not "nobody on call". The
+     * entry stays PENDING and is retried for a bounded window; after it the
+     * entry is parked as UNDELIVERABLE (which also tells the operator).
+     */
+    @Nested
+    @DisplayName("oncall-service unavailable (backlog #0-19)")
+    class OncallUnavailable {
+
+        /** An entry created long ago, whose lookup first failed {@code failingFor} ago (null: never). */
+        private NotificationQueueEntry entry(Duration createdAgo, Duration failingFor) {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            ReflectionTestUtils.setField(entry, "createdAt", Instant.now().minus(createdAgo));
+            if (failingFor != null) {
+                ReflectionTestUtils.setField(entry, "firstLookupFailureAt",
+                        Instant.now().minus(failingFor));
+            }
+            return entry;
+        }
+
+        private void failLookupFor(NotificationQueueEntry entry) {
+            willThrow(new OncallLookupUnavailableException("down", new RuntimeException()))
+                    .given(notificationService).processEntry(entry);
+        }
+
+        @Test
+        @DisplayName("records the first failed lookup on the entry")
+        void recordsTheFirstFailure() {
+            final NotificationQueueEntry entry = entry(Duration.ofMinutes(1), null);
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failLookupFor(entry);
+
+            scheduler.processPendingNotifications();
+
+            then(persistenceService).should().recordLookupFailure(entry);
+        }
+
+        @Test
+        @DisplayName("does not write the failure again once the first one is recorded")
+        void doesNotRerecordTheFirstFailure() {
+            final NotificationQueueEntry entry = entry(Duration.ofMinutes(5), Duration.ofMinutes(2));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failLookupFor(entry);
+
+            scheduler.processPendingNotifications();
+
+            then(persistenceService).should(never()).recordLookupFailure(any());
+        }
+
+        @Test
+        @DisplayName("inside the retry window the entry is left PENDING: not FAILED, not UNDELIVERABLE")
+        void staysPendingInsideTheWindow() {
+            final NotificationQueueEntry entry = entry(Duration.ofMinutes(2), Duration.ofMinutes(2));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failLookupFor(entry);
+
+            scheduler.processPendingNotifications();
+
+            then(notificationService).should(never()).markUndeliverable(any(), any());
+            then(persistenceService).should(never()).markFailed(any(), any());
+        }
+
+        @Test
+        @DisplayName("an entry older than the window still gets its retries: the window runs from the first failed lookup, not from creation")
+        void oldEntryStillGetsRetries() {
+            // created 2 hours ago (a restart, a long outage), first failure just now
+            final NotificationQueueEntry entry = entry(Duration.ofHours(2), null);
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failLookupFor(entry);
+
+            scheduler.processPendingNotifications();
+
+            then(notificationService).should(never()).markUndeliverable(any(), any());
+        }
+
+        @Test
+        @DisplayName("past the retry window since the first failure the entry is parked as UNDELIVERABLE (ONCALL_UNAVAILABLE)")
+        void undeliverableAfterTheWindow() {
+            final NotificationQueueEntry entry = entry(Duration.ofHours(1), Duration.ofMinutes(11));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failLookupFor(entry);
+
+            scheduler.processPendingNotifications();
+
+            then(notificationService).should()
+                    .markUndeliverable(entry, UndeliverableReason.ONCALL_UNAVAILABLE);
+            then(persistenceService).should(never()).markFailed(any(), any());
+        }
+
+        @Test
+        @DisplayName("keeps processing the rest of the batch when parking the entry itself fails")
+        void continuesWhenParkingFails() {
+            final NotificationQueueEntry old = entry(Duration.ofHours(1), Duration.ofMinutes(11));
+            final NotificationQueueEntry other = buildPendingEntry();
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(old, other));
+            failLookupFor(old);
+            willThrow(new RuntimeException("db down"))
+                    .given(notificationService).markUndeliverable(any(), any());
+
+            scheduler.processPendingNotifications();
+
+            then(notificationService).should().processEntry(other);
+        }
+
+        @Test
+        @DisplayName("keeps the entry PENDING when recording the failure itself fails")
+        void recordingFailureIsNotFatal() {
+            final NotificationQueueEntry entry = entry(Duration.ofMinutes(1), null);
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failLookupFor(entry);
+            willThrow(new RuntimeException("db down"))
+                    .given(persistenceService).recordLookupFailure(any());
+
+            scheduler.processPendingNotifications();
+
+            then(notificationService).should(never()).markUndeliverable(any(), any());
+            then(persistenceService).should(never()).markFailed(any(), any());
+        }
+    }
+
+    @Nested
+    @DisplayName("batch and budget configuration")
+    class BatchAndBudgetConfiguration {
+
+        private NotificationSchedulerProperties props(Duration budget) {
+            return new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7),
+                    Duration.ofMinutes(10), budget, 200);
+        }
+
+        @Test
+        @DisplayName("loads at most batch-size entries, from the first page (oldest first)")
+        void loadsOneCappedPage() {
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of());
+
+            scheduler.processPendingNotifications();
+
+            final org.mockito.ArgumentCaptor<org.springframework.data.domain.Pageable> page =
+                    org.mockito.ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+            then(queueRepository).should().findPendingOlderThan(any(), page.capture());
+            org.assertj.core.api.Assertions.assertThat(page.getValue())
+                    .isEqualTo(org.springframework.data.domain.PageRequest.of(0, 200));
+        }
+
+        @Test
+        @DisplayName("rejects, at startup, a processing budget that could outlive the ShedLock")
+        void rejectsABudgetLongerThanTheLock() {
+            for (final Duration bad : List.of(Duration.ZERO, Duration.ofMinutes(-1),
+                    Duration.ofMinutes(4), Duration.ofMinutes(5))) {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> new NotificationScheduler(
+                                queueRepository, notificationService, persistenceService,
+                                messageStore, props(bad)))
+                        .as("budget %s", bad)
+                        .isInstanceOf(IllegalArgumentException.class);
+            }
+        }
+
+        @Test
+        @DisplayName("accepts a budget with margin below the lock")
+        void acceptsABudgetBelowTheLock() {
+            org.assertj.core.api.Assertions.assertThatCode(() -> new NotificationScheduler(
+                            queueRepository, notificationService, persistenceService,
+                            messageStore, props(Duration.ofMinutes(3))))
+                    .doesNotThrowAnyException();
+        }
+    }
+
+    @Nested
+    @DisplayName("processing budget")
+    class ProcessingBudget {
+
+        @Test
+        @DisplayName("stops after the budget is used up but always processes at least one entry")
+        void stopsWhenTheBudgetIsUsedUp() {
+            final NotificationScheduler tight = new NotificationScheduler(
+                    queueRepository, notificationService, persistenceService, messageStore,
+                    new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7),
+                            Duration.ofMinutes(10), Duration.ofNanos(1), 200));
+            final NotificationQueueEntry first = buildPendingEntry();
+            final NotificationQueueEntry second = buildPendingEntry();
+            final NotificationQueueEntry third = buildPendingEntry();
+            given(queueRepository.findPendingOlderThan(any(), any()))
+                    .willReturn(List.of(first, second, third));
+
+            tight.processPendingNotifications();
+
+            then(notificationService).should().processEntry(first);
+            then(notificationService).should(never()).processEntry(second);
+            then(notificationService).should(never()).processEntry(third);
+        }
+
+        @Test
+        @DisplayName("processes every entry when the budget is not exhausted")
+        void processesEverythingInsideTheBudget() {
+            final NotificationQueueEntry first = buildPendingEntry();
+            final NotificationQueueEntry second = buildPendingEntry();
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(first, second));
+
+            scheduler.processPendingNotifications();
+
+            then(notificationService).should().processEntry(first);
+            then(notificationService).should().processEntry(second);
+        }
+    }
+
     @Nested
     @DisplayName("processPendingNotifications")
     class ProcessPendingNotifications {
@@ -80,7 +287,7 @@ class NotificationSchedulerTest {
         @Test
         @DisplayName("does nothing when there are no PENDING entries")
         void doesNothingWhenNoPendingEntries() {
-            given(queueRepository.findPendingOlderThan(any())).willReturn(List.of());
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of());
 
             scheduler.processPendingNotifications();
 
@@ -92,7 +299,7 @@ class NotificationSchedulerTest {
         @DisplayName("processes each due entry via notificationService")
         void processesEachDueEntry() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(queueRepository.findPendingOlderThan(any())).willReturn(List.of(entry));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
 
             scheduler.processPendingNotifications();
 
@@ -104,7 +311,7 @@ class NotificationSchedulerTest {
         void continuesAfterOneEntryFails() {
             final NotificationQueueEntry failing = buildPendingEntry();
             final NotificationQueueEntry normal = buildPendingEntry();
-            given(queueRepository.findPendingOlderThan(any()))
+            given(queueRepository.findPendingOlderThan(any(), any()))
                     .willReturn(List.of(failing, normal));
             willThrow(new RuntimeException("oncall-service unreachable"))
                     .given(notificationService).processEntry(failing);
@@ -124,7 +331,7 @@ class NotificationSchedulerTest {
                 "not by calling queueRepository directly")
         void marksFailedViaPersistenceServiceOnFailure() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(queueRepository.findPendingOlderThan(any())).willReturn(List.of(entry));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
             willThrow(new RuntimeException("oncall-service unreachable"))
                     .given(notificationService).processEntry(entry);
 
@@ -146,7 +353,7 @@ class NotificationSchedulerTest {
         void continuesBatchEvenIfMarkFailedThrows() {
             final NotificationQueueEntry failing = buildPendingEntry();
             final NotificationQueueEntry normal = buildPendingEntry();
-            given(queueRepository.findPendingOlderThan(any()))
+            given(queueRepository.findPendingOlderThan(any(), any()))
                     .willReturn(List.of(failing, normal));
 
             willThrow(new RuntimeException("oncall-service unreachable"))
@@ -163,7 +370,7 @@ class NotificationSchedulerTest {
         @DisplayName("sets and clears TenantContext per entry")
         void setsAndClearsTenantContextPerEntry() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(queueRepository.findPendingOlderThan(any())).willReturn(List.of(entry));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
 
             scheduler.processPendingNotifications();
 
@@ -174,7 +381,7 @@ class NotificationSchedulerTest {
         @DisplayName("clears TenantContext even when processing throws")
         void clearsTenantContextOnFailure() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(queueRepository.findPendingOlderThan(any())).willReturn(List.of(entry));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
             willThrow(new RuntimeException("oncall-service unreachable"))
                     .given(notificationService).processEntry(entry);
 

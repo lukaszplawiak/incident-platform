@@ -125,6 +125,15 @@ public class NotificationQueueEntry {
     @Column(name = "processed_at")
     private Instant processedAt;
 
+    /**
+     * When oncall-service first failed to answer the recipient lookup for this
+     * entry (backlog #0-19). The retry window is measured from here, not from
+     * {@link #createdAt}: an entry that waited longer than the window (a restart,
+     * a long outage) must still get its retries.
+     */
+    @Column(name = "first_lookup_failure_at")
+    private Instant firstLookupFailureAt;
+
     protected NotificationQueueEntry() {}
 
     /**
@@ -184,6 +193,28 @@ public class NotificationQueueEntry {
         this.errorMessage = errorMessage;
         this.processedAt = Instant.now();
     }
+
+    /**
+     * Marks this entry undeliverable — nobody in the tenant could be
+     * notified (backlog #0-18). Terminal, like SENT and FAILED.
+     */
+    public void markUndeliverable(UndeliverableReason reason) {
+        this.status = NotificationQueueStatus.UNDELIVERABLE;
+        this.errorMessage = reason.name();
+        this.processedAt = Instant.now();
+    }
+
+    /**
+     * Records that the recipient lookup failed. Only the first failure is kept:
+     * the retry window runs from it.
+     */
+    public void recordLookupFailure() {
+        if (this.firstLookupFailureAt == null) {
+            this.firstLookupFailureAt = Instant.now();
+        }
+    }
+
+    public Instant getFirstLookupFailureAt()     { return firstLookupFailureAt; }
 
     public UUID getId()                          { return id; }
     public UUID getIncidentId()                  { return incidentId; }

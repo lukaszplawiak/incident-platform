@@ -45,6 +45,12 @@ spring:
     properties:
       mail:
         smtp:
+          # Backlog #0-18: JavaMail's defaults are infinite. The notification scheduler now also
+          # sends the operator alert from its own loop, so a hung mail relay would stall every
+          # notification, not just that email.
+          connectiontimeout: ${MAIL_SMTP_CONNECTION_TIMEOUT_MS:5000}
+          timeout: ${MAIL_SMTP_TIMEOUT_MS:5000}
+          writetimeout: ${MAIL_SMTP_WRITE_TIMEOUT_MS:5000}
           # Note: unconditionally true, correct for the real default host
           # (Mailtrap) but mismatched with docker-compose's mailhog
           # override, which doesn't require auth — this is exactly what
@@ -115,15 +121,26 @@ notification:
       enabled: true
       bot-token: ${SLACK_BOT_TOKEN}
       channel: "#incidents"
+      # Backlog #0-18: also post every notification to the shared channel above.
+      # Off by default: in a multi-tenant deployment it would send each tenant's
+      # incident text to one channel. Only a single-organisation deployment should
+      # turn it on. The DM to the on-call user is unaffected.
+      broadcast-enabled: ${SLACK_BROADCAST_ENABLED:false}
       signing-secret: ${SLACK_SIGNING_SECRET}
       api-base-url: ${SLACK_API_BASE_URL:https://slack.com/api}
     sms:
       enabled: true
       from-number: ${SMS_FROM:+1234567890}
-  fallback:
-    email: ${NOTIFICATION_FALLBACK_EMAIL:oncall@example.com}
-    slack-channel: ${NOTIFICATION_FALLBACK_SLACK:#incidents}
-    phone: ${NOTIFICATION_FALLBACK_PHONE:}
+  # Backlog #0-18: replaces notification.fallback.*, which received the incident text of
+  # any tenant whenever no on-call contact was found. This address belongs to the platform
+  # OPERATOR and receives only content-free alerts (tenant id, incident id, event type,
+  # reason) when a notification could not be delivered to anyone in the tenant.
+  # No default: unset means no email is sent (the ERROR log and metric remain).
+  operator-alert:
+    email: ${NOTIFICATION_OPERATOR_ALERT_EMAIL:}
+    # At most one email per tenant and reason within this interval (a tenant with nobody on call
+    # would otherwise email the operator once per incident). Every alert is still logged and counted.
+    min-interval: ${NOTIFICATION_OPERATOR_ALERT_MIN_INTERVAL:PT15M}
   client:
     # Timeout for inter-service HTTP calls.
     connect-timeout-seconds: ${NOTIFICATION_CLIENT_CONNECT_TIMEOUT:3}
@@ -131,6 +148,17 @@ notification:
   scheduler:
     # How long PENDING entries must exist before scheduler picks them up.
     pending-threshold: ${NOTIFICATION_SCHEDULER_PENDING_THRESHOLD:PT30S}
+    # Backlog #0-19: how long an entry is retried (it stays PENDING) while oncall-service cannot
+    # answer the lookup that decides who is notified. After it the entry is UNDELIVERABLE.
+    # Measured from the first failed lookup of the entry, not from its creation.
+    lookup-retry-window: ${NOTIFICATION_LOOKUP_RETRY_WINDOW:PT10M}
+    # One run stops after this long and leaves the rest for the next cycle. Keep it below the
+    # ShedLock lockAtMostFor (4m) of processPendingNotifications, or a second replica starts on
+    # the same PENDING entries.
+    processing-budget: ${NOTIFICATION_SCHEDULER_PROCESSING_BUDGET:PT3M}
+    # At most this many PENDING entries are loaded per run, oldest first (backlog #0-10; same idea
+    # as escalation-service's scheduler-batch-size).
+    batch-size: ${NOTIFICATION_SCHEDULER_BATCH_SIZE:200}
     interval-ms: ${NOTIFICATION_SCHEDULER_INTERVAL_MS:30000}
     # How long a slack_message_ts row is kept before the cleanup job
     # deletes it — only matters for incidents acknowledged some other way
@@ -239,8 +267,14 @@ resilience4j:
       # findCurrentByUserId).
       # 2 attempts with 200ms fixed wait — oncall-service is within the cluster,
       # transient failures are typically short-lived.
-      # Retry runs inside the circuit breaker: each attempt counts toward
-      # the sliding window, so the CB opens if both attempts fail repeatedly.
+      # NOTE (backlog #0-23): this retry is probably inactive for these methods. Each has a
+      # circuit-breaker fallback that turns every failure into OncallLookupUnavailableException
+      # (or, for findBySlackUserId, an empty result), and neither is listed in retry-exceptions
+      # below, so the retry never sees the original ResourceAccessException /
+      # HttpServerErrorException. The real retry of the recipient lookup is the scheduler's:
+      # the entry stays PENDING (notification.scheduler.lookup-retry-window). Whether to keep
+      # this retry, and how Resilience4j orders it around the breaker in this configuration,
+      # has not been verified.
       oncall:
         max-attempts: ${ONCALL_RETRY_MAX_ATTEMPTS:2}
         wait-duration: ${ONCALL_RETRY_WAIT_MS:200ms}

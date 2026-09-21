@@ -40,9 +40,9 @@ class EmailNotificationChannelTest {
         final NotificationChannelProperties properties = new NotificationChannelProperties(
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, FROM_ADDRESS),
-                        new NotificationChannelProperties.Slack(true, "token", "#ch", "secret", "http://localhost"),
+                        new NotificationChannelProperties.Slack(true, "token", "#ch", "secret", "http://localhost", false),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
-                new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", ""));
+                new NotificationChannelProperties.OperatorAlert("operator@test.com", null));
         channel = new EmailNotificationChannel(mailSender, properties);
     }
 
@@ -70,9 +70,9 @@ class EmailNotificationChannelTest {
                             new NotificationChannelProperties(
                                     new NotificationChannelProperties.Channels(
                                             new NotificationChannelProperties.Email(false, FROM_ADDRESS),
-                                            new NotificationChannelProperties.Slack(true, "token", "#ch", "secret", "http://localhost"),
+                                            new NotificationChannelProperties.Slack(true, "token", "#ch", "secret", "http://localhost", false),
                                             new NotificationChannelProperties.Sms(true, "+1234")),
-                                    new NotificationChannelProperties.Fallback("o@t.com", "#i", "")));
+                                    new NotificationChannelProperties.OperatorAlert("operator@test.com", null)));
             assertThat(disabled.isEnabled()).isFalse();
         }
     }
@@ -97,6 +97,22 @@ class EmailNotificationChannelTest {
 
             // then
             then(mailSender).should().send(mimeMessage);
+        }
+
+        @Test
+        @DisplayName("escapes the tenant id in the HTML body (it reaches the operator too)")
+        void shouldEscapeTheTenantId() throws Exception {
+            final MimeMessage mimeMessage = new MimeMessage((Session) null);
+            given(mailSender.createMimeMessage()).willReturn(mimeMessage);
+            final NotificationRequest request = new NotificationRequest(
+                    UUID.randomUUID(), "<script>alert(1)</script>", "IncidentOpenedEvent",
+                    "oncall@test.com", "[HIGH] subject", "message", Severity.HIGH, "title");
+
+            channel.send(request);
+
+            final String body = String.valueOf(mimeMessage.getContent());
+            assertThat(body).doesNotContain("<script>");
+            assertThat(body).contains("&lt;script&gt;");
         }
 
         @Test

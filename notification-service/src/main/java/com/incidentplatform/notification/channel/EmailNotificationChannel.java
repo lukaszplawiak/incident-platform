@@ -117,7 +117,10 @@ public class EmailNotificationChannel implements NotificationChannel {
                 request.incidentId(),
                 severityColor,
                 request.severity().name(),
-                request.tenantId()
+                // The tenant id comes from a Kafka header or payload without a format
+                // check, and this email now also goes to the platform operator
+                // (backlog #0-18), so it is escaped like the subject and message.
+                escapeHtml(request.tenantId())
         );
     }
 

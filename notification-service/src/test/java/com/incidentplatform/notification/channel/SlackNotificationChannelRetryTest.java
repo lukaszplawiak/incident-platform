@@ -41,9 +41,9 @@ class SlackNotificationChannelRetryTest {
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
                         new NotificationChannelProperties.Slack(
                                 true, "xoxb-test-token", "#incidents", "signing-secret",
-                                "http://localhost"),
+                                "http://localhost", false),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
-                new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", ""));
+                new NotificationChannelProperties.OperatorAlert("operator@test.com", null));
         channel = new SlackNotificationChannel(
                 RestClient.builder(),
                 new ObjectMapper(),

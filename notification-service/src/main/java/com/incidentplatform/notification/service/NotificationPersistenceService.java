@@ -2,6 +2,7 @@ package com.incidentplatform.notification.service;
 
 import com.incidentplatform.notification.domain.NotificationLog;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
+import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import org.springframework.stereotype.Service;
@@ -83,6 +84,27 @@ public class NotificationPersistenceService {
     @Transactional
     public void markFailed(NotificationQueueEntry entry, String errorMessage) {
         entry.markFailed(errorMessage);
+        queueRepository.save(entry);
+    }
+
+    /**
+     * Records the first failed recipient lookup on {@code entry} and commits
+     * immediately (backlog #0-19); later failures leave the timestamp alone.
+     */
+    @Transactional
+    public void recordLookupFailure(NotificationQueueEntry entry) {
+        entry.recordLookupFailure();
+        queueRepository.save(entry);
+    }
+
+    /**
+     * Marks {@code entry} UNDELIVERABLE and commits immediately (backlog
+     * #0-18): nobody in the tenant could be notified.
+     */
+    @Transactional
+    public void markUndeliverable(NotificationQueueEntry entry,
+                                  UndeliverableReason reason) {
+        entry.markUndeliverable(reason);
         queueRepository.save(entry);
     }
 

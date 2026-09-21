@@ -4,6 +4,15 @@ import java.util.Optional;
 
 public interface OncallClient {
 
+    /**
+     * Looks up the current on-call person for a role, scoped to the tenant.
+     *
+     * <p>Returns empty only when nobody is on call (a 204). If oncall-service
+     * cannot answer (unreachable, timeout, circuit open, 401/403) it throws
+     * {@link OncallLookupUnavailableException} instead of returning empty
+     * (backlog #0-19), so a failed lookup is never mistaken for "nobody on
+     * call".
+     */
     Optional<OncallInfo> getCurrentOncall(String tenantId, String role);
 
     /**
@@ -31,13 +40,13 @@ public interface OncallClient {
      * {@code userId} by oncall-service: {@code escalateTo} is an unverified
      * id from a Kafka payload, so it must never be resolved across tenants.
      *
-     * <p>Returns empty if the user is not on call right now, if
-     * oncall-service is unavailable or rejects the call (circuit breaker /
-     * fallback), or if the response is for a different user than the one asked
-     * for. The caller cannot tell "not on call" from "service down" (backlog
-     * #0-19); both mean "no contact details", and the router then treats the
-     * target as not found: it falls back to the tenant's PRIMARY on-call and
-     * only then to the configured fallback addresses.
+     * <p>Returns empty if the user is not on call right now (a 204), or if
+     * the response is for a different user than the one asked for. If
+     * oncall-service cannot answer (unreachable, timeout, circuit open,
+     * 401/403) it throws {@link OncallLookupUnavailableException} instead of
+     * returning empty (backlog #0-19), so a failed lookup is never mistaken
+     * for "not on call". The router treats "not on call" as target not found
+     * and falls back to the tenant's PRIMARY on-call.
      */
     Optional<OncallInfo> findCurrentByUserId(String tenantId, String userId);
 
