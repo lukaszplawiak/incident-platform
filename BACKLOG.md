@@ -45,6 +45,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-23](#0-23-the-oncall-retry-is-probably-inactive) | The `oncall` `@Retry` is probably inactive | tech-debt | Low | Open |
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
+| [0-26](#0-26-set-notification_operator_alert_email-per-kubernetes-environment) | Set `NOTIFICATION_OPERATOR_ALERT_EMAIL` per Kubernetes environment | design | Medium | Open |
+| [0-27](#0-27-claudemd-says-team-isolation-is-the-default-but-it-is-not-enforced) | CLAUDE.md reads as if team isolation were enforced | docs | Low | Open |
+| [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
 
 ---
 
@@ -342,6 +345,10 @@ the operator). No notification setting exists per tenant (`tenant_settings` in a
 tenant or per team (see #0-12), who may edit it, and how notification-service reads it (HTTP with the
 service token, or a copy kept in sync).
 
+Related, accepted trade-off of #0-18: `NO_ONCALL` is terminal on the first attempt (unlike an oncall-service outage, which is
+retried), so a shift-handover gap parks an `INCIDENT_OPENED` notification as UNDELIVERABLE. A short retry for `NO_ONCALL`
+is worth weighing together with the tenant-owned contact.
+
 ---
 
 ### 0-21. Slack is one workspace for the whole platform
@@ -359,6 +366,8 @@ notification-service uses that tenant's token and channel, stored per tenant. Th
 usable only in a single-organisation deployment.
 With `broadcast-enabled=true` the router still skips Slack for a contact without a valid Slack user id, so that entry
 also gets no shared-channel post; a per-tenant integration should settle what broadcast means.
+The README paragraph "Why Slack Bot Token instead of Incoming Webhook?" still describes channel posts and should be
+updated with the same change.
 
 ---
 
@@ -373,6 +382,7 @@ Without an operator address only the ERROR log and the `notification.undeliverab
 alert on that metric is backlog #0-17.
 The email is limited to one per tenant and reason per interval, in memory and per replica; a cross-replica limit
 (for example Redis, which ingestion already uses) or a digest is possible if that proves noisy.
+The alert is sent synchronously on the scheduler thread, and the SMTP timeouts bound each socket operation, not the whole send.
 
 ---
 
@@ -421,6 +431,60 @@ rollout, could overwrite another writer's status (for example the catch-all `mar
 
 **Approach.** Add a `version` column (its own Flyway migration, V7) and `@Version`, and decide how the scheduler treats
 an `OptimisticLockingFailureException` (skip the entry; the next cycle reloads it).
+
+---
+
+### 0-26. Set `NOTIFICATION_OPERATOR_ALERT_EMAIL` per Kubernetes environment
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Problem.** Backlog #0-18 replaced the shared fallback address with a content-free alert email to the platform operator
+(`notification.operator-alert.email`, no default). The k8s base ConfigMap `app-config` ships
+`NOTIFICATION_OPERATOR_ALERT_EMAIL: ""` and no overlay (`k8s/overlays/dev|staging|prod`) patches it, so on Kubernetes the
+operator is never emailed about an undeliverable notification; only the ERROR log and the `notification.undeliverable`
+metric remain. Nothing fails in CI: it is a silent runtime gap. docker-compose ships `operator@incident-platform.local`
+(mailhog) for local runs, so the compose smoke test exercises the configured path and k8s the unconfigured one.
+
+**Decide.** The real address for prod and staging (dev may point at mailhog, which the base already uses for `MAIL_HOST`),
+and whether it belongs in the ConfigMap or in a secret (then the Deployment needs a `secretKeyRef`, like `JWT_SECRET`).
+Then patch `app-config` in each overlay, for example:
+
+    - target: {kind: ConfigMap, name: app-config}
+      patch: |-
+        - op: replace
+          path: /data/NOTIFICATION_OPERATOR_ALERT_EMAIL
+          value: "ops@<real-domain>"
+
+Also state on purpose in the dev overlay if it stays empty. Related: backlog #0-17 (alert on the metric) and #0-22.
+
+---
+
+### 0-27. CLAUDE.md says team isolation is the default, but it is not enforced
+
+**Type:** docs · **Priority:** Low · **Status:** Open
+
+**Problem.** The "Notifications" bullet under "Multi-tenancy invariants" in CLAUDE.md ends with "Between teams of one tenant the
+default is also 'no' (backlog #0-12)". It reads as an enforced invariant, but the PRIMARY lookup is still tenant-wide until
+#0-12, so in a multi-team tenant it can notify another team's PRIMARY. CLAUDE.md is the file a future session reads first, so
+a session could assume team isolation exists and skip the work. `.ai/context/project.md` already states this openly.
+
+**Decide / do.** Reword to "the intended default is also 'no', but it is not enforced yet: the PRIMARY lookup is
+tenant-wide (backlog #0-12)". Held back on purpose: CLAUDE.md is edited only on the owner's decision. Remove this item when
+#0-12 lands and the sentence becomes true.
+
+---
+
+### 0-28. `notification_queue` rows are never purged
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** Nothing deletes queue rows in any status: SENT and FAILED were never purged, and since #0-18 UNDELIVERABLE rows
+accumulate as well. The partial index `idx_notification_queue_status_created (status, created_at) WHERE status = 'PENDING'`
+keeps the scheduler fast, but the table only grows, and an operator browsing UNDELIVERABLE rows has no index for them.
+
+**Approach.** A ShedLock-protected retention job (delete terminal rows older than a configurable age, keeping UNDELIVERABLE
+longer), like `NotificationScheduler`'s existing `slack_message_ts` cleanup. Decide retention with the audit requirements in
+mind: the audit events are the compliance record, the queue is a work queue.
 
 ---
 
