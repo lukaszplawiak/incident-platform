@@ -171,9 +171,11 @@ public class SharedSecurityAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(JwtAuthFilter.class)
-    public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils,
-                                       TokenRevocationChecker revocationChecker) {
-        return new JwtAuthFilter(jwtUtils, revocationChecker);
+    public JwtAuthFilter jwtAuthFilter(
+            JwtUtils jwtUtils,
+            TokenRevocationChecker revocationChecker,
+            @Value("${spring.application.name:}") String serviceName) {
+        return new JwtAuthFilter(jwtUtils, revocationChecker, serviceName);
     }
 
     /**

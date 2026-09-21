@@ -61,21 +61,39 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final TokenRevocationChecker revocationChecker;
 
     /**
-     * Default constructor — no revocation checking.
-     * Used by all services except auth-service.
+     * This service's own name, matched against the {@code aud} claim of a
+     * service token. {@code null} or blank means this service accepts
+     * <em>no</em> service tokens (fail closed) — the case for auth-service
+     * and for any filter built without a name.
+     */
+    private final String expectedAudience;
+
+    /**
+     * Default constructor — no revocation checking and no service tokens.
      */
     public JwtAuthFilter(JwtUtils jwtUtils) {
-        this.jwtUtils = jwtUtils;
-        this.revocationChecker = jti -> false;
+        this(jwtUtils, jti -> false, null);
     }
 
     /**
-     * Constructor with explicit revocation checker.
-     * Used by auth-service which wires in {@code TokenRevocationService::isRevoked}.
+     * Constructor with explicit revocation checker and no service tokens.
+     * Used by auth-service which wires in {@code TokenRevocationService::isRevoked}
+     * and is never the target of a service-to-service call.
      */
     public JwtAuthFilter(JwtUtils jwtUtils, TokenRevocationChecker revocationChecker) {
+        this(jwtUtils, revocationChecker, null);
+    }
+
+    /**
+     * Full constructor. {@code expectedAudience} is this service's own name
+     * ({@code spring.application.name}): a service token is authenticated
+     * only if its {@code aud} claim contains it (backlog #0-11).
+     */
+    public JwtAuthFilter(JwtUtils jwtUtils, TokenRevocationChecker revocationChecker,
+                         String expectedAudience) {
         this.jwtUtils = jwtUtils;
         this.revocationChecker = revocationChecker;
+        this.expectedAudience = expectedAudience;
     }
 
     @Override
@@ -123,6 +141,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
+        // Fixed (backlog #0-11): a service token has no UUID subject and no
+        // email, so it must not go through the user branch below — that
+        // branch rejected every service token, and each service-to-service
+        // HTTP call ended as a 401 hidden by fail-open client fallbacks.
+        final Optional<String> serviceNameOpt = jwtUtils.extractServiceName(claims);
+        if (serviceNameOpt.isPresent()) {
+            authenticateService(request, claims, serviceNameOpt.get());
+            return;
+        }
+
         final Optional<UUID> userIdOpt = jwtUtils.extractUserId(claims);
         final Optional<String> tenantIdOpt = jwtUtils.extractTenantId(claims);
         final Optional<String> emailOpt = jwtUtils.extractEmail(claims);
@@ -163,6 +191,64 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         log.debug("Authentication set for userId: {}, tenantId: {}, " +
                         "roles: {}, request: {}", userId, tenantId, roles,
                 request.getRequestURI());
+    }
+
+    /**
+     * Authenticates a service token ({@code serviceName} claim present).
+     *
+     * <p>Requires an {@code aud} claim naming <em>this</em> service, a
+     * non-blank {@code tenantId} claim and {@link SecurityRoles#ROLE_SERVICE}
+     * in the {@code roles} claim; the tenant comes only from the signed
+     * claim, never from a request header. A token that fails any check is
+     * left unauthenticated, like every other invalid token, so the entry
+     * point answers 401.
+     *
+     * <p>The audience check is what keeps a token minted to call one service
+     * from authenticating on all the others: without it, every endpoint in
+     * every service that is only {@code authenticated()} would accept it,
+     * and a controller would be safe from a service caller only if it
+     * happened to fail on the non-user principal.
+     */
+    private void authenticateService(HttpServletRequest request,
+                                     Claims claims,
+                                     String serviceName) {
+        if (expectedAudience == null || expectedAudience.isBlank()
+                || !jwtUtils.extractAudience(claims).contains(expectedAudience)) {
+            log.warn("Service token not issued for this service rejected: " +
+                            "service={}, request={}",
+                    serviceName, request.getRequestURI());
+            return;
+        }
+
+        final String tenantId = jwtUtils.extractTenantId(claims)
+                .filter(t -> !t.isBlank())
+                .orElse(null);
+        if (tenantId == null) {
+            log.warn("Service token without tenantId claim rejected: " +
+                    "service={}, request={}", serviceName, request.getRequestURI());
+            return;
+        }
+
+        if (!jwtUtils.extractRoles(claims).contains(SecurityRoles.ROLE_SERVICE)) {
+            log.warn("Service token without {} rejected: service={}, request={}",
+                    SecurityRoles.ROLE_SERVICE, serviceName, request.getRequestURI());
+            return;
+        }
+
+        TenantContext.set(tenantId);
+        request.setAttribute(TenantContext.REQUEST_ATTRIBUTE_TENANT_ID, tenantId);
+
+        final ServicePrincipal principal =
+                new ServicePrincipal(serviceName, tenantId);
+        final UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(
+                        principal, null, principal.getAuthorities());
+        authentication.setDetails(
+                new WebAuthenticationDetailsSource().buildDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        log.debug("Service authentication set: service={}, tenantId={}, " +
+                "request={}", serviceName, tenantId, request.getRequestURI());
     }
 
     private Optional<String> extractBearerToken(HttpServletRequest request) {

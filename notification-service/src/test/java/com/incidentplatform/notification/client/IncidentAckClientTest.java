@@ -2,13 +2,19 @@ package com.incidentplatform.notification.client;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.incidentplatform.shared.observability.ClientFallbackMetrics;
+import com.incidentplatform.shared.security.ServiceNames;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -17,6 +23,7 @@ import java.time.Duration;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.patch;
 import static com.github.tomakehurst.wiremock.client.WireMock.patchRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
@@ -68,6 +75,8 @@ class IncidentAckClientTest {
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final UUID USER_ID = UUID.randomUUID();
+    private SimpleMeterRegistry meterRegistry;
+
     private static final String TENANT_ID = "test-tenant";
 
     @BeforeEach
@@ -76,7 +85,9 @@ class IncidentAckClientTest {
         wireMock.start();
 
         serviceTokenProvider = mock(ServiceTokenProvider.class);
-        given(serviceTokenProvider.getToken()).willReturn("test-token");
+        // pinned to the tenant AND the target service — see OncallClientImplTest
+        given(serviceTokenProvider.getToken(TENANT_ID, ServiceNames.INCIDENT_SERVICE))
+                .willReturn("test-token");
 
         // HTTP/1.1 only — WireMock standalone does not support HTTP/2
         final HttpClient httpClient = HttpClient.newBuilder()
@@ -88,9 +99,11 @@ class IncidentAckClientTest {
                 .requestFactory(new JdkClientHttpRequestFactory(httpClient))
                 .build();
 
+        meterRegistry = new SimpleMeterRegistry();
         client = new IncidentAckClient(
                 restClient,
                 serviceTokenProvider,
+                new ClientFallbackMetrics(meterRegistry),
                 "http://localhost:" + wireMock.port()
         );
     }
@@ -139,7 +152,9 @@ class IncidentAckClientTest {
             client.acknowledgeIncident(INCIDENT_ID, TENANT_ID, USER_ID);
 
             wireMock.verify(1, patchRequestedFor(
-                    urlPathEqualTo("/api/v1/incidents/" + INCIDENT_ID + "/status")));
+                    urlPathEqualTo("/api/v1/incidents/" + INCIDENT_ID + "/status"))
+                    .withHeader("Authorization", equalTo("Bearer test-token"))
+                    .withHeader("X-Tenant-Id", equalTo(TENANT_ID)));
         }
 
         @Test
@@ -152,6 +167,23 @@ class IncidentAckClientTest {
                     .isInstanceOf(RestClientException.class);
 
             wireMock.start();
+        }
+    }
+
+    @Nested
+    @DisplayName("acknowledgeIncidentFallback is counted")
+    class FallbackIsCounted {
+
+        @Test
+        @DisplayName("counts a 403 as reason=auth — the state backlog #0-15 will produce")
+        void countsAuth() {
+            client.acknowledgeIncidentFallback(INCIDENT_ID, TENANT_ID, USER_ID,
+                    HttpClientErrorException.create(HttpStatus.FORBIDDEN, "f",
+                            HttpHeaders.EMPTY, new byte[0], null));
+
+            assertThat(meterRegistry.counter(ClientFallbackMetrics.METRIC_NAME,
+                    "client", "incident-ack", "target", "incident-service",
+                    "reason", "auth").count()).isEqualTo(1.0);
         }
     }
 

@@ -1,5 +1,7 @@
 package com.incidentplatform.notification.client;
 
+import com.incidentplatform.shared.observability.ClientFallbackMetrics;
+import com.incidentplatform.shared.security.ServiceNames;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import org.slf4j.Logger;
@@ -63,15 +65,18 @@ public class IncidentAckClient {
 
     private final RestClient restClient;
     private final ServiceTokenProvider serviceTokenProvider;
+    private final ClientFallbackMetrics fallbackMetrics;
     private final String incidentServiceBaseUrl;
 
     public IncidentAckClient(
             @Qualifier("notificationServiceRestClient") RestClient restClient,
             ServiceTokenProvider serviceTokenProvider,
+            ClientFallbackMetrics fallbackMetrics,
             @Value("${incident-service.base-url:http://localhost:8082}")
             String incidentServiceBaseUrl) {
         this.restClient = restClient;
         this.serviceTokenProvider = serviceTokenProvider;
+        this.fallbackMetrics = fallbackMetrics;
         this.incidentServiceBaseUrl = incidentServiceBaseUrl;
     }
 
@@ -92,7 +97,7 @@ public class IncidentAckClient {
                 .uri(incidentServiceBaseUrl +
                         "/api/v1/incidents/" + incidentId + "/status")
                 .header("Authorization",
-                        "Bearer " + serviceTokenProvider.getToken())
+                        "Bearer " + serviceTokenProvider.getToken(tenantId, ServiceNames.INCIDENT_SERVICE))
                 .header("X-Tenant-Id", tenantId)
                 .body(body)
                 .retrieve()
@@ -117,6 +122,7 @@ public class IncidentAckClient {
         log.error("Failed to acknowledge incident (circuit breaker fallback): " +
                         "incidentId={}, tenant={}, error={}",
                 incidentId, tenantId, e.getMessage());
+        fallbackMetrics.record("incident-ack", "incident-service", e);
         return false;
     }
 }
