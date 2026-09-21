@@ -23,6 +23,13 @@ import org.springframework.web.cors.CorsConfigurationSource;
  *       and {@code ROLE_ADMIN}. Called by internal services via service tokens
  *       (notification-service, escalation-service) — never by end users, so
  *       there's no reason for RESPONDER to reach it directly.</li>
+ *   <li>{@code /api/v1/oncall/current/by-user/*} — restricted to
+ *       {@code ROLE_SERVICE} and {@code ROLE_ADMIN} (backlog #0-1). Called by
+ *       notification-service to reach the person an incident was escalated to.
+ *       It returns a user's email and phone number, and an exact-path rule for
+ *       {@code /current} does not cover a sub-path, so without its own matcher
+ *       it would fall through to the generic "any authenticated user" rule
+ *       below and any role could read it.</li>
  *   <li>{@code /api/v1/oncall/current/all} — {@code ROLE_RESPONDER} and
  *       {@code ROLE_ADMIN}. Backs the admin panel's "Currently on-call"
  *       display. Previously had no dedicated rule — being a different exact
@@ -75,6 +82,13 @@ public class SecurityConfig {
                         .requestMatchers("/api/v1/oncall/current/all")
                         .hasAnyRole(SecurityRoles.RESPONDER, SecurityRoles.ADMIN)
                         .requestMatchers("/api/v1/oncall/current")
+                        .hasAnyRole(SecurityRoles.SERVICE, SecurityRoles.ADMIN)
+                        // Backlog #0-1: contact details of one user, for
+                        // notification-service. An exact-path rule above does not
+                        // cover this path, so without this line it would fall
+                        // through to anyRequest().authenticated() and any role
+                        // could read a user's email and phone number.
+                        .requestMatchers("/api/v1/oncall/current/by-user/*")
                         .hasAnyRole(SecurityRoles.SERVICE, SecurityRoles.ADMIN)
                         .anyRequest().authenticated()
                 )

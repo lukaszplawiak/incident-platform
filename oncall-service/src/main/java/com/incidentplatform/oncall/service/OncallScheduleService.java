@@ -363,6 +363,30 @@ public Optional<CurrentOncallResponse> getCurrentOncallForTeam(
     }
 
     /**
+     * Returns the current on-call entry (with contact details) of a given
+     * user within the specified tenant, or empty if that user is not on a
+     * schedule right now. Used by {@code notification-service} to notify the
+     * person an incident was escalated to (backlog #0-1).
+     *
+     * <p>The {@code tenantId} parameter is mandatory and is matched together
+     * with {@code userId}: the user id comes from an unverified Kafka payload
+     * on the caller's side, so it must never be resolved across tenants.
+     *
+     * <p>If the user holds several concurrent entries, the most recently
+     * started one is returned (see
+     * {@link OncallScheduleRepository#findCurrentByTenantIdAndUserId}).
+     */
+    @Transactional(readOnly = true)
+    public Optional<CurrentOncallResponse> findCurrentByUserId(
+            String tenantId, String userId) {
+        return repository.findCurrentByTenantIdAndUserId(
+                        tenantId, userId, Instant.now())
+                .stream()
+                .findFirst()
+                .map(CurrentOncallResponse::from);
+    }
+
+    /**
      * <h2>TeamRole.MANAGER authorization</h2>
      * {@code principal} added for the Manager role feature. The schedule
      * is loaded first regardless (needed for the 404 case anyway), so its

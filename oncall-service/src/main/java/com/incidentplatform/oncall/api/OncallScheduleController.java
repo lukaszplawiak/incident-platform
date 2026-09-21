@@ -16,6 +16,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -377,6 +379,57 @@ public class OncallScheduleController {
         log.debug("GET /api/v1/oncall/by-slack/{}, tenant={}",
                 slackUserId, tenantId);
         return service.findBySlackUserId(tenantId, slackUserId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    /**
+     * Returns the current on-call entry, with contact details, of one user
+     * within the calling tenant. Called by {@code notification-service} to
+     * reach the person an incident was escalated to (backlog #0-1); it is
+     * the by-user counterpart of {@link #getCurrentOncall}'s by-role lookup.
+     *
+     * <p>The tenant is taken from {@link TenantContext} (the signed claim of
+     * the service token) and matched together with {@code userId} in the
+     * query. {@code userId} comes from an unverified Kafka payload on the
+     * caller's side, so a lookup by user id alone could hand one tenant's
+     * contact data to another tenant's incident.
+     *
+     * <p>No {@code @PreAuthorize} — same reason as {@link #findBySlackUserId}:
+     * the caller holds {@code ROLE_SERVICE}, which is neither RESPONDER nor
+     * ADMIN. The URL-level rule in {@code SecurityConfig} restricts this path
+     * to SERVICE and ADMIN, because the response carries email and phone
+     * number and, unlike {@code /by-slack}, must not fall through to
+     * {@code anyRequest().authenticated()}.
+     *
+     * <p>Returns 204 No Content when the user is not on call right now.
+     *
+     * <p>Only the contact details in the response are meaningful. A user can
+     * hold several concurrent entries (for example PRIMARY for team A and
+     * SECONDARY for team B) and this returns the most recently started one, so
+     * {@code role} (and the absent team) is not authoritative for any
+     * particular incident. A caller that needs the role must not read it from
+     * here; see backlog #0-12.
+     */
+    @GetMapping(value = "/current/by-user/{userId}",
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "Get the current on-call entry of a user",
+            description = "Called by notification-service to notify the person " +
+                    "an incident was escalated to. Scoped to the caller's " +
+                    "tenant. Requires ROLE_SERVICE or ROLE_ADMIN.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "User is on call"),
+            @ApiResponse(responseCode = "204", description = "User is not on call right now"),
+            @ApiResponse(responseCode = "400", description = "Invalid user id"),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid JWT token"),
+            @ApiResponse(responseCode = "403", description = "Not a service or admin token")
+    })
+    public ResponseEntity<CurrentOncallResponse> getCurrentByUserId(
+            @PathVariable @NotBlank @Size(max = 255) String userId) {
+        final String tenantId = TenantContext.get();
+        log.debug("GET /api/v1/oncall/current/by-user/{}, tenant={}",
+                userId, tenantId);
+        return service.findCurrentByUserId(tenantId, userId)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.noContent().build());
     }

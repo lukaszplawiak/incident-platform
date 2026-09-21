@@ -849,6 +849,84 @@ class OncallScheduleServiceTest {
     }
 
     @Nested
+    @DisplayName("findCurrentByUserId")
+    class FindCurrentByUserId {
+
+        @Test
+        @DisplayName("should map the current entry with the contact details")
+        void shouldReturnContactDetails() {
+            // given
+            final OncallSchedule schedule = buildSchedule(OncallRole.SECONDARY);
+            given(repository.findCurrentByTenantIdAndUserId(
+                    eq(TENANT_ID), eq("user-1"), any(Instant.class)))
+                    .willReturn(List.of(schedule));
+
+            // when
+            final Optional<CurrentOncallResponse> result =
+                    service.findCurrentByUserId(TENANT_ID, "user-1");
+
+            // then
+            assertThat(result).isPresent();
+            assertThat(result.get().userId()).isEqualTo("user-1");
+            assertThat(result.get().email()).isEqualTo("jan@example.com");
+            assertThat(result.get().phone()).isEqualTo("+48100200300");
+            assertThat(result.get().slackUserId()).isEqualTo("U0123456789");
+            assertThat(result.get().role()).isEqualTo("SECONDARY");
+        }
+
+        @Test
+        @DisplayName("should return empty when the user is not on call right now")
+        void shouldReturnEmptyWhenNotOnCall() {
+            // given
+            given(repository.findCurrentByTenantIdAndUserId(
+                    eq(TENANT_ID), eq("user-9"), any(Instant.class)))
+                    .willReturn(List.of());
+
+            // when / then
+            assertThat(service.findCurrentByUserId(TENANT_ID, "user-9")).isEmpty();
+        }
+
+        @Test
+        @DisplayName("should return the first entry when the user holds several concurrent ones")
+        void shouldReturnFirstOfSeveral() {
+            // given — the repository orders most recently started first
+            final OncallSchedule newest = buildSchedule(OncallRole.SECONDARY);
+            final OncallSchedule older = buildSchedule(OncallRole.PRIMARY);
+            given(repository.findCurrentByTenantIdAndUserId(
+                    eq(TENANT_ID), eq("user-1"), any(Instant.class)))
+                    .willReturn(List.of(newest, older));
+
+            // when
+            final Optional<CurrentOncallResponse> result =
+                    service.findCurrentByUserId(TENANT_ID, "user-1");
+
+            // then
+            assertThat(result).isPresent();
+            assertThat(result.get().role()).isEqualTo("SECONDARY");
+        }
+
+        @Test
+        @DisplayName("should query with the given tenant — never across tenants")
+        void shouldQueryWithTenantId() {
+            // given
+            given(repository.findCurrentByTenantIdAndUserId(
+                    eq("tenant-b"), eq("user-1"), any(Instant.class)))
+                    .willReturn(List.of());
+
+            // when
+            final Optional<CurrentOncallResponse> result =
+                    service.findCurrentByUserId("tenant-b", "user-1");
+
+            // then
+            assertThat(result).isEmpty();
+            then(repository).should().findCurrentByTenantIdAndUserId(
+                    eq("tenant-b"), eq("user-1"), any(Instant.class));
+            then(repository).should(never()).findCurrentByTenantIdAndUserId(
+                    eq(TENANT_ID), any(), any());
+        }
+    }
+
+    @Nested
     @DisplayName("findBySlackUserId")
     class FindBySlackUserId {
 

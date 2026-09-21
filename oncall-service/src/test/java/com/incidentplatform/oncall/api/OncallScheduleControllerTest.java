@@ -228,6 +228,62 @@ class OncallScheduleControllerTest {
     }
 
     @Nested
+    @DisplayName("getCurrentByUserId")
+    class GetCurrentByUserId {
+
+        @Test
+        @DisplayName("should return 200 with the on-call entry when the user is on call in the tenant")
+        void shouldReturn200WhenOnCall() {
+            // given
+            final CurrentOncallResponse response = new CurrentOncallResponse(
+                    "user-2", "Sam Secondary", "sam@example.com", null,
+                    "+48100200301", "U0987654321", "SECONDARY",
+                    Instant.now().plusSeconds(3600));
+            given(service.findCurrentByUserId(TENANT_ID, "user-2"))
+                    .willReturn(Optional.of(response));
+
+            // when
+            final ResponseEntity<CurrentOncallResponse> result =
+                    controller.getCurrentByUserId("user-2");
+
+            // then
+            assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(result.getBody()).isNotNull();
+            assertThat(result.getBody().userId()).isEqualTo("user-2");
+            assertThat(result.getBody().email()).isEqualTo("sam@example.com");
+        }
+
+        @Test
+        @DisplayName("should return 204 No Content when the user is not on call")
+        void shouldReturn204WhenNotOnCall() {
+            // given
+            given(service.findCurrentByUserId(TENANT_ID, "user-9"))
+                    .willReturn(Optional.empty());
+
+            // when
+            final ResponseEntity<CurrentOncallResponse> result =
+                    controller.getCurrentByUserId("user-9");
+
+            // then
+            assertThat(result.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        }
+
+        @Test
+        @DisplayName("should pass the tenantId from TenantContext together with the user id")
+        void shouldPassTenantIdFromContext() {
+            // given
+            given(service.findCurrentByUserId(TENANT_ID, "user-2"))
+                    .willReturn(Optional.empty());
+
+            // when
+            controller.getCurrentByUserId("user-2");
+
+            // then
+            then(service).should().findCurrentByUserId(TENANT_ID, "user-2");
+        }
+    }
+
+    @Nested
     @DisplayName("findBySlackUserId")
     class FindBySlackUserId {
 

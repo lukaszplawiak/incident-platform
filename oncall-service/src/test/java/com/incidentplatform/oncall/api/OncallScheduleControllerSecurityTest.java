@@ -1,6 +1,7 @@
 package com.incidentplatform.oncall.api;
 
 import com.incidentplatform.oncall.config.SecurityConfig;
+import com.incidentplatform.oncall.dto.CurrentOncallResponse;
 import com.incidentplatform.oncall.dto.OncallScheduleDto;
 import com.incidentplatform.oncall.service.OncallScheduleService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
@@ -40,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -60,6 +62,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *                                  service*
  * GET  /by-slack/{id}    authenticated only (ROLE_SERVICE allowed)
  * GET  /current                      ❌         ✅       ❌         ✅
+ * GET  /current/by-user/{id}         ❌         ✅       ❌         ✅
  * GET  /current/all                  ✅         ✅       ❌         ❌
  * </pre>
  *
@@ -518,6 +521,56 @@ class OncallScheduleControllerSecurityTest {
     // these two paths look related but have deliberately different role
     // requirements (see SecurityConfig's class Javadoc for the reasoning),
     // and until now neither had any test coverage at all.
+
+    @Nested
+    @DisplayName("GET /current/by-user/{userId} — SERVICE and ADMIN only")
+    class CurrentByUserEndpoint {
+
+        private static final String PATH = "/api/v1/oncall/current/by-user/user-2";
+
+        @Test
+        @DisplayName("200 for SERVICE, and the service receives the tenant of the principal")
+        void returns200ForService() throws Exception {
+            given(service.findCurrentByUserId(TENANT_ID, "user-2")).willReturn(Optional.of(
+                    new CurrentOncallResponse("user-2", "Sam", "sam@example.com", null,
+                            "+48100200301", "U0987654321", "SECONDARY", Instant.now().plusSeconds(3600))));
+
+            mockMvc.perform(get(PATH).with(principal("ROLE_SERVICE")))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("204 for ADMIN when the user is not on call")
+        void returns204ForAdmin() throws Exception {
+            given(service.findCurrentByUserId(any(), any())).willReturn(Optional.empty());
+
+            mockMvc.perform(get(PATH).with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isNoContent());
+        }
+
+        @Test
+        @DisplayName("403 for RESPONDER — the response carries email and phone number")
+        void returns403ForResponder() throws Exception {
+            mockMvc.perform(get(PATH).with(principal("ROLE_RESPONDER")))
+                    .andExpect(status().isForbidden());
+
+            then(service).should(never()).findCurrentByUserId(any(), any());
+        }
+
+        @Test
+        @DisplayName("403 for INGESTOR")
+        void returns403ForIngestor() throws Exception {
+            mockMvc.perform(get(PATH).with(principal("ROLE_INGESTOR")))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("401 without token")
+        void returns401Unauthenticated() throws Exception {
+            mockMvc.perform(get(PATH))
+                    .andExpect(status().isUnauthorized());
+        }
+    }
 
     @Nested
     @DisplayName("GET /current — SERVICE and ADMIN only")

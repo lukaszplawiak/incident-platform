@@ -151,6 +151,44 @@ public interface OncallScheduleRepository
             @Param("slackUserId") String slackUserId);
 
     /**
+     * Finds the ACTIVE schedule entries a user is on right now, within one
+     * tenant. Added for backlog #0-1: an escalation notification has to reach
+     * the person escalation-service chose ({@code escalateTo}), not the
+     * PRIMARY, so notification-service looks that person's contact details
+     * up by user id.
+     *
+     * <p>Both {@code tenantId} and {@code userId} are mandatory and are
+     * matched together. {@code escalateTo} is an unverified id read from a
+     * Kafka payload; a lookup by user id alone could send one tenant's
+     * incident to another tenant's user.
+     *
+     * <p>Returns a {@link List}, not an {@code Optional}, because one user can
+     * legitimately hold several concurrent entries (for example PRIMARY for
+     * team A and SECONDARY for team B): the exclusion constraint of V4/V5 only
+     * forbids overlaps per tenant, team and role. An {@code Optional} would
+     * throw {@code IncorrectResultSizeDataAccessException} for such a user.
+     * The order is deterministic: most recently started first, then by id.
+     *
+     * <p>"Current" is the same predicate as {@link #findCurrentOncallByRole}:
+     * status ACTIVE and {@code startsAt <= now < endsAt}. Covered by
+     * {@code idx_oncall_schedules_user (tenant_id, user_id)}; the remaining
+     * filters run over the few rows one user has.
+     */
+    @Query("""
+            SELECT s FROM OncallSchedule s
+            WHERE s.tenantId = :tenantId
+            AND s.userId = :userId
+            AND s.status = com.incidentplatform.oncall.domain.OncallScheduleStatus.ACTIVE
+            AND s.startsAt <= :now
+            AND s.endsAt > :now
+            ORDER BY s.startsAt DESC, s.id
+            """)
+    List<OncallSchedule> findCurrentByTenantIdAndUserId(
+            @Param("tenantId") String tenantId,
+            @Param("userId") String userId,
+            @Param("now") Instant now);
+
+    /**
      * Fixed: previously did not filter by {@code teamId} at all, only
      * {@code tenantId} + {@code role} — meaning two different teams in the
      * same tenant could never both have, say, a PRIMARY on-call at the

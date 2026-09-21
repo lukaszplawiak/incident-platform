@@ -207,9 +207,16 @@ escalation level and stores both on its outbox entry (`escalate_to` is stored be
 scheduler, not the consumer, resolves the recipient at send time), but `NotificationRouter`
 still resolves the recipient from the PRIMARY on-call for every event type, so escalation
 notifications currently go to the PRIMARY's addresses (or the configured fallback addresses).
-Fixing it means resolving the contact for `escalateTo`; that lookup must be scoped to the
-entry's tenant as well as the user id, because `escalateTo` is an unverified id from a Kafka
-payload. Tracked as backlog #0-1 in `BACKLOG.md`.
+oncall-service already exposes `GET /api/v1/oncall/current/by-user/{userId}` for this (SERVICE and
+ADMIN only; tenant and user id are matched together, because `escalateTo` is an unverified id from a
+Kafka payload; a user with several concurrent entries gets the most recently started one, so only the
+contact details are meaningful, not the role). What remains is the `OncallClient` method and the
+`NotificationRouter` change in notification-service. Tracked as backlog #0-1 in `BACKLOG.md`.
+
+oncall-service endpoints that return contact data need their own URL-level SERVICE/ADMIN matcher in
+`SecurityConfig`: the rule for `/api/v1/oncall/current` is an exact path and does not cover a
+sub-path, which would otherwise fall through to `anyRequest().authenticated()`. A service token is
+`ROLE_SERVICE`, so a `@PreAuthorize` RESPONDER/ADMIN rule on such an endpoint would reject it.
 
 ### Notification idempotency is keyed on tenant and escalation level
 
