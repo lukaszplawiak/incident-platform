@@ -29,6 +29,15 @@ public final class AuditEventTypes {
     // ── Notification ────────────────────────────────────────────────────────
     public static final String NOTIFICATION_SENT         = "NOTIFICATION_SENT";
     public static final String NOTIFICATION_FAILED       = "NOTIFICATION_FAILED";
+    /**
+     * Nobody in the tenant could be notified (backlog #0-18): nobody on call, no
+     * on-call contact with an address on any enabled channel, or oncall-service
+     * unavailable past the retry window. The incident text was deliberately not
+     * sent anywhere. Distinct from {@link #NOTIFICATION_FAILED}, which means a
+     * send through one channel failed: an auditor filtering by type must not get
+     * both meanings.
+     */
+    public static final String NOTIFICATION_UNDELIVERABLE = "NOTIFICATION_UNDELIVERABLE";
     public static final String SLACK_ACK_MESSAGE_UPDATE_FAILED = "SLACK_ACK_MESSAGE_UPDATE_FAILED";
 
     // ── Postmortem ──────────────────────────────────────────────────────────
