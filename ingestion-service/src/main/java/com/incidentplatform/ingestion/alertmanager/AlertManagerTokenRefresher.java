@@ -2,6 +2,7 @@ package com.incidentplatform.ingestion.alertmanager;
 
 import com.incidentplatform.ingestion.config.AlertManagerProperties;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.ServiceNames;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -83,7 +84,9 @@ public class AlertManagerTokenRefresher {
         if (!isConfigured()) return;
 
         try {
-            final String token = jwtUtils.generateServiceToken(SERVICE_NAME);
+            final String token = jwtUtils.generateServiceToken(
+                    SERVICE_NAME, JwtUtils.SYSTEM_TENANT_ID,
+                    ServiceNames.INGESTION_SERVICE);
             writeTokenToFile(token);
 
             final long expirationMs = jwtUtils.getServiceTokenTtl().toMillis();

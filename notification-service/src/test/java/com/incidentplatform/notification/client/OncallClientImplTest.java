@@ -2,13 +2,19 @@ package com.incidentplatform.notification.client;
 
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.incidentplatform.shared.observability.ClientFallbackMetrics;
+import com.incidentplatform.shared.security.ServiceNames;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
@@ -17,7 +23,9 @@ import java.time.Duration;
 import java.util.Optional;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.getRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -56,6 +64,8 @@ class OncallClientImplTest {
     private WireMockServer wireMock;
     private OncallClientImpl client;
 
+    private SimpleMeterRegistry meterRegistry;
+
     private static final String TENANT_ID = "test-tenant";
     private static final String SLACK_USER_ID = "U0123456789";
 
@@ -65,7 +75,11 @@ class OncallClientImplTest {
         wireMock.start();
 
         final ServiceTokenProvider tokenProvider = mock(ServiceTokenProvider.class);
-        given(tokenProvider.getToken()).willReturn("test-token");
+        // pinned to the tenant AND the target service: with any() a client that minted the
+        // token for the wrong tenant or audience would still pass every test here
+        given(tokenProvider.getToken(TENANT_ID, ServiceNames.ONCALL_SERVICE))
+                .willReturn("test-token");
+        meterRegistry = new SimpleMeterRegistry();
 
         final HttpClient httpClient = HttpClient.newBuilder()
                 .version(HttpClient.Version.HTTP_1_1)
@@ -78,6 +92,7 @@ class OncallClientImplTest {
                         .build(),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 tokenProvider,
+                new ClientFallbackMetrics(meterRegistry),
                 "http://localhost:" + wireMock.port()
         );
     }
@@ -164,6 +179,76 @@ class OncallClientImplTest {
                     .isInstanceOf(RestClientException.class);
 
             wireMock.start();
+        }
+    }
+
+    @Nested
+    @DisplayName("service token on the wire")
+    class ServiceTokenOnTheWire {
+
+        @Test
+        @DisplayName("getCurrentOncall sends the token minted for this tenant and oncall-service")
+        void currentOncallSendsTenantToken() {
+            wireMock.stubFor(get(urlPathEqualTo("/api/v1/oncall/current"))
+                    .willReturn(aResponse().withStatus(204)));
+
+            client.getCurrentOncall(TENANT_ID, "PRIMARY");
+
+            wireMock.verify(getRequestedFor(urlPathEqualTo("/api/v1/oncall/current"))
+                    .withHeader("Authorization", equalTo("Bearer test-token"))
+                    .withHeader("X-Tenant-Id", equalTo(TENANT_ID)));
+        }
+
+        @Test
+        @DisplayName("findBySlackUserId sends the token minted for this tenant and oncall-service")
+        void bySlackSendsTenantToken() {
+            wireMock.stubFor(get(urlPathMatching("/api/v1/oncall/by-slack/.*"))
+                    .willReturn(aResponse().withStatus(204)));
+
+            client.findBySlackUserId(TENANT_ID, SLACK_USER_ID);
+
+            wireMock.verify(getRequestedFor(urlPathMatching("/api/v1/oncall/by-slack/.*"))
+                    .withHeader("Authorization", equalTo("Bearer test-token"))
+                    .withHeader("X-Tenant-Id", equalTo(TENANT_ID)));
+        }
+    }
+
+    @Nested
+    @DisplayName("fallbacks are counted")
+    class FallbacksAreCounted {
+
+        private double count(String reason) {
+            return meterRegistry.counter(ClientFallbackMetrics.METRIC_NAME,
+                    "client", "oncall", "target", "oncall-service",
+                    "reason", reason).count();
+        }
+
+        @Test
+        @DisplayName("getCurrentOncallFallback counts a 401 as reason=auth")
+        void currentOncallCountsAuth() {
+            client.getCurrentOncallFallback(TENANT_ID, "PRIMARY",
+                    HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "u",
+                            HttpHeaders.EMPTY, new byte[0], null));
+
+            assertThat(count("auth")).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("findBySlackUserIdFallback counts a 403 as reason=auth")
+        void bySlackCountsAuth() {
+            client.findBySlackUserIdFallback(TENANT_ID, SLACK_USER_ID,
+                    HttpClientErrorException.create(HttpStatus.FORBIDDEN, "f",
+                            HttpHeaders.EMPTY, new byte[0], null));
+
+            assertThat(count("auth")).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("a generic failure is counted as reason=other")
+        void genericFailureCountsOther() {
+            client.getCurrentOncallFallback(TENANT_ID, "PRIMARY", new RuntimeException("boom"));
+
+            assertThat(count("other")).isEqualTo(1.0);
         }
     }
 

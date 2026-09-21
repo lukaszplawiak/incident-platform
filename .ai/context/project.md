@@ -177,6 +177,28 @@ ingestion-service rate limiting uses bucket4j with a Redis `ProxyManager`, prote
 buckets were per-pod (effective limit = limit × replicas) and lived in unbounded maps keyed
 by the caller-controlled `X-Forwarded-For` header. Do not reintroduce in-memory per-key state.
 
+### Service-to-service auth: per-tenant service tokens (backlog #0-11)
+
+Service tokens (`JwtUtils.generateServiceToken(serviceName, tenantId)`) used to be rejected by
+`JwtAuthFilter`, which required a UUID `sub`, an `email` and a tenant that a service token did not
+have. Every service-to-service HTTP call was a 401, hidden because the clients fail open. The
+filter now recognises a token by its `serviceName` claim and builds a `ServicePrincipal`
+(`ROLE_SERVICE`, tenant from the signed claim), but only if the token's `aud` claim names the
+service that received it (`ServiceNames`; a filter built without a service name, like
+auth-service's, accepts none). Without the audience check a token minted to call oncall-service
+would authenticate on every service, and any endpoint that is only `authenticated()` would accept it. No HTTP filter reads `X-Tenant-Id`; the header the
+clients still send is informational only. `ServiceTokenProvider.getToken(tenantId)` caches one token
+per (tenant, audience) (bounded; the tenant id comes from Kafka payloads and is validated: 1-100
+characters, no whitespace or control characters).
+
+Known limitation (decided, not overlooked): all services share one HMAC secret, so any service can
+mint a token for any tenant and audience. Per-tenant, per-audience tokens stop a forged header and
+a token replayed against the wrong service, not a compromised service. The structural fix (asymmetric keys, or mTLS / a token issuer) is backlog #0-13;
+the README "Design Decisions" section records why RS256/Keycloak was rejected for now.
+
+Fail-open is kept, but made visible: clients call `ClientFallbackMetrics.record(...)` from their
+fallbacks (`service_client_fallback_total{client,target,reason}`). `reason="auth"` is a 401/403.
+
 ### Known limitation: escalation notifications reach the PRIMARY on-call
 
 escalation-service resolves the SECONDARY / MANAGER user and sends it in

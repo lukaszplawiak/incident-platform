@@ -7,7 +7,8 @@
 #
 # The token is identical to what AlertManagerTokenRefresher generates at
 # ingestion-service startup — HS512, signed with JWT_SECRET, payload:
-#   sub=alertmanager, serviceName=alertmanager, roles=[ROLE_SERVICE],
+#   sub=alertmanager, aud=[ingestion-service], serviceName=alertmanager,
+#   roles=[ROLE_SERVICE],
 #   tenantId=system
 #
 # Usage:
@@ -103,6 +104,7 @@ header = {
 #   .claim(CLAIM_TENANT_ID, "system")
 payload = {
     "sub": "alertmanager",
+    "aud": ["ingestion-service"],
     "serviceName": "alertmanager",
     "roles": ["ROLE_SERVICE"],
     "tenantId": "system",

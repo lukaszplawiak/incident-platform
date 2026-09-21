@@ -149,7 +149,13 @@ security:
 # oncall-service HTTP client
 oncall:
   service:
-    url: ${ONCALL_SERVICE_URL:http://oncall-service:8085}
+    url: ${ONCALL_SERVICE_URL:http://oncall-service:8086}
+    # Fixed (backlog #0-11): this client had no timeouts. Before the service
+    # token fix every call was a fast 401; now they are real calls, and a hung
+    # oncall-service would block the scheduler thread (the circuit breaker only
+    # counts calls that finish). See OncallClientConfig.
+    connect-timeout: ${ONCALL_CONNECT_TIMEOUT:2s}
+    read-timeout: ${ONCALL_READ_TIMEOUT:5s}
 
 # Resilience4j circuit breaker for oncall-service HTTP calls
 resilience4j:
@@ -166,3 +172,12 @@ resilience4j:
         # Count both exceptions and slow calls as failures
         slidingWindowType: COUNT_BASED
         slidingWindowSize: 10
+        # This comment used to promise slow calls count as failures, but no
+        # threshold was set (the default is 60s, longer than the read timeout).
+        # Above 3s a call is slow; at 50% slow calls the circuit opens.
+        slowCallDurationThreshold: 3s
+        slowCallRateThreshold: 50
+        # A malformed tenant id is a defect in the caller/payload, not an
+        # oncall-service outage: it must not count toward opening the circuit.
+        ignoreExceptions:
+          - java.lang.IllegalArgumentException

@@ -35,6 +35,12 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-8](#0-8-dead-publishescalated-and-a-stale-javadoc-in-incident-service) | Dead `publishEscalated` and a stale Javadoc in incident-service | tech-debt | Low | Open |
 | [0-9](#0-9-stale-index-annotations-on-notificationlog) | Stale `@Index` annotations on `NotificationLog` | tech-debt | Low | Open |
 | [0-10](#0-10-notificationscheduler-loads-all-pending-entries-without-a-limit) | `NotificationScheduler` loads all pending entries without a limit | tech-debt | Low | Open |
+| [0-12](#0-12-notification-primary-lookup-sends-no-teamid) | Notification PRIMARY lookup sends no `teamId` | bug | Medium | Open |
+| [0-13](#0-13-asymmetric-service-tokens-or-mtls-for-service-identity) | Asymmetric service tokens or mTLS for service identity | design | Medium | Open |
+| [0-14](#0-14-by-slack-is-open-to-any-authenticated-role) | `GET /by-slack/{id}` is open to any authenticated role | tech-debt | Low | Open |
+| [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
+| [0-16](#0-16-decide-the-alertmanager-service-token-tenant-role-and-lifetime) | Decide the Alertmanager service token: tenant, role, lifetime | design | High | Open |
+| [0-17](#0-17-alert-on-service_client_fallback_totalreasonauth) | Alert on `service_client_fallback_total{reason="auth"}` | tech-debt | Medium | Open |
 
 ---
 
@@ -53,6 +59,10 @@ notifications therefore reach the PRIMARY's addresses (or the configured fallbac
 keyed on tenant + event type + escalation level, and `escalate_to` is stored on
 `notification_queue`.
 
+**Prerequisite (backlog #0-11).** Service tokens were rejected by `JwtAuthFilter`, so every
+service-to-service HTTP call was a 401 and `escalateTo` was always null. Fixed first; without it
+the steps below would be unreachable in a real deployment.
+
 **Remaining (PR 2).**
 1. oncall-service: `GET /api/v1/oncall/current/by-user/{userId}` returning the user's current
    on-call entry (contact details), scoped to the request tenant **and** the user id together.
@@ -61,8 +71,8 @@ keyed on tenant + event type + escalation level, and `escalate_to` is stored on
 2. notification-service: `OncallClient` method for it; `NotificationRouter` uses the entry's
    `escalateTo` for `IncidentEscalatedEvent` (fall back to the configured fallback addresses when
    there is no target or no schedule).
-3. Also check `OncallClientImpl.getCurrentOncall(tenantId, role)`: it sends no `teamId`, so
-   "PRIMARY" is resolved tenant-wide, which is ambiguous when a tenant has several teams.
+3. `OncallClientImpl.getCurrentOncall(tenantId, role)` sends no `teamId`, so "PRIMARY" is
+   resolved tenant-wide. Split out as backlog #0-12.
 4. Remove the "Current limitation" text from the README (Escalation Chain) and from
    `.ai/context/project.md` when this lands.
 
@@ -232,10 +242,130 @@ through them with synchronous HTTP calls. The same class of problem was fixed in
 
 ---
 
+### 0-12. Notification PRIMARY lookup sends no `teamId`
+
+**Type:** bug · **Priority:** Medium · **Status:** Open
+
+**Problem.** `OncallClientImpl.getCurrentOncall(tenantId, role)` calls `/api/v1/oncall/current`
+with `role` only, so "PRIMARY" is resolved tenant-wide, which is ambiguous when a tenant has more
+than one team. Split out of backlog #0-1 (item 3): the escalation path needs no `teamId` because it
+looks the target up by tenant and user id.
+
+**Approach.** Carry `teamId` through `IncidentEscalatedEvent`/the incident events, the
+notification consumer and `NotificationQueueEntry` (Flyway migration), then send it. Touches `shared`
+event records, so it rebuilds all 7 services: do it as its own PR.
+
+---
+
+### 0-13. Asymmetric service tokens or mTLS for service identity
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Context.** Every service holds the same HMAC secret (`jwt.secret`), so any service can mint a token
+with any tenant and any role. Per-tenant service tokens (backlog #0-11) stop a forged header from
+outside the platform but not a compromised service. The README "Design Decisions" section records why
+RS256/Keycloak was rejected; this item asks whether that still holds.
+
+**Options.** (1) Accept and keep documenting the limitation. (2) Asymmetric signing (RS256/EdDSA +
+JWKS), private key only in auth-service, services verify only. (3) mTLS or a service mesh for service
+identity, with authorization policy at the mesh. (4) OAuth2 client-credentials tokens issued by
+auth-service, with `aud` and scopes.
+
+**Deliverable.** A recorded decision (an ADR, per `.ai/README.md`). Implementation becomes its own item.
+
+---
+
+### 0-14. `GET /by-slack/{id}` is open to any authenticated role
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** oncall-service's `SecurityConfig` has exact-path rules only for `/current` and
+`/current/all`, so `/api/v1/oncall/by-slack/{slackUserId}` falls through to
+`anyRequest().authenticated()` and any role can read it. It returns less data than `/current`, but it
+is an internal service-to-service lookup.
+
+**Wider than oncall.** The same holds platform-wide: an endpoint that is only `authenticated()`
+accepts every principal type. Since backlog #0-11 a service token authenticates, but only in the
+service named in its `aud` claim, so an oncall-bound token cannot reach auth-service any more. Within
+one service it still reaches every `authenticated()`-only route, and a controller that dereferences
+`@AuthenticationPrincipal UserPrincipal` fails with a 500 instead of a 403 for a service caller.
+
+**Decide.** The intended roles per route, and whether the shared chain should deny `ServicePrincipal`
+by default and let each service opt routes in, rather than each service excepting itself.
+
+---
+
+### 0-15. `IncidentAckClient` is not authorized on the status endpoint
+
+**Type:** bug · **Priority:** Medium · **Status:** Open (found by code reading, not run)
+
+**Problem.** notification-service's `IncidentAckClient` calls `PATCH /api/v1/incidents/{id}/status`
+with a service token (ACK via Slack). That endpoint has `@PreAuthorize("hasRole('RESPONDER') or
+hasRole('ADMIN')")` and dereferences `principal.userId()`. After backlog #0-11 the token
+authenticates, but as a `ServicePrincipal` with `ROLE_SERVICE`, so the call is answered with 403; and
+`@AuthenticationPrincipal UserPrincipal` would be `null` for a service caller.
+
+**Decision needed.** How a service acts on behalf of a user: a dedicated service endpoint that takes
+`acknowledgedBy` from the request, or propagating the user's identity. Then add a test that sends a
+real service token to this endpoint.
+
+---
+
+### 0-16. Decide the Alertmanager service token: tenant, role, lifetime
+
+**Type:** design · **Priority:** High · **Status:** Open
+
+**Context.** Alertmanager is part of the optional local monitoring stack (README "Step 5"; it is not
+deployed in `k8s/`). It posts to `/api/v1/alerts/prometheus` with a 30-day JWT that
+`AlertManagerTokenRefresher` and `scripts/generate-alertmanager-token.sh` mint with
+`tenantId = "system"`, `ROLE_SERVICE` and (since backlog #0-11) `aud = ingestion-service`. Before #0-11
+`JwtAuthFilter` rejected that token, so Alertmanager never authenticated; now it does.
+
+`system` is intentional: four rules in `docker/prometheus.rules.yml` about the platform itself
+(`IpRateLimitExceeded`, `IncidentServiceDown`, `KafkaConsumerLag*`) carry `tenantId: system`. So the
+question is not "which tenant?" but how to make `system` a real operator tenant and whether a service
+token is the right credential for an external alert source.
+
+**Findings (by reading the code, not run).**
+- A `tenantId` label does not choose the tenant: the normalizer copies labels into metadata and the
+  tenant comes only from the caller's token. The misleading comment in `prometheus.rules.yml` is fixed.
+- No `system` tenant is defined anywhere: no seed, migration, users or on-call. In development you can
+  enter it with `/dev/token?tenantId=system`; otherwise nobody owns those incidents.
+- The name is not reserved: tenant ids are free-form strings.
+- The token is `ROLE_SERVICE`, and ingest accepts `hasRole('SERVICE')`, so any service token minted for
+  the target tenant can post alerts, not only Alertmanager's. The script's comment says `ROLE_INGESTOR`.
+- The token has no `jti` (it cannot be revoked) and lives 30 days.
+
+**Options.** (1) Keep `system`: reserve the name and give that tenant users and on-call.
+(2) Narrow the role to ingest only. (3) Replace the JWT with an Integration API key
+(`Authorization: ApiKey ipl_<prefix>.<secret>`, scope `alerts:ingest`, per tenant, revocable);
+`ApiKeyAuthFilter` already reads that header, and Prometheus documents `authorization.type` as
+configurable, which still has to be verified against the Alertmanager version in `docker-compose.yml`.
+(4) Take the tenant from the alert label: rejected in review, since whoever writes the rules would
+choose the tenant.
+
+**Deliverable.** A recorded decision, then an implementation item. Revisit after backlog #0-1. Related:
+backlog #0-13, #0-17.
+
+---
+
+### 0-17. Alert on `service_client_fallback_total{reason="auth"}`
+
+**Type:** tech-debt · **Priority:** Medium · **Status:** Open
+
+**Problem.** Fail-open clients count every fallback in `service.client.fallback{client,target,reason}`
+(backlog #0-11), and `reason="auth"` (401/403) is a misconfiguration, not an outage. Nothing alerts on
+it. `docker/prometheus.rules.yml` is not the place yet: its alerts reach ingestion through Alertmanager and
+become incidents of the tenant in Alertmanager's token (currently `system`), so an alert about the
+platform itself depends on how that operator tenant is set up in backlog #0-16.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
 |---|---|---|
+| 0-11 | Service tokens were rejected by `JwtAuthFilter`: per-tenant, per-audience service tokens, `ServicePrincipal`, real-token filter tests, fallback metric, tenant-id validation, escalation client timeouts, correct oncall URL default | this PR (number added when merged) |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

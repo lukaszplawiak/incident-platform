@@ -17,7 +17,9 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * JWT utility — generates and validates JSON Web Tokens for both human
@@ -58,6 +60,24 @@ public class JwtUtils {
     public static final String CLAIM_TEAM_IDS     = "teamIds";
     public static final String CLAIM_MANAGED_TEAM_IDS = "managedTeamIds";
     public static final String CLAIM_SESSION_ID   = "sessionId";
+
+    /**
+     * Tenant id of tokens that act for no real tenant (the Alertmanager
+     * ingestor token). Named so that the choice is visible at the call
+     * site instead of being a string literal buried in token generation.
+     */
+    public static final String SYSTEM_TENANT_ID = "system";
+
+    /**
+     * Shape accepted for the tenant id of a <em>service</em> token: 1-100
+     * characters, no whitespace or control characters. Tenant ids have no
+     * other format in this codebase (they are free-form strings), so this
+     * deliberately does not invent one; it only keeps a tenant id that came
+     * from a Kafka payload from carrying newlines into log lines or an absurd
+     * length into a signed claim and an outbound header.
+     */
+    private static final Pattern SERVICE_TENANT_ID_PATTERN =
+            Pattern.compile("^[^\\p{Cntrl}\\s]{1,100}$", Pattern.UNICODE_CHARACTER_CLASS);
 
     private static final int MIN_SECRET_BYTES = 64;
 
@@ -203,27 +223,100 @@ public class JwtUtils {
     }
 
     /**
-     * Generates a service token for inter-service authentication.
-     * TTL controlled by {@code jwt.service-token-ttl} (default PT1H).
+     * Generates a service token for inter-service authentication, acting
+     * for one tenant and valid for one target service. TTL controlled by
+     * {@code jwt.service-token-ttl} (default PT1H).
+     *
+     * <h2>Fixed (backlog #0-11): the tenant and the audience are parameters</h2>
+     * The previous one-argument overload hard-coded {@code tenantId =
+     * "system"}, and {@link JwtAuthFilter} rejected the token anyway (see
+     * {@link ServicePrincipal}). Every tenant-scoped query on the receiving
+     * side is filtered by the tenant from the token, so a call for a real
+     * tenant needs that tenant in the signed claim — not in a header, which
+     * no filter reads. Callers that genuinely act for no tenant (the
+     * Alertmanager token) pass {@link #SYSTEM_TENANT_ID} explicitly.
+     *
+     * <p>The {@code aud} claim names the service the token is for, and
+     * {@link JwtAuthFilter} accepts a service token only where {@code aud}
+     * matches its own service name (see {@link ServiceNames}). Without it a
+     * token minted to call oncall-service would also authenticate on every
+     * other service that shares the secret.
+     *
+     * <p>Known limitation, tracked as backlog #0-13: every service holds
+     * the same HMAC secret, so any service can mint a token for any
+     * tenant and any audience. Per-tenant, per-audience tokens stop a
+     * forged header or a token replayed against the wrong service; they do
+     * not stop a compromised service.
+     *
+     * @throws IllegalArgumentException if any argument is blank, or if
+     *         {@code tenantId} fails {@link #requireValidServiceTenantId}
      */
-    public String generateServiceToken(String serviceName) {
+    public String generateServiceToken(String serviceName, String tenantId,
+                                       String audience) {
+        if (serviceName == null || serviceName.isBlank()) {
+            throw new IllegalArgumentException("serviceName must not be blank");
+        }
+        if (audience == null || audience.isBlank()) {
+            throw new IllegalArgumentException("audience must not be blank");
+        }
+        requireValidServiceTenantId(tenantId);
+
         final Instant now        = Instant.now();
         final Instant expiration = now.plus(properties.serviceTokenTtl());
 
         final String token = Jwts.builder()
                 .subject(serviceName)
+                .audience().add(audience).and()
                 .claim(CLAIM_SERVICE_NAME, serviceName)
                 .claim(CLAIM_ROLES, List.of(SecurityRoles.ROLE_SERVICE))
-                .claim(CLAIM_TENANT_ID, "system")
+                .claim(CLAIM_TENANT_ID, tenantId)
                 .issuedAt(Date.from(now))
                 .expiration(Date.from(expiration))
                 .signWith(secretKey)
                 .compact();
 
-        log.debug("Service token generated: service={}, expiresAt={}",
-                serviceName, expiration);
+        log.debug("Service token generated: service={}, audience={}, " +
+                "tenantId={}, expiresAt={}", serviceName, audience, tenantId, expiration);
 
         return token;
+    }
+
+    /**
+     * Rejects a tenant id that must not go into a service token, an
+     * {@code X-Tenant-Id} header or a log line: null, blank, longer than 100
+     * characters, or containing whitespace or control characters.
+     *
+     * @throws IllegalArgumentException with a message that does not echo the
+     *         rejected value (it may itself contain the offending characters)
+     */
+    public static void requireValidServiceTenantId(String tenantId) {
+        if (tenantId == null || !SERVICE_TENANT_ID_PATTERN.matcher(tenantId).matches()) {
+            throw new IllegalArgumentException(
+                    "tenantId must be 1-100 characters with no whitespace or " +
+                            "control characters — a service token always acts " +
+                            "for a valid tenant");
+        }
+    }
+
+    /**
+     * Extracts the {@code aud} claim. Present on service tokens; empty for
+     * tokens issued without an audience (user access tokens).
+     */
+    public Set<String> extractAudience(Claims claims) {
+        final Set<String> audience = claims.getAudience();
+        return audience == null ? Set.of() : audience;
+    }
+
+    /**
+     * Extracts the {@code serviceName} claim. Present only on service
+     * tokens — this is how {@link JwtAuthFilter} tells a service token
+     * from a user token.
+     */
+    public Optional<String> extractServiceName(Claims claims) {
+        final String serviceName = claims.get(CLAIM_SERVICE_NAME, String.class);
+        return serviceName == null || serviceName.isBlank()
+                ? Optional.empty()
+                : Optional.of(serviceName);
     }
 
     // ── token TTL accessors ───────────────────────────────────────────────

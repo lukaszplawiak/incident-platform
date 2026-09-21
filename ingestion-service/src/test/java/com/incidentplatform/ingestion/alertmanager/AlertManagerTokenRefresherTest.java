@@ -2,6 +2,7 @@ package com.incidentplatform.ingestion.alertmanager;
 
 import com.incidentplatform.ingestion.config.AlertManagerProperties;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.ServiceNames;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -79,7 +80,7 @@ class AlertManagerTokenRefresherTest {
             // refresher has no @EventListener — nothing fires on startup
 
             // then — no file written, no JwtUtils call
-            then(jwtUtils).should(never()).generateServiceToken("alertmanager");
+            then(jwtUtils).should(never()).generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE);
             assertThat(tokenFile).doesNotExist();
         }
 
@@ -111,7 +112,7 @@ class AlertManagerTokenRefresherTest {
             final AlertManagerTokenRefresher refresher = createRefresher(true);
             Files.writeString(tokenFile, "old-token");
 
-            given(jwtUtils.generateServiceToken("alertmanager"))
+            given(jwtUtils.generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE))
                     .willReturn("new-token");
 
             // when
@@ -129,7 +130,7 @@ class AlertManagerTokenRefresherTest {
             final Path nestedPath = tempDir.resolve("secrets/nested/ingestor-token");
             final AlertManagerTokenRefresher refresher =
                     createRefresherWithPath(nestedPath.toString());
-            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
+            given(jwtUtils.generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE)).willReturn(FAKE_TOKEN);
 
             // when
             refresher.refreshToken();
@@ -145,7 +146,7 @@ class AlertManagerTokenRefresherTest {
         void doesNotThrowWhenJwtUtilsFails() {
             // given
             final AlertManagerTokenRefresher refresher = createRefresher(true);
-            given(jwtUtils.generateServiceToken("alertmanager"))
+            given(jwtUtils.generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE))
                     .willThrow(new RuntimeException("JWT secret not configured"));
 
             // when / then
@@ -158,7 +159,7 @@ class AlertManagerTokenRefresherTest {
         void tokenFileHasNoTrailingNewline() throws IOException {
             // given
             final AlertManagerTokenRefresher refresher = createRefresher(true);
-            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
+            given(jwtUtils.generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE)).willReturn(FAKE_TOKEN);
 
             // when
             refresher.refreshToken();
@@ -175,7 +176,7 @@ class AlertManagerTokenRefresherTest {
         void refreshesOnEachScheduledCall() {
             // given
             final AlertManagerTokenRefresher refresher = createRefresher(true);
-            given(jwtUtils.generateServiceToken("alertmanager")).willReturn(FAKE_TOKEN);
+            given(jwtUtils.generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE)).willReturn(FAKE_TOKEN);
 
             // when
             refresher.refreshToken();
@@ -183,7 +184,7 @@ class AlertManagerTokenRefresherTest {
             refresher.refreshToken();
 
             // then
-            then(jwtUtils).should(times(3)).generateServiceToken("alertmanager");
+            then(jwtUtils).should(times(3)).generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE);
         }
 
         @Test
@@ -196,7 +197,7 @@ class AlertManagerTokenRefresherTest {
             refresher.refreshToken();
 
             // then
-            then(jwtUtils).should(never()).generateServiceToken("alertmanager");
+            then(jwtUtils).should(never()).generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE);
             assertThat(tokenFile).doesNotExist();
         }
 
@@ -211,7 +212,7 @@ class AlertManagerTokenRefresherTest {
             refresher.refreshToken();
 
             // then
-            then(jwtUtils).should(never()).generateServiceToken("alertmanager");
+            then(jwtUtils).should(never()).generateServiceToken("alertmanager", JwtUtils.SYSTEM_TENANT_ID, ServiceNames.INGESTION_SERVICE);
         }
     }
 }

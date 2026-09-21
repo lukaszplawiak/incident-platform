@@ -84,7 +84,7 @@ public class AlertIngestionController {
             produces = MediaType.APPLICATION_JSON_VALUE
     )
     @PreAuthorize("hasRole('INGESTOR') or hasRole('ADMIN') "
-            + "or hasRole('SERVICE')"
+            + "or hasRole('SERVICE') "
             + "or (principal instanceof T(com.incidentplatform.shared.security.UserPrincipal) "
             + "and principal.hasScope(T(com.incidentplatform.shared.security.ApiScopes).ALERTS_INGEST))")
     @Operation(

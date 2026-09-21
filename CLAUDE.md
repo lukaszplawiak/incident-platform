@@ -50,7 +50,7 @@ Event flow: `alerts.raw`/`alerts.resolved` (ingestion → incident) → `inciden
 
 ### `shared` is platform-wide policy, not a utility bag
 
-`shared/src/main/java/com/incidentplatform/shared/` holds security (`JwtAuthFilter`, `JwtUtils`, `TenantContext`, `ServiceTokenProvider`, `SecurityRoles`), Kafka tenant interceptors + `TenantKafkaRecordResolver` + `DeadLetterPublisher`, Kafka event records, `AuditEventPublisher`, and `GlobalExceptionHandler`.
+`shared/src/main/java/com/incidentplatform/shared/` holds security (`JwtAuthFilter`, `JwtUtils`, `TenantContext`, `ServiceTokenProvider`, `ServicePrincipal`, `ServiceNames`, `SecurityRoles`), Kafka tenant interceptors + `TenantKafkaRecordResolver` + `DeadLetterPublisher`, Kafka event records, `AuditEventPublisher`, and `GlobalExceptionHandler`.
 
 `SharedSecurityAutoConfiguration` (registered via `META-INF/spring/...AutoConfiguration.imports`) supplies the default `SecurityFilterChain` and `CorsConfigurationSource` for every service; both are `@ConditionalOnMissingBean`, so a service declaring its own `SecurityFilterChain` takes over completely — including re-wiring CORS and the shared `PUBLIC_PATHS`, which is a recurring source of bugs (see commits `d80541f`, `ec4eae4`). Prefer extending the shared chain's contract over silently forking it.
 
@@ -62,6 +62,7 @@ Tenant isolation spans HTTP, Kafka and DB, and is the property most easily broke
 
 - HTTP: `JwtAuthFilter` sets `TenantContext` + MDC, and also stores the tenant as a request attribute (`TenantContext.REQUEST_ATTRIBUTE_TENANT_ID`) because the ThreadLocal is cleared before the observation filter finishes.
 - Kafka: `TenantKafkaProducerInterceptor` stamps `X-Tenant-Id` on every record. Consumers must resolve tenant **per record** via `TenantKafkaRecordResolver` (header first, payload `tenantId` fallback, otherwise dead-letter) and clear `TenantContext` in a `finally` block. Never set tenant from a batch — `TenantKafkaConsumerInterceptor` is a validation layer only.
+- Service-to-service HTTP: call with `ServiceTokenProvider.getToken(tenantId, ServiceNames.<TARGET>)` — the target's name, not your own. The token carries the tenant as a signed claim and `aud` names the one service that accepts it; `JwtAuthFilter` builds a `ServicePrincipal` from it and rejects it in any other service (fail closed: a filter with no service name, like auth-service's, accepts none). No filter reads `X-Tenant-Id` on HTTP, so a header alone authenticates nothing. A new HTTP client needs a connect/read timeout. `@AuthenticationPrincipal UserPrincipal` is `null` on a service call, so an endpoint open to `ROLE_SERVICE` must not dereference it. Fail-open client fallbacks must call `ClientFallbackMetrics.record` (backlog #0-11).
 - Async: propagate with `TenantAwareTaskDecorator`; don't hand work to a plain executor.
 - Queries are always tenant-scoped; `@PreAuthorize`/filter-chain rules use the non-prefixed `hasRole("ADMIN")` form (`SecurityRoles.*_NAME`), while JWT claims and `UserPrincipal.hasRole` use the `ROLE_`-prefixed constants.
 

@@ -1,12 +1,18 @@
 # Prometheus alerting rules for Incident Platform
 #
-# All alerts MUST include a tenantId label — ingestion-service uses this
-# to set TenantContext when creating incidents.
+# Which tenant an alert belongs to: NOT decided by a tenantId label.
+# ingestion-service takes the tenant of the authenticated caller, and for
+# Alertmanager that is the tenant in its token (currently "system", see
+# backlog #0-16 in BACKLOG.md). A tenantId label is only copied into the
+# alert's metadata (every label except alertname/severity is) and used by
+# Alertmanager's group_by. The rules about the platform itself carry
+# tenantId: system so the label matches the tenant the token gives them.
 #
 # Alert severity must match IncidentSeverity enum:
 # CRITICAL, HIGH, MEDIUM, LOW (case-insensitive in normalizer)
 #
-# Example Prometheus recording rule to add tenantId to your metrics:
+# Example Prometheus recording rule to add a tenantId label to your metrics
+# (metadata / grouping only, it does not choose the tenant):
 #   - record: node_cpu_usage_with_tenant
 #     expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)
 #     labels:

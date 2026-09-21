@@ -144,7 +144,7 @@ Kafka Streams would require windowing, state stores, and a significantly more co
 Using the raw HTTP API via `RestClient` through a `GeminiClient` interface keeps the integration vendor-neutral — switching to a different AI provider requires changing exactly one class. It also makes the HTTP contract explicit and debuggable without additional Maven dependencies.
 
 **Why HS512 for JWT instead of RS256 or Keycloak?**
-HS512 with a shared secret is sufficient for a controlled environment where all services are owned by the same team. `ServiceTokenProvider` is abstracted behind an interface — migrating to RS256 or Keycloak requires changing one class per service. The tradeoff is documented and understood.
+HS512 with a shared secret is sufficient for a controlled environment where all services are owned by the same team. Service tokens are minted and cached per tenant and per target service by `ServiceTokenProvider` (a concrete class, not an interface) and verified in `JwtAuthFilter`; moving to RS256 or Keycloak means changing token issuance in `JwtUtils`/`ServiceTokenProvider` and verification in `JwtAuthFilter`, both in `shared`. The tradeoff is documented and understood: every service holds the same secret, so any service can mint a token for any tenant and audience (backlog #0-13 records the asymmetric-key / mTLS alternative).
 
 **Why Slack Bot Token instead of Incoming Webhook?**
 Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` supports both direct messages to the on-call engineer's Slack User ID and channel posts with a single API. Bot Token also enables ACK-via-Slack: Interactive Components post to `/api/v1/slack/actions` on notification-service (request signature verified with `SLACK_SIGNING_SECRET` by `SlackSignatureVerifier`), which acknowledges the incident through `IncidentAckClient`.
@@ -246,7 +246,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 ### Security
 
 - **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set explicitly
-- **Service-to-service auth**: `ServiceTokenProvider` generates and caches JWT tokens with `ROLE_SERVICE` — not exposed to end users
+- **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts none) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
 - **Dev endpoints**: `DevTokenController` gated with `@Profile({"local", "dev"})` plus a fail-fast startup guard as a second line of defence — never available in production
 - **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8097) — never co-located with the business API
 - **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in access logs

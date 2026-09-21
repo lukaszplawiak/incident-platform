@@ -2,6 +2,8 @@ package com.incidentplatform.notification.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.observability.ClientFallbackMetrics;
+import com.incidentplatform.shared.security.ServiceNames;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
@@ -52,17 +54,20 @@ public class OncallClientImpl implements OncallClient {
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final ServiceTokenProvider serviceTokenProvider;
+    private final ClientFallbackMetrics fallbackMetrics;
     private final String oncallServiceBaseUrl;
 
     public OncallClientImpl(
             @Qualifier("notificationServiceRestClient") RestClient restClient,
             ObjectMapper objectMapper,
             ServiceTokenProvider serviceTokenProvider,
+            ClientFallbackMetrics fallbackMetrics,
             @Value("${oncall-service.base-url:http://localhost:8086}")
             String oncallServiceBaseUrl) {
         this.restClient = restClient;
         this.objectMapper = objectMapper;
         this.serviceTokenProvider = serviceTokenProvider;
+        this.fallbackMetrics = fallbackMetrics;
         this.oncallServiceBaseUrl = oncallServiceBaseUrl;
     }
 
@@ -82,7 +87,7 @@ public class OncallClientImpl implements OncallClient {
         final String responseBody = restClient.get()
                 .uri(uri)
                 .header("Authorization",
-                        "Bearer " + serviceTokenProvider.getToken())
+                        "Bearer " + serviceTokenProvider.getToken(tenantId, ServiceNames.ONCALL_SERVICE))
                 .header("X-Tenant-Id", tenantId)
                 .retrieve()
                 .body(String.class);
@@ -106,6 +111,7 @@ public class OncallClientImpl implements OncallClient {
         log.warn("oncall-service unavailable — getCurrentOncall fallback: " +
                         "tenantId={}, role={}, error={}",
                 tenantId, role, e.getMessage());
+        fallbackMetrics.record("oncall", "oncall-service", e);
         return Optional.empty();
     }
 
@@ -124,7 +130,7 @@ public class OncallClientImpl implements OncallClient {
         final String responseBody = restClient.get()
                 .uri(uri)
                 .header("Authorization",
-                        "Bearer " + serviceTokenProvider.getToken())
+                        "Bearer " + serviceTokenProvider.getToken(tenantId, ServiceNames.ONCALL_SERVICE))
                 .header("X-Tenant-Id", tenantId)
                 .retrieve()
                 .body(String.class);
@@ -156,6 +162,7 @@ public class OncallClientImpl implements OncallClient {
         log.warn("oncall-service unavailable — findBySlackUserId fallback: " +
                         "slackUserId={}, tenant={}, error={}",
                 slackUserId, tenantId, e.getMessage());
+        fallbackMetrics.record("oncall", "oncall-service", e);
         return Optional.empty();
     }
 
