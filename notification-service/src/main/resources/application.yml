@@ -235,7 +235,8 @@ resilience4j:
           - org.springframework.web.client.ResourceAccessException
           - org.springframework.web.client.HttpServerErrorException
 
-      # Retry for oncall-service calls (getCurrentOncall, findBySlackUserId).
+      # Retry for oncall-service calls (getCurrentOncall, findBySlackUserId,
+      # findCurrentByUserId).
       # 2 attempts with 200ms fixed wait — oncall-service is within the cluster,
       # transient failures are typically short-lived.
       # Retry runs inside the circuit breaker: each attempt counts toward

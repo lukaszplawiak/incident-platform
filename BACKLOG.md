@@ -25,7 +25,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 
 | # | Title | Type | Priority | Status |
 |---|---|---|---|---|
-| [0-1](#0-1-escalation-notifications-go-to-the-primary-on-call-not-the-escalation-target) | Escalation notifications go to the PRIMARY on-call, not the escalation target | bug | High | Open |
 | [0-2](#0-2-make-the-docker-compose-smoke-test-a-required-check-and-add-context-boot-tests) | Make the compose smoke test a required check; add context-boot tests | ci | High | Open |
 | [0-3](#0-3-decide-token-revocation-coverage-across-services) | Decide token-revocation coverage across services | design | Medium | Open |
 | [0-4](#0-4-escalation-event-is-published-at-most-once) | Escalation event is published at-most-once | tech-debt | Medium | Open |
@@ -41,48 +40,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
 | [0-16](#0-16-decide-the-alertmanager-service-token-tenant-role-and-lifetime) | Decide the Alertmanager service token: tenant, role, lifetime | design | High | Open |
 | [0-17](#0-17-alert-on-service_client_fallback_totalreasonauth) | Alert on `service_client_fallback_total{reason="auth"}` | tech-debt | Medium | Open |
-
----
-
-### 0-1. Escalation notifications go to the PRIMARY on-call, not the escalation target
-
-**Type:** bug · **Priority:** High · **Status:** Open (PR #411 and the oncall-service endpoint done, notification-service left; see below)
-
-**Problem.** escalation-service (`EscalationScheduler.escalate()`) resolves the SECONDARY
-(level 1) or MANAGER (level 2) user through oncall-service and publishes
-`IncidentEscalatedEvent(escalateTo, escalationLevel, ...)`. notification-service stores both on
-its outbox entry, but `NotificationRouter.route(...)` still resolves the recipient with
-`oncallClient.getCurrentOncall(tenantId, "PRIMARY")` for every event type. Escalation
-notifications therefore reach the PRIMARY's addresses (or the configured fallback addresses).
-
-**Done.** PR 1 (PR #411): level-2 notifications are no longer dropped as duplicates; idempotency is
-keyed on tenant + event type + escalation level, and `escalate_to` is stored on
-`notification_queue`.
-
-**Prerequisite (backlog #0-11).** Service tokens were rejected by `JwtAuthFilter`, so every
-service-to-service HTTP call was a 401 and `escalateTo` was always null. Fixed first; without it
-the steps below would be unreachable in a real deployment.
-
-**Done (oncall-service).** `GET /api/v1/oncall/current/by-user/{userId}` returns the user's current
-on-call entry with contact details, scoped to the request tenant **and** the user id together
-(`escalateTo` is an unverified id from a Kafka payload; a lookup by user id alone could send one
-tenant's incident to another tenant's user). Restricted to SERVICE and ADMIN at URL level, since the
-response carries email and phone number. A user with several concurrent entries gets the most recently
-started one. Only the contact details in the response are meaningful: the role of that entry is not
-authoritative (no `teamId` is returned either), so notification-service must not derive anything from it.
-
-**Remaining (notification-service).**
-1. `OncallClient` method for the new endpoint; `NotificationRouter` uses the entry for
-   `IncidentEscalatedEvent` from `escalateTo` (fall back to the configured fallback addresses when
-   there is no target or no schedule).
-2. `OncallClientImpl.getCurrentOncall(tenantId, role)` sends no `teamId`, so "PRIMARY" is
-   resolved tenant-wide. Split out as backlog #0-12.
-3. Remove the "Current limitation" text from the README (Escalation Chain) and from
-   `.ai/context/project.md` when this lands.
-
-**Acceptance.** Level-1 and level-2 escalations notify the SECONDARY and MANAGER respectively;
-tests in `NotificationRouterTest`, the oncall controller/service tests and a tenant-mismatch
-case; the docs above updated.
+| [0-18](#0-18-tenant-content-can-reach-the-shared-fallback-address) | Tenant content can reach the shared fallback address | bug | High | Open |
+| [0-19](#0-19-a-failed-oncall-lookup-is-indistinguishable-from-not-on-call) | A failed on-call lookup is indistinguishable from "not on call" | tech-debt | High | Open |
+| [0-20](#0-20-tenant-owned-fallback-contact) | Tenant-owned fallback contact | design | Medium | Open |
 
 ---
 
@@ -252,7 +212,7 @@ through them with synchronous HTTP calls. The same class of problem was fixed in
 
 **Problem.** `OncallClientImpl.getCurrentOncall(tenantId, role)` calls `/api/v1/oncall/current`
 with `role` only, so "PRIMARY" is resolved tenant-wide, which is ambiguous when a tenant has more
-than one team. Split out of backlog #0-1 (item 3): the escalation path needs no `teamId` because it
+than one team. Split out of backlog #0-1 (done): the escalation path needs no `teamId` because it
 looks the target up by tenant and user id.
 
 The by-user lookup (backlog #0-1) returns the most recently started entry when one user holds
@@ -353,7 +313,7 @@ configurable, which still has to be verified against the Alertmanager version in
 (4) Take the tenant from the alert label: rejected in review, since whoever writes the rules would
 choose the tenant.
 
-**Deliverable.** A recorded decision, then an implementation item. Revisit after backlog #0-1. Related:
+**Deliverable.** A recorded decision, then an implementation item. Backlog #0-1 is done, so this is ready to revisit. Related:
 backlog #0-13, #0-17.
 
 ---
@@ -370,10 +330,71 @@ platform itself depends on how that operator tenant is set up in backlog #0-16.
 
 ---
 
+### 0-18. Tenant content can reach the shared fallback address
+
+**Type:** bug · **Priority:** High · **Status:** Open
+
+**Problem.** `NotificationRouter.resolveRecipient` uses `notification.fallback.*` (email, Slack channel,
+phone) whenever no on-call contact is found, for **every** event type, and also per channel when a found
+contact lacks that channel. These are single platform-wide values, not tenant-scoped, and the message
+carries the incident title, id and severity. In a multi-tenant SaaS that sends one tenant's incident text
+to a destination that is not a member of that tenant. It exists on `main` today; backlog #0-1 did not
+make it worse (an escalation without a target goes to the tenant's PRIMARY first) but did not fix it.
+
+**Production practice.** PagerDuty does not reroute an incident with nobody on call to a shared inbox:
+the incident is not created or is reported as unassigned, and the recommended remedy is continuous
+coverage plus fallback users on each escalation level of the tenant's own policy. Operator-facing
+telemetry may carry a tenant id so operators can find the affected customer, but never customer content,
+and only on a channel the platform operator owns.
+
+**Approach.** (1) Resolve recipients only inside the tenant: target, PRIMARY, another current on-call of
+the same tenant. (2) When nobody in the tenant can be reached, do not send the incident text anywhere:
+mark the queue entry undeliverable (`notification.dead-letter`, a metric) and send the shared
+destination only a content-free operator alert (tenant id, incident id, reason). (3) Apply this to every
+event type and to the per-channel fallback, with a test per event type. (4) Remove the non-empty defaults
+of `notification.fallback.*` from `application.yml` (`oncall@example.com`, `#incidents`): they are
+placeholders, so an unconfigured deployment still sends tenant content to them. Tracked together with
+#0-19 and #0-20.
+
+---
+
+### 0-19. A failed on-call lookup is indistinguishable from "not on call"
+
+**Type:** tech-debt · **Priority:** High · **Status:** Open
+
+**Problem.** `OncallClient.findCurrentByUserId` (and `getCurrentOncall`) are fail-open: a 204 (the user is
+not on call) and an oncall-service outage both give `Optional.empty()`. The queue entry is then marked
+SENT, so an escalation whose lookup failed is not retried once oncall-service recovers.
+
+Since backlog #0-1 the escalation is routed by this lookup, so an oncall-service outage, an open circuit
+breaker or a rejected service token (401/403) sends every escalation in that window to the PRIMARY or
+the fallback addresses and never re-sends it to the SECONDARY or MANAGER: a denial of escalation.
+
+**Approach.** Return a result that distinguishes "not on call" from "lookup failed", and leave the entry
+PENDING (with a bounded retry) on failure. Interacts with #0-18: what is sent while the lookup is failing.
+Related: `service.client.fallback` does not say which operation fell back (a target lookup or a PRIMARY
+lookup); an `operation` tag needs a change in `shared`.
+
+---
+
+### 0-20. Tenant-owned fallback contact
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Context.** The proper counterpart of the "fallback users on each escalation level" in PagerDuty: a
+tenant configures its own last-resort contact, used before the operator alert of #0-18. Today no
+notification setting exists per tenant (`tenant_settings` in auth-service only has `mfaRequired`).
+
+**Decide.** Where it lives (auth-service tenant settings, or a notification-service table), who may edit
+it, and how notification-service reads it (HTTP with the service token, or a copy kept in sync).
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
 |---|---|---|
+| 0-1 | Escalations notify the `escalateTo` user, falling back to the tenant's PRIMARY, then to the configured addresses | PRs #411, #413, #414, this PR (number added when merged) |
 | 0-11 | Service tokens were rejected by `JwtAuthFilter`: per-tenant, per-audience service tokens, `ServicePrincipal`, real-token filter tests, fallback metric, tenant-id validation, escalation client timeouts, correct oncall URL default | PR #413 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |

@@ -199,19 +199,26 @@ the README "Design Decisions" section records why RS256/Keycloak was rejected fo
 Fail-open is kept, but made visible: clients call `ClientFallbackMetrics.record(...)` from their
 fallbacks (`service_client_fallback_total{client,target,reason}`). `reason="auth"` is a 401/403.
 
-### Known limitation: escalation notifications reach the PRIMARY on-call
+### Escalation notifications go to the escalation target (backlog #0-1)
 
 escalation-service resolves the SECONDARY / MANAGER user and sends it in
-`IncidentEscalatedEvent.escalateTo`. notification-service reads `escalateTo` and the
-escalation level and stores both on its outbox entry (`escalate_to` is stored because the
-scheduler, not the consumer, resolves the recipient at send time), but `NotificationRouter`
-still resolves the recipient from the PRIMARY on-call for every event type, so escalation
-notifications currently go to the PRIMARY's addresses (or the configured fallback addresses).
-oncall-service already exposes `GET /api/v1/oncall/current/by-user/{userId}` for this (SERVICE and
-ADMIN only; tenant and user id are matched together, because `escalateTo` is an unverified id from a
-Kafka payload; a user with several concurrent entries gets the most recently started one, so only the
-contact details are meaningful, not the role). What remains is the `OncallClient` method and the
-`NotificationRouter` change in notification-service. Tracked as backlog #0-1 in `BACKLOG.md`.
+`IncidentEscalatedEvent.escalateTo`. notification-service stores it on its outbox entry (the
+scheduler, not the consumer, resolves the recipient at send time). For `INCIDENT_ESCALATED`,
+`NotificationRouter` looks that user up with `OncallClient.findCurrentByUserId` (oncall-service
+`GET /api/v1/oncall/current/by-user/{userId}`) and notifies their email, Slack id and phone.
+
+Recipient order for an escalation: the target, then the tenant's PRIMARY on-call, then the
+configured fallback addresses. **Do not drop the PRIMARY step**: the fallback addresses are
+platform-wide, so skipping it sends a tenant's incident text to a shared destination. Every other
+event type resolves the PRIMARY on-call, tenant-wide until backlog #0-12 carries the team. The
+lookup is scoped to the entry's tenant as well as the user id, because `escalateTo` is an
+unverified id from a Kafka payload, and the client ignores a response for a different user. The
+fail-open client cannot tell "not on call" from "service down" (backlog #0-19). oncall-service
+restricts the endpoint to SERVICE and ADMIN; a user with several concurrent entries gets the most
+recently started one, so only the contact details are meaningful, not the role.
+
+Tenant content may only reach members of that tenant. `notification.fallback.*` breaks that rule
+today (backlog #0-18); its shipped defaults are placeholders, not a disabled fallback.
 
 oncall-service endpoints that return contact data need their own URL-level SERVICE/ADMIN matcher in
 `SecurityConfig`: the rule for `/api/v1/oncall/current` is an exact path and does not cover a

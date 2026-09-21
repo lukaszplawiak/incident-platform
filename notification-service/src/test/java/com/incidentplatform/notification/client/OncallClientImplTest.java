@@ -182,6 +182,143 @@ class OncallClientImplTest {
         }
     }
 
+    // ── findCurrentByUserId (backlog #0-1) ────────────────────────────────
+
+    @Nested
+    @DisplayName("findCurrentByUserId")
+    class FindCurrentByUserId {
+
+        private static final String USER_ID = "11111111-1111-1111-1111-111111111111";
+        private static final String PATH = "/api/v1/oncall/current/by-user/" + USER_ID;
+
+        @Test
+        @DisplayName("returns fully parsed OncallInfo, and sends the tenant's token and headers")
+        void returnsParsedOncallInfo() {
+            wireMock.stubFor(get(urlPathEqualTo(PATH))
+                    .willReturn(aResponse()
+                            .withStatus(200)
+                            .withHeader("Content-Type", "application/json")
+                            .withBody("""
+                                    {
+                                      "userId": "11111111-1111-1111-1111-111111111111",
+                                      "userName": "Sam Secondary",
+                                      "email": "sam@example.com",
+                                      "phone": "+48100200301",
+                                      "slackUserId": "U0987654321",
+                                      "role": "SECONDARY"
+                                    }
+                                    """)));
+
+            final Optional<OncallClient.OncallInfo> result =
+                    client.findCurrentByUserId(TENANT_ID, USER_ID);
+
+            assertThat(result).isPresent();
+            final OncallClient.OncallInfo info = result.get();
+            assertThat(info.userId()).isEqualTo(USER_ID);
+            assertThat(info.email()).isEqualTo("sam@example.com");
+            assertThat(info.phone()).isEqualTo("+48100200301");
+            assertThat(info.slackUserId()).isEqualTo("U0987654321");
+            assertThat(info.role()).isEqualTo("SECONDARY");
+            wireMock.verify(getRequestedFor(urlPathEqualTo(PATH))
+                    .withHeader("Authorization", equalTo("Bearer test-token"))
+                    .withHeader("X-Tenant-Id", equalTo(TENANT_ID)));
+        }
+
+        @Test
+        @DisplayName("encodes the user id as a single path segment — '/' or '?' cannot change the path")
+        void encodesUserIdAsOneSegment() {
+            wireMock.stubFor(get(urlPathEqualTo("/api/v1/oncall/current/by-user/a%2Fb%3Fc"))
+                    .willReturn(aResponse().withStatus(204)));
+
+            assertThat(client.findCurrentByUserId(TENANT_ID, "a/b?c")).isEmpty();
+
+            wireMock.verify(getRequestedFor(
+                    urlPathEqualTo("/api/v1/oncall/current/by-user/a%2Fb%3Fc")));
+        }
+
+        @Test
+        @DisplayName("ignores a response for a different user than the one asked for")
+        void ignoresResponseForAnotherUser() {
+            wireMock.stubFor(get(urlPathEqualTo(PATH))
+                    .willReturn(aResponse()
+                            .withStatus(200)
+                            .withHeader("Content-Type", "application/json")
+                            .withBody("""
+                                    {
+                                      "userId": "99999999-9999-9999-9999-999999999999",
+                                      "userName": "Somebody Else",
+                                      "email": "else@example.com",
+                                      "phone": "+48100200399",
+                                      "slackUserId": "UELSE",
+                                      "role": "SECONDARY"
+                                    }
+                                    """)));
+
+            assertThat(client.findCurrentByUserId(TENANT_ID, USER_ID)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("returns empty on 204 — the user is not on call right now")
+        void returnsEmptyOnNoContent() {
+            wireMock.stubFor(get(urlPathEqualTo(PATH))
+                    .willReturn(aResponse().withStatus(204)));
+
+            assertThat(client.findCurrentByUserId(TENANT_ID, USER_ID)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("propagates on HTTP 403 — a rejected token must reach the fallback, not look like 'not on call'")
+        void throwsOnForbidden() {
+            wireMock.stubFor(get(urlPathEqualTo(PATH))
+                    .willReturn(aResponse().withStatus(403)));
+
+            assertThatThrownBy(() -> client.findCurrentByUserId(TENANT_ID, USER_ID))
+                    .isInstanceOf(RestClientException.class);
+        }
+
+        @Test
+        @DisplayName("propagates on HTTP 500")
+        void throwsOnServerError() {
+            wireMock.stubFor(get(urlPathEqualTo(PATH))
+                    .willReturn(aResponse().withStatus(500)));
+
+            assertThatThrownBy(() -> client.findCurrentByUserId(TENANT_ID, USER_ID))
+                    .isInstanceOf(RestClientException.class);
+        }
+
+        @Test
+        @DisplayName("propagates on connection refused")
+        void throwsOnConnectionRefused() {
+            wireMock.stop();
+
+            assertThatThrownBy(() -> client.findCurrentByUserId(TENANT_ID, USER_ID))
+                    .isInstanceOf(RestClientException.class);
+        }
+
+        @Test
+        @DisplayName("propagates a malformed response body as a parsing failure")
+        void throwsOnMalformedBody() {
+            wireMock.stubFor(get(urlPathEqualTo(PATH))
+                    .willReturn(aResponse().withStatus(200).withBody("not json")));
+
+            assertThatThrownBy(() -> client.findCurrentByUserId(TENANT_ID, USER_ID))
+                    .isInstanceOf(RuntimeException.class);
+        }
+
+        @Test
+        @DisplayName("fallback returns empty and counts the failure (401/403 as reason=auth)")
+        void fallbackReturnsEmptyAndCounts() {
+            final var result = client.findCurrentByUserIdFallback(TENANT_ID, USER_ID,
+                    HttpClientErrorException.create(HttpStatus.FORBIDDEN, "f",
+                            HttpHeaders.EMPTY, new byte[0], null));
+
+            assertThat(result).isEmpty();
+            assertThat(meterRegistry.counter(ClientFallbackMetrics.METRIC_NAME,
+                    "client", "oncall", "target", "oncall-service",
+                    "reason", "auth").count()).isEqualTo(1.0);
+        }
+    }
+
     @Nested
     @DisplayName("service token on the wire")
     class ServiceTokenOnTheWire {

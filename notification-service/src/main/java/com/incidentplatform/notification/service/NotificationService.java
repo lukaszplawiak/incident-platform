@@ -174,7 +174,7 @@ public class NotificationService {
         // database transaction open (backlog #42).
         final var channelRequests = router.route(
                 eventType, incidentId, tenantId,
-                entry.getSeverity(), entry.getTitle());
+                entry.getSeverity(), entry.getTitle(), entry.getEscalateTo());
 
         if (channelRequests.isEmpty()) {
             log.debug("No channels configured for event: {}", eventType);
