@@ -98,6 +98,15 @@ class OncallScheduleOverlapIntegrationTest {
                 "Integration test schedule");
     }
 
+    /** Same as above, for a specific tenant and user (backlog #0-1 by-user lookup). */
+    private OncallSchedule buildScheduleFor(String tenantId, String userId, UUID teamId,
+                                            OncallRole role, Instant startsAt, Instant endsAt) {
+        return OncallSchedule.create(
+                tenantId, teamId, userId, "Name of " + userId, userId + "@example.com",
+                "+48100200300", "U" + userId, role, startsAt, endsAt,
+                "Integration test schedule");
+    }
+
     @Nested
     @DisplayName("Flyway migrations")
     class Migrations {
@@ -354,6 +363,103 @@ class OncallScheduleOverlapIntegrationTest {
                     TENANT_ID, UUID.randomUUID(), OncallRole.PRIMARY, now);
 
             assertThat(result).isEmpty();
+        }
+    }
+
+    /**
+     * Real-Postgres coverage of {@code findCurrentByTenantIdAndUserId} (backlog
+     * #0-1). The tenant-mismatch case is the reason this query exists in the
+     * shape it has: the user id it is called with is an unverified id from a
+     * Kafka payload, so it must never match a user of another tenant.
+     */
+    @Nested
+    @DisplayName("findCurrentByTenantIdAndUserId — real JPQL")
+    class FindCurrentByUser {
+
+        private final Instant now = Instant.now();
+
+        private OncallSchedule saveCurrent(String tenantId, String userId, UUID teamId,
+                                           OncallRole role) {
+            return repository.saveAndFlush(buildScheduleFor(tenantId, userId, teamId, role,
+                    now.minusSeconds(3600), now.plusSeconds(3600)));
+        }
+
+        @Test
+        @DisplayName("finds the active entry of the user in the tenant")
+        void findsActiveEntry() {
+            saveCurrent(TENANT_ID, "user-2", null, OncallRole.SECONDARY);
+
+            final var result = repository.findCurrentByTenantIdAndUserId(
+                    TENANT_ID, "user-2", now);
+
+            assertThat(result).hasSize(1);
+            assertThat(result.get(0).getRole()).isEqualTo(OncallRole.SECONDARY);
+            assertThat(result.get(0).getEmail()).isEqualTo("user-2@example.com");
+        }
+
+        @Test
+        @DisplayName("does NOT return the same user id from another tenant")
+        void doesNotCrossTenants() {
+            saveCurrent("other-tenant", "user-2", null, OncallRole.SECONDARY);
+
+            assertThat(repository.findCurrentByTenantIdAndUserId(TENANT_ID, "user-2", now))
+                    .isEmpty();
+            // and the row is reachable from its own tenant — the query is not just broken
+            assertThat(repository.findCurrentByTenantIdAndUserId("other-tenant", "user-2", now))
+                    .hasSize(1);
+        }
+
+        @Test
+        @DisplayName("does not return a different user of the same tenant")
+        void doesNotReturnOtherUser() {
+            saveCurrent(TENANT_ID, "user-3", null, OncallRole.SECONDARY);
+
+            assertThat(repository.findCurrentByTenantIdAndUserId(TENANT_ID, "user-2", now))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("ignores an entry that has not started yet and one that has already ended")
+        void ignoresFutureAndExpired() {
+            repository.saveAndFlush(buildScheduleFor(TENANT_ID, "user-2", null,
+                    OncallRole.SECONDARY, now.plusSeconds(3600), now.plusSeconds(7200)));
+            repository.saveAndFlush(buildScheduleFor(TENANT_ID, "user-2", null,
+                    OncallRole.MANAGER, now.minusSeconds(7200), now.minusSeconds(3600)));
+
+            assertThat(repository.findCurrentByTenantIdAndUserId(TENANT_ID, "user-2", now))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("ignores CANCELLED and SUPERSEDED entries")
+        void ignoresCancelledAndSuperseded() {
+            final OncallSchedule cancelled =
+                    saveCurrent(TENANT_ID, "user-2", null, OncallRole.SECONDARY);
+            cancelled.cancel();
+            repository.saveAndFlush(cancelled);
+
+            final OncallSchedule superseded =
+                    saveCurrent(TENANT_ID, "user-2", UUID.randomUUID(), OncallRole.MANAGER);
+            superseded.markSuperseded();
+            repository.saveAndFlush(superseded);
+
+            assertThat(repository.findCurrentByTenantIdAndUserId(TENANT_ID, "user-2", now))
+                    .isEmpty();
+        }
+
+        @Test
+        @DisplayName("returns several concurrent entries, most recently started first")
+        void ordersConcurrentEntries() {
+            // one user: SECONDARY for team A (started earlier), MANAGER for team B (started later)
+            repository.saveAndFlush(buildScheduleFor(TENANT_ID, "user-2", UUID.randomUUID(),
+                    OncallRole.SECONDARY, now.minusSeconds(7200), now.plusSeconds(3600)));
+            repository.saveAndFlush(buildScheduleFor(TENANT_ID, "user-2", UUID.randomUUID(),
+                    OncallRole.MANAGER, now.minusSeconds(1800), now.plusSeconds(3600)));
+
+            final var result = repository.findCurrentByTenantIdAndUserId(TENANT_ID, "user-2", now);
+
+            assertThat(result).extracting(OncallSchedule::getRole)
+                    .containsExactly(OncallRole.MANAGER, OncallRole.SECONDARY);
         }
     }
 

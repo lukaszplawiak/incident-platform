@@ -46,7 +46,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 
 ### 0-1. Escalation notifications go to the PRIMARY on-call, not the escalation target
 
-**Type:** bug · **Priority:** High · **Status:** Open (PR 1 of 2 done, see below)
+**Type:** bug · **Priority:** High · **Status:** Open (PR #411 and the oncall-service endpoint done, notification-service left; see below)
 
 **Problem.** escalation-service (`EscalationScheduler.escalate()`) resolves the SECONDARY
 (level 1) or MANAGER (level 2) user through oncall-service and publishes
@@ -63,17 +63,21 @@ keyed on tenant + event type + escalation level, and `escalate_to` is stored on
 service-to-service HTTP call was a 401 and `escalateTo` was always null. Fixed first; without it
 the steps below would be unreachable in a real deployment.
 
-**Remaining (PR 2).**
-1. oncall-service: `GET /api/v1/oncall/current/by-user/{userId}` returning the user's current
-   on-call entry (contact details), scoped to the request tenant **and** the user id together.
-   `escalateTo` is an unverified id from a Kafka payload; a lookup by user id alone could send one
-   tenant's incident to another tenant's user.
-2. notification-service: `OncallClient` method for it; `NotificationRouter` uses the entry's
-   `escalateTo` for `IncidentEscalatedEvent` (fall back to the configured fallback addresses when
+**Done (oncall-service).** `GET /api/v1/oncall/current/by-user/{userId}` returns the user's current
+on-call entry with contact details, scoped to the request tenant **and** the user id together
+(`escalateTo` is an unverified id from a Kafka payload; a lookup by user id alone could send one
+tenant's incident to another tenant's user). Restricted to SERVICE and ADMIN at URL level, since the
+response carries email and phone number. A user with several concurrent entries gets the most recently
+started one. Only the contact details in the response are meaningful: the role of that entry is not
+authoritative (no `teamId` is returned either), so notification-service must not derive anything from it.
+
+**Remaining (notification-service).**
+1. `OncallClient` method for the new endpoint; `NotificationRouter` uses the entry for
+   `IncidentEscalatedEvent` from `escalateTo` (fall back to the configured fallback addresses when
    there is no target or no schedule).
-3. `OncallClientImpl.getCurrentOncall(tenantId, role)` sends no `teamId`, so "PRIMARY" is
+2. `OncallClientImpl.getCurrentOncall(tenantId, role)` sends no `teamId`, so "PRIMARY" is
    resolved tenant-wide. Split out as backlog #0-12.
-4. Remove the "Current limitation" text from the README (Escalation Chain) and from
+3. Remove the "Current limitation" text from the README (Escalation Chain) and from
    `.ai/context/project.md` when this lands.
 
 **Acceptance.** Level-1 and level-2 escalations notify the SECONDARY and MANAGER respectively;
@@ -251,6 +255,11 @@ with `role` only, so "PRIMARY" is resolved tenant-wide, which is ambiguous when 
 than one team. Split out of backlog #0-1 (item 3): the escalation path needs no `teamId` because it
 looks the target up by tenant and user id.
 
+The by-user lookup (backlog #0-1) returns the most recently started entry when one user holds
+concurrent entries on different teams, which is not necessarily the team of the incident. Only the
+contact details are used today, so this is harmless, but it is the same missing-team gap: once
+`teamId` travels with the event, the lookup can take it as an optional filter.
+
 **Approach.** Carry `teamId` through `IncidentEscalatedEvent`/the incident events, the
 notification consumer and `NotificationQueueEntry` (Flyway migration), then send it. Touches `shared`
 event records, so it rebuilds all 7 services: do it as its own PR.
@@ -365,7 +374,7 @@ platform itself depends on how that operator tenant is set up in backlog #0-16.
 
 | # | Title | Delivered in |
 |---|---|---|
-| 0-11 | Service tokens were rejected by `JwtAuthFilter`: per-tenant, per-audience service tokens, `ServicePrincipal`, real-token filter tests, fallback metric, tenant-id validation, escalation client timeouts, correct oncall URL default | this PR (number added when merged) |
+| 0-11 | Service tokens were rejected by `JwtAuthFilter`: per-tenant, per-audience service tokens, `ServicePrincipal`, real-token filter tests, fallback metric, tenant-id validation, escalation client timeouts, correct oncall URL default | PR #413 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |
