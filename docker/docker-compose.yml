@@ -451,7 +451,9 @@ services:
       MAIL_PASSWORD: ${MAIL_PASSWORD:-}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-xoxb-placeholder-not-a-real-token}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-placeholder-signing-secret-not-real}
-      NOTIFICATION_FALLBACK_EMAIL: ${NOTIFICATION_FALLBACK_EMAIL:-oncall@incident-platform.local}
+      # Dev only: mailhog catches it. The service has no default (empty means no operator email),
+      # and the k8s ConfigMap ships it empty; never point a shared environment at a placeholder.
+      NOTIFICATION_OPERATOR_ALERT_EMAIL: ${NOTIFICATION_OPERATOR_ALERT_EMAIL:-operator@incident-platform.local}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
       postgres:

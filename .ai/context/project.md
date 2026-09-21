@@ -198,6 +198,9 @@ the README "Design Decisions" section records why RS256/Keycloak was rejected fo
 
 Fail-open is kept, but made visible: clients call `ClientFallbackMetrics.record(...)` from their
 fallbacks (`service_client_fallback_total{client,target,reason}`). `reason="auth"` is a 401/403.
+Exception: where an empty result changes who is notified, the client records the metric and then
+throws (`OncallLookupUnavailableException`, backlog #0-19), so "unavailable" is never read as
+"nobody there".
 
 ### Escalation notifications go to the escalation target (backlog #0-1)
 
@@ -207,18 +210,44 @@ scheduler, not the consumer, resolves the recipient at send time). For `INCIDENT
 `NotificationRouter` looks that user up with `OncallClient.findCurrentByUserId` (oncall-service
 `GET /api/v1/oncall/current/by-user/{userId}`) and notifies their email, Slack id and phone.
 
-Recipient order for an escalation: the target, then the tenant's PRIMARY on-call, then the
-configured fallback addresses. **Do not drop the PRIMARY step**: the fallback addresses are
-platform-wide, so skipping it sends a tenant's incident text to a shared destination. Every other
-event type resolves the PRIMARY on-call, tenant-wide until backlog #0-12 carries the team. The
-lookup is scoped to the entry's tenant as well as the user id, because `escalateTo` is an
-unverified id from a Kafka payload, and the client ignores a response for a different user. The
-fail-open client cannot tell "not on call" from "service down" (backlog #0-19). oncall-service
-restricts the endpoint to SERVICE and ADMIN; a user with several concurrent entries gets the most
-recently started one, so only the contact details are meaningful, not the role.
+**Invariants (do not undo them):**
+- Recipient order for an escalation: the target, then the tenant's PRIMARY on-call, then
+  UNDELIVERABLE. Do not drop the PRIMARY step, and do not add a platform-wide fallback address.
+- Tenant content (incident title, id, severity) may only reach members of that tenant. The
+  contact details of an on-call entry are free text, not verified against tenant membership, so
+  this is enforced by trust until backlog #0-24.
+- Every other event type resolves the PRIMARY on-call, tenant-wide until backlog #0-12 carries
+  the team, so in a multi-team tenant it can be another team's PRIMARY. Between teams the intended
+  default is also "no", but it is not enforced yet.
+- The lookup is scoped to the entry's tenant as well as the user id (`escalateTo` is an unverified
+  id from a Kafka payload), and the client ignores a response for a different user.
+- A channel the contact has no address for is skipped, never replaced by a shared one. A Slack id
+  is an address only if `SlackNotificationChannel.isSlackUserId` accepts it; the router and the
+  channel share that predicate, because a DM the channel silently ignores would still be recorded
+  as SENT.
 
-Tenant content may only reach members of that tenant. `notification.fallback.*` breaks that rule
-today (backlog #0-18); its shipped defaults are placeholders, not a disabled fallback.
+When nobody in the tenant can be notified the queue entry becomes `UNDELIVERABLE` (V6; the reason
+is in `error_message`) and nothing is sent. The tenant gets an audit event of its own type,
+`NOTIFICATION_UNDELIVERABLE`, distinct from `NOTIFICATION_FAILED` (a failed send): an auditor
+filtering by type must not get both meanings. For opened and escalated incidents the operator gets
+a content-free email (identifiers and reason only) at `notification.operator-alert.email`, which has
+no default; details of the rate limit and the metrics are in the code and the README.
+
+An oncall-service outage is not "nobody on call" (backlog #0-19). `getCurrentOncall` and
+`findCurrentByUserId` throw `OncallLookupUnavailableException`; the entry stays PENDING until the
+lookup has been failing for `notification.scheduler.lookup-retry-window`, then becomes UNDELIVERABLE.
+The window runs from the entry's first failed lookup (`first_lookup_failure_at`), not from its
+creation, or a restart would park a whole backlog on one blip. `@Retry(name = "oncall")` on these
+clients is probably inactive (backlog #0-23); the scheduler's PENDING retry is the real one.
+`findBySlackUserId` still fails open. A scheduler run stops after `processing-budget`, which must
+stay below the 4-minute ShedLock (validated at startup), and loads at most `batch-size` entries,
+oldest first.
+
+Slack does not post to the shared channel unless `broadcast-enabled` (default false). Slack is
+still one workspace and one bot token for the whole platform, so DMs only work for users in that
+workspace (backlog #0-21). oncall-service restricts the by-user endpoint to SERVICE and ADMIN; a
+user with several concurrent entries gets the most recently started one, so only the contact
+details are meaningful, not the role.
 
 oncall-service endpoints that return contact data need their own URL-level SERVICE/ADMIN matcher in
 `SecurityConfig`: the rule for `/api/v1/oncall/current` is an exact path and does not cover a

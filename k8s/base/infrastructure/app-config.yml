@@ -34,6 +34,11 @@ data:
   APP_BASE_URL: "https://incident-platform.local"
   CORS_ALLOWED_ORIGINS: "https://incident-platform.local"
   INVITE_EMAIL_FROM: "noreply@incident-platform.local"
+  # notification-service: where the platform OPERATOR is emailed (content-free alert) when a
+  # notification could not be delivered to anyone in its tenant. Empty means no email is sent
+  # (the ERROR log and the notification.undeliverable metric remain), so set it per environment
+  # in the overlay (backlog #0-18).
+  NOTIFICATION_OPERATOR_ALERT_EMAIL: ""
   MAIL_HOST: "mailhog"
   MAIL_PORT: "1025"
 

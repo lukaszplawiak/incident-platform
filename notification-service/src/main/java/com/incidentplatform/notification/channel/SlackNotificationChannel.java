@@ -30,6 +30,7 @@ public class SlackNotificationChannel implements NotificationChannel {
     private final boolean enabled;
     private final String botToken;
     private final String defaultChannel;
+    private final boolean broadcastEnabled;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final SlackMessageStore messageStore;
@@ -44,6 +45,7 @@ public class SlackNotificationChannel implements NotificationChannel {
         this.enabled        = properties.channels().slack().enabled();
         this.botToken       = properties.channels().slack().botToken();
         this.defaultChannel = properties.channels().slack().channel();
+        this.broadcastEnabled = properties.channels().slack().broadcastEnabled();
         this.messageStore = messageStore;
 
         final String apiBaseUrl = properties.channels().slack().apiBaseUrl();
@@ -80,9 +82,15 @@ public class SlackNotificationChannel implements NotificationChannel {
      */
     @Override
     public void send(NotificationRequest request) {
-        final String defaultChannelTs = sendWithAckButton(defaultChannel, request);
-        messageStore.save(request.incidentId(), defaultChannel,
-                request.tenantId(), defaultChannelTs);
+        // Fixed (backlog #0-18): the message used to be posted to the one shared
+        // channel for every notification of every tenant, whatever the recipient.
+        // In a multi-tenant deployment that hands each tenant's incident text to a
+        // destination that is not a member of that tenant, so it is now opt-in.
+        if (broadcastEnabled) {
+            final String defaultChannelTs = sendWithAckButton(defaultChannel, request);
+            messageStore.save(request.incidentId(), defaultChannel,
+                    request.tenantId(), defaultChannelTs);
+        }
 
         if (isSlackUserId(request.recipient())) {
             final String dmTs = sendWithAckButton(request.recipient(), request);
@@ -92,6 +100,16 @@ public class SlackNotificationChannel implements NotificationChannel {
             log.info("Slack DM with ACK button sent to on-call: " +
                             "userId={}, incidentId={}",
                     request.recipient(), request.incidentId());
+        } else if (!broadcastEnabled) {
+            // Nothing was posted: the broadcast is off and the recipient is not a
+            // Slack user id, so no DM either. Returning normally would let the
+            // caller record a SENT notification (and a NOTIFICATION_SENT audit
+            // event) for a message that never left. The router already skips a
+            // recipient that is not a Slack user id, so this only guards a caller
+            // that bypasses it; fail loudly rather than report a delivery.
+            throw new NotificationException("SLACK", request.recipient(),
+                    "Nothing posted: not a Slack user id and the shared-channel " +
+                            "broadcast is disabled", null);
         }
     }
 
@@ -272,7 +290,14 @@ public class SlackNotificationChannel implements NotificationChannel {
                 cause);
     }
 
-    private boolean isSlackUserId(String recipient) {
+    /**
+     * Whether {@code recipient} is a Slack user id that {@link #send} will DM.
+     * Public and static so that {@code NotificationRouter} decides with the very
+     * same predicate: a recipient this rejects has no Slack address, and the router
+     * skips the channel instead of building a request that would silently post
+     * nothing (backlog #0-18).
+     */
+    public static boolean isSlackUserId(String recipient) {
         return recipient != null
                 && !recipient.isBlank()
                 && recipient.startsWith("U");

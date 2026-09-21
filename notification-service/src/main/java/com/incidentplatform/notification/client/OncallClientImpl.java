@@ -112,7 +112,9 @@ public class OncallClientImpl implements OncallClient {
                         "tenantId={}, role={}, error={}",
                 tenantId, role, e.getMessage());
         fallbackMetrics.record("oncall", "oncall-service", e);
-        return Optional.empty();
+        // Backlog #0-19: not fail-open any more — see OncallLookupUnavailableException.
+        throw new OncallLookupUnavailableException(
+                "oncall-service could not answer getCurrentOncall", e);
     }
 
     @Retry(name = "oncall")
@@ -214,7 +216,9 @@ public class OncallClientImpl implements OncallClient {
                         "userId={}, tenantId={}, error={}",
                 userId, tenantId, e.getMessage());
         fallbackMetrics.record("oncall", "oncall-service", e);
-        return Optional.empty();
+        // Backlog #0-19: not fail-open any more — see OncallLookupUnavailableException.
+        throw new OncallLookupUnavailableException(
+                "oncall-service could not answer findCurrentByUserId", e);
     }
 
     private OncallInfo parseOncallInfo(String responseBody) {

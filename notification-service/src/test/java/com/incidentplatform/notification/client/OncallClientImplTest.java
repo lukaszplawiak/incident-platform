@@ -306,13 +306,13 @@ class OncallClientImplTest {
         }
 
         @Test
-        @DisplayName("fallback returns empty and counts the failure (401/403 as reason=auth)")
-        void fallbackReturnsEmptyAndCounts() {
-            final var result = client.findCurrentByUserIdFallback(TENANT_ID, USER_ID,
+        @DisplayName("fallback counts the failure (401/403 as reason=auth) and throws — it does not fail open (backlog #0-19)")
+        void fallbackThrowsAndCounts() {
+            assertThatThrownBy(() -> client.findCurrentByUserIdFallback(TENANT_ID, USER_ID,
                     HttpClientErrorException.create(HttpStatus.FORBIDDEN, "f",
-                            HttpHeaders.EMPTY, new byte[0], null));
+                            HttpHeaders.EMPTY, new byte[0], null)))
+                    .isInstanceOf(OncallLookupUnavailableException.class);
 
-            assertThat(result).isEmpty();
             assertThat(meterRegistry.counter(ClientFallbackMetrics.METRIC_NAME,
                     "client", "oncall", "target", "oncall-service",
                     "reason", "auth").count()).isEqualTo(1.0);
@@ -363,9 +363,10 @@ class OncallClientImplTest {
         @Test
         @DisplayName("getCurrentOncallFallback counts a 401 as reason=auth")
         void currentOncallCountsAuth() {
-            client.getCurrentOncallFallback(TENANT_ID, "PRIMARY",
+            assertThatThrownBy(() -> client.getCurrentOncallFallback(TENANT_ID, "PRIMARY",
                     HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "u",
-                            HttpHeaders.EMPTY, new byte[0], null));
+                            HttpHeaders.EMPTY, new byte[0], null)))
+                    .isInstanceOf(OncallLookupUnavailableException.class);
 
             assertThat(count("auth")).isEqualTo(1.0);
         }
@@ -383,7 +384,9 @@ class OncallClientImplTest {
         @Test
         @DisplayName("a generic failure is counted as reason=other")
         void genericFailureCountsOther() {
-            client.getCurrentOncallFallback(TENANT_ID, "PRIMARY", new RuntimeException("boom"));
+            assertThatThrownBy(() -> client.getCurrentOncallFallback(
+                    TENANT_ID, "PRIMARY", new RuntimeException("boom")))
+                    .isInstanceOf(OncallLookupUnavailableException.class);
 
             assertThat(count("other")).isEqualTo(1.0);
         }
@@ -394,11 +397,14 @@ class OncallClientImplTest {
     class GetCurrentOncallFallback {
 
         @Test
-        @DisplayName("returns empty regardless of the exception it's given")
-        void alwaysReturnsEmpty() {
-            assertThat(client.getCurrentOncallFallback(
-                    TENANT_ID, "PRIMARY", new RuntimeException("boom")))
-                    .isEmpty();
+        @DisplayName("throws OncallLookupUnavailableException — a failed lookup is not 'nobody on call' (backlog #0-19)")
+        void throwsLookupUnavailable() {
+            final RuntimeException cause = new RuntimeException("boom");
+
+            assertThatThrownBy(() -> client.getCurrentOncallFallback(
+                    TENANT_ID, "PRIMARY", cause))
+                    .isInstanceOf(OncallLookupUnavailableException.class)
+                    .hasCause(cause);
         }
     }
 

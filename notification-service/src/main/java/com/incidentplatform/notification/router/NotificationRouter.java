@@ -1,8 +1,11 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
+import com.incidentplatform.notification.channel.SlackNotificationChannel;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.client.OncallClient;
+import com.incidentplatform.notification.client.OncallLookupUnavailableException;
+import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
@@ -10,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -46,29 +50,23 @@ public class NotificationRouter {
 
     private final Map<String, NotificationChannel> channelsByName;
     private final OncallClient oncallClient;
-    private final String fallbackEmail;
-    private final String fallbackSlackChannel;
-    private final String fallbackPhone;
 
     public NotificationRouter(
             List<NotificationChannel> channels,
-            OncallClient oncallClient,
-            NotificationChannelProperties properties) {
+            OncallClient oncallClient) {
         this.channelsByName = channels.stream()
                 .collect(Collectors.toMap(
                         NotificationChannel::channelName,
                         ch -> ch
                 ));
         this.oncallClient = oncallClient;
-        this.fallbackEmail = properties.fallback().email();
-        this.fallbackSlackChannel = properties.fallback().slackChannel();
-        this.fallbackPhone = properties.fallback().phone();
         log.info("NotificationRouter initialized with channels: {}",
                 channelsByName.keySet());
     }
 
     /**
-     * Builds the per-channel requests for one notification.
+     * Builds the per-channel requests for one notification, or says that
+     * nobody in the tenant can be notified.
      *
      * <h2>Fixed (backlog #0-1): escalations go to the escalation target</h2>
      * The recipient used to be the PRIMARY on-call for every event type, so an
@@ -76,89 +74,109 @@ public class NotificationRouter {
      * the SECONDARY or MANAGER escalation-service chose. For
      * {@code INCIDENT_ESCALATED} the recipient is now the user in
      * {@code escalateTo}, resolved through oncall-service by tenant and user
-     * id together.
+     * id together. If there is no target, or nobody is found for it, the
+     * escalation goes to the tenant's PRIMARY on-call, as before. (An earlier
+     * draft dropped the {@code getCurrentOncall(tenantId, PRIMARY)} step; that
+     * reversed a safe default and was undone.) That PRIMARY is tenant-wide
+     * across its teams until backlog #0-12, so in a multi-team tenant it can be
+     * another team's PRIMARY.
      *
-     * <p>If there is no target, or the lookup finds nobody (not on call any
-     * more, or oncall-service unavailable), the escalation goes to the
-     * tenant's PRIMARY on-call, exactly as before this change, and only if
-     * there is none either to the configured fallback addresses. An earlier
-     * draft of this change dropped the {@code getCurrentOncall(tenantId,
-     * PRIMARY)} step for escalations and went straight to the fallback
-     * addresses; review showed that reversed a safe default: those addresses
-     * are platform-wide, not tenant-scoped, so every escalation without a
-     * target would have sent that tenant's incident text to a shared
-     * destination, and where they are unconfigured it would have reached
-     * nobody. The PRIMARY lookup is scoped to the tenant (though tenant-wide
-     * across its teams until backlog #0-12, so in a multi-team tenant it can
-     * be another team's PRIMARY), and a repeat notification to a PRIMARY who
-     * was already alerted is a lesser evil than a lost or misdirected
-     * escalation.
+     * <h2>Fixed (backlog #0-18): tenant content only reaches members of the tenant</h2>
+     * When nobody is found, the recipient used to be the platform-wide
+     * {@code notification.fallback.*} addresses, and a found contact that lacked
+     * a channel got the fallback address for that channel. Both sent one
+     * tenant's incident title, id and severity to a destination that is not a
+     * member of that tenant. There is no fallback address any more: a channel
+     * the contact has no address for is skipped, and if nobody can be reached
+     * the result is {@link Routing#undeliverable}. The caller parks the entry
+     * as UNDELIVERABLE and tells the operator with a content-free alert. This is
+     * what PagerDuty-style systems do: an incident nobody can be assigned to is
+     * a visible error, not a message to a shared inbox. A tenant-owned fallback
+     * contact is backlog #0-20.
      *
-     * <p>Known limitation, not fixed here (backlog #0-18): the fallback
-     * addresses are still used, for every event type, when no on-call is
-     * found, and the message carries the incident title. That is not
-     * acceptable for a multi-tenant SaaS and is tracked as a high-priority
-     * follow-up. Every other event type keeps the PRIMARY lookup (which is
-     * tenant-wide until backlog #0-12 adds the team).
+     * <p>Every other event type keeps the PRIMARY lookup, tenant-wide until
+     * backlog #0-12 adds the team.
      *
      * @param escalateTo the user an incident was escalated to; only read for
      *                   {@code INCIDENT_ESCALATED}, may be null
+     * @throws OncallLookupUnavailableException if oncall-service cannot answer
+     *         a lookup (backlog #0-19); the scheduler retries the entry
      */
-    public List<ChannelRequest> route(String eventType,
-                                      UUID incidentId,
-                                      String tenantId,
-                                      Severity severity,
-                                      String title,
-                                      UUID escalateTo) {
+    public Routing route(String eventType,
+                         UUID incidentId,
+                         String tenantId,
+                         Severity severity,
+                         String title,
+                         UUID escalateTo) {
 
         final Set<String> targetChannels = EVENT_TO_CHANNELS
                 .getOrDefault(eventType, Set.of());
 
         if (targetChannels.isEmpty()) {
             log.debug("No channels configured for event: {}", eventType);
-            return List.of();
+            return Routing.nothingToSend();
+        }
+
+        final List<NotificationChannel> enabledChannels = targetChannels.stream()
+                .map(channelsByName::get)
+                .filter(ch -> ch != null && ch.isEnabled())
+                .toList();
+
+        if (enabledChannels.isEmpty()) {
+            log.debug("No enabled channel for event: {}", eventType);
+            return Routing.nothingToSend();
         }
 
         final OncallClient.OncallInfo oncall =
                 resolveOncall(eventType, incidentId, tenantId, escalateTo);
 
-        return targetChannels.stream()
-                .map(channelName -> {
-                    final NotificationChannel channel =
-                            channelsByName.get(channelName);
+        if (oncall == null) {
+            log.warn("Nobody on call in the tenant — notification is " +
+                            "undeliverable: incidentId={}, tenantId={}, eventType={}",
+                    incidentId, tenantId, eventType);
+            return Routing.undeliverable(UndeliverableReason.NO_ONCALL);
+        }
 
-                    if (channel == null || !channel.isEnabled()) {
-                        log.debug("Channel {} not available, skipping",
-                                channelName);
-                        return null;
-                    }
+        final List<ChannelRequest> requests = new ArrayList<>();
+        final List<String> skipped = new ArrayList<>();
 
-                    final String recipient = resolveRecipient(
-                            channelName, tenantId, oncall);
+        for (final NotificationChannel channel : enabledChannels) {
+            final String recipient = recipientFor(channel.channelName(), oncall);
 
-                    final NotificationRequest request = new NotificationRequest(
-                            incidentId,
-                            tenantId,
-                            eventType,
-                            recipient,
-                            buildSubject(eventType, title, severity),
-                            buildMessage(eventType, title, severity, incidentId),
-                            severity,
-                            title
-                    );
+            if (recipient == null) {
+                skipped.add(channel.channelName());
+                continue;
+            }
 
-                    return new ChannelRequest(channel, request);
-                })
-                .filter(Objects::nonNull)
-                .toList();
+            requests.add(new ChannelRequest(channel, new NotificationRequest(
+                    incidentId,
+                    tenantId,
+                    eventType,
+                    recipient,
+                    buildSubject(eventType, title, severity),
+                    buildMessage(eventType, title, severity, incidentId),
+                    severity,
+                    title
+            )));
+        }
+
+        if (requests.isEmpty()) {
+            log.warn("On-call user has no address on any enabled channel — " +
+                            "notification is undeliverable: incidentId={}, " +
+                            "tenantId={}, eventType={}, userId={}",
+                    incidentId, tenantId, eventType, oncall.userId());
+            return Routing.undeliverable(
+                    UndeliverableReason.NO_REACHABLE_CHANNEL, skipped);
+        }
+
+        return Routing.send(requests, skipped);
     }
 
     /**
      * Resolves whose contact details this notification goes to. For
      * {@code INCIDENT_ESCALATED} that is the escalation target when there is
      * one and it can be found; otherwise, and for every other event type, the
-     * tenant's PRIMARY on-call. Returns null when nobody was found, which
-     * makes {@link #resolveRecipient} use the fallback addresses.
+     * tenant's PRIMARY on-call. Returns null when nobody was found.
      */
     private OncallClient.OncallInfo resolveOncall(String eventType,
                                                   UUID incidentId,
@@ -180,8 +198,7 @@ public class NotificationRouter {
                             tenantId, target.userId(), target.userName());
                     return target;
                 }
-                log.warn("Escalation target not found (not on call, or " +
-                                "oncall-service unavailable) — falling back to " +
+                log.warn("Escalation target is not on call — falling back to " +
                                 "the PRIMARY on-call: incidentId={}, tenantId={}, " +
                                 "escalateTo={}",
                         incidentId, tenantId, escalateTo);
@@ -195,33 +212,29 @@ public class NotificationRouter {
         if (oncall != null) {
             log.debug("Routing to oncall: tenantId={}, userId={}, userName={}",
                     tenantId, oncall.userId(), oncall.userName());
-        } else {
-            log.warn("No oncall found for tenantId={} — using fallback addresses",
-                    tenantId);
         }
         return oncall;
     }
 
-    private String resolveRecipient(String channelName,
-                                    String tenantId,
-                                    OncallClient.OncallInfo oncall) {
-        if (oncall != null) {
-            return switch (channelName) {
-                case EMAIL -> oncall.email() != null
-                        ? oncall.email() : fallbackEmail;
-                case SLACK -> oncall.hasDm()
-                        ? oncall.slackUserId() : fallbackSlackChannel;
-                case SMS   -> oncall.hasSms()
-                        ? oncall.phone() : fallbackPhone;
-                default -> "unknown";
-            };
-        }
-
+    /**
+     * The on-call user's own address for a channel, or null if they have none
+     * (in which case the channel is skipped, never replaced by a shared one).
+     */
+    private static String recipientFor(String channelName,
+                                       OncallClient.OncallInfo oncall) {
         return switch (channelName) {
-            case EMAIL -> fallbackEmail;
-            case SLACK -> fallbackSlackChannel;
-            case SMS   -> fallbackPhone;
-            default -> "unknown";
+            case EMAIL -> oncall.email() != null && !oncall.email().isBlank()
+                    ? oncall.email() : null;
+            // The same predicate the Slack channel uses to DM: an id it would silently
+            // ignore (an Enterprise Grid "W…" id, a channel name) is no address. The router
+            // does not know the shared-channel broadcast (single-organisation deployments
+            // only, off by default), so with it on a contact without a valid Slack id still
+            // gets no Slack request here, and therefore no shared-channel post either.
+            case SLACK -> oncall.hasDm()
+                    && SlackNotificationChannel.isSlackUserId(oncall.slackUserId())
+                    ? oncall.slackUserId() : null;
+            case SMS   -> oncall.hasSms() ? oncall.phone() : null;
+            default    -> null;
         };
     }
 
@@ -274,4 +287,44 @@ public class NotificationRouter {
             NotificationChannel channel,
             NotificationRequest request
     ) {}
+
+    /**
+     * Outcome of {@link #route}: requests to send, nothing to send (no channel
+     * is configured or enabled for the event), or undeliverable (nobody in the
+     * tenant can be notified, backlog #0-18).
+     *
+     * @param skippedChannels enabled channels the on-call user has no address
+     *                        for; they are skipped, never replaced by a shared
+     *                        destination, and the caller makes that visible
+     */
+    public record Routing(List<ChannelRequest> requests,
+                          List<String> skippedChannels,
+                          UndeliverableReason undeliverableReason) {
+
+        public static Routing send(List<ChannelRequest> requests) {
+            return new Routing(requests, List.of(), null);
+        }
+
+        public static Routing send(List<ChannelRequest> requests,
+                                   List<String> skippedChannels) {
+            return new Routing(requests, List.copyOf(skippedChannels), null);
+        }
+
+        public static Routing nothingToSend() {
+            return new Routing(List.of(), List.of(), null);
+        }
+
+        public static Routing undeliverable(UndeliverableReason reason) {
+            return new Routing(List.of(), List.of(), reason);
+        }
+
+        public static Routing undeliverable(UndeliverableReason reason,
+                                            List<String> skippedChannels) {
+            return new Routing(List.of(), List.copyOf(skippedChannels), reason);
+        }
+
+        public boolean isUndeliverable() {
+            return undeliverableReason != null;
+        }
+    }
 }

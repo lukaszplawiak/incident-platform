@@ -33,16 +33,21 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-7](#0-7-incident-service-coerces-escalationlevel-with-asint0) | incident-service coerces `escalationLevel` with `asInt(0)` | bug | Low | Open |
 | [0-8](#0-8-dead-publishescalated-and-a-stale-javadoc-in-incident-service) | Dead `publishEscalated` and a stale Javadoc in incident-service | tech-debt | Low | Open |
 | [0-9](#0-9-stale-index-annotations-on-notificationlog) | Stale `@Index` annotations on `NotificationLog` | tech-debt | Low | Open |
-| [0-10](#0-10-notificationscheduler-loads-all-pending-entries-without-a-limit) | `NotificationScheduler` loads all pending entries without a limit | tech-debt | Low | Open |
-| [0-12](#0-12-notification-primary-lookup-sends-no-teamid) | Notification PRIMARY lookup sends no `teamId` | bug | Medium | Open |
+| [0-12](#0-12-notification-primary-lookup-sends-no-teamid) | Notification PRIMARY lookup sends no `teamId` | bug | High | Open |
 | [0-13](#0-13-asymmetric-service-tokens-or-mtls-for-service-identity) | Asymmetric service tokens or mTLS for service identity | design | Medium | Open |
 | [0-14](#0-14-by-slack-is-open-to-any-authenticated-role) | `GET /by-slack/{id}` is open to any authenticated role | tech-debt | Low | Open |
 | [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
 | [0-16](#0-16-decide-the-alertmanager-service-token-tenant-role-and-lifetime) | Decide the Alertmanager service token: tenant, role, lifetime | design | High | Open |
 | [0-17](#0-17-alert-on-service_client_fallback_totalreasonauth) | Alert on `service_client_fallback_total{reason="auth"}` | tech-debt | Medium | Open |
-| [0-18](#0-18-tenant-content-can-reach-the-shared-fallback-address) | Tenant content can reach the shared fallback address | bug | High | Open |
-| [0-19](#0-19-a-failed-oncall-lookup-is-indistinguishable-from-not-on-call) | A failed on-call lookup is indistinguishable from "not on call" | tech-debt | High | Open |
 | [0-20](#0-20-tenant-owned-fallback-contact) | Tenant-owned fallback contact | design | Medium | Open |
+| [0-21](#0-21-slack-is-one-workspace-for-the-whole-platform) | Slack is one workspace for the whole platform | design | High | Open |
+| [0-22](#0-22-the-operator-alert-is-email-only) | The operator alert is email only | tech-debt | Low | Open |
+| [0-23](#0-23-the-oncall-retry-is-probably-inactive) | The `oncall` `@Retry` is probably inactive | tech-debt | Low | Open |
+| [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
+| [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
+| [0-26](#0-26-set-notification_operator_alert_email-per-kubernetes-environment) | Set `NOTIFICATION_OPERATOR_ALERT_EMAIL` per Kubernetes environment | design | Medium | Open |
+| [0-27](#0-27-claudemd-says-team-isolation-is-the-default-but-it-is-not-enforced) | CLAUDE.md reads as if team isolation were enforced | docs | Low | Open |
+| [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
 
 ---
 
@@ -192,28 +197,22 @@ validated) but misleading. Align the annotations with the real indexes or remove
 
 ---
 
-### 0-10. `NotificationScheduler` loads all pending entries without a limit
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open
-
-**Problem.** `NotificationQueueRepository.findPendingOlderThan(...)` returns a `List` with no
-limit, so after an outage or burst the scheduler loads every pending entry in one cycle and works
-through them with synchronous HTTP calls. The same class of problem was fixed in
-`EscalationScheduler` (backlog #39, `scheduler-batch-size`).
-
-**Approach.** Cap per cycle with a `Pageable`/limit and a configurable
-`notification.scheduler-batch-size`, mirroring backlog #39.
-
----
-
 ### 0-12. Notification PRIMARY lookup sends no `teamId`
 
-**Type:** bug · **Priority:** Medium · **Status:** Open
+**Type:** bug · **Priority:** High · **Status:** Open
 
 **Problem.** `OncallClientImpl.getCurrentOncall(tenantId, role)` calls `/api/v1/oncall/current`
 with `role` only, so "PRIMARY" is resolved tenant-wide, which is ambiguous when a tenant has more
 than one team. Split out of backlog #0-1 (done): the escalation path needs no `teamId` because it
 looks the target up by tenant and user id.
+
+This is the team-level counterpart of the tenant isolation done in #0-18. A tenant is one customer; below
+it are teams, then members. Between customers the boundary is absolute; between teams of one customer it is
+"no by default, unless someone configures it" (as in PagerDuty, where an escalation policy belongs to a
+service owned by a team, and a private team's services and incidents are invisible to other teams). The
+PRIMARY step of the recipient chain is tenant-wide, so in a tenant with several teams it can notify another
+team's PRIMARY about an incident that is not theirs. With `teamId` in the event and on the queue entry the
+chain becomes target, that team's PRIMARY, UNDELIVERABLE.
 
 The by-user lookup (backlog #0-1) returns the most recently started entry when one user holds
 concurrent entries on different teams, which is not necessarily the team of the incident. Only the
@@ -327,53 +326,8 @@ backlog #0-13, #0-17.
 it. `docker/prometheus.rules.yml` is not the place yet: its alerts reach ingestion through Alertmanager and
 become incidents of the tenant in Alertmanager's token (currently `system`), so an alert about the
 platform itself depends on how that operator tenant is set up in backlog #0-16.
-
----
-
-### 0-18. Tenant content can reach the shared fallback address
-
-**Type:** bug · **Priority:** High · **Status:** Open
-
-**Problem.** `NotificationRouter.resolveRecipient` uses `notification.fallback.*` (email, Slack channel,
-phone) whenever no on-call contact is found, for **every** event type, and also per channel when a found
-contact lacks that channel. These are single platform-wide values, not tenant-scoped, and the message
-carries the incident title, id and severity. In a multi-tenant SaaS that sends one tenant's incident text
-to a destination that is not a member of that tenant. It exists on `main` today; backlog #0-1 did not
-make it worse (an escalation without a target goes to the tenant's PRIMARY first) but did not fix it.
-
-**Production practice.** PagerDuty does not reroute an incident with nobody on call to a shared inbox:
-the incident is not created or is reported as unassigned, and the recommended remedy is continuous
-coverage plus fallback users on each escalation level of the tenant's own policy. Operator-facing
-telemetry may carry a tenant id so operators can find the affected customer, but never customer content,
-and only on a channel the platform operator owns.
-
-**Approach.** (1) Resolve recipients only inside the tenant: target, PRIMARY, another current on-call of
-the same tenant. (2) When nobody in the tenant can be reached, do not send the incident text anywhere:
-mark the queue entry undeliverable (`notification.dead-letter`, a metric) and send the shared
-destination only a content-free operator alert (tenant id, incident id, reason). (3) Apply this to every
-event type and to the per-channel fallback, with a test per event type. (4) Remove the non-empty defaults
-of `notification.fallback.*` from `application.yml` (`oncall@example.com`, `#incidents`): they are
-placeholders, so an unconfigured deployment still sends tenant content to them. Tracked together with
-#0-19 and #0-20.
-
----
-
-### 0-19. A failed on-call lookup is indistinguishable from "not on call"
-
-**Type:** tech-debt · **Priority:** High · **Status:** Open
-
-**Problem.** `OncallClient.findCurrentByUserId` (and `getCurrentOncall`) are fail-open: a 204 (the user is
-not on call) and an oncall-service outage both give `Optional.empty()`. The queue entry is then marked
-SENT, so an escalation whose lookup failed is not retried once oncall-service recovers.
-
-Since backlog #0-1 the escalation is routed by this lookup, so an oncall-service outage, an open circuit
-breaker or a rejected service token (401/403) sends every escalation in that window to the PRIMARY or
-the fallback addresses and never re-sends it to the SECONDARY or MANAGER: a denial of escalation.
-
-**Approach.** Return a result that distinguishes "not on call" from "lookup failed", and leave the entry
-PENDING (with a bounded retry) on failure. Interacts with #0-18: what is sent while the lookup is failing.
-Related: `service.client.fallback` does not say which operation fell back (a target lookup or a PRIMARY
-lookup); an `operation` tag needs a change in `shared`.
+Also: `service.client.fallback` does not say which operation fell back (for example a target lookup or a PRIMARY lookup); an
+`operation` tag needs a change in `shared`.
 
 ---
 
@@ -382,11 +336,155 @@ lookup); an `operation` tag needs a change in `shared`.
 **Type:** design · **Priority:** Medium · **Status:** Open
 
 **Context.** The proper counterpart of the "fallback users on each escalation level" in PagerDuty: a
-tenant configures its own last-resort contact, used before the operator alert of #0-18. Today no
-notification setting exists per tenant (`tenant_settings` in auth-service only has `mfaRequired`).
+tenant configures its own last-resort contact, used before an entry is parked as UNDELIVERABLE (backlog
+#0-18 removed the shared fallback address, so today "nobody on call" means UNDELIVERABLE plus an alert to
+the operator). No notification setting exists per tenant (`tenant_settings` in auth-service only has
+`mfaRequired`).
 
-**Decide.** Where it lives (auth-service tenant settings, or a notification-service table), who may edit
-it, and how notification-service reads it (HTTP with the service token, or a copy kept in sync).
+**Decide.** Where it lives (auth-service tenant settings, or a notification-service table), whether it is per
+tenant or per team (see #0-12), who may edit it, and how notification-service reads it (HTTP with the
+service token, or a copy kept in sync).
+
+Related, accepted trade-off of #0-18: `NO_ONCALL` is terminal on the first attempt (unlike an oncall-service outage, which is
+retried), so a shift-handover gap parks an `INCIDENT_OPENED` notification as UNDELIVERABLE. A short retry for `NO_ONCALL`
+is worth weighing together with the tenant-owned contact.
+
+---
+
+### 0-21. Slack is one workspace for the whole platform
+
+**Type:** design · **Priority:** High · **Status:** Open
+
+**Problem.** `notification.channels.slack` has one `bot-token` and one channel for the whole platform.
+That is a single-organisation design. In a multi-tenant SaaS each customer has its own Slack workspace, and
+one bot token cannot DM their users, so with `broadcast-enabled=false` (the safe default since backlog
+#0-18) the Slack DM only works for users who are in the platform's own workspace.
+
+**Approach.** A per-tenant Slack integration: each tenant installs the app in its own workspace (OAuth) and
+notification-service uses that tenant's token and channel, stored per tenant. The ACK button flow
+(`SlackActionService`, `SlackMessageStore`) has to resolve the tenant's token too. Until then Slack is
+usable only in a single-organisation deployment.
+With `broadcast-enabled=true` the router still skips Slack for a contact without a valid Slack user id, so that entry
+also gets no shared-channel post; a per-tenant integration should settle what broadcast means.
+The README paragraph "Why Slack Bot Token instead of Incoming Webhook?" still describes channel posts and should be
+updated with the same change.
+
+---
+
+### 0-22. The operator alert is email only
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** The content-free alert for an UNDELIVERABLE notification (backlog #0-18) is sent by email only.
+`SlackNotificationChannel.send` attaches an ACK button bound to the incident id and stores the message, which
+an operator alert must not do, so Slack and SMS operator alerts need a plain-message path of their own.
+Without an operator address only the ERROR log and the `notification.undeliverable` metric remain, and an
+alert on that metric is backlog #0-17.
+The email is limited to one per tenant and reason per interval, in memory and per replica; a cross-replica limit
+(for example Redis, which ingestion already uses) or a digest is possible if that proves noisy.
+The alert is sent synchronously on the scheduler thread, and the SMTP timeouts bound each socket operation, not the whole send.
+
+---
+
+### 0-23. The `oncall` `@Retry` is probably inactive
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** `OncallClientImpl` methods carry `@Retry(name = "oncall")` and a `@CircuitBreaker` with a fallback. Each
+fallback turns every failure into `OncallLookupUnavailableException` (or, for `findBySlackUserId`, an empty
+result), and neither is in `retry-exceptions`, so the retry never sees the original `ResourceAccessException` or
+`HttpServerErrorException`. Before #0-19 the fallback returned an empty result, so it did not fire either. The real
+retry of the recipient lookup is the scheduler's (the entry stays PENDING). How Resilience4j orders Retry around the
+breaker here has not been verified.
+
+**Approach.** Confirm the behaviour with a test that runs the Spring proxies (the client tests call the methods
+directly), then either remove the retry on these methods or make it fire. Correct the comment in `application.yml`.
+
+---
+
+### 0-24. On-call contacts are not verified against tenant membership
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Problem.** The `email`, `phone` and `slackUserId` of an on-call entry are free text entered by whoever creates the
+schedule. Nothing checks that they belong to a member of the tenant, so a tenant admin can point its own incident
+content at any address or Slack user. It is the tenant's own content going where the tenant chose, so it is not a
+cross-tenant leak, but "tenant content only reaches members of that tenant" is then enforced by trust and not by the
+platform. Found by security review of #0-18.
+
+**Approach.** Take the contact from the user record in auth-service (a member of the tenant) instead of from free
+text, or verify the address on creation (a confirmation email). Hardening in the same area: `SlackNotificationChannel.isSlackUserId` is only `startsWith("U")`; a stricter shape (for
+example `^U[A-Z0-9]{8,}$`) would narrow what a tenant-controlled id can address, and the router shares the predicate.
+Related: #0-20 (tenant-owned fallback contact).
+
+---
+
+### 0-25. `NotificationQueueEntry` has no `@Version`
+
+**Type:** tech-debt · **Priority:** Medium · **Status:** Open
+
+**Problem.** CLAUDE.md lists optimistic locking (`@Version`) as the decided pattern for mutable entities, but the
+notification outbox entity has none. Its writers (`markSent`, `markFailed`, and since #0-18/#0-19 `markUndeliverable`
+and `recordLookupFailure`) save a detached entity, which is a merge that writes every mapped column as it was loaded.
+That is safe today only because ShedLock serialises the scheduler; a run that outlives the lock, or an old pod during a
+rollout, could overwrite another writer's status (for example the catch-all `markFailed` over an UNDELIVERABLE).
+
+**Approach.** Add a `version` column (its own Flyway migration, V7) and `@Version`, and decide how the scheduler treats
+an `OptimisticLockingFailureException` (skip the entry; the next cycle reloads it).
+
+---
+
+### 0-26. Set `NOTIFICATION_OPERATOR_ALERT_EMAIL` per Kubernetes environment
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Problem.** Backlog #0-18 replaced the shared fallback address with a content-free alert email to the platform operator
+(`notification.operator-alert.email`, no default). The k8s base ConfigMap `app-config` ships
+`NOTIFICATION_OPERATOR_ALERT_EMAIL: ""` and no overlay (`k8s/overlays/dev|staging|prod`) patches it, so on Kubernetes the
+operator is never emailed about an undeliverable notification; only the ERROR log and the `notification.undeliverable`
+metric remain. Nothing fails in CI: it is a silent runtime gap. docker-compose ships `operator@incident-platform.local`
+(mailhog) for local runs, so the compose smoke test exercises the configured path and k8s the unconfigured one.
+
+**Decide.** The real address for prod and staging (dev may point at mailhog, which the base already uses for `MAIL_HOST`),
+and whether it belongs in the ConfigMap or in a secret (then the Deployment needs a `secretKeyRef`, like `JWT_SECRET`).
+Then patch `app-config` in each overlay, for example:
+
+    - target: {kind: ConfigMap, name: app-config}
+      patch: |-
+        - op: replace
+          path: /data/NOTIFICATION_OPERATOR_ALERT_EMAIL
+          value: "ops@<real-domain>"
+
+Also state on purpose in the dev overlay if it stays empty. Related: backlog #0-17 (alert on the metric) and #0-22.
+
+---
+
+### 0-27. CLAUDE.md says team isolation is the default, but it is not enforced
+
+**Type:** docs · **Priority:** Low · **Status:** Open
+
+**Problem.** The "Notifications" bullet under "Multi-tenancy invariants" in CLAUDE.md ends with "Between teams of one tenant the
+default is also 'no' (backlog #0-12)". It reads as an enforced invariant, but the PRIMARY lookup is still tenant-wide until
+#0-12, so in a multi-team tenant it can notify another team's PRIMARY. CLAUDE.md is the file a future session reads first, so
+a session could assume team isolation exists and skip the work. `.ai/context/project.md` already states this openly.
+
+**Decide / do.** Reword to "the intended default is also 'no', but it is not enforced yet: the PRIMARY lookup is
+tenant-wide (backlog #0-12)". Held back on purpose: CLAUDE.md is edited only on the owner's decision. Remove this item when
+#0-12 lands and the sentence becomes true.
+
+---
+
+### 0-28. `notification_queue` rows are never purged
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** Nothing deletes queue rows in any status: SENT and FAILED were never purged, and since #0-18 UNDELIVERABLE rows
+accumulate as well. The partial index `idx_notification_queue_status_created (status, created_at) WHERE status = 'PENDING'`
+keeps the scheduler fast, but the table only grows, and an operator browsing UNDELIVERABLE rows has no index for them.
+
+**Approach.** A ShedLock-protected retention job (delete terminal rows older than a configurable age, keeping UNDELIVERABLE
+longer), like `NotificationScheduler`'s existing `slack_message_ts` cleanup. Decide retention with the audit requirements in
+mind: the audit events are the compliance record, the queue is a work queue.
 
 ---
 
@@ -394,7 +492,10 @@ it, and how notification-service reads it (HTTP with the service token, or a cop
 
 | # | Title | Delivered in |
 |---|---|---|
-| 0-1 | Escalations notify the `escalateTo` user, falling back to the tenant's PRIMARY, then to the configured addresses | PRs #411, #413, #414, this PR (number added when merged) |
+| 0-1 | Escalations notify the `escalateTo` user, falling back to the tenant's PRIMARY, then to the configured addresses (the addresses were removed by #0-18) | PRs #411, #413, #414, #415 |
+| 0-18 | Tenant content only reaches members of the tenant: no fallback address, `UNDELIVERABLE` status (V6), content-free rate-limited operator alert by email, a `NOTIFICATION_UNDELIVERABLE` audit event type of its own (`shared`), skipped channels reported, Slack shared-channel broadcast off by default, a Slack id the channel would ignore is no address | this PR (number added when merged) |
+| 0-19 | An oncall-service outage is no longer read as "nobody on call": the two decisive lookups throw, the entry stays PENDING until the lookup has been failing for a retry window (from its first failed lookup), then UNDELIVERABLE; a scheduler run stops after a processing budget | this PR (number added when merged) |
+| 0-10 | `NotificationScheduler` loads a capped page of PENDING entries, oldest first (`notification.scheduler.batch-size`, default 200), and a run stops after a processing budget validated against the ShedLock | this PR (number added when merged) |
 | 0-11 | Service tokens were rejected by `JwtAuthFilter`: per-tenant, per-audience service tokens, `ServicePrincipal`, real-token filter tests, fallback metric, tenant-id validation, escalation client timeouts, correct oncall URL default | PR #413 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |

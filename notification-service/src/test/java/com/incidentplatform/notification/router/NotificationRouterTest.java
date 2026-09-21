@@ -1,14 +1,17 @@
 package com.incidentplatform.notification.router;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
-import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.client.OncallClient;
+import com.incidentplatform.notification.client.OncallLookupUnavailableException;
+import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.Optional;
@@ -23,6 +26,7 @@ import static com.incidentplatform.notification.router.NotificationEventTypes.IN
 import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_OPENED;
 import static com.incidentplatform.notification.router.NotificationEventTypes.INCIDENT_RESOLVED;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
@@ -40,6 +44,9 @@ class NotificationRouterTest {
 
     private static final String TENANT_ID = "test-tenant";
     private static final UUID INCIDENT_ID = UUID.randomUUID();
+    private static final OncallClient.OncallInfo PRIMARY_CONTACT =
+            new OncallClient.OncallInfo("primary-user", "Pat Primary", "primary@acme.com",
+                    "+48111111111", "UPRIMARY", "PRIMARY");
 
     @BeforeEach
     void setUp() {
@@ -49,12 +56,11 @@ class NotificationRouterTest {
 
         final OncallClient oncallClient = mock(OncallClient.class);
         when(oncallClient.getCurrentOncall(anyString(), anyString()))
-                .thenReturn(Optional.empty());
+                .thenReturn(Optional.of(PRIMARY_CONTACT));
 
         router = new NotificationRouter(
                 List.of(emailChannel, slackChannel, smsChannel),
-                oncallClient,
-                buildProperties("oncall@example.com", "#incidents", ""));
+                oncallClient);
     }
 
     @Nested
@@ -67,7 +73,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_OPENED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "High CPU", null);
+                    TENANT_ID, Severity.CRITICAL, "High CPU", null).requests();
 
             // then
             final var channelNames = result.stream()
@@ -85,7 +91,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_OPENED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "High CPU Usage", null);
+                    TENANT_ID, Severity.CRITICAL, "High CPU Usage", null).requests();
 
             // then
             result.forEach(cr -> {
@@ -101,7 +107,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_OPENED, INCIDENT_ID,
-                    TENANT_ID, Severity.HIGH, "Test Incident", null);
+                    TENANT_ID, Severity.HIGH, "Test Incident", null).requests();
 
             // then
             result.forEach(cr -> {
@@ -122,7 +128,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_ESCALATED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Database Down", null);
+                    TENANT_ID, Severity.CRITICAL, "Database Down", null).requests();
 
             // then
             final var channelNames = result.stream()
@@ -139,7 +145,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_ESCALATED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Database Down", null);
+                    TENANT_ID, Severity.CRITICAL, "Database Down", null).requests();
 
             // then
             result.forEach(cr ->
@@ -158,7 +164,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_RESOLVED, INCIDENT_ID,
-                    TENANT_ID, Severity.HIGH, "API Outage", null);
+                    TENANT_ID, Severity.HIGH, "API Outage", null).requests();
 
             // then
             final var channelNames = result.stream()
@@ -180,7 +186,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_ACKNOWLEDGED, INCIDENT_ID,
-                    TENANT_ID, Severity.MEDIUM, "Memory Leak", null);
+                    TENANT_ID, Severity.MEDIUM, "Memory Leak", null).requests();
 
             // then
             final var channelNames = result.stream()
@@ -201,7 +207,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     INCIDENT_CLOSED, INCIDENT_ID,
-                    TENANT_ID, Severity.LOW, "Disk Space", null);
+                    TENANT_ID, Severity.LOW, "Disk Space", null).requests();
 
             // then
             final var channelNames = result.stream()
@@ -222,7 +228,7 @@ class NotificationRouterTest {
             // when
             final var result = router.route(
                     "UnknownEvent", INCIDENT_ID,
-                    TENANT_ID, Severity.HIGH, "Test", null);
+                    TENANT_ID, Severity.HIGH, "Test", null).requests();
 
             // then
             assertThat(result).isEmpty();
@@ -241,18 +247,17 @@ class NotificationRouterTest {
 
             final OncallClient oncallClient = mock(OncallClient.class);
             when(oncallClient.getCurrentOncall(anyString(), anyString()))
-                    .thenReturn(Optional.empty());
+                    .thenReturn(Optional.of(PRIMARY_CONTACT));
 
             final NotificationRouter routerWithDisabledSms =
                     new NotificationRouter(
                             List.of(emailChannel, slackChannel, disabledSms),
-                            oncallClient,
-                            buildProperties("oncall@example.com", "#incidents", ""));
+                            oncallClient);
 
             // when
             final var result = routerWithDisabledSms.route(
                     INCIDENT_ESCALATED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Critical Incident", null);
+                    TENANT_ID, Severity.CRITICAL, "Critical Incident", null).requests();
 
             // then
             final var channelNames = result.stream()
@@ -266,6 +271,149 @@ class NotificationRouterTest {
 
 
     /**
+     * Backlog #0-18: tenant content only reaches members of the tenant. With no
+     * on-call contact there is no fallback address: the result is undeliverable
+     * for every event type, and a channel the contact has no address for is
+     * skipped.
+     */
+    @Nested
+    @DisplayName("no shared destination for tenant content (backlog #0-18)")
+    class Undeliverable {
+
+        private OncallClient oncallClient;
+        private NotificationRouter isolatedRouter;
+
+        @BeforeEach
+        void setUpRouter() {
+            oncallClient = mock(OncallClient.class);
+            isolatedRouter = new NotificationRouter(
+                    List.of(emailChannel, slackChannel, smsChannel), oncallClient);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {INCIDENT_OPENED, INCIDENT_ESCALATED, INCIDENT_ACKNOWLEDGED,
+                INCIDENT_RESOLVED, INCIDENT_CLOSED})
+        @DisplayName("nobody on call: undeliverable and nothing to send, for every event type")
+        void undeliverableForEveryEventType(String eventType) {
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenReturn(Optional.empty());
+            when(oncallClient.findCurrentByUserId(anyString(), anyString()))
+                    .thenReturn(Optional.empty());
+
+            final var routing = isolatedRouter.route(eventType, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "Secret Customer Hostname Down", UUID.randomUUID());
+
+            assertThat(routing.isUndeliverable()).isTrue();
+            assertThat(routing.undeliverableReason()).isEqualTo(UndeliverableReason.NO_ONCALL);
+            assertThat(routing.requests()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("a contact with no address on any enabled channel is undeliverable (NO_REACHABLE_CHANNEL)")
+        void contactWithoutAnyAddress() {
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenReturn(Optional.of(new OncallClient.OncallInfo(
+                            "u", "No Contact", null, null, null, "PRIMARY")));
+
+            final var routing = isolatedRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null);
+
+            assertThat(routing.isUndeliverable()).isTrue();
+            assertThat(routing.undeliverableReason())
+                    .isEqualTo(UndeliverableReason.NO_REACHABLE_CHANNEL);
+        }
+
+        @Test
+        @DisplayName("a contact with only an email is sent to on the email channel alone")
+        void contactWithOnlyEmail() {
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenReturn(Optional.of(new OncallClient.OncallInfo(
+                            "u", "Email Only", "only@acme.com", null, null, "PRIMARY")));
+
+            final var routing = isolatedRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null);
+
+            assertThat(routing.isUndeliverable()).isFalse();
+            assertThat(routing.requests()).extracting(cr -> cr.channel().channelName())
+                    .containsExactly(EMAIL);
+            assertThat(routing.requests().get(0).request().recipient()).isEqualTo("only@acme.com");
+        }
+
+        @Test
+        @DisplayName("a Slack id the channel would silently ignore is no address: the channel is skipped and reported")
+        void invalidSlackIdIsSkipped() {
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenReturn(Optional.of(new OncallClient.OncallInfo(
+                            "u", "Grid User", "grid@acme.com", null, "W0123456789", "PRIMARY")));
+
+            final var routing = isolatedRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null);
+
+            assertThat(routing.requests()).extracting(cr -> cr.channel().channelName())
+                    .containsExactly(EMAIL);
+            assertThat(routing.skippedChannels()).containsExactly(SLACK);
+        }
+
+        @Test
+        @DisplayName("an event whose only channel is Slack is undeliverable when the Slack id is invalid, not 'sent'")
+        void slackOnlyEventWithInvalidSlackId() {
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenReturn(Optional.of(new OncallClient.OncallInfo(
+                            "u", "Handle User", "handle@acme.com", "+48111111111",
+                            "@some-handle", "PRIMARY")));
+
+            final var routing = isolatedRouter.route(INCIDENT_ACKNOWLEDGED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null);
+
+            assertThat(routing.isUndeliverable()).isTrue();
+            assertThat(routing.undeliverableReason())
+                    .isEqualTo(UndeliverableReason.NO_REACHABLE_CHANNEL);
+            assertThat(routing.skippedChannels()).containsExactly(SLACK);
+        }
+
+        @Test
+        @DisplayName("every channel the contact has no address for is reported as skipped")
+        void skippedChannelsAreReported() {
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenReturn(Optional.of(new OncallClient.OncallInfo(
+                            "u", "Email Only", "only@acme.com", null, null, "PRIMARY")));
+
+            final var routing = isolatedRouter.route(INCIDENT_ESCALATED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null);
+
+            assertThat(routing.requests()).extracting(cr -> cr.channel().channelName())
+                    .containsExactly(EMAIL);
+            assertThat(routing.skippedChannels()).containsExactlyInAnyOrder(SLACK, SMS);
+        }
+
+        @Test
+        @DisplayName("nothing to send — not undeliverable — when every channel for the event is disabled")
+        void allChannelsDisabled() {
+            final NotificationRouter disabledRouter = new NotificationRouter(
+                    List.of(new FakeChannel(EMAIL, false), new FakeChannel(SLACK, false),
+                            new FakeChannel(SMS, false)), oncallClient);
+
+            final var routing = disabledRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null);
+
+            assertThat(routing.isUndeliverable()).isFalse();
+            assertThat(routing.requests()).isEmpty();
+            then(oncallClient).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("an oncall-service failure propagates — it is not read as 'nobody on call' (backlog #0-19)")
+        void lookupFailurePropagates() {
+            when(oncallClient.getCurrentOncall(anyString(), anyString()))
+                    .thenThrow(new OncallLookupUnavailableException("down", new RuntimeException()));
+
+            assertThatThrownBy(() -> isolatedRouter.route(INCIDENT_OPENED, INCIDENT_ID,
+                    TENANT_ID, Severity.CRITICAL, "High CPU", null))
+                    .isInstanceOf(OncallLookupUnavailableException.class);
+        }
+    }
+
+    /**
      * Backlog #0-1: an escalation is sent to the user in {@code escalateTo},
      * not to the PRIMARY on-call. These tests assert the actual recipients
      * (the tests above only look at channels), and that the lookup is by
@@ -274,10 +422,6 @@ class NotificationRouterTest {
     @Nested
     @DisplayName("IncidentEscalatedEvent recipient — escalation target (backlog #0-1)")
     class EscalationTarget {
-
-        private static final String FALLBACK_EMAIL = "fallback@example.com";
-        private static final String FALLBACK_SLACK = "#fallback";
-        private static final String FALLBACK_PHONE = "+48000000000";
 
         private final UUID escalateTo = UUID.randomUUID();
         private OncallClient oncallClient;
@@ -292,8 +436,7 @@ class NotificationRouterTest {
                             "+48111111111", "UPRIMARY", "PRIMARY")));
             escalationRouter = new NotificationRouter(
                     List.of(emailChannel, slackChannel, smsChannel),
-                    oncallClient,
-                    buildProperties(FALLBACK_EMAIL, FALLBACK_SLACK, FALLBACK_PHONE));
+                    oncallClient);
         }
 
         private String recipientOn(List<NotificationRouter.ChannelRequest> result,
@@ -313,7 +456,7 @@ class NotificationRouterTest {
                             "+48222222222", "USECONDARY", "SECONDARY")));
 
             final var result = escalationRouter.route(INCIDENT_ESCALATED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo);
+                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo).requests();
 
             assertThat(recipientOn(result, EMAIL)).isEqualTo("sam@acme.com");
             assertThat(recipientOn(result, SLACK)).isEqualTo("USECONDARY");
@@ -334,8 +477,8 @@ class NotificationRouterTest {
         }
 
         @Test
-        @DisplayName("uses the fallback for a channel the target has no contact for")
-        void usesFallbackForMissingContact() {
+        @DisplayName("skips a channel the target has no address for — it is never replaced by a shared one")
+        void skipsChannelWithoutAddress() {
             // target has an email but no phone and no Slack id
             when(oncallClient.findCurrentByUserId(TENANT_ID, escalateTo.toString()))
                     .thenReturn(Optional.of(new OncallClient.OncallInfo(
@@ -343,11 +486,11 @@ class NotificationRouterTest {
                             null, null, "SECONDARY")));
 
             final var result = escalationRouter.route(INCIDENT_ESCALATED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo);
+                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo).requests();
 
+            assertThat(result).extracting(cr -> cr.channel().channelName())
+                    .containsExactly(EMAIL);
             assertThat(recipientOn(result, EMAIL)).isEqualTo("sam@acme.com");
-            assertThat(recipientOn(result, SLACK)).isEqualTo(FALLBACK_SLACK);
-            assertThat(recipientOn(result, SMS)).isEqualTo(FALLBACK_PHONE);
         }
 
         @Test
@@ -357,7 +500,7 @@ class NotificationRouterTest {
                     .thenReturn(Optional.empty());
 
             final var result = escalationRouter.route(INCIDENT_ESCALATED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo);
+                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo).requests();
 
             assertThat(recipientOn(result, EMAIL)).isEqualTo("primary@acme.com");
             assertThat(recipientOn(result, SLACK)).isEqualTo("UPRIMARY");
@@ -369,7 +512,7 @@ class NotificationRouterTest {
         @DisplayName("falls back to the tenant's PRIMARY when the escalation has no target, without a by-user lookup")
         void usesPrimaryWhenNoTarget() {
             final var result = escalationRouter.route(INCIDENT_ESCALATED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Database Down", null);
+                    TENANT_ID, Severity.CRITICAL, "Database Down", null).requests();
 
             assertThat(recipientOn(result, EMAIL)).isEqualTo("primary@acme.com");
             then(oncallClient).should(never()).findCurrentByUserId(anyString(), anyString());
@@ -377,42 +520,31 @@ class NotificationRouterTest {
         }
 
         @Test
-        @DisplayName("uses the fallback addresses only when neither the target nor the PRIMARY is found")
-        void usesFallbackAddressesOnlyAsLastResort() {
+        @DisplayName("is undeliverable — with no fallback address — when neither the target nor the PRIMARY is found")
+        void undeliverableWhenNobodyIsFound() {
             when(oncallClient.findCurrentByUserId(TENANT_ID, escalateTo.toString()))
                     .thenReturn(Optional.empty());
             when(oncallClient.getCurrentOncall(TENANT_ID, "PRIMARY"))
                     .thenReturn(Optional.empty());
 
-            final var result = escalationRouter.route(INCIDENT_ESCALATED, INCIDENT_ID,
+            final var routing = escalationRouter.route(INCIDENT_ESCALATED, INCIDENT_ID,
                     TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo);
 
-            assertThat(recipientOn(result, EMAIL)).isEqualTo(FALLBACK_EMAIL);
-            assertThat(recipientOn(result, SLACK)).isEqualTo(FALLBACK_SLACK);
-            assertThat(recipientOn(result, SMS)).isEqualTo(FALLBACK_PHONE);
+            assertThat(routing.isUndeliverable()).isTrue();
+            assertThat(routing.undeliverableReason()).isEqualTo(UndeliverableReason.NO_ONCALL);
+            assertThat(routing.requests()).isEmpty();
         }
 
         @Test
         @DisplayName("other event types still go to the PRIMARY, even when a target id is passed")
         void otherEventsStillUsePrimary() {
             final var result = escalationRouter.route(INCIDENT_OPENED, INCIDENT_ID,
-                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo);
+                    TENANT_ID, Severity.CRITICAL, "Database Down", escalateTo).requests();
 
             assertThat(recipientOn(result, EMAIL)).isEqualTo("primary@acme.com");
             then(oncallClient).should().getCurrentOncall(TENANT_ID, "PRIMARY");
             then(oncallClient).should(never()).findCurrentByUserId(anyString(), anyString());
         }
-    }
-
-    private static NotificationChannelProperties buildProperties(
-            String fallbackEmail, String fallbackSlack, String fallbackPhone) {
-        return new NotificationChannelProperties(
-                new NotificationChannelProperties.Channels(
-                        new NotificationChannelProperties.Email(true, "alerts@test.com"),
-                        new NotificationChannelProperties.Slack(true, "test-token", "#test", "test-secret", "http://localhost"),
-                        new NotificationChannelProperties.Sms(true, "+1234567890")),
-                new NotificationChannelProperties.Fallback(
-                        fallbackEmail, fallbackSlack, fallbackPhone));
     }
 
     private static class FakeChannel implements NotificationChannel {

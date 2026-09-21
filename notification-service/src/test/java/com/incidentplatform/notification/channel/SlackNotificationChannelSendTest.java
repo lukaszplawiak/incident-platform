@@ -21,8 +21,12 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.containing;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
+import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.then;
@@ -69,14 +73,23 @@ class SlackNotificationChannelSendTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody("{\"ok\":true,\"ts\":\"" + SLACK_TS + "\"}")));
 
+        channel = newChannel(true);
+    }
+
+    /**
+     * @param broadcastEnabled whether every notification is also posted to the
+     *                         shared channel (backlog #0-18); the tests that
+     *                         predate the flag exercise it with true
+     */
+    private SlackNotificationChannel newChannel(boolean broadcastEnabled) {
         final NotificationChannelProperties properties = new NotificationChannelProperties(
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
                         new NotificationChannelProperties.Slack(
                                 true, "xoxb-test-token", DEFAULT_CHANNEL, "signing-secret",
-                                "http://localhost:" + wireMock.port()),
+                                "http://localhost:" + wireMock.port(), broadcastEnabled),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
-                new NotificationChannelProperties.Fallback("oncall@test.com", "#incidents", ""));
+                new NotificationChannelProperties.OperatorAlert("operator@test.com", null));
 
         // HTTP/1.1 only — WireMock standalone does not support HTTP/2, and
         // JdkClientHttpRequestFactory defaults to HTTP/2 which causes
@@ -87,7 +100,7 @@ class SlackNotificationChannelSendTest {
                 .connectTimeout(Duration.ofSeconds(3))
                 .build();
 
-        channel = new SlackNotificationChannel(
+        return new SlackNotificationChannel(
                 RestClient.builder()
                         .requestFactory(new JdkClientHttpRequestFactory(httpClient)),
                 new ObjectMapper(),
@@ -140,6 +153,46 @@ class SlackNotificationChannelSendTest {
                 eq(INCIDENT_ID), eq(DEFAULT_CHANNEL), eq(TENANT_ID), eq(SLACK_TS));
         then(messageStore).should(never()).save(
                 eq(INCIDENT_ID), eq("oncall@test.com"), eq(TENANT_ID), eq(SLACK_TS));
+    }
+
+    @Test
+    @DisplayName("broadcast disabled (the default): nothing is posted to the shared channel, the DM still goes out")
+    void broadcastDisabledSendsOnlyTheDm() {
+        final SlackNotificationChannel dmOnly = newChannel(false);
+        final String slackUserId = "U0123456789";
+
+        dmOnly.send(buildRequest(slackUserId));
+
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/chat.postMessage")));
+        wireMock.verify(1, postRequestedFor(urlPathEqualTo("/chat.postMessage"))
+                .withRequestBody(containing("\"channel\":\"" + slackUserId + "\"")));
+        then(messageStore).should().save(
+                eq(INCIDENT_ID), eq(slackUserId), eq(TENANT_ID), eq(SLACK_TS));
+        then(messageStore).should(never()).save(
+                eq(INCIDENT_ID), eq(DEFAULT_CHANNEL), eq(TENANT_ID), eq(SLACK_TS));
+    }
+
+    @Test
+    @DisplayName("broadcast disabled and no Slack user id: nothing is posted, and it fails loudly instead of reporting a delivery")
+    void broadcastDisabledAndNoDmFailsLoudly() {
+        final SlackNotificationChannel dmOnly = newChannel(false);
+
+        assertThatThrownBy(() -> dmOnly.send(buildRequest("oncall@test.com")))
+                .isInstanceOf(NotificationException.class);
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/chat.postMessage")));
+        then(messageStore).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("isSlackUserId is the predicate the router uses: only a non-blank id starting with U")
+    void isSlackUserIdPredicate() {
+        assertThat(SlackNotificationChannel.isSlackUserId("U0123456789")).isTrue();
+        assertThat(SlackNotificationChannel.isSlackUserId("W0123456789")).isFalse();
+        assertThat(SlackNotificationChannel.isSlackUserId("@handle")).isFalse();
+        assertThat(SlackNotificationChannel.isSlackUserId("#incidents")).isFalse();
+        assertThat(SlackNotificationChannel.isSlackUserId(" ")).isFalse();
+        assertThat(SlackNotificationChannel.isSlackUserId(null)).isFalse();
     }
 
     private NotificationRequest buildRequest(String recipient) {
