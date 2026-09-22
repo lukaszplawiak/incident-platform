@@ -94,11 +94,19 @@ public class NotificationRouter {
      * a visible error, not a message to a shared inbox. A tenant-owned fallback
      * contact is backlog #0-20.
      *
-     * <p>Every other event type keeps the PRIMARY lookup, tenant-wide until
-     * backlog #0-12 adds the team.
+     * <h2>Fixed (backlog #0-12): PRIMARY lookup is now team-scoped</h2>
+     * The PRIMARY fallback — used by every event type, and by
+     * {@code INCIDENT_ESCALATED} when there is no target or the target isn't
+     * found — now passes the incident's {@code teamId} to oncall-service, so a
+     * multi-team tenant no longer risks notifying another team's PRIMARY.
+     * {@code teamId} is {@code null} for incidents with no team assignment
+     * (manually created, or an {@code Integration} without one), in which case
+     * the lookup is still tenant-wide, exactly as before this fix.
      *
      * @param escalateTo the user an incident was escalated to; only read for
      *                   {@code INCIDENT_ESCALATED}, may be null
+     * @param teamId     the team the incident belongs to, or null; scopes the
+     *                   PRIMARY fallback lookup (backlog #0-12)
      * @throws OncallLookupUnavailableException if oncall-service cannot answer
      *         a lookup (backlog #0-19); the scheduler retries the entry
      */
@@ -107,7 +115,8 @@ public class NotificationRouter {
                          String tenantId,
                          Severity severity,
                          String title,
-                         UUID escalateTo) {
+                         UUID escalateTo,
+                         UUID teamId) {
 
         final Set<String> targetChannels = EVENT_TO_CHANNELS
                 .getOrDefault(eventType, Set.of());
@@ -128,7 +137,7 @@ public class NotificationRouter {
         }
 
         final OncallClient.OncallInfo oncall =
-                resolveOncall(eventType, incidentId, tenantId, escalateTo);
+                resolveOncall(eventType, incidentId, tenantId, escalateTo, teamId);
 
         if (oncall == null) {
             log.warn("Nobody on call in the tenant — notification is " +
@@ -176,12 +185,15 @@ public class NotificationRouter {
      * Resolves whose contact details this notification goes to. For
      * {@code INCIDENT_ESCALATED} that is the escalation target when there is
      * one and it can be found; otherwise, and for every other event type, the
-     * tenant's PRIMARY on-call. Returns null when nobody was found.
+     * PRIMARY on-call — scoped to {@code teamId} when the incident has one
+     * (backlog #0-12), tenant-wide otherwise. Returns null when nobody was
+     * found.
      */
     private OncallClient.OncallInfo resolveOncall(String eventType,
                                                   UUID incidentId,
                                                   String tenantId,
-                                                  UUID escalateTo) {
+                                                  UUID escalateTo,
+                                                  UUID teamId) {
         if (INCIDENT_ESCALATED.equals(eventType)) {
             if (escalateTo == null) {
                 log.warn("Escalation without a target user — falling back to " +
@@ -206,7 +218,7 @@ public class NotificationRouter {
         }
 
         final OncallClient.OncallInfo oncall = oncallClient
-                .getCurrentOncall(tenantId, PRIMARY_ONCALL_ROLE)
+                .getCurrentOncall(tenantId, teamId, PRIMARY_ONCALL_ROLE)
                 .orElse(null);
 
         if (oncall != null) {

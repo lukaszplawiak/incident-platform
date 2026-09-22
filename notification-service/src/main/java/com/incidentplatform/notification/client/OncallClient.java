@@ -1,11 +1,22 @@
 package com.incidentplatform.notification.client;
 
 import java.util.Optional;
+import java.util.UUID;
 
 public interface OncallClient {
 
     /**
-     * Looks up the current on-call person for a role, scoped to the tenant.
+     * Looks up the current on-call person for a role, scoped to the tenant
+     * and, when given, to the team (backlog #0-12).
+     *
+     * <p>{@code teamId} is null for incidents with no team assignment
+     * (manually created, or an {@code Integration} without one), in which
+     * case the lookup is tenant-wide — the same behavior this method had
+     * before {@code teamId} existed. There is deliberately no 2-arg overload
+     * without it: escalation-service's equivalent client
+     * ({@code OncallServiceClient}) never had one either, and keeping one
+     * here would leave a caller free to silently go back to a tenant-wide
+     * lookup, reintroducing the bug backlog #0-12 fixes.
      *
      * <p>Returns empty only when nobody is on call (a 204). If oncall-service
      * cannot answer (unreachable, timeout, circuit open, 401/403) it throws
@@ -13,7 +24,7 @@ public interface OncallClient {
      * (backlog #0-19), so a failed lookup is never mistaken for "nobody on
      * call".
      */
-    Optional<OncallInfo> getCurrentOncall(String tenantId, String role);
+    Optional<OncallInfo> getCurrentOncall(String tenantId, UUID teamId, String role);
 
     /**
      * Looks up the on-call schedule entry for the given Slack user ID,

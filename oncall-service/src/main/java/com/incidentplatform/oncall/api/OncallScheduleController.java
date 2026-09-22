@@ -92,11 +92,21 @@ public class OncallScheduleController {
      * branching it already did for the optional {@code role} parameter to
      * also branch on {@code teamId} — the same pattern, not a new one.
      * Zero change needed on either caller's side: escalation-service's
-     * {@code OncallServiceClient} keeps calling
-     * {@code /current?teamId=...&role=...} exactly as before, and
-     * notification-service's {@code OncallClientImpl} keeps calling
-     * {@code /current?role=...} exactly as before — each now reaches the
-     * correct branch unambiguously, in one method, one route.
+     * {@code OncallServiceClient} kept calling
+     * {@code /current?teamId=...&role=...} exactly as before, and (at the
+     * time of this fix) notification-service's {@code OncallClientImpl}
+     * kept calling {@code /current?role=...} exactly as before — each
+     * reached the correct branch unambiguously, in one method, one route.
+     *
+     * <h2>Update (backlog #0-12): notification-service now sends {@code teamId} too</h2>
+     * The paragraph above describes this endpoint's two callers as they were
+     * before backlog #0-12: {@code OncallClientImpl}'s PRIMARY lookup was
+     * tenant-wide only, the reason this endpoint's team branch used to be
+     * exercised by escalation-service alone. Since #0-12, notification-service
+     * also passes {@code teamId} (nullable — omitted from the request when the
+     * incident has none) so its own PRIMARY lookup is team-scoped too. No
+     * change was needed here: the branching this Javadoc already documents
+     * handles a nullable {@code teamId} from either caller identically.
      */
     @GetMapping(value = "/current", produces = MediaType.APPLICATION_JSON_VALUE)
     @Operation(

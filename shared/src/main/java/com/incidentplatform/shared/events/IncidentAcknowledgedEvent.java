@@ -7,7 +7,8 @@ public record IncidentAcknowledgedEvent(
         UUID incidentId,
         String tenantId,
         UUID acknowledgedBy,
-        Instant occurredAt
+        Instant occurredAt,
+        UUID teamId
 ) implements IncidentEvent {
 
     public IncidentAcknowledgedEvent {

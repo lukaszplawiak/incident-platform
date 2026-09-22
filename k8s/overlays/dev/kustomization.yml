@@ -39,6 +39,16 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/livenessProbe/initialDelaySeconds
         value: 120
+  # backlog #0-26: base ships NOTIFICATION_OPERATOR_ALERT_EMAIL empty (no operator email sent).
+  # Mirror docker-compose's default here so dev on Kubernetes exercises the same undeliverable-
+  # notification alert path as the compose smoke test, caught by the same mailhog.
+  - target:
+      kind: ConfigMap
+      name: app-config
+    patch: |-
+      - op: replace
+        path: /data/NOTIFICATION_OPERATOR_ALERT_EMAIL
+        value: "operator@incident-platform.local"
 
 images:
   - name: auth-service

@@ -105,6 +105,24 @@ class IncidentEventConsumerTest {
                 }""", INCIDENT_ID, TENANT_ID, severity.name(), Instant.now());
     }
 
+    /**
+     * Backlog #0-12: unlike {@link #openedEvent(Severity)}, this variant
+     * includes {@code teamId} — before this fix, {@code IncidentOpenedEvent}
+     * never carried it, so this branch of {@code handleOpened} had zero
+     * positive-path coverage; only the "absent → null" path was ever tested.
+     */
+    private String openedEvent(Severity severity, UUID teamId) {
+        return String.format("""
+                {
+                  "incidentId": "%s",
+                  "tenantId": "%s",
+                  "title": "High CPU",
+                  "severity": "%s",
+                  "occurredAt": "%s",
+                  "teamId": "%s"
+                }""", INCIDENT_ID, TENANT_ID, severity.name(), Instant.now(), teamId);
+    }
+
     private String acknowledgedEvent() {
         return String.format("""
                 {
@@ -162,6 +180,45 @@ class IncidentEventConsumerTest {
             // then
             then(escalationService).should().scheduleEscalation(any(),
                     any(), any(), any(), eq(Severity.HIGH), any());
+        }
+
+        @Test
+        @DisplayName("should schedule escalation with teamId when the event carries one (backlog #0-12)")
+        void shouldScheduleEscalationWithTeamId() {
+            // given
+            final UUID teamId = UUID.randomUUID();
+            final ConsumerRecord<String, String> record =
+                    buildRecord(openedEvent(Severity.CRITICAL, teamId), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then
+            final ArgumentCaptor<UUID> teamIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            then(escalationService).should().scheduleEscalation(
+                    eq(INCIDENT_ID), eq(TENANT_ID), teamIdCaptor.capture(),
+                    any(), eq(Severity.CRITICAL), any());
+            assertThat(teamIdCaptor.getValue()).isEqualTo(teamId);
+        }
+
+        @Test
+        @DisplayName("should schedule escalation with null teamId when the event has none")
+        void shouldScheduleEscalationWithNullTeamIdWhenAbsent() {
+            // given — openedEvent(Severity) never includes teamId
+            final ConsumerRecord<String, String> record =
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then
+            final ArgumentCaptor<UUID> teamIdCaptor = ArgumentCaptor.forClass(UUID.class);
+            then(escalationService).should().scheduleEscalation(
+                    eq(INCIDENT_ID), eq(TENANT_ID), teamIdCaptor.capture(),
+                    any(), eq(Severity.CRITICAL), any());
+            assertThat(teamIdCaptor.getValue()).isNull();
         }
 
         @Test

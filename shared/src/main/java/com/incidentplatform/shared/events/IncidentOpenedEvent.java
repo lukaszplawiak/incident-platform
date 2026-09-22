@@ -13,7 +13,8 @@ public record IncidentOpenedEvent(
         String title,
         Severity severity,
         SourceType sourceType,
-        Instant occurredAt
+        Instant occurredAt,
+        UUID teamId
 ) implements IncidentEvent {
     public IncidentOpenedEvent {
         if (occurredAt == null) occurredAt = Instant.now();

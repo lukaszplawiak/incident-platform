@@ -252,7 +252,8 @@ public class EscalationScheduler {
                 task.getEscalationLevel(),
                 task.getSeverity(),
                 task.getTitle(),
-                Instant.now()
+                Instant.now(),
+                task.getTeamId()
         );
 
         // ── Ordering: persist state BEFORE publishing to Kafka ───────────────

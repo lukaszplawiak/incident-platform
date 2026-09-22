@@ -12,7 +12,8 @@ public record IncidentEscalatedEvent(
         int escalationLevel,
         Severity severity,
         String title,
-        Instant occurredAt
+        Instant occurredAt,
+        UUID teamId
 ) implements IncidentEvent {
 
     public IncidentEscalatedEvent {

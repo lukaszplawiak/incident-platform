@@ -110,6 +110,20 @@ public class NotificationQueueEntry {
     @Column(name = "escalate_to", updatable = false)
     private UUID escalateTo;
 
+    /**
+     * The team the incident belongs to ({@code IncidentXxxEvent.teamId}), or
+     * {@code null} for an incident with no team assignment (backlog #0-12).
+     *
+     * <p>Used to scope the oncall-service PRIMARY lookup to the incident's
+     * team instead of resolving tenant-wide; {@code null} falls back to the
+     * tenant-wide lookup, unchanged from before this field existed. Like
+     * {@link #escalateTo}, it is routing/informational data and deliberately
+     * not part of the idempotency key ({@code
+     * uq_notification_queue_incident_tenant_event_level}).
+     */
+    @Column(name = "team_id", updatable = false)
+    private UUID teamId;
+
     @NotNull
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
@@ -150,7 +164,9 @@ public class NotificationQueueEntry {
     }
 
     /**
-     * Creates a new PENDING outbox entry carrying escalation context.
+     * Creates a new PENDING outbox entry carrying escalation context, with no
+     * team ({@code null}) — kept for callers (and tests) that don't need to
+     * pass one; delegates to the full overload below.
      *
      * @param escalationLevel the escalation level, {@code 0} for events
      *                        that are not escalations
@@ -163,6 +179,27 @@ public class NotificationQueueEntry {
                                                  String title,
                                                  int escalationLevel,
                                                  UUID escalateTo) {
+        return pending(incidentId, tenantId, eventType, severity, title,
+                escalationLevel, escalateTo, null);
+    }
+
+    /**
+     * Creates a new PENDING outbox entry carrying escalation and team context
+     * (backlog #0-12).
+     *
+     * @param escalationLevel the escalation level, {@code 0} for events
+     *                        that are not escalations
+     * @param escalateTo      the escalation target, or {@code null}
+     * @param teamId          the incident's team, or {@code null}
+     */
+    public static NotificationQueueEntry pending(UUID incidentId,
+                                                 String tenantId,
+                                                 String eventType,
+                                                 Severity severity,
+                                                 String title,
+                                                 int escalationLevel,
+                                                 UUID escalateTo,
+                                                 UUID teamId) {
         final NotificationQueueEntry entry = new NotificationQueueEntry();
         entry.id = UUID.randomUUID();
         entry.incidentId = incidentId;
@@ -172,6 +209,7 @@ public class NotificationQueueEntry {
         entry.title = title;
         entry.escalationLevel = escalationLevel;
         entry.escalateTo = escalateTo;
+        entry.teamId = teamId;
         entry.status = NotificationQueueStatus.PENDING;
         entry.createdAt = Instant.now();
         return entry;
@@ -224,6 +262,7 @@ public class NotificationQueueEntry {
     public String getTitle()                     { return title; }
     public int getEscalationLevel()              { return escalationLevel; }
     public UUID getEscalateTo()                  { return escalateTo; }
+    public UUID getTeamId()                      { return teamId; }
     public NotificationQueueStatus getStatus()   { return status; }
     public String getErrorMessage()              { return errorMessage; }
     public Instant getCreatedAt()                { return createdAt; }

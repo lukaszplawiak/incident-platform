@@ -65,6 +65,17 @@ patches:
       - op: replace
         path: /spec/maxReplicas
         value: 5
+  # backlog #0-26: base ships NOTIFICATION_OPERATOR_ALERT_EMAIL empty, so no overlay emailed the
+  # operator about an undeliverable notification. Placeholder address, in the same .local
+  # convention as APP_BASE_URL/INVITE_EMAIL_FROM in the base ConfigMap (no real domain exists
+  # anywhere in this repo yet) — replace before a real deployment.
+  - target:
+      kind: ConfigMap
+      name: app-config
+    patch: |-
+      - op: replace
+        path: /data/NOTIFICATION_OPERATOR_ALERT_EMAIL
+        value: "ops@incident-platform.local"
 
 images:
   - name: auth-service
