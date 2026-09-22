@@ -81,7 +81,8 @@ public class IncidentEventPublisher {
                 incident.getTitle(),
                 incident.getSeverity(),
                 incident.getSourceType(),
-                Instant.now()
+                Instant.now(),
+                incident.getTeamId()
         );
         stage(incident.getId(), incident.getTenantId(),
                 IncidentEventTypes.INCIDENT_OPENED, event);
@@ -92,7 +93,8 @@ public class IncidentEventPublisher {
                 incident.getId(),
                 incident.getTenantId(),
                 acknowledgedBy,
-                Instant.now()
+                Instant.now(),
+                incident.getTeamId()
         );
         stage(incident.getId(), incident.getTenantId(),
                 IncidentEventTypes.INCIDENT_ACKNOWLEDGED, event);
@@ -112,7 +114,8 @@ public class IncidentEventPublisher {
                 null,
                 incident.getTitle(),
                 incident.getSeverity(),
-                Instant.now()
+                Instant.now(),
+                incident.getTeamId()
         );
         stage(incident.getId(), incident.getTenantId(),
                 IncidentEventTypes.INCIDENT_RESOLVED, event);
@@ -124,7 +127,8 @@ public class IncidentEventPublisher {
                 incident.getTenantId(),
                 closedBy,
                 postmortemId,
-                Instant.now()
+                Instant.now(),
+                incident.getTeamId()
         );
         stage(incident.getId(), incident.getTenantId(),
                 IncidentEventTypes.INCIDENT_CLOSED, event);
@@ -140,7 +144,8 @@ public class IncidentEventPublisher {
                 escalationLevel,
                 incident.getSeverity(),
                 incident.getTitle(),
-                Instant.now()
+                Instant.now(),
+                incident.getTeamId()
         );
         stage(incident.getId(), incident.getTenantId(),
                 IncidentEventTypes.INCIDENT_ESCALATED, event);

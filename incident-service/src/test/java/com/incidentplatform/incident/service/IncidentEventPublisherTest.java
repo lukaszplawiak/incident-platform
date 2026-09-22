@@ -57,6 +57,12 @@ class IncidentEventPublisherTest {
                 "prometheus:highcpu:server-1", UUID.randomUUID(), Instant.now());
     }
 
+    private Incident buildIncidentWithTeam(UUID teamId) {
+        final Incident incident = buildIncident();
+        incident.assignToTeam(teamId);
+        return incident;
+    }
+
     @Test
     @DisplayName("publishOpened writes a PENDING outbox row, never touches Kafka directly")
     void publishOpenedWritesOutboxRow() {
@@ -137,6 +143,38 @@ class IncidentEventPublisherTest {
 
         assertThat(captor.getValue().getEventType())
                 .isEqualTo(IncidentEventTypes.INCIDENT_ESCALATED);
+    }
+
+    /**
+     * Regression coverage for backlog #0-12: every {@code publishXxx} method
+     * must carry {@code Incident.teamId} onto the event it stages. This is
+     * exactly the assertion that would have caught the original bug —
+     * {@code publishOpened} built {@code IncidentOpenedEvent} without ever
+     * reading {@code incident.getTeamId()}, even though it was already set
+     * (see this class's Javadoc history and {@code IncidentEventPublisher}
+     * itself for the full account).
+     */
+    @Test
+    @DisplayName("every publishXxx method carries the incident's teamId onto the staged event")
+    void everyPublishMethodCarriesTeamId() {
+        final UUID teamId = UUID.randomUUID();
+        final Incident incident = buildIncidentWithTeam(teamId);
+        final ArgumentCaptor<IncidentEventOutbox> captor =
+                ArgumentCaptor.forClass(IncidentEventOutbox.class);
+
+        publisher.publishOpened(incident);
+        publisher.publishAcknowledged(incident, UUID.randomUUID());
+        publisher.publishResolved(incident, UUID.randomUUID());
+        publisher.publishClosed(incident, UUID.randomUUID(), null);
+        publisher.publishEscalated(incident, UUID.randomUUID(), 1);
+
+        then(outboxRepository).should(org.mockito.Mockito.times(5)).save(captor.capture());
+
+        for (final IncidentEventOutbox entry : captor.getAllValues()) {
+            assertThat(entry.getPayload())
+                    .as("payload for event type %s", entry.getEventType())
+                    .contains(teamId.toString());
+        }
     }
 
     /**
