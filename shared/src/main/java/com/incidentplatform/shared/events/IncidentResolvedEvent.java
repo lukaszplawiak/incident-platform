@@ -14,7 +14,8 @@ public record IncidentResolvedEvent(
         String resolution,
         String title,
         Severity severity,
-        Instant occurredAt
+        Instant occurredAt,
+        UUID teamId
 ) implements IncidentEvent {
     public IncidentResolvedEvent {
         if (occurredAt == null) occurredAt = Instant.now();

@@ -14,6 +14,7 @@ class IncidentEventTest {
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final UUID USER_ID = UUID.randomUUID();
+    private static final UUID TEAM_ID = UUID.randomUUID();
     private static final String TENANT_ID = "acme-corp";
 
     @Test
@@ -22,20 +23,21 @@ class IncidentEventTest {
         final IncidentOpenedEvent event = new IncidentOpenedEvent(
                 INCIDENT_ID, TENANT_ID, UUID.randomUUID(),
                 "prometheus:highcpu:prod-1",
-                "High CPU", Severity.CRITICAL, SourceType.OPS, Instant.now()
+                "High CPU", Severity.CRITICAL, SourceType.OPS, Instant.now(), TEAM_ID
         );
 
         assertThat(event).isInstanceOf(IncidentEvent.class);
         assertThat(event.incidentId()).isEqualTo(INCIDENT_ID);
         assertThat(event.tenantId()).isEqualTo(TENANT_ID);
         assertThat(event.occurredAt()).isNotNull();
+        assertThat(event.teamId()).isEqualTo(TEAM_ID);
     }
 
     @Test
     @DisplayName("IncidentAcknowledgedEvent should set occurredAt when null")
     void acknowledgedEventShouldSetOccurredAt() {
         final IncidentAcknowledgedEvent event = new IncidentAcknowledgedEvent(
-                INCIDENT_ID, TENANT_ID, USER_ID, null
+                INCIDENT_ID, TENANT_ID, USER_ID, null, TEAM_ID
         );
 
         assertThat(event.occurredAt()).isNotNull();
@@ -48,7 +50,7 @@ class IncidentEventTest {
         final IncidentResolvedEvent event = new IncidentResolvedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
                 "prometheus:highcpu:prod-1",
-                45L, "Restarted the service", "High CPU usage on prod-server-1", Severity.CRITICAL, Instant.now()
+                45L, "Restarted the service", "High CPU usage on prod-server-1", Severity.CRITICAL, Instant.now(), TEAM_ID
         );
 
         assertThat(event.durationMinutes()).isEqualTo(45L);
@@ -62,7 +64,7 @@ class IncidentEventTest {
     void escalatedEventShouldContainLevel() {
         final IncidentEscalatedEvent event = new IncidentEscalatedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
-                2, Severity.CRITICAL, "High CPU", Instant.now()
+                2, Severity.CRITICAL, "High CPU", Instant.now(), TEAM_ID
         );
 
         assertThat(event.escalationLevel()).isEqualTo(2);
@@ -74,7 +76,7 @@ class IncidentEventTest {
     void closedEventShouldContainPostmortemId() {
         final UUID postmortemId = UUID.randomUUID();
         final IncidentClosedEvent event = new IncidentClosedEvent(
-                INCIDENT_ID, TENANT_ID, USER_ID, postmortemId, Instant.now()
+                INCIDENT_ID, TENANT_ID, USER_ID, postmortemId, Instant.now(), TEAM_ID
         );
 
         assertThat(event.postmortemId()).isEqualTo(postmortemId);
@@ -87,18 +89,18 @@ class IncidentEventTest {
         final IncidentEvent opened = new IncidentOpenedEvent(
                 INCIDENT_ID, TENANT_ID, UUID.randomUUID(),
                 "prometheus:test:prod-1",
-                "title", Severity.HIGH, SourceType.OPS, Instant.now());
+                "title", Severity.HIGH, SourceType.OPS, Instant.now(), TEAM_ID);
         final IncidentEvent acknowledged = new IncidentAcknowledgedEvent(
-                INCIDENT_ID, TENANT_ID, USER_ID, Instant.now());
+                INCIDENT_ID, TENANT_ID, USER_ID, Instant.now(), TEAM_ID);
         final IncidentEvent resolved = new IncidentResolvedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
                 "prometheus:test:prod-1",
-                30L, null, "title", Severity.HIGH, Instant.now());
+                30L, null, "title", Severity.HIGH, Instant.now(), TEAM_ID);
         final IncidentEvent escalated = new IncidentEscalatedEvent(
                 INCIDENT_ID, TENANT_ID, USER_ID,
-                1, Severity.HIGH, "title", Instant.now());
+                1, Severity.HIGH, "title", Instant.now(), TEAM_ID);
         final IncidentEvent closed = new IncidentClosedEvent(
-                INCIDENT_ID, TENANT_ID, USER_ID, UUID.randomUUID(), Instant.now());
+                INCIDENT_ID, TENANT_ID, USER_ID, UUID.randomUUID(), Instant.now(), TEAM_ID);
 
         assertThat(describeEvent(opened)).isEqualTo("opened");
         assertThat(describeEvent(acknowledged)).isEqualTo("acknowledged");

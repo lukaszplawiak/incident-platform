@@ -142,7 +142,8 @@ public final class TestDataFactory {
                 "High CPU usage on prod-server-1",
                 Severity.CRITICAL,
                 SourceType.OPS,
-                Instant.now()
+                Instant.now(),
+                TEST_TEAM_ID
         );
     }
 
@@ -151,7 +152,8 @@ public final class TestDataFactory {
                 TEST_INCIDENT_ID,
                 TEST_TENANT_ID,
                 TEST_USER_ID,
-                Instant.now()
+                Instant.now(),
+                TEST_TEAM_ID
         );
     }
 
@@ -165,7 +167,8 @@ public final class TestDataFactory {
                 "Restarted the overloaded service and scaled up the instance",
                 "High CPU usage on prod-server-1",
                 Severity.CRITICAL,
-                Instant.now()
+                Instant.now(),
+                TEST_TEAM_ID
         );
     }
 
@@ -177,7 +180,8 @@ public final class TestDataFactory {
                 1,
                 Severity.CRITICAL,
                 "High CPU usage on prod-server-1",
-                Instant.now()
+                Instant.now(),
+                TEST_TEAM_ID
         );
     }
 
@@ -187,7 +191,8 @@ public final class TestDataFactory {
                 TEST_TENANT_ID,
                 TEST_USER_ID,
                 UUID.randomUUID(),
-                Instant.now()
+                Instant.now(),
+                TEST_TEAM_ID
         );
     }
 

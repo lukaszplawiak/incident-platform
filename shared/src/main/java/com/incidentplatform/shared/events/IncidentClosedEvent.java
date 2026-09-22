@@ -8,7 +8,8 @@ public record IncidentClosedEvent(
         String tenantId,
         UUID closedBy,
         UUID postmortemId,
-        Instant occurredAt
+        Instant occurredAt,
+        UUID teamId
 ) implements IncidentEvent {
 
     public IncidentClosedEvent {

@@ -56,7 +56,7 @@ class IncidentEventKafkaSenderTest {
                 UUID.randomUUID(), TENANT_ID, UUID.randomUUID(),
                 "prometheus:highcpu:server-1", "High CPU usage",
                 com.incidentplatform.shared.domain.Severity.CRITICAL,
-                SourceType.OPS, Instant.now());
+                SourceType.OPS, Instant.now(), UUID.randomUUID());
     }
 
     @Nested
