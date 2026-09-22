@@ -1,7 +1,14 @@
 services:
   # ----------------------------------------------------------
-  # PostgreSQL 16
+  # PostgreSQL 18
   # ----------------------------------------------------------
+  # Fixed: 18+'s official image stores data in a pg_ctlcluster-compatible,
+  # version-specific subdirectory and refuses to start against a volume
+  # mounted directly at .../data (see docker-library/postgres#1259) — the
+  # mount point moved up to the parent directory accordingly. A pre-existing
+  # postgres_data volume from 16 is not compatible with 18's layout either
+  # way (that would need a real pg_upgrade, not just a path change); local
+  # runs upgrading from 16 need `make dev-reset` to start from an empty volume.
   postgres:
     image: postgres:18-alpine
     container_name: incident-postgres
@@ -13,7 +20,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U incident_app -d incidentdb"]
