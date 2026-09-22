@@ -482,6 +482,9 @@ class EscalationSchedulerTest {
             assertThat(event.tenantId()).isEqualTo(TENANT_ID);
             assertThat(event.severity()).isEqualTo(Severity.CRITICAL);
             assertThat(event.escalationLevel()).isEqualTo(1);
+            // Backlog #0-12: task.getTeamId() must reach the outgoing event —
+            // it was silently dropped before this fix, even when non-null.
+            assertThat(event.teamId()).isEqualTo(task.getTeamId());
         }
 
         @Test
