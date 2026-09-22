@@ -45,7 +45,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
-| [0-29](#0-29-staging-and-prod-k8s-overlays-have-swapped-namespaces) | staging and prod k8s overlays have swapped namespaces | bug | Low | Open |
+| [0-29](#0-29-staging-and-prod-k8s-overlays-are-wholesale-swapped-not-just-their-namespace) | staging and prod k8s overlays are wholesale swapped, not just their `namespace:` | bug | Low | Open |
 
 ---
 
