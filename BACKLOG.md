@@ -419,22 +419,33 @@ mind: the audit events are the compliance record, the queue is a work queue.
 
 ---
 
-### 0-29. staging and prod k8s overlays have swapped namespaces
+### 0-29. staging and prod k8s overlays are wholesale swapped, not just their `namespace:`
 
 **Type:** bug · **Priority:** Low · **Status:** Open
 
-**Problem.** `k8s/overlays/staging/kustomization.yml` sets `namespace: incident-platform-prod`, and
-`k8s/overlays/prod/kustomization.yml` sets `namespace: incident-platform-staging` — the two are swapped relative to
-their directory names. Kustomize's top-level `namespace:` field overrides the namespace of every resource it
-kustomizes, including each overlay's own `secrets.yml` (which does correctly declare `namespace:
-incident-platform-prod` / `incident-platform-staging` matching its directory — that value is simply discarded by the
-overlay's own `namespace:` transformer). Found while investigating backlog #0-26; unrelated to it.
+**Problem.** `k8s/overlays/staging/kustomization.yml` and `k8s/overlays/prod/kustomization.yml` each contain the
+*other* environment's whole configuration, not just a swapped `namespace:` field. The file in `staging/` sets
+`namespace: incident-platform-prod`, its resources comment reads "Prod-specific secrets", and its patches give
+prod-shaped sizing: `incident-service` 3 replicas with 1Gi/512Mi memory limits, `ingestion-service` 3 replicas,
+`notification-service`/`escalation-service`/`postmortem-service`/`oncall-service` 2 replicas each, an
+`incident-service-hpa` patch (`maxReplicas: 5`), and every image pinned to `newTag: "1.0.0"` (a release version, not
+an environment name). The file in `prod/` is the mirror image: `namespace: incident-platform-staging`, "Staging-specific
+secrets", only `incident-service`/`ingestion-service` bumped to 2 replicas each (no HPA patch, no bump for the other
+four services), and every image at `newTag: staging`. Kustomize's top-level `namespace:` field overrides every
+resource's namespace regardless of what each overlay's own `secrets.yml` declares, so the namespace mismatch is real,
+not just cosmetic. Found while investigating backlog #0-26; unrelated to it. (An earlier version of this entry
+described only the `namespace:` field as swapped — a review of the full diff showed the whole file bodies are
+swapped between directories.)
 
-**Effect.** Deploying "prod" today would land resources in the `incident-platform-staging` namespace, and vice versa
-— the overlay names and the actual namespaces disagree.
+**Effect.** "Deploying prod" today would land `staging`-tagged images, at staging-level replica counts and no HPA
+bump, into the `incident-platform-staging` namespace — and "deploying staging" would land `1.0.0`-tagged images at
+prod-level scale into `incident-platform-prod`. Image tag and scale are wrong for whichever environment someone
+believes they're targeting, not only the namespace label.
 
-**Decide / do.** Confirm this is unintended (not, for example, a deliberate historical rename that the directory
-names never caught up to) and swap the two `namespace:` values back to match their directories.
+**Decide / do.** Confirm this is unintended (not, for example, a deliberate historical rename the directory names
+never caught up to), then swap the two file bodies (or move the files) wholesale — editing only the `namespace:`
+line in each, as a narrower read of this bug might suggest, would leave the replica counts, resource limits, HPA
+target and image tags mismatched.
 
 ---
 
