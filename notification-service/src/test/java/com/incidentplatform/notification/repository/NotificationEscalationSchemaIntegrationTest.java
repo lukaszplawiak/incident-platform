@@ -105,6 +105,13 @@ class NotificationEscalationSchemaIntegrationTest {
                 "High CPU", level, escalateTo);
     }
 
+    private NotificationQueueEntry entry(UUID incidentId, String eventType,
+                                         int level, UUID escalateTo, UUID teamId) {
+        return NotificationQueueEntry.pending(
+                incidentId, TENANT_ID, eventType, Severity.CRITICAL,
+                "High CPU", level, escalateTo, teamId);
+    }
+
     @Test
     @DisplayName("queue: level 1 and level 2 of the same escalation can both be stored")
     void queueAllowsBothEscalationLevels() {
@@ -264,6 +271,36 @@ class NotificationEscalationSchemaIntegrationTest {
                 queueRepository.findById(saved.getId()).orElseThrow();
         assertThat(loaded.getEscalationLevel()).isEqualTo(2);
         assertThat(loaded.getEscalateTo()).isEqualTo(escalateTo);
+    }
+
+    @Test
+    @DisplayName("queue: teamId round-trips through Postgres (V7, backlog #0-12)")
+    void queuePersistsTeamId() {
+        final UUID incidentId = UUID.randomUUID();
+        final UUID teamId = UUID.randomUUID();
+
+        final NotificationQueueEntry saved = queueRepository.saveAndFlush(
+                entry(incidentId, OPENED, 0, null, teamId));
+        entityManager.clear();
+
+        final NotificationQueueEntry loaded =
+                queueRepository.findById(saved.getId()).orElseThrow();
+        assertThat(loaded.getTeamId()).isEqualTo(teamId);
+    }
+
+    @Test
+    @DisplayName("queue: teamId is not part of the idempotency key (V7, backlog #0-12)")
+    void queueTeamIdIsNotPartOfTheUniqueIndex() {
+        final UUID incidentId = UUID.randomUUID();
+        queueRepository.saveAndFlush(
+                entry(incidentId, OPENED, 0, null, UUID.randomUUID()));
+
+        // Same incident/tenant/event/level, a *different* teamId — still
+        // rejected, proving teamId was not folded into
+        // uq_notification_queue_incident_tenant_event_level.
+        assertThatThrownBy(() -> queueRepository.saveAndFlush(
+                entry(incidentId, OPENED, 0, null, UUID.randomUUID())))
+                .isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test

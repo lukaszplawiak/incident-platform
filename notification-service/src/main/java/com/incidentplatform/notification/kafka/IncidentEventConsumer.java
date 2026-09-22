@@ -103,15 +103,22 @@ public class IncidentEventConsumer {
             final UUID escalateTo = escalation
                     ? extractEscalateTo(event, incidentId) : null;
 
+            // Unlike escalationLevel/escalateTo, teamId is read for every
+            // event type (backlog #0-12): NotificationRouter's PRIMARY
+            // fallback runs for every event type that reaches routing, not
+            // just INCIDENT_ESCALATED, so every event needs the incident's
+            // team to scope that lookup.
+            final UUID teamId = extractTeamId(event);
+
             log.info("Processing incident event: type={}, incidentId={}, " +
-                            "severity={}, escalationLevel={}, tenant={}",
-                    eventType, incidentId, severity, escalationLevel, tenantId);
+                            "severity={}, escalationLevel={}, tenant={}, teamId={}",
+                    eventType, incidentId, severity, escalationLevel, tenantId, teamId);
 
             // Outbox Pattern: write PENDING entry and acknowledge immediately.
             // NotificationScheduler sends actual notifications asynchronously.
             notificationService.enqueue(
                     eventType, incidentId, tenantId, severity, title,
-                    escalationLevel, escalateTo);
+                    escalationLevel, escalateTo, teamId);
 
         } catch (UnrecognizedSeverityException e) {
             // Poison pill — unrecognized severity cannot be fixed by retrying.
@@ -228,6 +235,33 @@ public class IncidentEventConsumer {
             // lines (newlines) or inflate log volume.
             log.warn("Ignoring malformed escalateTo on IncidentEscalatedEvent: " +
                             "incidentId={}", incidentId);
+            return null;
+        }
+    }
+
+    /**
+     * Reads the optional {@code teamId} of any {@code IncidentEvent} (backlog #0-12).
+     *
+     * <p>Missing, {@code null} or blank is normal (an incident with no team
+     * assignment — manually created, or an {@code Integration} without one)
+     * and yields {@code null}, in which case routing stays tenant-wide exactly
+     * as before this field existed. A value that is present but not a UUID is
+     * logged and also treated as absent, the same treatment {@link
+     * #extractEscalateTo} gives a malformed hint: it is optional routing data,
+     * not part of the idempotency key, so dropping the whole notification over
+     * a malformed team id would lose an alert that can still be delivered.
+     */
+    private UUID extractTeamId(JsonNode event) {
+        final JsonNode node = event.path("teamId");
+        if (node.isMissingNode() || node.isNull() || node.asText().isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(node.asText());
+        } catch (IllegalArgumentException e) {
+            // The raw value is deliberately not logged — see extractEscalateTo.
+            log.warn("Ignoring malformed teamId on incident event: incidentId={}",
+                    event.path("incidentId").asText("unknown"));
             return null;
         }
     }

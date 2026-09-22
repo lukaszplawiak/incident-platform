@@ -16,6 +16,7 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * HTTP client for oncall-service.
@@ -74,13 +75,19 @@ public class OncallClientImpl implements OncallClient {
     @Retry(name = "oncall")
     @CircuitBreaker(name = "oncall", fallbackMethod = "getCurrentOncallFallback")
     @Override
-    public Optional<OncallInfo> getCurrentOncall(String tenantId, String role) {
-        log.debug("Fetching current oncall: tenantId={}, role={}",
-                tenantId, role);
+    public Optional<OncallInfo> getCurrentOncall(String tenantId, UUID teamId, String role) {
+        log.debug("Fetching current oncall: tenantId={}, teamId={}, role={}",
+                tenantId, teamId, role);
 
+        // teamId is routinely null (an incident with no team assignment) —
+        // queryParamIfPresent leaves the param off the URI entirely in that
+        // case. A plain .queryParam("teamId", teamId) would instead render a
+        // literal "teamId=null" on the wire, which oncall-service's
+        // @RequestParam(required = false) UUID would fail to parse.
         final String uri = UriComponentsBuilder
                 .fromHttpUrl(oncallServiceBaseUrl)
                 .path("/api/v1/oncall/current")
+                .queryParamIfPresent("teamId", Optional.ofNullable(teamId))
                 .queryParam("role", role)
                 .toUriString();
 
@@ -106,11 +113,11 @@ public class OncallClientImpl implements OncallClient {
      * {@link io.github.resilience4j.circuitbreaker.CallNotPermittedException}).
      */
     @SuppressWarnings("unused")
-    Optional<OncallInfo> getCurrentOncallFallback(String tenantId, String role,
+    Optional<OncallInfo> getCurrentOncallFallback(String tenantId, UUID teamId, String role,
                                                   Exception e) {
         log.warn("oncall-service unavailable — getCurrentOncall fallback: " +
-                        "tenantId={}, role={}, error={}",
-                tenantId, role, e.getMessage());
+                        "tenantId={}, teamId={}, role={}, error={}",
+                tenantId, teamId, role, e.getMessage());
         fallbackMetrics.record("oncall", "oncall-service", e);
         // Backlog #0-19: not fail-open any more — see OncallLookupUnavailableException.
         throw new OncallLookupUnavailableException(

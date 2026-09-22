@@ -129,6 +129,10 @@ public class NotificationService {
      * @param escalateTo      the user the escalation is addressed to, or
      *                        {@code null}; stored on the entry because the
      *                        recipient is resolved at send time
+     * @param teamId          the team the incident belongs to, or {@code null}
+     *                        (backlog #0-12); stored on the entry, not part of
+     *                        the idempotency key — same treatment as {@code
+     *                        escalateTo}, it is routing data, not identity
      */
     @Transactional
     public void enqueue(String eventType,
@@ -137,7 +141,8 @@ public class NotificationService {
                         Severity severity,
                         String title,
                         int escalationLevel,
-                        UUID escalateTo) {
+                        UUID escalateTo,
+                        UUID teamId) {
         if (queueRepository
                 .existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
                         incidentId, tenantId, eventType, escalationLevel)) {
@@ -149,7 +154,7 @@ public class NotificationService {
 
         final NotificationQueueEntry entry = NotificationQueueEntry.pending(
                 incidentId, tenantId, eventType, severity, title,
-                escalationLevel, escalateTo);
+                escalationLevel, escalateTo, teamId);
         queueRepository.save(entry);
 
         log.info("Notification queued: incidentId={}, eventType={}, " +
@@ -250,7 +255,8 @@ public class NotificationService {
         // database transaction open (backlog #42).
         final var routing = router.route(
                 eventType, incidentId, tenantId,
-                entry.getSeverity(), entry.getTitle(), entry.getEscalateTo());
+                entry.getSeverity(), entry.getTitle(), entry.getEscalateTo(),
+                entry.getTeamId());
 
         reportSkippedChannels(routing.skippedChannels(), entry);
 

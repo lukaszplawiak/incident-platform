@@ -21,7 +21,9 @@ import org.springframework.web.client.RestClientException;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.util.Optional;
+import java.util.UUID;
 
+import static com.github.tomakehurst.wiremock.client.WireMock.absent;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.get;
@@ -127,7 +129,7 @@ class OncallClientImplTest {
                                     """)));
 
             final Optional<OncallClient.OncallInfo> result =
-                    client.getCurrentOncall(TENANT_ID, "PRIMARY");
+                    client.getCurrentOncall(TENANT_ID, null, "PRIMARY");
 
             assertThat(result).isPresent();
             final OncallClient.OncallInfo info = result.get();
@@ -147,7 +149,7 @@ class OncallClientImplTest {
                             .withStatus(200)
                             .withBody("")));
 
-            assertThat(client.getCurrentOncall(TENANT_ID, "PRIMARY")).isEmpty();
+            assertThat(client.getCurrentOncall(TENANT_ID, null, "PRIMARY")).isEmpty();
         }
 
         @Test
@@ -156,7 +158,7 @@ class OncallClientImplTest {
             wireMock.stubFor(get(urlPathEqualTo("/api/v1/oncall/current"))
                     .willReturn(aResponse().withStatus(404)));
 
-            assertThatThrownBy(() -> client.getCurrentOncall(TENANT_ID, "PRIMARY"))
+            assertThatThrownBy(() -> client.getCurrentOncall(TENANT_ID, null, "PRIMARY"))
                     .isInstanceOf(RestClientException.class);
         }
 
@@ -166,7 +168,7 @@ class OncallClientImplTest {
             wireMock.stubFor(get(urlPathEqualTo("/api/v1/oncall/current"))
                     .willReturn(aResponse().withStatus(500)));
 
-            assertThatThrownBy(() -> client.getCurrentOncall(TENANT_ID, "PRIMARY"))
+            assertThatThrownBy(() -> client.getCurrentOncall(TENANT_ID, null, "PRIMARY"))
                     .isInstanceOf(RestClientException.class);
         }
 
@@ -175,10 +177,45 @@ class OncallClientImplTest {
         void throwsOnConnectionRefused() {
             wireMock.stop();
 
-            assertThatThrownBy(() -> client.getCurrentOncall(TENANT_ID, "PRIMARY"))
+            assertThatThrownBy(() -> client.getCurrentOncall(TENANT_ID, null, "PRIMARY"))
                     .isInstanceOf(RestClientException.class);
 
             wireMock.start();
+        }
+
+        /**
+         * Backlog #0-12: no existing test in this file asserted on query
+         * parameters at all. These two are what actually proves the fix —
+         * that a non-null {@code teamId} reaches oncall-service on the wire,
+         * and that a null one is omitted rather than rendered as a literal
+         * {@code teamId=null} (which oncall-service's {@code UUID} param
+         * would fail to parse).
+         */
+        @Test
+        @DisplayName("sends teamId as a query param when given (backlog #0-12)")
+        void sendsTeamIdWhenPresent() {
+            final UUID teamId = UUID.randomUUID();
+            wireMock.stubFor(get(urlPathEqualTo("/api/v1/oncall/current"))
+                    .willReturn(aResponse().withStatus(204)));
+
+            client.getCurrentOncall(TENANT_ID, teamId, "PRIMARY");
+
+            wireMock.verify(getRequestedFor(urlPathEqualTo("/api/v1/oncall/current"))
+                    .withQueryParam("teamId", equalTo(teamId.toString()))
+                    .withQueryParam("role", equalTo("PRIMARY")));
+        }
+
+        @Test
+        @DisplayName("omits teamId from the query string when null, instead of sending a literal 'null'")
+        void omitsTeamIdWhenAbsent() {
+            wireMock.stubFor(get(urlPathEqualTo("/api/v1/oncall/current"))
+                    .willReturn(aResponse().withStatus(204)));
+
+            client.getCurrentOncall(TENANT_ID, null, "PRIMARY");
+
+            wireMock.verify(getRequestedFor(urlPathEqualTo("/api/v1/oncall/current"))
+                    .withQueryParam("teamId", absent())
+                    .withQueryParam("role", equalTo("PRIMARY")));
         }
     }
 
@@ -329,7 +366,7 @@ class OncallClientImplTest {
             wireMock.stubFor(get(urlPathEqualTo("/api/v1/oncall/current"))
                     .willReturn(aResponse().withStatus(204)));
 
-            client.getCurrentOncall(TENANT_ID, "PRIMARY");
+            client.getCurrentOncall(TENANT_ID, null, "PRIMARY");
 
             wireMock.verify(getRequestedFor(urlPathEqualTo("/api/v1/oncall/current"))
                     .withHeader("Authorization", equalTo("Bearer test-token"))
@@ -363,7 +400,7 @@ class OncallClientImplTest {
         @Test
         @DisplayName("getCurrentOncallFallback counts a 401 as reason=auth")
         void currentOncallCountsAuth() {
-            assertThatThrownBy(() -> client.getCurrentOncallFallback(TENANT_ID, "PRIMARY",
+            assertThatThrownBy(() -> client.getCurrentOncallFallback(TENANT_ID, null, "PRIMARY",
                     HttpClientErrorException.create(HttpStatus.UNAUTHORIZED, "u",
                             HttpHeaders.EMPTY, new byte[0], null)))
                     .isInstanceOf(OncallLookupUnavailableException.class);
@@ -385,7 +422,7 @@ class OncallClientImplTest {
         @DisplayName("a generic failure is counted as reason=other")
         void genericFailureCountsOther() {
             assertThatThrownBy(() -> client.getCurrentOncallFallback(
-                    TENANT_ID, "PRIMARY", new RuntimeException("boom")))
+                    TENANT_ID, null, "PRIMARY", new RuntimeException("boom")))
                     .isInstanceOf(OncallLookupUnavailableException.class);
 
             assertThat(count("other")).isEqualTo(1.0);
@@ -402,7 +439,7 @@ class OncallClientImplTest {
             final RuntimeException cause = new RuntimeException("boom");
 
             assertThatThrownBy(() -> client.getCurrentOncallFallback(
-                    TENANT_ID, "PRIMARY", cause))
+                    TENANT_ID, null, "PRIMARY", cause))
                     .isInstanceOf(OncallLookupUnavailableException.class)
                     .hasCause(cause);
         }

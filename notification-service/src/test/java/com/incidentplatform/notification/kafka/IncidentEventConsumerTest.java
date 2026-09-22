@@ -144,6 +144,23 @@ class IncidentEventConsumerTest {
                 }""", INCIDENT_ID, TENANT_ID, escalateToJson, level);
     }
 
+    /**
+     * Backlog #0-12: unlike {@link #openedEvent()}, this variant carries a
+     * (possibly malformed) {@code teamId}. Used for the {@code TeamContext}
+     * tests below — {@code extractTeamId} is exercised for every event type,
+     * not just escalations, so a non-escalation event type is enough.
+     */
+    private String openedEvent(String teamIdJson) {
+        return String.format("""
+                {
+                  "incidentId": "%s",
+                  "tenantId": "%s",
+                  "title": "High CPU",
+                  "severity": "CRITICAL",
+                  "teamId": %s
+                }""", INCIDENT_ID, TENANT_ID, teamIdJson);
+    }
+
     @Nested
     @DisplayName("tenant context management")
     class TenantContextManagement {
@@ -171,7 +188,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    any(), any(), tenantCaptor.capture(), any(), any(), anyInt(), any());
+                    any(), any(), tenantCaptor.capture(), any(), any(), anyInt(), any(), any());
             assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
         }
 
@@ -198,7 +215,7 @@ class IncidentEventConsumerTest {
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("db error"))
                     .given(notificationService)
-                    .enqueue(any(), any(), any(), any(), any(), anyInt(), any());
+                    .enqueue(any(), any(), any(), any(), any(), anyInt(), any(), any());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
@@ -225,7 +242,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should(org.mockito.Mockito.times(2))
-                    .enqueue(any(), any(), tenantCaptor.capture(), any(), any(), anyInt(), any());
+                    .enqueue(any(), any(), tenantCaptor.capture(), any(), any(), anyInt(), any(), any());
 
             assertThat(tenantCaptor.getAllValues())
                     .containsExactly("tenant-a", "tenant-b");
@@ -255,7 +272,7 @@ class IncidentEventConsumerTest {
                     eq("High CPU"),
                     eq(0),
                     isNull()
-            );
+            , isNull());
         }
 
         @Test
@@ -270,7 +287,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    eq(IncidentEventTypes.INCIDENT_ACKNOWLEDGED), any(), any(), any(), any(), anyInt(), any());
+                    eq(IncidentEventTypes.INCIDENT_ACKNOWLEDGED), any(), any(), any(), any(), anyInt(), any(), any());
         }
 
         @Test
@@ -285,7 +302,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    eq(IncidentEventTypes.INCIDENT_RESOLVED), any(), any(), any(), any(), anyInt(), any());
+                    eq(IncidentEventTypes.INCIDENT_RESOLVED), any(), any(), any(), any(), anyInt(), any(), any());
         }
 
         @Test
@@ -315,7 +332,7 @@ class IncidentEventConsumerTest {
 
             // then
             then(notificationService).should().enqueue(
-                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(), any(), any(), anyInt(), any());
+                    eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(), any(), any(), anyInt(), any(), any());
         }
     }
 
@@ -336,7 +353,7 @@ class IncidentEventConsumerTest {
             then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_ESCALATED), eq(INCIDENT_ID),
                     eq(TENANT_ID), eq(Severity.CRITICAL), eq("High CPU"),
-                    eq(2), eq(escalateTo));
+                    eq(2), eq(escalateTo), isNull());
             then(acknowledgment).should().acknowledge();
         }
 
@@ -351,7 +368,7 @@ class IncidentEventConsumerTest {
 
             then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(),
-                    any(), any(), eq(1), isNull());
+                    any(), any(), eq(1), isNull(), isNull());
         }
 
         @Test
@@ -365,7 +382,7 @@ class IncidentEventConsumerTest {
 
             then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(),
-                    any(), any(), eq(1), isNull());
+                    any(), any(), eq(1), isNull(), isNull());
         }
 
         /**
@@ -385,7 +402,7 @@ class IncidentEventConsumerTest {
 
             then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_ESCALATED), any(), any(),
-                    any(), any(), eq(2), isNull());
+                    any(), any(), eq(2), isNull(), isNull());
             then(deadLetterPublisher).shouldHaveNoInteractions();
             then(acknowledgment).should().acknowledge();
         }
@@ -464,7 +481,83 @@ class IncidentEventConsumerTest {
 
             then(notificationService).should().enqueue(
                     eq(IncidentEventTypes.INCIDENT_OPENED), any(), any(),
-                    any(), any(), eq(0), isNull());
+                    any(), any(), eq(0), isNull(), isNull());
+        }
+    }
+
+    /**
+     * Backlog #0-12: {@code extractTeamId} is applied to every event type
+     * (unlike {@code escalationLevel}/{@code escalateTo}, which only apply to
+     * {@code INCIDENT_ESCALATED}), so a non-escalation event type
+     * ({@code INCIDENT_OPENED}) is enough to exercise it here.
+     */
+    @Nested
+    @DisplayName("team context (backlog #0-12)")
+    class TeamContext {
+
+        @Test
+        @DisplayName("should pass the teamId of any event type")
+        void shouldPassTeamId() {
+            final UUID teamId = UUID.randomUUID();
+            final ConsumerRecord<String, String> record = buildRecord(
+                    openedEvent("\"" + teamId + "\""), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_OPENED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_OPENED), eq(INCIDENT_ID),
+                    eq(TENANT_ID), eq(Severity.CRITICAL), eq("High CPU"),
+                    eq(0), isNull(), eq(teamId));
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("should pass a null teamId when the field is JSON null")
+        void shouldPassNullTeamIdWhenNull() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    openedEvent("null"), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_OPENED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_OPENED), any(), any(),
+                    any(), any(), eq(0), isNull(), isNull());
+        }
+
+        @Test
+        @DisplayName("should pass a null teamId when the field is absent")
+        void shouldPassNullTeamIdWhenAbsent() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    openedEvent(), TENANT_ID, IncidentEventTypes.INCIDENT_OPENED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_OPENED), any(), any(),
+                    any(), any(), eq(0), isNull(), isNull());
+        }
+
+        /**
+         * teamId is an optional hint, like escalateTo — a malformed value
+         * must not turn the event into a poison pill (which would drop an
+         * alert that can still be delivered).
+         */
+        @Test
+        @DisplayName("should still enqueue and acknowledge when teamId is not a UUID")
+        void shouldIgnoreMalformedTeamId() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    openedEvent("\"not-a-uuid\""), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_OPENED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(notificationService).should().enqueue(
+                    eq(IncidentEventTypes.INCIDENT_OPENED), any(), any(),
+                    any(), any(), eq(0), isNull(), isNull());
+            then(deadLetterPublisher).shouldHaveNoInteractions();
+            then(acknowledgment).should().acknowledge();
         }
     }
 
@@ -497,7 +590,7 @@ class IncidentEventConsumerTest {
 
             org.mockito.BDDMockito.willThrow(new RuntimeException("Slack API down"))
                     .given(notificationService)
-                    .enqueue(any(), any(), any(), any(), any(), anyInt(), any());
+                    .enqueue(any(), any(), any(), any(), any(), anyInt(), any(), any());
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);

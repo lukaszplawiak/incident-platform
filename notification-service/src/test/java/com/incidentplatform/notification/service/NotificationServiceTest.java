@@ -89,7 +89,7 @@ class NotificationServiceTest {
 
             notificationService.enqueue(
                     EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", 0, null);
+                    Severity.CRITICAL, "High CPU", 0, null, null);
 
             final ArgumentCaptor<NotificationQueueEntry> captor =
                     ArgumentCaptor.forClass(NotificationQueueEntry.class);
@@ -111,7 +111,7 @@ class NotificationServiceTest {
 
             notificationService.enqueue(
                     EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", 0, null);
+                    Severity.CRITICAL, "High CPU", 0, null, null);
 
             then(queueRepository).should(never()).save(any());
         }
@@ -126,13 +126,31 @@ class NotificationServiceTest {
 
             notificationService.enqueue(
                     ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", 2, escalateTo);
+                    Severity.CRITICAL, "High CPU", 2, escalateTo, null);
 
             final ArgumentCaptor<NotificationQueueEntry> captor =
                     ArgumentCaptor.forClass(NotificationQueueEntry.class);
             then(queueRepository).should().save(captor.capture());
             assertThat(captor.getValue().getEscalationLevel()).isEqualTo(2);
             assertThat(captor.getValue().getEscalateTo()).isEqualTo(escalateTo);
+        }
+
+        @Test
+        @DisplayName("should store the teamId on the entry (backlog #0-12)")
+        void shouldStoreTeamId() {
+            final UUID teamId = UUID.randomUUID();
+            given(queueRepository.existsByIncidentIdAndTenantIdAndEventTypeAndEscalationLevel(
+                    INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0)).willReturn(false);
+            given(queueRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            notificationService.enqueue(
+                    EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", 0, null, teamId);
+
+            final ArgumentCaptor<NotificationQueueEntry> captor =
+                    ArgumentCaptor.forClass(NotificationQueueEntry.class);
+            then(queueRepository).should().save(captor.capture());
+            assertThat(captor.getValue().getTeamId()).isEqualTo(teamId);
         }
 
         /**
@@ -152,7 +170,7 @@ class NotificationServiceTest {
 
             notificationService.enqueue(
                     ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", 2, null);
+                    Severity.CRITICAL, "High CPU", 2, null, null);
 
             then(queueRepository).should().save(any());
             then(queueRepository).should(never())
@@ -168,7 +186,7 @@ class NotificationServiceTest {
 
             notificationService.enqueue(
                     ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", 1, null);
+                    Severity.CRITICAL, "High CPU", 1, null, null);
 
             then(queueRepository).should(never()).save(any());
         }
@@ -182,7 +200,7 @@ class NotificationServiceTest {
 
             notificationService.enqueue(
                     EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", 0, null);
+                    Severity.CRITICAL, "High CPU", 0, null, null);
 
             then(router).shouldHaveNoInteractions();
             then(emailChannel).shouldHaveNoInteractions();
@@ -206,7 +224,7 @@ class NotificationServiceTest {
             given(emailChannel.channelName()).willReturn("EMAIL");
             given(slackChannel.channelName()).willReturn("SLACK");
             given(router.route(EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", null))
+                    Severity.CRITICAL, "High CPU", null, null))
                     .willReturn(NotificationRouter.Routing.send(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
                             new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
@@ -224,7 +242,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.send(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request))));
 
@@ -239,7 +257,7 @@ class NotificationServiceTest {
         @DisplayName("should mark queue entry SENT after processing, via persistenceService")
         void shouldMarkQueueEntrySent() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.nothingToSend());
 
             notificationService.processEntry(entry);
@@ -256,7 +274,7 @@ class NotificationServiceTest {
 
             given(emailChannel.channelName()).willReturn("EMAIL");
             given(slackChannel.channelName()).willReturn("SLACK");
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.send(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
                             new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
@@ -288,7 +306,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.send(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request))));
             given(logRepository
@@ -308,13 +326,30 @@ class NotificationServiceTest {
             final UUID escalateTo = UUID.randomUUID();
             final NotificationQueueEntry entry = buildEscalationEntry(1, escalateTo);
             given(router.route(ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", escalateTo))
+                    Severity.CRITICAL, "High CPU", escalateTo, null))
                     .willReturn(NotificationRouter.Routing.nothingToSend());
 
             notificationService.processEntry(entry);
 
             then(router).should().route(ESCALATED_EVENT_TYPE, INCIDENT_ID, TENANT_ID,
-                    Severity.CRITICAL, "High CPU", escalateTo);
+                    Severity.CRITICAL, "High CPU", escalateTo, null);
+        }
+
+        @Test
+        @DisplayName("should pass the entry's teamId to the router (backlog #0-12)")
+        void shouldPassTeamIdToRouter() {
+            final UUID teamId = UUID.randomUUID();
+            final NotificationQueueEntry entry = NotificationQueueEntry.pending(
+                    INCIDENT_ID, TENANT_ID, EVENT_TYPE,
+                    Severity.CRITICAL, "High CPU", 0, null, teamId);
+            given(router.route(EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null, teamId))
+                    .willReturn(NotificationRouter.Routing.nothingToSend());
+
+            notificationService.processEntry(entry);
+
+            then(router).should().route(EVENT_TYPE, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null, teamId);
         }
 
         @Test
@@ -323,7 +358,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildEscalationEntry(2);
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.send(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request))));
             // Level 1 already sent EMAIL for this incident + event type, but
@@ -349,7 +384,7 @@ class NotificationServiceTest {
         @DisplayName("should mark SENT and not call channels when router returns empty")
         void shouldMarkSentWhenNoChannels() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.nothingToSend());
 
             notificationService.processEntry(entry);
@@ -372,7 +407,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = buildPendingEntry();
             final NotificationRequest request = buildRequest("EMAIL");
             given(emailChannel.channelName()).willReturn("EMAIL");
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.send(List.of(
                             new NotificationRouter.ChannelRequest(emailChannel, request))));
 
@@ -398,7 +433,7 @@ class NotificationServiceTest {
         @DisplayName("parks the entry, counts it, audits it and tells the operator, and sends nothing")
         void parksAndAlertsForAnOpenedIncident() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.undeliverable(
                             UndeliverableReason.NO_ONCALL));
 
@@ -421,7 +456,7 @@ class NotificationServiceTest {
         @DisplayName("counts every skipped channel — a missing address is never silent")
         void countsSkippedChannels() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.undeliverable(
                             UndeliverableReason.NO_REACHABLE_CHANNEL, List.of("SLACK", "SMS")));
 
@@ -437,7 +472,7 @@ class NotificationServiceTest {
         @DisplayName("tells the operator for an escalation too")
         void alertsForAnEscalation() {
             final NotificationQueueEntry entry = buildEscalationEntry(1, UUID.randomUUID());
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.undeliverable(
                             UndeliverableReason.NO_REACHABLE_CHANNEL));
 
@@ -454,7 +489,7 @@ class NotificationServiceTest {
             final NotificationQueueEntry entry = NotificationQueueEntry.pending(
                     INCIDENT_ID, TENANT_ID, "IncidentResolvedEvent",
                     Severity.CRITICAL, "High CPU");
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.undeliverable(
                             UndeliverableReason.NO_ONCALL));
 
@@ -471,7 +506,7 @@ class NotificationServiceTest {
         @DisplayName("nothing to send (no channel configured) is still marked SENT, not undeliverable")
         void nothingToSendIsSent() {
             final NotificationQueueEntry entry = buildPendingEntry();
-            given(router.route(any(), any(), any(), any(), any(), any()))
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
                     .willReturn(NotificationRouter.Routing.nothingToSend());
 
             notificationService.processEntry(entry);
