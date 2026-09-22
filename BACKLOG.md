@@ -48,6 +48,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-26](#0-26-set-notification_operator_alert_email-per-kubernetes-environment) | Set `NOTIFICATION_OPERATOR_ALERT_EMAIL` per Kubernetes environment | design | Medium | Open |
 | [0-27](#0-27-claudemd-says-team-isolation-is-the-default-but-it-is-not-enforced) | CLAUDE.md reads as if team isolation were enforced | docs | Low | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
+| [0-29](#0-29-staging-and-prod-k8s-overlays-have-swapped-namespaces) | staging and prod k8s overlays have swapped namespaces | bug | Low | Open |
 
 ---
 
@@ -488,14 +489,33 @@ mind: the audit events are the compliance record, the queue is a work queue.
 
 ---
 
+### 0-29. staging and prod k8s overlays have swapped namespaces
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+
+**Problem.** `k8s/overlays/staging/kustomization.yml` sets `namespace: incident-platform-prod`, and
+`k8s/overlays/prod/kustomization.yml` sets `namespace: incident-platform-staging` — the two are swapped relative to
+their directory names. Kustomize's top-level `namespace:` field overrides the namespace of every resource it
+kustomizes, including each overlay's own `secrets.yml` (which does correctly declare `namespace:
+incident-platform-prod` / `incident-platform-staging` matching its directory — that value is simply discarded by the
+overlay's own `namespace:` transformer). Found while investigating backlog #0-26; unrelated to it.
+
+**Effect.** Deploying "prod" today would land resources in the `incident-platform-staging` namespace, and vice versa
+— the overlay names and the actual namespaces disagree.
+
+**Decide / do.** Confirm this is unintended (not, for example, a deliberate historical rename that the directory
+names never caught up to) and swap the two `namespace:` values back to match their directories.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
 |---|---|---|
 | 0-1 | Escalations notify the `escalateTo` user, falling back to the tenant's PRIMARY, then to the configured addresses (the addresses were removed by #0-18) | PRs #411, #413, #414, #415 |
-| 0-18 | Tenant content only reaches members of the tenant: no fallback address, `UNDELIVERABLE` status (V6), content-free rate-limited operator alert by email, a `NOTIFICATION_UNDELIVERABLE` audit event type of its own (`shared`), skipped channels reported, Slack shared-channel broadcast off by default, a Slack id the channel would ignore is no address | this PR (number added when merged) |
-| 0-19 | An oncall-service outage is no longer read as "nobody on call": the two decisive lookups throw, the entry stays PENDING until the lookup has been failing for a retry window (from its first failed lookup), then UNDELIVERABLE; a scheduler run stops after a processing budget | this PR (number added when merged) |
-| 0-10 | `NotificationScheduler` loads a capped page of PENDING entries, oldest first (`notification.scheduler.batch-size`, default 200), and a run stops after a processing budget validated against the ShedLock | this PR (number added when merged) |
+| 0-18 | Tenant content only reaches members of the tenant: no fallback address, `UNDELIVERABLE` status (V6), content-free rate-limited operator alert by email, a `NOTIFICATION_UNDELIVERABLE` audit event type of its own (`shared`), skipped channels reported, Slack shared-channel broadcast off by default, a Slack id the channel would ignore is no address | PR #416 |
+| 0-19 | An oncall-service outage is no longer read as "nobody on call": the two decisive lookups throw, the entry stays PENDING until the lookup has been failing for a retry window (from its first failed lookup), then UNDELIVERABLE; a scheduler run stops after a processing budget | PR #416 |
+| 0-10 | `NotificationScheduler` loads a capped page of PENDING entries, oldest first (`notification.scheduler.batch-size`, default 200), and a run stops after a processing budget validated against the ShedLock | PR #416 |
 | 0-11 | Service tokens were rejected by `JwtAuthFilter`: per-tenant, per-audience service tokens, `ServicePrincipal`, real-token filter tests, fallback metric, tenant-id validation, escalation client timeouts, correct oncall URL default | PR #413 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
