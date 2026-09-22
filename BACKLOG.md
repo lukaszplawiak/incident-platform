@@ -33,7 +33,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-7](#0-7-incident-service-coerces-escalationlevel-with-asint0) | incident-service coerces `escalationLevel` with `asInt(0)` | bug | Low | Open |
 | [0-8](#0-8-dead-publishescalated-and-a-stale-javadoc-in-incident-service) | Dead `publishEscalated` and a stale Javadoc in incident-service | tech-debt | Low | Open |
 | [0-9](#0-9-stale-index-annotations-on-notificationlog) | Stale `@Index` annotations on `NotificationLog` | tech-debt | Low | Open |
-| [0-12](#0-12-notification-primary-lookup-sends-no-teamid) | Notification PRIMARY lookup sends no `teamId` | bug | High | Open |
 | [0-13](#0-13-asymmetric-service-tokens-or-mtls-for-service-identity) | Asymmetric service tokens or mTLS for service identity | design | Medium | Open |
 | [0-14](#0-14-by-slack-is-open-to-any-authenticated-role) | `GET /by-slack/{id}` is open to any authenticated role | tech-debt | Low | Open |
 | [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
@@ -45,8 +44,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-23](#0-23-the-oncall-retry-is-probably-inactive) | The `oncall` `@Retry` is probably inactive | tech-debt | Low | Open |
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
-| [0-26](#0-26-set-notification_operator_alert_email-per-kubernetes-environment) | Set `NOTIFICATION_OPERATOR_ALERT_EMAIL` per Kubernetes environment | design | Medium | Open |
-| [0-27](#0-27-claudemd-says-team-isolation-is-the-default-but-it-is-not-enforced) | CLAUDE.md reads as if team isolation were enforced | docs | Low | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
 | [0-29](#0-29-staging-and-prod-k8s-overlays-have-swapped-namespaces) | staging and prod k8s overlays have swapped namespaces | bug | Low | Open |
 
@@ -195,34 +192,6 @@ with the automatic one, because a repeat escalation at the same level is dedupli
 **Problem.** `NotificationLog` declares `idx_notification_log_incident_id`, `_tenant_id` and
 `_sent_at`, which migration V2 dropped. Harmless under `ddl-auto: validate` (indexes are not
 validated) but misleading. Align the annotations with the real indexes or remove them.
-
----
-
-### 0-12. Notification PRIMARY lookup sends no `teamId`
-
-**Type:** bug · **Priority:** High · **Status:** Open
-
-**Problem.** `OncallClientImpl.getCurrentOncall(tenantId, role)` calls `/api/v1/oncall/current`
-with `role` only, so "PRIMARY" is resolved tenant-wide, which is ambiguous when a tenant has more
-than one team. Split out of backlog #0-1 (done): the escalation path needs no `teamId` because it
-looks the target up by tenant and user id.
-
-This is the team-level counterpart of the tenant isolation done in #0-18. A tenant is one customer; below
-it are teams, then members. Between customers the boundary is absolute; between teams of one customer it is
-"no by default, unless someone configures it" (as in PagerDuty, where an escalation policy belongs to a
-service owned by a team, and a private team's services and incidents are invisible to other teams). The
-PRIMARY step of the recipient chain is tenant-wide, so in a tenant with several teams it can notify another
-team's PRIMARY about an incident that is not theirs. With `teamId` in the event and on the queue entry the
-chain becomes target, that team's PRIMARY, UNDELIVERABLE.
-
-The by-user lookup (backlog #0-1) returns the most recently started entry when one user holds
-concurrent entries on different teams, which is not necessarily the team of the incident. Only the
-contact details are used today, so this is harmless, but it is the same missing-team gap: once
-`teamId` travels with the event, the lookup can take it as an optional filter.
-
-**Approach.** Carry `teamId` through `IncidentEscalatedEvent`/the incident events, the
-notification consumer and `NotificationQueueEntry` (Flyway migration), then send it. Touches `shared`
-event records, so it rebuilds all 7 services: do it as its own PR.
 
 ---
 
@@ -430,48 +399,9 @@ and `recordLookupFailure`) save a detached entity, which is a merge that writes 
 That is safe today only because ShedLock serialises the scheduler; a run that outlives the lock, or an old pod during a
 rollout, could overwrite another writer's status (for example the catch-all `markFailed` over an UNDELIVERABLE).
 
-**Approach.** Add a `version` column (its own Flyway migration, V7) and `@Version`, and decide how the scheduler treats
+**Approach.** Add a `version` column (its own Flyway migration — V7 went to backlog #0-12's `team_id`
+column, so this one is V8) and `@Version`, and decide how the scheduler treats
 an `OptimisticLockingFailureException` (skip the entry; the next cycle reloads it).
-
----
-
-### 0-26. Set `NOTIFICATION_OPERATOR_ALERT_EMAIL` per Kubernetes environment
-
-**Type:** design · **Priority:** Medium · **Status:** Open
-
-**Problem.** Backlog #0-18 replaced the shared fallback address with a content-free alert email to the platform operator
-(`notification.operator-alert.email`, no default). The k8s base ConfigMap `app-config` ships
-`NOTIFICATION_OPERATOR_ALERT_EMAIL: ""` and no overlay (`k8s/overlays/dev|staging|prod`) patches it, so on Kubernetes the
-operator is never emailed about an undeliverable notification; only the ERROR log and the `notification.undeliverable`
-metric remain. Nothing fails in CI: it is a silent runtime gap. docker-compose ships `operator@incident-platform.local`
-(mailhog) for local runs, so the compose smoke test exercises the configured path and k8s the unconfigured one.
-
-**Decide.** The real address for prod and staging (dev may point at mailhog, which the base already uses for `MAIL_HOST`),
-and whether it belongs in the ConfigMap or in a secret (then the Deployment needs a `secretKeyRef`, like `JWT_SECRET`).
-Then patch `app-config` in each overlay, for example:
-
-    - target: {kind: ConfigMap, name: app-config}
-      patch: |-
-        - op: replace
-          path: /data/NOTIFICATION_OPERATOR_ALERT_EMAIL
-          value: "ops@<real-domain>"
-
-Also state on purpose in the dev overlay if it stays empty. Related: backlog #0-17 (alert on the metric) and #0-22.
-
----
-
-### 0-27. CLAUDE.md says team isolation is the default, but it is not enforced
-
-**Type:** docs · **Priority:** Low · **Status:** Open
-
-**Problem.** The "Notifications" bullet under "Multi-tenancy invariants" in CLAUDE.md ends with "Between teams of one tenant the
-default is also 'no' (backlog #0-12)". It reads as an enforced invariant, but the PRIMARY lookup is still tenant-wide until
-#0-12, so in a multi-team tenant it can notify another team's PRIMARY. CLAUDE.md is the file a future session reads first, so
-a session could assume team isolation exists and skip the work. `.ai/context/project.md` already states this openly.
-
-**Decide / do.** Reword to "the intended default is also 'no', but it is not enforced yet: the PRIMARY lookup is
-tenant-wide (backlog #0-12)". Held back on purpose: CLAUDE.md is edited only on the owner's decision. Remove this item when
-#0-12 lands and the sentence becomes true.
 
 ---
 
@@ -517,6 +447,9 @@ names never caught up to) and swap the two `namespace:` values back to match the
 | 0-19 | An oncall-service outage is no longer read as "nobody on call": the two decisive lookups throw, the entry stays PENDING until the lookup has been failing for a retry window (from its first failed lookup), then UNDELIVERABLE; a scheduler run stops after a processing budget | PR #416 |
 | 0-10 | `NotificationScheduler` loads a capped page of PENDING entries, oldest first (`notification.scheduler.batch-size`, default 200), and a run stops after a processing budget validated against the ShedLock | PR #416 |
 | 0-11 | Service tokens were rejected by `JwtAuthFilter`: per-tenant, per-audience service tokens, `ServicePrincipal`, real-token filter tests, fallback metric, tenant-id validation, escalation client timeouts, correct oncall URL default | PR #413 |
+| 0-12 | `teamId` now flows through all 5 `IncidentEvent` records (`shared`) and `NotificationQueueEntry` (V7); the PRIMARY on-call lookup (every event type, and the escalation fallback) is team-scoped via oncall-service's already-team-aware `/current?teamId=...`. Also fixed the dead SECONDARY/MANAGER escalation chain found along the way: `IncidentOpenedEvent` never carried `teamId`, so `EscalationTask.teamId` was always null and `EscalationScheduler` always skipped team-scoped on-call routing | this PR (number added when merged) |
+| 0-27 | CLAUDE.md's "Between teams of one tenant the default is also 'no'" sentence is now true — closed by #0-12 | this PR (number added when merged) |
+| 0-26 | `NOTIFICATION_OPERATOR_ALERT_EMAIL` patched in the app-config ConfigMap for every overlay: dev mirrors docker-compose's `operator@incident-platform.local` (mailhog); staging/prod get a placeholder `ops@incident-platform.local` (this repo has no real domain anywhere), commented to replace before a real deployment | this PR (number added when merged) |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

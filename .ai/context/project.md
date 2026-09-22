@@ -216,9 +216,14 @@ scheduler, not the consumer, resolves the recipient at send time). For `INCIDENT
 - Tenant content (incident title, id, severity) may only reach members of that tenant. The
   contact details of an on-call entry are free text, not verified against tenant membership, so
   this is enforced by trust until backlog #0-24.
-- Every other event type resolves the PRIMARY on-call, tenant-wide until backlog #0-12 carries
-  the team, so in a multi-team tenant it can be another team's PRIMARY. Between teams the intended
-  default is also "no", but it is not enforced yet.
+- Every event type's PRIMARY lookup (and the escalation fallback, when there is no target or it
+  isn't found) is team-scoped since backlog #0-12: `teamId` flows from `Incident` through all 5
+  `IncidentEvent` records (`shared`) and `NotificationQueueEntry` (V7), and `OncallClientImpl`
+  passes it to oncall-service's `/current?teamId=...`, which was already team-aware (escalation-service's
+  `OncallServiceClient` already called it that way). `null` (no team assignment) falls back to
+  tenant-wide, same as before #0-12. Fixing this also surfaced that `IncidentOpenedEvent` never
+  carried `teamId` at all, so `EscalationTask.teamId` was always null and the automatic
+  SECONDARY/MANAGER escalation chain never resolved a real target — both are fixed together.
 - The lookup is scoped to the entry's tenant as well as the user id (`escalateTo` is an unverified
   id from a Kafka payload), and the client ignores a response for a different user.
 - A channel the contact has no address for is skipped, never replaced by a shared one. A Slack id
