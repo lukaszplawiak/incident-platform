@@ -325,17 +325,61 @@ is worth weighing together with the tenant-owned contact.
 
 **Type:** design · **Priority:** High · **Status:** Open
 
-**Problem.** `notification.channels.slack` has one `bot-token` and one channel for the whole platform.
-That is a single-organisation design. In a multi-tenant SaaS each customer has its own Slack workspace, and
-one bot token cannot DM their users, so with `broadcast-enabled=false` (the safe default since backlog
-#0-18) the Slack DM only works for users who are in the platform's own workspace.
+**Problem.** `notification.channels.slack` has one `bot-token`, one `channel` and one `signing-secret` for
+the whole platform (one k8s `Secret` per environment). That is a single-organisation design. In a
+multi-tenant SaaS each customer has its own Slack workspace, and one bot token cannot DM their users, so
+with `broadcast-enabled=false` (the safe default since backlog #0-18) Slack works at all only for the one
+tenant whose engineers happen to be in the platform's own workspace — every other tenant's DM branch in
+`SlackNotificationChannel.send()` never fires (`isSlackUserId` is false for them) and the channel fails per
+`NotificationException`. `SlackWebhookController`/`SlackActionService` (ACK-via-Slack) have the same
+single-workspace assumption on the inbound side.
 
-**Approach.** A per-tenant Slack integration: each tenant installs the app in its own workspace (OAuth) and
-notification-service uses that tenant's token and channel, stored per tenant. The ACK button flow
-(`SlackActionService`, `SlackMessageStore`) has to resolve the tenant's token too. Until then Slack is
-usable only in a single-organisation deployment.
-With `broadcast-enabled=true` the router still skips Slack for a contact without a valid Slack user id, so that entry
-also gets no shared-channel post; a per-tenant integration should settle what broadcast means.
+**Verified against Slack's own docs (not assumed):** the signing secret is per-app, not per-workspace — one
+Slack App has one `Signing Secret` that verifies every installation's callbacks, so `SlackSignatureVerifier`
+and `SLACK_SIGNING_SECRET` do **not** need to become per-tenant. Only the bot token is per-workspace (one
+`xoxb-...` per OAuth install, standard for a multi-workspace Slack app), and the interactive payload carries
+the workspace id (`payload.team.id`) as an optional cross-check. See
+[Authentication overview](https://api.slack.com/authentication),
+[Installing via OAuth](https://docs.slack.dev/authentication/installing-with-oauth/),
+[block_actions payload](https://docs.slack.dev/reference/interaction-payloads/block_actions-payload/).
+
+**Precedent in this codebase.** `Integration` (auth-service) is the shape match: a named, tenant-scoped
+connection to an external system, its own lifecycle (`create`/`revoke`), its own credential
+(`ApiKey`, `@OneToOne`) — a per-tenant Slack workspace is the same kind of object, for outbound notification
+instead of inbound alerts. `tenant_settings` (`V12__add_mfa_support.sql`) is the storage-philosophy
+counter-precedent: its own migration comment says typed columns over generic key-value are deliberate,
+which argues against folding Slack into it as a settings row rather than a connection with a lifecycle.
+`AesEncryptionService` (already encrypting `users.mfa_secret` as AES-256-GCM) is the precedent for the bot
+token itself — the first genuinely new thing here is that no existing credential in this codebase is
+issued *by* a third party and stored by us (`ApiKey`/JWTs are platform-issued, MFA secrets are
+user-entered); an OAuth-installed Slack bot token would be the first.
+
+**Options.** (A) Add typed Slack columns to `tenant_settings` — smallest diff, but fights that table's own
+stated purpose (simple flags, not objects with an install/revoke lifecycle) and doesn't generalize to
+team-scoped channels later. (B) A dedicated `Integration`-shaped entity in auth-service (`slack_team_id`,
+`bot_token` encrypted via `AesEncryptionService`, `default_channel`, `broadcast_enabled`, `installed_at`,
+`revoked_at`), fetched by notification-service cross-service — matches the established "identity/tenant
+data lives in auth-service" architecture and reuses the existing encryption primitive, at the cost of a
+new cross-service fetch-and-cache path notification-service doesn't have today for this kind of data.
+(C) Store it in notification-service's own database — keeps Slack code and data together, but
+notification-service has no encryption-at-rest primitive today, so this means either a live bot token in
+plaintext or duplicating `AesEncryptionService` (a second key to manage) — and fights the "identity data has
+one home" architecture directly.
+
+**Recommendation.** (B). The sensitive-token risk alone rules out (C); between (A) and (B), `tenant_settings`'s
+own documented purpose argues for treating a Slack workspace as an `Integration`-like connection, not a
+settings flag, and it leaves room for team-scoped channels (a predictable next ask, since `Integration`
+already scopes to `Team`) without a second migration. With `broadcast-enabled=true` the router still skips
+Slack for a contact without a valid Slack user id, so that entry also gets no shared-channel post; the
+per-tenant integration should settle what broadcast means.
+
+**Correction to the ACK-flow claim above:** `SlackActionService.processAcknowledgeAction` already carries
+`tenantId` safely through the ACK round-trip today (embedded server-side in the button's own `value` field,
+which Slack echoes back unmodified — not user-editable, so already trustworthy). It doesn't need a *new* way
+to learn the tenant; it needs to use the tenant it already has to call
+`SlackNotificationChannel.updateMessageAfterAck` with *that tenant's* bot token instead of the one global
+one. `payload.team.id` is optional defense-in-depth here (cross-checking the click's workspace against the
+tenant recorded in the button), not a requirement.
 The README paragraph "Why Slack Bot Token instead of Incoming Webhook?" still describes channel posts and should be
 updated with the same change.
 
