@@ -32,7 +32,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-6](#0-6-untracked-todos-need-a-backlog-reference) | Untracked `TODO`s need a backlog reference | tech-debt | Low | Open |
 | [0-7](#0-7-incident-service-coerces-escalationlevel-with-asint0) | incident-service coerces `escalationLevel` with `asInt(0)` | bug | Low | Open |
 | [0-8](#0-8-dead-publishescalated-and-a-stale-javadoc-in-incident-service) | Dead `publishEscalated` and a stale Javadoc in incident-service | tech-debt | Low | Open |
-| [0-9](#0-9-stale-index-annotations-on-notificationlog) | Stale `@Index` annotations on `NotificationLog` | tech-debt | Low | Open |
 | [0-13](#0-13-asymmetric-service-tokens-or-mtls-for-service-identity) | Asymmetric service tokens or mTLS for service identity | design | Medium | Open |
 | [0-14](#0-14-by-slack-is-open-to-any-authenticated-role) | `GET /by-slack/{id}` is open to any authenticated role | tech-debt | Low | Open |
 | [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
@@ -50,6 +49,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-33](#0-33-unify-caching-on-caffeine-once-a-third-cache-appears) | Unify caching on Caffeine once a third cache appears | tech-debt | Low | Open |
 | [0-34](#0-34-servicetokenprovider-cache-has-no-metrics) | `ServiceTokenProvider` cache has no metrics | tech-debt | Low | Open |
 | [0-35](#0-35-slack-install-via-oauth-add-to-slack-brings-back-ack-via-slack) | Slack install via OAuth ("Add to Slack") brings back ACK via Slack | design | Medium | Open |
+| [0-36](#0-36-nothing-checks-entity-index-annotations-against-the-real-schema) | Nothing checks entity `@Index` annotations against the real schema | tech-debt | Low | Open |
 
 ---
 
@@ -186,16 +186,6 @@ for manual REST-driven escalation, so the only producer today is escalation-serv
 **Work.** Remove the dead method (or wire the manual-escalation path if it is meant to exist) and
 correct the Javadoc. If a manual path is ever added it must publish a level that cannot collide
 with the automatic one, because a repeat escalation at the same level is deduplicated.
-
----
-
-### 0-9. Stale `@Index` annotations on `NotificationLog`
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open
-
-**Problem.** `NotificationLog` declares `idx_notification_log_incident_id`, `_tenant_id` and
-`_sent_at`, which migration V2 dropped. Harmless under `ddl-auto: validate` (indexes are not
-validated) but misleading. Align the annotations with the real indexes or remove them.
 
 ---
 
@@ -603,6 +593,29 @@ the #0-21 security review, where the DTO Javadoc (tenant's own App) and #0-21's 
 
 ---
 
+### 0-36. Nothing checks entity `@Index` annotations against the real schema
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** Eight entities in six services (`Incident`, `IncidentHistory`, `AuditEvent`, `EscalationTask`,
+`NotificationLog`, `NotificationQueueEntry`, `OncallSchedule`, `Postmortem`) list their indexes in
+`@Table(indexes = ...)`. The Flyway migrations are the real schema. `ddl-auto: validate` does not check indexes,
+so the lists are documentation that nothing verifies. `NotificationLog` drifted twice (V2 dropped its three
+single-column indexes, V5 replaced one of V2's composites) before backlog #0-9 caught it by reading the code. Some
+lists are also simplified on purpose: JPA cannot express a partial index, so `NotificationQueueEntry` shows
+`(status, created_at)` for a `WHERE status = 'PENDING'` index.
+
+**Options.** (1) A Testcontainers test per service that reads `pg_indexes` after the migrations and asserts every
+`@Index` name on the service's entities exists (names only, since the definitions can't match exactly for
+partial/expression indexes). Each service with Postgres integration tests already boots the migrated schema.
+(2) Drop `@Index` from every entity and treat the migrations as the only documentation. This removes the drift
+risk, but readers lose the at-a-glance list.
+
+**Approach.** (1), added to each service's existing Postgres integration test, or a small shared test helper
+in `shared`'s test utilities if one fits.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -617,6 +630,7 @@ the #0-21 security review, where the DTO Javadoc (tenant's own App) and #0-21's 
 | 0-26 | `NOTIFICATION_OPERATOR_ALERT_EMAIL` patched in the app-config ConfigMap for every overlay: dev mirrors docker-compose's `operator@incident-platform.local` (mailhog); staging/prod get a placeholder `ops@incident-platform.local` (this repo has no real domain anywhere), commented to replace before a real deployment | PR #417 |
 | 0-21 | Slack is per tenant: each tenant connects its own workspace (`SlackWorkspace`, V17, one active per tenant via a partial unique index, bot token AES-256-GCM under a separate `slack.encryption-key`, admin API `/api/v1/slack-workspace`, manual token paste). notification-service reads it through `CachingSlackWorkspaceClient` (60 s TTL, bounded, Micrometer `cache.*` meters) over `SlackWorkspaceClientImpl` (Resilience4j, fallback throws). The global bot token/channel/broadcast config is gone. An auth-service outage skips only Slack, except when Slack was the only channel (PENDING, then `SLACK_WORKSPACE_UNAVAILABLE`). ACK via Slack is off until the OAuth install: #0-35. Follow-ups: #0-32, #0-33, #0-34 | PR #422 |
 | 0-30 | Decided and implemented: a service that needs auth-service-owned tenant data pulls it over a narrow HTTP call with a service token `aud=auth-service`, accepted on exactly one `ROLE_SERVICE` endpoint (`GET /api/v1/internal/slack-workspace`), cached briefly by the caller. Kafka replication was rejected for a single consumer. Decision recorded in `.ai/context/project.md` and CLAUDE.md; the identity/config split it raised is #0-31 | PR #422 |
+| 0-9 | `NotificationLog`'s `@Index` list named V1's three indexes, dropped by V2 (and V5 replaced one of V2's); it now mirrors V2/V5 and says the migrations are the source of truth. A check against the real schema is #0-36 | PR #424 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

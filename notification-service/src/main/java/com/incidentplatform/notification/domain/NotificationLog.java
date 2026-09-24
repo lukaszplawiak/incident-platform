@@ -13,16 +13,32 @@ import jakarta.validation.constraints.NotNull;
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * One attempt to send one notification over one channel: the append-only
+ * delivery record, and the per-channel idempotency key read before every send.
+ *
+ * <h2>Fixed (backlog #0-9): the {@code @Index} list is documentation, not schema</h2>
+ * The Flyway migrations are the only source of truth for this table's
+ * indexes. {@code ddl-auto} is {@code validate}, which does not check indexes,
+ * so nothing here is ever created or verified. The list used to name V1's three
+ * single-column indexes, which V2 dropped (and V5 then replaced one of V2's
+ * composites), so a reader looking here for "what is indexed" got the wrong
+ * answer. It now mirrors what V2 and V5 actually create. A schema change to
+ * this table's indexes must update this list too: nothing enforces it yet
+ * (backlog #0-36).
+ */
 @Entity
 @Table(
         name = "notification_log",
         indexes = {
-                @Index(name = "idx_notification_log_incident_id",
-                        columnList = "incident_id"),
-                @Index(name = "idx_notification_log_tenant_id",
-                        columnList = "tenant_id"),
-                @Index(name = "idx_notification_log_sent_at",
-                        columnList = "sent_at")
+                // V2: history of one incident, newest first.
+                @Index(name = "idx_notification_log_incident_tenant_sent",
+                        columnList = "incident_id, tenant_id, sent_at DESC"),
+                // V5: the per-channel idempotency check in
+                // NotificationService.processEntry (replaced V2's
+                // idx_notification_log_incident_type_channel).
+                @Index(name = "idx_notification_log_incident_tenant_type_level_channel",
+                        columnList = "incident_id, tenant_id, event_type, escalation_level, channel")
         }
 )
 public class NotificationLog {
