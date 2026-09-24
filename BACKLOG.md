@@ -39,14 +39,12 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-16](#0-16-decide-the-alertmanager-service-token-tenant-role-and-lifetime) | Decide the Alertmanager service token: tenant, role, lifetime | design | High | Open |
 | [0-17](#0-17-alert-on-service_client_fallback_totalreasonauth) | Alert on `service_client_fallback_total{reason="auth"}` | tech-debt | Medium | Open |
 | [0-20](#0-20-tenant-owned-fallback-contact) | Tenant-owned fallback contact | design | Medium | Open |
-| [0-21](#0-21-slack-is-one-workspace-for-the-whole-platform) | Slack is one workspace for the whole platform | design | High | In progress |
 | [0-22](#0-22-the-operator-alert-is-email-only) | The operator alert is email only | tech-debt | Low | Open |
 | [0-23](#0-23-the-oncall-retry-is-probably-inactive) | The `oncall` `@Retry` is probably inactive | tech-debt | Low | Open |
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
 | [0-29](#0-29-staging-and-prod-k8s-overlays-are-wholesale-swapped-not-just-their-namespace) | staging and prod k8s overlays are wholesale swapped, not just their `namespace:` | bug | Low | Open |
-| [0-30](#0-30-auth-service-has-no-sanctioned-way-to-be-called-by-another-service) | auth-service has no sanctioned way to be called by another service | design | High | In progress |
 | [0-31](#0-31-auth-service-identityconfig-split-evaluated-and-deferred) | auth-service identity/config split — evaluated and deferred | design | Low | Open |
 | [0-32](#0-32-no-notification-channel-is-retried-after-a-failed-send) | No notification channel is retried after a failed send | design | Medium | Open |
 | [0-33](#0-33-unify-caching-on-caffeine-once-a-third-cache-appears) | Unify caching on Caffeine once a third cache appears | tech-debt | Low | Open |
@@ -287,8 +285,9 @@ token is the right credential for an external alert source.
 configurable, which still has to be verified against the Alertmanager version in `docker-compose.yml`.
 Note for (3): `ApiKeyAuthFilter` is wired only in auth-service today — ingestion-service would need either
 that filter plus a way to validate the key, which lives in auth-service, or an HTTP lookup into
-auth-service. How another service reads auth-service-owned data is decided once in backlog #0-30 (narrow
-HTTP pull with a service token, `aud=auth-service`); build on that instead of re-deciding it here.
+auth-service. How another service reads auth-service-owned data is decided once in backlog #0-30 (Done, PR #422:
+narrow HTTP pull with a service token, `aud=auth-service`, recorded in `.ai/context/project.md`); build on that
+instead of re-deciding it here.
 (4) Take the tenant from the alert label: rejected in review, since whoever writes the rules would
 choose the tenant.
 
@@ -328,83 +327,6 @@ service token, or a copy kept in sync).
 Related, accepted trade-off of #0-18: `NO_ONCALL` is terminal on the first attempt (unlike an oncall-service outage, which is
 retried), so a shift-handover gap parks an `INCIDENT_OPENED` notification as UNDELIVERABLE. A short retry for `NO_ONCALL`
 is worth weighing together with the tenant-owned contact.
-
----
-
-### 0-21. Slack is one workspace for the whole platform
-
-**Type:** design · **Priority:** High · **Status:** In progress
-
-**Problem.** `notification.channels.slack` has one `bot-token`, one `channel` and one `signing-secret` for
-the whole platform (one k8s `Secret` per environment). That is a single-organisation design. In a
-multi-tenant SaaS each customer has its own Slack workspace, and one bot token cannot DM their users, so
-with `broadcast-enabled=false` (the safe default since backlog #0-18) Slack works at all only for the one
-tenant whose engineers happen to be in the platform's own workspace — every other tenant's DM branch in
-`SlackNotificationChannel.send()` never fires (`isSlackUserId` is false for them) and the channel fails per
-`NotificationException`. `SlackWebhookController`/`SlackActionService` (ACK-via-Slack) have the same
-single-workspace assumption on the inbound side.
-
-**Verified against Slack's own docs (not assumed):** the signing secret is per-app, not per-workspace — one
-Slack App has one `Signing Secret` that verifies every installation's callbacks, so `SlackSignatureVerifier`
-and `SLACK_SIGNING_SECRET` do **not** need to become per-tenant. Only the bot token is per-workspace (one
-`xoxb-...` per OAuth install, standard for a multi-workspace Slack app), and the interactive payload carries
-the workspace id (`payload.team.id`) as an optional cross-check. See
-[Authentication overview](https://api.slack.com/authentication),
-[Installing via OAuth](https://docs.slack.dev/authentication/installing-with-oauth/),
-[block_actions payload](https://docs.slack.dev/reference/interaction-payloads/block_actions-payload/).
-
-**Precedent in this codebase.** `Integration` (auth-service) is the shape match: a named, tenant-scoped
-connection to an external system, its own lifecycle (`create`/`revoke`), its own credential
-(`ApiKey`, `@OneToOne`) — a per-tenant Slack workspace is the same kind of object, for outbound notification
-instead of inbound alerts. `tenant_settings` (`V12__add_mfa_support.sql`) is the storage-philosophy
-counter-precedent: its own migration comment says typed columns over generic key-value are deliberate,
-which argues against folding Slack into it as a settings row rather than a connection with a lifecycle.
-`AesEncryptionService` (already encrypting `users.mfa_secret` as AES-256-GCM) is the precedent for the bot
-token itself — the first genuinely new thing here is that no existing credential in this codebase is
-issued *by* a third party and stored by us (`ApiKey`/JWTs are platform-issued, MFA secrets are
-user-entered); an OAuth-installed Slack bot token would be the first.
-
-**Options.** (A) Add typed Slack columns to `tenant_settings` — smallest diff, but fights that table's own
-stated purpose (simple flags, not objects with an install/revoke lifecycle) and doesn't generalize to
-team-scoped channels later. (B) A dedicated `Integration`-shaped entity in auth-service (`slack_team_id`,
-`bot_token` encrypted via `AesEncryptionService`, `default_channel`, `broadcast_enabled`, `installed_at`,
-`revoked_at`), fetched by notification-service cross-service — matches the established "identity/tenant
-data lives in auth-service" architecture and reuses the existing encryption primitive, at the cost of a
-new cross-service fetch-and-cache path notification-service doesn't have today for this kind of data.
-(C) Store it in notification-service's own database — keeps Slack code and data together, but
-notification-service has no encryption-at-rest primitive today, so this means either a live bot token in
-plaintext or duplicating `AesEncryptionService` (a second key to manage) — and fights the "identity data has
-one home" architecture directly.
-
-**Recommendation.** (B). The sensitive-token risk alone rules out (C); between (A) and (B), `tenant_settings`'s
-own documented purpose argues for treating a Slack workspace as an `Integration`-like connection, not a
-settings flag, and it leaves room for team-scoped channels (a predictable next ask, since `Integration`
-already scopes to `Team`) without a second migration. With `broadcast-enabled=true` the router still skips
-Slack for a contact without a valid Slack user id, so that entry also gets no shared-channel post; the
-per-tenant integration should settle what broadcast means.
-
-**Correction to the ACK-flow claim above:** `SlackActionService.processAcknowledgeAction` already carries
-`tenantId` safely through the ACK round-trip today (embedded server-side in the button's own `value` field,
-which Slack echoes back unmodified — not user-editable, so already trustworthy). It doesn't need a *new* way
-to learn the tenant; it needs to use the tenant it already has to call
-`SlackNotificationChannel.updateMessageAfterAck` with *that tenant's* bot token instead of the one global
-one. `payload.team.id` is optional defense-in-depth here (cross-checking the click's workspace against the
-tenant recorded in the button), not a requirement.
-The README paragraph "Why Slack Bot Token instead of Incoming Webhook?" still describes channel posts and should be
-updated with the same change.
-
-**Implementation (option B).** auth-service: `SlackWorkspace` (`V17__create_slack_workspaces.sql`, one active row per
-tenant, bot token AES-256-GCM under its own `slack.encryption-key`), admin API `/api/v1/slack-workspace` (install /
-view masked / revoke; manual bot-token paste, no OAuth install flow yet), and `GET /api/v1/internal/slack-workspace`
-for `ROLE_SERVICE` with `aud=auth-service` only (backlog #0-30). notification-service: `SlackWorkspaceClientImpl`
-(HTTP, `@Retry`/`@CircuitBreaker`) behind `CachingSlackWorkspaceClient` (60 s TTL, 404 cached, failures not);
-global `bot-token`/`channel`/`broadcast-enabled` removed. "No workspace" skips Slack like a missing Slack id; an
-auth-service outage throws `SlackWorkspaceLookupUnavailableException` and skips only Slack (the rest is sent), except
-when Slack was the only reachable channel — then the entry stays PENDING for the #0-19 retry window and becomes
-`UNDELIVERABLE (SLACK_WORKSPACE_UNAVAILABLE)` after it. The Slack message itself is not retried: backlog #0-32.
-`team_id` is stored but not used in routing yet. **ACK via Slack is off:** with a pasted token the tenant's own App
-signs button clicks, which the platform-wide `SLACK_SIGNING_SECRET` can't verify, so messages no longer carry the
-Acknowledge button (backlog #0-35).
 
 ---
 
@@ -513,54 +435,6 @@ believes they're targeting, not only the namespace label.
 never caught up to), then swap the two file bodies (or move the files) wholesale — editing only the `namespace:`
 line in each, as a narrower read of this bug might suggest, would leave the replica counts, resource limits, HPA
 target and image tags mismatched.
-
----
-
-### 0-30. auth-service has no sanctioned way to be called by another service
-
-**Type:** design · **Priority:** High · **Status:** In progress
-
-**Problem.** `JwtAuthFilter`'s own Javadoc states auth-service "is never the target of a service-to-service call",
-and until now that was true: `SecurityConfig.jwtAuthFilter(...)` wires the 2-arg constructor (no `expectedAudience`),
-so every service token is rejected there, by design (backlog #0-11's audience check fails closed for a filter built
-without a name). This was a reasonable default for as long as nothing needed it — every fact a caller needs about
-itself already lives in its own JWT claims (`userId`/`tenantId`/`roles`/`teamIds`), so no service ever had to call
-back into auth-service to look anything up.
-
-That stopped being true once the platform needed a second *kind* of data: not "who is calling", but "a setting or
-secret the *tenant* owns, stored in auth-service, needed by a *different* service at runtime" (backlog #0-21's Slack
-bot token is the first concrete case). This gap was found independently at least twice before without ever being
-closed: backlog #0-16 (Alertmanager's `system` tenant) names the same shape of problem, and — found while
-investigating this item — the `ApiKeyAuthFilter`/`ApiKeyLookupService` path is **fully built in auth-service and
-completely dead everywhere else**: no other service wires `ApiKeyAuthFilter` into its `SecurityFilterChain` (each
-service's own chain is `@ConditionalOnMissingBean`, so the shared default that registers it never applies outside
-auth-service), so an `Authorization: ApiKey ...` request to, say, ingestion-service is never recognized by anything
-and falls through to 401. `ingestion-service`'s own security test manufactures a fake principal specifically because
-there is no real filter chain to exercise — confirmed by that test's own Javadoc.
-
-**Options considered.**
-1. **Narrow HTTP pull** — the calling service mints a service token with `aud=auth-service`
-   (`ServiceNames.AUTH_SERVICE`), auth-service's filter accepts *only* that audience on *one* new, explicitly scoped
-   endpoint, the caller caches the result briefly. Reuses the `ServiceTokenProvider`/`ServicePrincipal`/per-audience
-   mechanism already built and proven for #0-11 (oncall/incident/ingestion). Cost: auth-service's Javadoc claim of
-   "never a callee" becomes "never a callee except this one narrow, named exception" — must be corrected where it's
-   written, not just quietly outgrown.
-2. **Kafka event replication** — auth-service publishes change events for tenant-owned config (e.g.
-   `SlackWorkspaceInstalled`/`Revoked`) to a new topic; the reading service keeps a synced local read copy. Never
-   makes auth-service a callee, fits this platform's existing event-heavy style (outbox pattern, tenant-scoped
-   consumers everywhere), but costs a new topic + producer + consumer + local schema per data kind, adds eventual
-   consistency, and raises its own question of how a secret travels safely through Kafka (plaintext in the event,
-   which needs its own encryption-in-transit story, vs. a "changed" signal that still triggers an HTTP fetch — the
-   hybrid, which mostly cancels the point of not calling back into auth-service).
-
-**Decided.** Option 1 (narrow HTTP pull), first implemented for backlog #0-21. Rationale: the mechanism already
-exists and is already proven on three other services; a generic Kafka-replication mechanism for "any tenant-owned
-config another service might need" is a bigger, more speculative investment to make for a single current consumer.
-Revisit Kafka replication if more read paths into auth-service accumulate and the per-call cost starts to matter.
-
-**Follow-up.** Backlog #0-16's option 3 (Integration API key for Alertmanager) and any future tenant-owned setting
-another service needs to read (e.g. #0-20's fallback contact) should point at this decision instead of re-deciding
-the mechanism independently.
 
 ---
 
@@ -741,6 +615,8 @@ the #0-21 security review, where the DTO Javadoc (tenant's own App) and #0-21's 
 | 0-12 | `teamId` now flows through all 5 `IncidentEvent` records (`shared`) and `NotificationQueueEntry` (V7); the PRIMARY on-call lookup (every event type, and the escalation fallback) is team-scoped via oncall-service's already-team-aware `/current?teamId=...`. Also fixed the dead SECONDARY/MANAGER escalation chain found along the way: `IncidentOpenedEvent` never carried `teamId`, so `EscalationTask.teamId` was always null and `EscalationScheduler` always skipped team-scoped on-call routing | PR #417 |
 | 0-27 | CLAUDE.md's "Between teams of one tenant the default is also 'no'" sentence is now true — closed by #0-12 | PR #417 |
 | 0-26 | `NOTIFICATION_OPERATOR_ALERT_EMAIL` patched in the app-config ConfigMap for every overlay: dev mirrors docker-compose's `operator@incident-platform.local` (mailhog); staging/prod get a placeholder `ops@incident-platform.local` (this repo has no real domain anywhere), commented to replace before a real deployment | PR #417 |
+| 0-21 | Slack is per tenant: each tenant connects its own workspace (`SlackWorkspace`, V17, one active per tenant via a partial unique index, bot token AES-256-GCM under a separate `slack.encryption-key`, admin API `/api/v1/slack-workspace`, manual token paste). notification-service reads it through `CachingSlackWorkspaceClient` (60 s TTL, bounded, Micrometer `cache.*` meters) over `SlackWorkspaceClientImpl` (Resilience4j, fallback throws). The global bot token/channel/broadcast config is gone. An auth-service outage skips only Slack, except when Slack was the only channel (PENDING, then `SLACK_WORKSPACE_UNAVAILABLE`). ACK via Slack is off until the OAuth install: #0-35. Follow-ups: #0-32, #0-33, #0-34 | PR #422 |
+| 0-30 | Decided and implemented: a service that needs auth-service-owned tenant data pulls it over a narrow HTTP call with a service token `aud=auth-service`, accepted on exactly one `ROLE_SERVICE` endpoint (`GET /api/v1/internal/slack-workspace`), cached briefly by the caller. Kafka replication was rejected for a single consumer. Decision recorded in `.ai/context/project.md` and CLAUDE.md; the identity/config split it raised is #0-31 | PR #422 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |
