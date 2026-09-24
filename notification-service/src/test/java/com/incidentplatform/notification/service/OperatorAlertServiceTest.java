@@ -55,8 +55,7 @@ class OperatorAlertServiceTest {
         return new NotificationChannelProperties(
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
-                        new NotificationChannelProperties.Slack(true, "token", "#ch",
-                                "secret", "http://localhost", false),
+                        new NotificationChannelProperties.Slack(true, "secret", "http://localhost"),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 new NotificationChannelProperties.OperatorAlert(operatorEmail, MIN_INTERVAL));
     }

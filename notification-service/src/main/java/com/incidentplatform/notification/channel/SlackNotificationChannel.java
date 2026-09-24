@@ -1,6 +1,8 @@
 package com.incidentplatform.notification.channel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.notification.client.SlackWorkspaceClient;
+import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.slack.SlackMessageStore;
@@ -28,25 +30,22 @@ public class SlackNotificationChannel implements NotificationChannel {
     private final String slackApiUpdateUrl;
 
     private final boolean enabled;
-    private final String botToken;
-    private final String defaultChannel;
-    private final boolean broadcastEnabled;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final SlackMessageStore messageStore;
+    private final SlackWorkspaceClient slackWorkspaceClient;
 
     public SlackNotificationChannel(
             RestClient.Builder restClientBuilder,
             ObjectMapper objectMapper,
             NotificationChannelProperties properties,
-            SlackMessageStore messageStore) {
+            SlackMessageStore messageStore,
+            SlackWorkspaceClient slackWorkspaceClient) {
         this.restClient = restClientBuilder.build();
         this.objectMapper = objectMapper;
-        this.enabled        = properties.channels().slack().enabled();
-        this.botToken       = properties.channels().slack().botToken();
-        this.defaultChannel = properties.channels().slack().channel();
-        this.broadcastEnabled = properties.channels().slack().broadcastEnabled();
+        this.enabled = properties.channels().slack().enabled();
         this.messageStore = messageStore;
+        this.slackWorkspaceClient = slackWorkspaceClient;
 
         final String apiBaseUrl = properties.channels().slack().apiBaseUrl();
         this.slackApiPostUrl = apiBaseUrl + "/chat.postMessage";
@@ -68,54 +67,94 @@ public class SlackNotificationChannel implements NotificationChannel {
      * additionally as a DM if the recipient is a Slack user ID.
      *
      * <h2>Fixed: the returned ts was previously discarded entirely</h2>
-     * {@code sendWithAckButton} returns the Slack message {@code ts} —
+     * {@code postIncidentMessage} returns the Slack message {@code ts} —
      * needed later to update this specific message via {@code chat.update}
      * once the incident is acknowledged (e.g. from a *different* channel's
      * button, or the web UI). Previously this method called
-     * {@code sendWithAckButton} and threw away its return value in both
+     * {@code postIncidentMessage} and threw away its return value in both
      * call sites — meaning {@link SlackMessageStore} was never actually
      * populated, ever, in any deployment. The "update every other Slack
      * message for this incident after ACK" loop in
      * {@code SlackActionService.updateSlackMessages} always found nothing
      * to update beyond the one message Slack's own callback payload already
-     * identifies directly — not a scaling issue, a wiring bug.
+     * identifies directly — not a scaling issue, a wiring bug. The ts is
+     * still stored now that the message carries no ACK button (backlog
+     * #0-35): the update path returns unchanged with the OAuth install.
+     *
+     * <h2>Fixed (backlog #0-21): the bot token/channel/broadcast flag are
+     * per-tenant now, not a single global config</h2>
+     * Resolved via {@link SlackWorkspaceClient} instead of a field held
+     * since construction. {@code NotificationRouter} already checks a
+     * workspace exists for the tenant before building this channel's
+     * request (same "skip, don't build a request that posts nothing"
+     * philosophy as the Slack-user-id check), so reaching here with no
+     * workspace configured means a caller bypassed the router — the same
+     * defensive fail-loud case the broadcast-disabled/no-Slack-id branch
+     * below already covers. The router's lookup is normally served from
+     * {@code CachingSlackWorkspaceClient}, so this second read costs no HTTP
+     * call in the common case.
      */
     @Override
     public void send(NotificationRequest request) {
+        final SlackWorkspaceClient.SlackWorkspaceInfo workspace;
+        try {
+            workspace = slackWorkspaceClient.getWorkspace(request.tenantId())
+                    .orElseThrow(() -> new NotificationException("SLACK", request.recipient(),
+                            "No active Slack workspace for this tenant — nothing posted", null));
+        } catch (SlackWorkspaceLookupUnavailableException e) {
+            // The router saw a workspace (possibly from cache) but auth-service
+            // failed now. Converted to NotificationException so processEntry
+            // records this channel as FAILED with an audit event — the same
+            // outcome as a Slack API outage — instead of the generic "unexpected
+            // error" path. Kept distinct from "no workspace" in the message.
+            throw new NotificationException("SLACK", request.recipient(),
+                    "auth-service unavailable — could not read the tenant's Slack " +
+                            "workspace, nothing posted", e);
+        }
+
         // Fixed (backlog #0-18): the message used to be posted to the one shared
         // channel for every notification of every tenant, whatever the recipient.
         // In a multi-tenant deployment that hands each tenant's incident text to a
-        // destination that is not a member of that tenant, so it is now opt-in.
+        // destination that is not a member of that tenant, so it is now opt-in
+        // (backlog #0-21: opted in per tenant, on that tenant's own workspace).
+        final boolean broadcastEnabled = workspace.broadcastEnabled()
+                && workspace.defaultChannel() != null && !workspace.defaultChannel().isBlank();
+
         if (broadcastEnabled) {
-            final String defaultChannelTs = sendWithAckButton(defaultChannel, request);
-            messageStore.save(request.incidentId(), defaultChannel,
+            final String defaultChannelTs = postIncidentMessage(
+                    workspace.defaultChannel(), request, workspace.botToken());
+            messageStore.save(request.incidentId(), workspace.defaultChannel(),
                     request.tenantId(), defaultChannelTs);
         }
 
         if (isSlackUserId(request.recipient())) {
-            final String dmTs = sendWithAckButton(request.recipient(), request);
+            final String dmTs = postIncidentMessage(
+                    request.recipient(), request, workspace.botToken());
             messageStore.save(request.incidentId(), request.recipient(),
                     request.tenantId(), dmTs);
 
-            log.info("Slack DM with ACK button sent to on-call: " +
+            log.info("Slack DM sent to on-call: " +
                             "userId={}, incidentId={}",
                     request.recipient(), request.incidentId());
         } else if (!broadcastEnabled) {
-            // Nothing was posted: the broadcast is off and the recipient is not a
-            // Slack user id, so no DM either. Returning normally would let the
-            // caller record a SENT notification (and a NOTIFICATION_SENT audit
-            // event) for a message that never left. The router already skips a
-            // recipient that is not a Slack user id, so this only guards a caller
-            // that bypasses it; fail loudly rather than report a delivery.
+            // Nothing was posted: the broadcast is off (or unconfigured) and the
+            // recipient is not a Slack user id, so no DM either. Returning
+            // normally would let the caller record a SENT notification (and a
+            // NOTIFICATION_SENT audit event) for a message that never left. The
+            // router already skips a recipient that is not a Slack user id, so
+            // this only guards a caller that bypasses it; fail loudly rather
+            // than report a delivery.
             throw new NotificationException("SLACK", request.recipient(),
                     "Nothing posted: not a Slack user id and the shared-channel " +
-                            "broadcast is disabled", null);
+                            "broadcast is disabled or has no default channel " +
+                            "configured", null);
         }
     }
 
-    @Retry(name = "slack", fallbackMethod = "sendWithAckButtonFallback")
-    public String sendWithAckButton(String channel,
-                                    NotificationRequest request) {
+    @Retry(name = "slack", fallbackMethod = "postIncidentMessageFallback")
+    public String postIncidentMessage(String channel,
+                                    NotificationRequest request,
+                                    String botToken) {
         final String severityEmoji = resolveSeverityEmoji(request.severity());
 
         final Map<String, Object> payload = Map.of(
@@ -137,18 +176,28 @@ public class SlackNotificationChannel implements NotificationChannel {
 
         final String ts = extractTs(responseBody);
 
-        log.info("Slack message sent with ACK button: " +
+        log.info("Slack incident message sent: " +
                         "channel={}, incidentId={}, ts={}",
                 channel, request.incidentId(), ts);
 
         return ts;
     }
 
+    /**
+     * Fixed (backlog #0-21): {@code botToken} is now a parameter, not a
+     * field held since construction — the caller ({@code
+     * SlackActionService}, which already carries {@code tenantId} through
+     * the ACK round-trip) resolves the tenant's own token via {@link
+     * SlackWorkspaceClient} and passes it in, instead of this method always
+     * using one global token regardless of which tenant's incident is being
+     * acknowledged.
+     */
     @Retry(name = "slack", fallbackMethod = "updateMessageFallback")
     public void updateMessageAfterAck(String channel,
                                       String messageTs,
                                       String acknowledgedByName,
-                                      NotificationRequest originalRequest) {
+                                      NotificationRequest originalRequest,
+                                      String botToken) {
         final String severityEmoji =
                 resolveSeverityEmoji(originalRequest.severity());
 
@@ -193,22 +242,21 @@ public class SlackNotificationChannel implements NotificationChannel {
                                         request.tenantId())
                         )
                 ),
-                Map.of("type", "divider"),
+                // Backlog #0-21/#0-35: no "Acknowledge" button any more. A tenant
+                // connects Slack by pasting a bot token from its own Slack App, so
+                // a click is signed with that App's signing secret, which
+                // SlackSignatureVerifier (one platform-wide secret) can never
+                // match: the button always ended in a 401 and an error in Slack.
+                // A plain pointer to the app instead. The /api/v1/slack/actions
+                // webhook, SlackActionService and updateMessageAfterAck are kept
+                // unchanged: with the OAuth "Add to Slack" install (#0-35) every
+                // workspace uses the platform's own App and the button returns.
                 Map.of(
-                        "type", "actions",
+                        "type", "context",
                         "elements", List.of(
                                 Map.of(
-                                        "type", "button",
-                                        "text", Map.of(
-                                                "type", "plain_text",
-                                                "text", "✅ Acknowledge",
-                                                "emoji", true
-                                        ),
-                                        "action_id", "acknowledge_incident",
-                                        "value", String.format("%s|%s",
-                                                request.incidentId(),
-                                                request.tenantId()),
-                                        "style", "primary"
+                                        "type", "mrkdwn",
+                                        "text", "Acknowledge this incident in the Incident Platform app."
                                 )
                         )
                 )
@@ -249,8 +297,9 @@ public class SlackNotificationChannel implements NotificationChannel {
         );
     }
 
-    void sendWithAckButtonFallback(String channel,
+    void postIncidentMessageFallback(String channel,
                                    NotificationRequest request,
+                                   String botToken,
                                    Exception cause) {
         log.error("Slack notification failed after all retries: " +
                         "channel={}, incidentId={}, error={}",
@@ -270,7 +319,7 @@ public class SlackNotificationChannel implements NotificationChannel {
      * tracking row for every channel regardless of whether its update
      * actually succeeded, destroying the one piece of data a future retry
      * mechanism would need. Now rethrows (as {@link NotificationException},
-     * matching the exact exception type {@link #sendWithAckButtonFallback}
+     * matching the exact exception type {@link #postIncidentMessageFallback}
      * already uses elsewhere in this same class for the identical
      * "retries exhausted, tell the caller" situation) so the caller can
      * make an informed decision per channel instead of silently assuming
@@ -280,6 +329,7 @@ public class SlackNotificationChannel implements NotificationChannel {
                                String messageTs,
                                String acknowledgedByName,
                                NotificationRequest originalRequest,
+                               String botToken,
                                Exception cause) {
         log.warn("Failed to update Slack message after ACK: " +
                         "channel={}, ts={}, error={}",

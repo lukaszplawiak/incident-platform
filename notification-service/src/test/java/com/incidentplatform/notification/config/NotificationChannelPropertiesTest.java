@@ -19,8 +19,7 @@ class NotificationChannelPropertiesTest {
         final NotificationChannelProperties properties = new NotificationChannelProperties(
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
-                        new NotificationChannelProperties.Slack(true, "t", "#c", "s",
-                                "http://localhost", false),
+                        new NotificationChannelProperties.Slack(true, "s", "http://localhost"),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 null);
 

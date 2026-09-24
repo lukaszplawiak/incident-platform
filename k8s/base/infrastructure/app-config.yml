@@ -24,6 +24,9 @@ data:
   INCIDENT_SERVICE_URL: "http://incident-service:8082"
   ONCALL_SERVICE_URL: "http://oncall-service:8086"
   NOTIFICATION_SERVICE_URL: "http://notification-service:8083"
+  # Backlog #0-21/#0-30: notification-service's SlackWorkspaceClient reads a
+  # tenant's Slack workspace connection from auth-service's internal endpoint.
+  AUTH_SERVICE_URL: "http://auth-service:8087"
 
   # Auth service — non-secret configuration. JWT_SECRET and
   # MFA_ENCRYPTION_KEY are secrets and live in app-secrets, not here.

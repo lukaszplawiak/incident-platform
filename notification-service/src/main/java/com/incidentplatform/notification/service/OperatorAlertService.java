@@ -33,9 +33,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>The destination is {@code notification.operator-alert.email}, which
  * belongs to the operator and has no default. If it is not configured, only the
  * {@code ERROR} log line and the {@code notification.undeliverable} metric
- * remain. Email only for now: the Slack channel attaches an ACK button bound
- * to the incident id and stores the message, which an operator alert must not
- * do.
+ * remain. Email only for now: the Slack channel posts into the tenant's own
+ * workspace (backlog #0-21) and stores the message against the incident id,
+ * neither of which fits an operator alert.
  *
  * <p>A failure to send the alert is logged and swallowed: it must never turn a
  * handled undeliverable notification into a failed queue entry.

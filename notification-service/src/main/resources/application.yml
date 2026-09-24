@@ -119,13 +119,13 @@ notification:
       from: alerts@incidentplatform.com
     slack:
       enabled: true
-      bot-token: ${SLACK_BOT_TOKEN}
-      channel: "#incidents"
-      # Backlog #0-18: also post every notification to the shared channel above.
-      # Off by default: in a multi-tenant deployment it would send each tenant's
-      # incident text to one channel. Only a single-organisation deployment should
-      # turn it on. The DM to the on-call user is unaffected.
-      broadcast-enabled: ${SLACK_BROADCAST_ENABLED:false}
+      # bot-token/channel/broadcast-enabled were here (backlog #0-18's
+      # comment about the shared-channel broadcast lived on this block) —
+      # removed by backlog #0-21: each tenant's own bot token, default
+      # channel and broadcast flag now live in auth-service's
+      # SlackWorkspace, read per notification via SlackWorkspaceClient.
+      # signing-secret/api-base-url stay global: Slack's signing secret is
+      # per-App, not per-workspace (verified against Slack's own docs).
       signing-secret: ${SLACK_SIGNING_SECRET}
       api-base-url: ${SLACK_API_BASE_URL:https://slack.com/api}
     sms:
@@ -172,6 +172,11 @@ oncall-service:
 
 incident-service:
   base-url: ${INCIDENT_SERVICE_URL:http://localhost:8082}
+
+# Backlog #0-21/#0-30: SlackWorkspaceClient — the first call this service
+# makes into auth-service, to read a tenant's Slack workspace connection.
+auth-service:
+  base-url: ${AUTH_SERVICE_URL:http://localhost:8087}
 
 
 server:
@@ -252,6 +257,22 @@ resilience4j:
           - org.springframework.web.client.ResourceAccessException
           - org.springframework.web.client.HttpServerErrorException
 
+      # SlackWorkspaceClient (backlog #0-21/#0-30) — same shape as oncall/incident-ack.
+      # The 404-is-not-found case is caught inline in the client before it ever
+      # reaches this breaker, so only a real failure (unreachable, 5xx, rejected
+      # token) counts against it.
+      slack-workspace:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 3
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 1
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+
   retry:
     instances:
       slack:
@@ -278,6 +299,22 @@ resilience4j:
       oncall:
         max-attempts: ${ONCALL_RETRY_MAX_ATTEMPTS:2}
         wait-duration: ${ONCALL_RETRY_WAIT_MS:200ms}
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
+
+      # Retry for SlackWorkspaceClient (backlog #0-21/#0-30). Same shape as
+      # oncall above, including its open question (backlog #0-23): this
+      # client's @CircuitBreaker fallback also returns normally rather than
+      # rethrowing, so whether @Retry actually gets a chance to see the
+      # original exception before the fallback answers is the same
+      # unverified Resilience4j-ordering question already tracked there —
+      # not re-litigated here.
+      slack-workspace:
+        max-attempts: ${SLACK_WORKSPACE_RETRY_MAX_ATTEMPTS:2}
+        wait-duration: ${SLACK_WORKSPACE_RETRY_WAIT_MS:200ms}
         retry-exceptions:
           - org.springframework.web.client.ResourceAccessException
           - org.springframework.web.client.HttpServerErrorException

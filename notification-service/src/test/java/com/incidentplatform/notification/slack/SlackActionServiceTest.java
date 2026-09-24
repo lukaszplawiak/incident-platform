@@ -5,6 +5,8 @@ import com.incidentplatform.notification.channel.NotificationException;
 import com.incidentplatform.notification.channel.SlackNotificationChannel;
 import com.incidentplatform.notification.client.IncidentAckClient;
 import com.incidentplatform.notification.client.OncallClient;
+import com.incidentplatform.notification.client.SlackWorkspaceClient;
+import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
@@ -48,6 +50,7 @@ class SlackActionServiceTest {
     @Mock private SlackNotificationChannel slackChannel;
     @Mock private SlackMessageStore messageStore;
     @Mock private OncallClient oncallClient;
+    @Mock private SlackWorkspaceClient slackWorkspaceClient;
     @Mock private AuditEventPublisher auditEventPublisher;
 
     private SlackActionService service;
@@ -56,12 +59,18 @@ class SlackActionServiceTest {
     private static final String TENANT_ID = "test-tenant";
     private static final String CHANNEL = "#incidents";
     private static final String MESSAGE_TS = "1234567890.123456";
+    private static final String BOT_TOKEN = "xoxb-tenant-own-token";
 
     @BeforeEach
     void setUp() {
         service = new SlackActionService(
                 incidentAckClient, slackChannel, messageStore,
-                oncallClient, new ObjectMapper(), auditEventPublisher);
+                oncallClient, slackWorkspaceClient, new ObjectMapper(), auditEventPublisher);
+    }
+
+    private void givenTenantWorkspace() {
+        given(slackWorkspaceClient.getWorkspace(TENANT_ID)).willReturn(Optional.of(
+                new SlackWorkspaceClient.SlackWorkspaceInfo(BOT_TOKEN, null, false, null)));
     }
 
     @Nested
@@ -72,6 +81,7 @@ class SlackActionServiceTest {
         @DisplayName("removes the tracking row for each successfully-updated " +
                 "channel and does not publish an audit event")
         void removesTrackingRowsAndPublishesNothing() {
+            givenTenantWorkspace();
             given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
                     .willReturn(List.of(CHANNEL));
 
@@ -79,7 +89,7 @@ class SlackActionServiceTest {
                     INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
 
             then(slackChannel).should().updateMessageAfterAck(
-                    eq(CHANNEL), eq(MESSAGE_TS), eq("Jane Doe"), any(NotificationRequest.class));
+                    eq(CHANNEL), eq(MESSAGE_TS), eq("Jane Doe"), any(NotificationRequest.class), eq(BOT_TOKEN));
             then(messageStore).should().remove(INCIDENT_ID, CHANNEL);
             then(messageStore).should(never()).removeAllForIncident(any());
             then(auditEventPublisher).should(never())
@@ -90,6 +100,7 @@ class SlackActionServiceTest {
         @DisplayName("updates every tracked channel, not just the one the " +
                 "button was clicked in")
         void updatesEveryTrackedChannel() {
+            givenTenantWorkspace();
             final String secondChannel = "#oncall-team-a";
             given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
                     .willReturn(List.of(CHANNEL, secondChannel));
@@ -100,9 +111,9 @@ class SlackActionServiceTest {
                     INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
 
             then(slackChannel).should().updateMessageAfterAck(
-                    eq(CHANNEL), eq(MESSAGE_TS), anyString(), any());
+                    eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
             then(slackChannel).should().updateMessageAfterAck(
-                    eq(secondChannel), eq("9999.111111"), anyString(), any());
+                    eq(secondChannel), eq("9999.111111"), anyString(), any(), anyString());
             then(messageStore).should().remove(INCIDENT_ID, CHANNEL);
             then(messageStore).should().remove(INCIDENT_ID, secondChannel);
         }
@@ -119,6 +130,7 @@ class SlackActionServiceTest {
         @DisplayName("does not remove the tracking row for the failed channel, " +
                 "but does remove it for a channel that succeeded")
         void preservesTrackingRowOnlyForFailedChannel() {
+            givenTenantWorkspace();
             final String secondChannel = "#oncall-team-a";
             given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
                     .willReturn(List.of(CHANNEL, secondChannel));
@@ -128,7 +140,7 @@ class SlackActionServiceTest {
             // The primary channel (button-click channel) fails; the second succeeds.
             willThrow(new NotificationException("SLACK", CHANNEL, "Slack API down"))
                     .given(slackChannel).updateMessageAfterAck(
-                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any());
+                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
 
             service.updateSlackMessages(
                     INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
@@ -142,6 +154,7 @@ class SlackActionServiceTest {
         @Test
         @DisplayName("still attempts every other channel after one fails")
         void stillAttemptsOtherChannelsAfterOneFails() {
+            givenTenantWorkspace();
             final String secondChannel = "#oncall-team-a";
             given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
                     .willReturn(List.of(CHANNEL, secondChannel));
@@ -150,24 +163,25 @@ class SlackActionServiceTest {
 
             willThrow(new NotificationException("SLACK", CHANNEL, "Slack API down"))
                     .given(slackChannel).updateMessageAfterAck(
-                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any());
+                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
 
             service.updateSlackMessages(
                     INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
 
             // then — the second channel was still attempted despite the first's failure
             then(slackChannel).should().updateMessageAfterAck(
-                    eq(secondChannel), eq("9999.111111"), anyString(), any());
+                    eq(secondChannel), eq("9999.111111"), anyString(), any(), anyString());
         }
 
         @Test
         @DisplayName("publishes SLACK_ACK_MESSAGE_UPDATE_FAILED naming the failed channel")
         void publishesAuditEventNamingFailedChannel() {
+            givenTenantWorkspace();
             given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
                     .willReturn(List.of(CHANNEL));
             willThrow(new NotificationException("SLACK", CHANNEL, "Slack API down"))
                     .given(slackChannel).updateMessageAfterAck(
-                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any());
+                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
 
             service.updateSlackMessages(
                     INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
@@ -190,6 +204,7 @@ class SlackActionServiceTest {
         @DisplayName("does not publish an audit event at all when every channel succeeds " +
                 "in a multi-channel batch")
         void doesNotPublishWhenAllChannelsSucceedInBatch() {
+            givenTenantWorkspace();
             final String secondChannel = "#oncall-team-a";
             given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
                     .willReturn(List.of(CHANNEL, secondChannel));
@@ -201,6 +216,78 @@ class SlackActionServiceTest {
 
             then(auditEventPublisher).should(never())
                     .publishIncident(any(), any(), any(), any(), any(), any());
+        }
+    }
+
+    /**
+     * Backlog #0-21: the ACK update must use the acknowledging tenant's own bot
+     * token — resolved from the tenantId carried through the button's value —
+     * not one platform-wide token.
+     */
+    @Nested
+    @DisplayName("tenant's own bot token (backlog #0-21)")
+    class TenantBotToken {
+
+        @Test
+        @DisplayName("resolves the workspace for the ACK's tenant and passes its token to every update")
+        void passesTenantTokenToEveryUpdate() {
+            givenTenantWorkspace();
+            final String secondChannel = "#oncall-team-a";
+            given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
+                    .willReturn(List.of(CHANNEL, secondChannel));
+            given(messageStore.find(INCIDENT_ID, secondChannel))
+                    .willReturn(Optional.of("9999.111111"));
+
+            service.updateSlackMessages(
+                    INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
+
+            then(slackWorkspaceClient).should().getWorkspace(TENANT_ID);
+            then(slackChannel).should().updateMessageAfterAck(
+                    eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), eq(BOT_TOKEN));
+            then(slackChannel).should().updateMessageAfterAck(
+                    eq(secondChannel), eq("9999.111111"), anyString(), any(), eq(BOT_TOKEN));
+        }
+
+        @Test
+        @DisplayName("no workspace any more (revoked after posting): nothing is updated, every channel reported failed")
+        void noWorkspaceFailsEveryChannel() {
+            given(slackWorkspaceClient.getWorkspace(TENANT_ID)).willReturn(Optional.empty());
+            given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
+                    .willReturn(List.of(CHANNEL, "#oncall-team-a"));
+
+            service.updateSlackMessages(
+                    INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
+
+            then(slackChannel).shouldHaveNoInteractions();
+            then(messageStore).should(never()).remove(any(), anyString());
+            assertThat(failedChannelsInAuditEvent())
+                    .containsExactlyInAnyOrder(CHANNEL, "#oncall-team-a");
+        }
+
+        @Test
+        @DisplayName("auth-service unavailable: does not throw, every channel reported failed")
+        void lookupFailureFailsEveryChannel() {
+            given(slackWorkspaceClient.getWorkspace(TENANT_ID))
+                    .willThrow(new SlackWorkspaceLookupUnavailableException("down", new RuntimeException()));
+            given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
+                    .willReturn(List.of(CHANNEL));
+
+            service.updateSlackMessages(
+                    INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
+
+            then(slackChannel).shouldHaveNoInteractions();
+            assertThat(failedChannelsInAuditEvent()).containsExactly(CHANNEL);
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<String> failedChannelsInAuditEvent() {
+            final ArgumentCaptor<Map<String, Object>> metadataCaptor =
+                    ArgumentCaptor.forClass(Map.class);
+            then(auditEventPublisher).should().publishIncident(
+                    eq(INCIDENT_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED),
+                    anyString(), anyString(), metadataCaptor.capture());
+            return (List<String>) metadataCaptor.getValue().get("failedChannels");
         }
     }
 }

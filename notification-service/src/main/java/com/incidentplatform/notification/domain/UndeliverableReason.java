@@ -22,5 +22,14 @@ public enum UndeliverableReason {
      * than the retry window (backlog #0-19), so it is unknown whether anyone
      * is on call.
      */
-    ONCALL_UNAVAILABLE
+    ONCALL_UNAVAILABLE,
+
+    /**
+     * Slack was the on-call contact's only reachable channel and auth-service
+     * could not answer the tenant's Slack-workspace lookup for longer than the
+     * retry window (backlog #0-21). Only used when nothing else could be sent —
+     * with another reachable channel, Slack is skipped and the rest goes out
+     * (see {@code SlackWorkspaceLookupUnavailableException}).
+     */
+    SLACK_WORKSPACE_UNAVAILABLE
 }
