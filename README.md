@@ -147,7 +147,7 @@ Using the raw HTTP API via `RestClient` through a `GeminiClient` interface keeps
 HS512 with a shared secret is sufficient for a controlled environment where all services are owned by the same team. Service tokens are minted and cached per tenant and per target service by `ServiceTokenProvider` (a concrete class, not an interface) and verified in `JwtAuthFilter`; moving to RS256 or Keycloak means changing token issuance in `JwtUtils`/`ServiceTokenProvider` and verification in `JwtAuthFilter`, both in `shared`. The tradeoff is documented and understood: every service holds the same secret, so any service can mint a token for any tenant and audience (backlog #0-13 records the asymmetric-key / mTLS alternative).
 
 **Why Slack Bot Token instead of Incoming Webhook?**
-Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` supports both direct messages to the on-call engineer's Slack User ID and channel posts with a single API. Bot Token also enables ACK-via-Slack: Interactive Components post to `/api/v1/slack/actions` on notification-service (request signature verified with `SLACK_SIGNING_SECRET` by `SlackSignatureVerifier`), which acknowledges the incident through `IncidentAckClient`.
+Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` sends direct messages to the on-call engineer's Slack User ID, and — only if the tenant turns on broadcast for its workspace — also a post to that tenant's own default channel. Each tenant connects its own workspace: an admin pastes the bot token into `POST /api/v1/slack-workspace` (auth-service stores it encrypted; there is no "Add to Slack" OAuth flow yet), and notification-service reads it per notification over a service-token call to auth-service (backlog #0-21/#0-30). A tenant with no workspace simply gets no Slack channel. **No ACK from Slack for now** (backlog #0-35): Slack signs a button click with the signing secret of the App that posted the message, and with a pasted token that App is the tenant's own, while `SlackSignatureVerifier` checks one platform-wide `SLACK_SIGNING_SECRET`. Messages therefore carry no Acknowledge button; incidents are acknowledged in the app. The callback endpoint (`/api/v1/slack/actions` → `IncidentAckClient`) is kept for the OAuth "Add to Slack" install, where every workspace uses the platform's App and the platform secret is correct.
 
 **Why a centralized audit log via Kafka instead of per-service history tables?**
 Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident view. The `audit.events` topic acts as a single audit stream — any service publishes events and the consumer assembles them into a unified chronological view via one API endpoint.
@@ -190,7 +190,7 @@ On-call schedule management is a distinct bounded context. A separate service al
 | Security | Spring Security + JWT (HS512) | Stateless auth, service-to-service tokens |
 | Real-time | WebSocket (STOMP) | Live incident dashboard updates |
 | Email | Spring Mail + Mailtrap SMTP | Real SMTP integration, safe sandbox |
-| Slack | Bot Token + chat.postMessage | DM + channel posts, Interactive Components for ACK-via-Slack |
+| Slack | Bot Token + chat.postMessage | DM + channel posts, per tenant; ACK-via-Slack returns with the OAuth install (backlog #0-35) |
 | AI | Gemini API via RestClient | Vendor-neutral, no SDK lock-in |
 | Resilience | Resilience4j | Circuit breakers on Redis, Gemini and inter-service HTTP clients (oncall-service, incident ACK), retry with backoff (the oncall client's own retry is unverified, backlog #0-23) |
 | Rate Limiting | bucket4j + Redis | Per-tenant + per-IP, state shared across replicas via `bucket4j-redis` |
@@ -229,7 +229,7 @@ T+10m*: Still no ACK   → Level 2 (MANAGER)   IncidentEscalatedEvent → Email 
 
 The channel set is chosen by **event type**, not by escalation level (`NotificationRouter`): `INCIDENT_OPENED` → Email + Slack, `INCIDENT_ESCALATED` → Email + Slack + SMS, `INCIDENT_ACKNOWLEDGED` → Slack, `INCIDENT_RESOLVED` → Email + Slack, `INCIDENT_CLOSED` → Email.
 
-escalation-service resolves the SECONDARY (level 1) or MANAGER (level 2) on-call user through oncall-service and puts that user in `IncidentEscalatedEvent.escalateTo`. notification-service stores `escalateTo` and the escalation level on its outbox entry, and each escalation level is now queued and sent at most once per channel (idempotency is keyed on incident + tenant + event type + escalation level, so the level-2 notification is no longer discarded as a duplicate of level 1). `escalationLevel` is required and must be an integer in 1..2; anything else is routed to `notification.dead-letter` rather than queued. A malformed `escalateTo` is ignored with a warning, not dead-lettered. When an entry is sent, `NotificationRouter` notifies the `escalateTo` user: it looks up that user's current on-call entry in oncall-service (`GET /api/v1/oncall/current/by-user/{userId}`, tenant and user id matched together) and uses their email, Slack id and phone. If there is no target, or the target is not on call, the escalation goes to the tenant's PRIMARY on-call as before. Other event types notify the PRIMARY on-call, resolved with the incident's `teamId` when it has one (falling back to tenant-wide otherwise, backlog #0-12) — the same team-scoped lookup the escalation fallback uses. **Tenant content only reaches members of that tenant** (the on-call contact details are entered by the tenant and are not verified against membership yet, backlog #0-24): there is no fallback address. A channel the on-call user has no address for is skipped (a WARN and `notification.channel_skipped{channel,event_type}`; a Slack id must start with `U`, anything else is no Slack address), and if nobody in the tenant can be notified the queue entry becomes `UNDELIVERABLE`; it is counted in `notification.undeliverable{event_type,reason}`, audited for the tenant as `NOTIFICATION_UNDELIVERABLE` (a type of its own, distinct from `NOTIFICATION_FAILED`, a failed send), and for opened and escalated incidents the platform operator gets a content-free email (tenant id, incident id, event type, reason) at `NOTIFICATION_OPERATOR_ALERT_EMAIL`. That address has no default: if it is unset no email is sent and only the ERROR log and the metric remain, so set it for every environment (the Kubernetes ConfigMap `app-config` carries an empty `NOTIFICATION_OPERATOR_ALERT_EMAIL`; each overlay patches it — dev mirrors docker-compose's mailhog address, staging/prod carry a placeholder to replace before a real deployment, backlog #0-26). Alerts are limited to one email per tenant and reason per `NOTIFICATION_OPERATOR_ALERT_MIN_INTERVAL` (default `PT15M`). If oncall-service cannot answer, the entry stays `PENDING` and is retried until the lookup has been failing for `NOTIFICATION_LOOKUP_RETRY_WINDOW` (default `PT10M`, measured from the first failed lookup and not from creation) before it becomes `UNDELIVERABLE`; a run of the scheduler loads at most `NOTIFICATION_SCHEDULER_BATCH_SIZE` entries (default `200`, oldest first) and stops after `NOTIFICATION_SCHEDULER_PROCESSING_BUDGET` (default `PT3M`; it must stay below the 4-minute lock, which is checked at startup). SMTP calls have 5-second timeouts (`MAIL_SMTP_*_TIMEOUT_MS`). The Slack channel posts to the shared channel only if `SLACK_BROADCAST_ENABLED=true` (default `false`; only a single-organisation deployment should turn it on). The Slack integration still uses one workspace and one bot token for the whole platform, which does not fit a multi-tenant SaaS (backlog #0-21).
+escalation-service resolves the SECONDARY (level 1) or MANAGER (level 2) on-call user through oncall-service and puts that user in `IncidentEscalatedEvent.escalateTo`. notification-service stores `escalateTo` and the escalation level on its outbox entry, and each escalation level is now queued and sent at most once per channel (idempotency is keyed on incident + tenant + event type + escalation level, so the level-2 notification is no longer discarded as a duplicate of level 1). `escalationLevel` is required and must be an integer in 1..2; anything else is routed to `notification.dead-letter` rather than queued. A malformed `escalateTo` is ignored with a warning, not dead-lettered. When an entry is sent, `NotificationRouter` notifies the `escalateTo` user: it looks up that user's current on-call entry in oncall-service (`GET /api/v1/oncall/current/by-user/{userId}`, tenant and user id matched together) and uses their email, Slack id and phone. If there is no target, or the target is not on call, the escalation goes to the tenant's PRIMARY on-call as before. Other event types notify the PRIMARY on-call, resolved with the incident's `teamId` when it has one (falling back to tenant-wide otherwise, backlog #0-12) — the same team-scoped lookup the escalation fallback uses. **Tenant content only reaches members of that tenant** (the on-call contact details are entered by the tenant and are not verified against membership yet, backlog #0-24): there is no fallback address. A channel the on-call user has no address for is skipped (a WARN and `notification.channel_skipped{channel,event_type}`; a Slack id must start with `U`, anything else is no Slack address), and if nobody in the tenant can be notified the queue entry becomes `UNDELIVERABLE`; it is counted in `notification.undeliverable{event_type,reason}`, audited for the tenant as `NOTIFICATION_UNDELIVERABLE` (a type of its own, distinct from `NOTIFICATION_FAILED`, a failed send), and for opened and escalated incidents the platform operator gets a content-free email (tenant id, incident id, event type, reason) at `NOTIFICATION_OPERATOR_ALERT_EMAIL`. That address has no default: if it is unset no email is sent and only the ERROR log and the metric remain, so set it for every environment (the Kubernetes ConfigMap `app-config` carries an empty `NOTIFICATION_OPERATOR_ALERT_EMAIL`; each overlay patches it — dev mirrors docker-compose's mailhog address, staging/prod carry a placeholder to replace before a real deployment, backlog #0-26). Alerts are limited to one email per tenant and reason per `NOTIFICATION_OPERATOR_ALERT_MIN_INTERVAL` (default `PT15M`). If oncall-service cannot answer, the entry stays `PENDING` and is retried until the lookup has been failing for `NOTIFICATION_LOOKUP_RETRY_WINDOW` (default `PT10M`, measured from the first failed lookup and not from creation) before it becomes `UNDELIVERABLE`; a run of the scheduler loads at most `NOTIFICATION_SCHEDULER_BATCH_SIZE` entries (default `200`, oldest first) and stops after `NOTIFICATION_SCHEDULER_PROCESSING_BUDGET` (default `PT3M`; it must stay below the 4-minute lock, which is checked at startup). SMTP calls have 5-second timeouts (`MAIL_SMTP_*_TIMEOUT_MS`). Slack is per tenant (backlog #0-21): each tenant's own workspace, bot token, default channel and broadcast flag (off by default) come from auth-service, cached for 60 s. A tenant without a workspace has Slack skipped like any other missing address. If auth-service cannot answer, only Slack is skipped and the other channels go out (counted in `service_client_fallback_total{client="slack-workspace"}`); when Slack was the only reachable channel the entry stays `PENDING` within the same retry window and then becomes `UNDELIVERABLE` with reason `SLACK_WORKSPACE_UNAVAILABLE`. A failed channel send is not retried later (backlog #0-32).
 
 Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK at any point cancels all pending tasks. ShedLock prevents duplicate job execution across multiple replicas. The escalation level is written back to the incident by incident-service, which consumes `IncidentEscalatedEvent` from `incidents.lifecycle`.
 
@@ -246,7 +246,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 ### Security
 
 - **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set explicitly
-- **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts none) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
+- **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts only `aud=auth-service`, on its one internal endpoint for a tenant's Slack workspace — backlog #0-30) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
 - **Dev endpoints**: `DevTokenController` gated with `@Profile({"local", "dev"})` plus a fail-fast startup guard as a second line of defence — never available in production
 - **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8097) — never co-located with the business API
 - **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in access logs
@@ -455,7 +455,7 @@ logging:
     com.incidentplatform: DEBUG
 ```
 
-**auth-service** additionally requires an MFA encryption key:
+**auth-service** additionally requires two encryption keys — one for MFA secrets, one for tenants' Slack bot tokens (separate on purpose, so one leaked key does not expose both; backlog #0-21). Each is 32 bytes, base64 (`openssl rand -base64 32`):
 
 ```yaml
 jwt:
@@ -463,6 +463,9 @@ jwt:
 
 mfa:
   encryption-key: dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE=
+
+slack:
+  encryption-key: bG9jYWwtc2xhY2sta2V5LWRldi1vbmx5LTMyYnl0ZSE=
 
 logging:
   level:
@@ -497,6 +500,13 @@ gemini:
 logging:
   level:
     com.incidentplatform: DEBUG
+```
+
+**notification-service** reads each tenant's Slack workspace from auth-service. `auth-service.base-url` defaults to `http://localhost:8087`, so nothing is needed locally unless auth-service runs elsewhere:
+
+```yaml
+auth-service:
+  base-url: http://localhost:8087
 ```
 
 > The JWT secret must be at least 64 characters. The value above meets this requirement — copy it exactly.
@@ -539,14 +549,15 @@ logging:
 ```bash
 cd docker
 cp .env.example .env
-# Edit .env — fill in JWT_SECRET and MFA_ENCRYPTION_KEY:
+# Edit .env — fill in JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY:
 #   JWT_SECRET=$(openssl rand -base64 64)
 #   MFA_ENCRYPTION_KEY=$(openssl rand -base64 32)
+#   SLACK_ENCRYPTION_KEY=$(openssl rand -base64 32)   # a different value
 docker compose up -d
 ```
 
-> **auth-service** requires `MFA_ENCRYPTION_KEY` — a 32-byte base64 AES-256-GCM key
-> for encrypting TOTP secrets at rest. See `docker/.env.example` for all required variables.
+> **auth-service** requires `MFA_ENCRYPTION_KEY` and `SLACK_ENCRYPTION_KEY` — two different
+> 32-byte base64 AES-256-GCM keys, for TOTP secrets and tenants' Slack bot tokens at rest. See `docker/.env.example` for all required variables.
 
 ### Step 5 — (Optional) Start monitoring stack
 
@@ -684,7 +695,9 @@ echo -n "your-gemini-api-key" | base64
 ```bash
 # Create a Slack app at https://api.slack.com/apps
 # Bot Token Scopes needed: chat:write, im:write
-echo -n "xoxb-your-slack-bot-token" | base64
+# The bot token is NOT a platform secret any more (backlog #0-21): each tenant
+# admin installs their own via POST /api/v1/slack-workspace. Only the App's
+# signing secret is platform-wide.
 echo -n "your-slack-signing-secret" | base64
 ```
 
@@ -701,7 +714,7 @@ data:
   JWT_SECRET: <base64-encoded-value>
   MFA_ENCRYPTION_KEY: <base64-encoded-value>    # auth-service — 32-byte AES-256-GCM key (the dev overlay ships a ready-made one)
   GEMINI_API_KEY: <base64-encoded-value>        # optional — postmortems disabled if missing
-  SLACK_BOT_TOKEN: <base64-encoded-value>       # optional — Slack notifications disabled if missing
+  SLACK_ENCRYPTION_KEY: <base64-encoded-value>  # auth-service — 32-byte AES-256-GCM key for tenants' Slack bot tokens, different from MFA_ENCRYPTION_KEY
   SLACK_SIGNING_SECRET: <base64-encoded-value>  # optional — Slack notifications disabled if missing
 ```
 
@@ -1077,7 +1090,7 @@ incident-platform/
 │   └── src/main/java/
 │       ├── channel/               # SlackNotificationChannel, EmailNotificationChannel, SmsNotificationChannel
 │       ├── router/                # NotificationRouter (maps event types to channels)
-│       ├── client/                # OncallClient (queries oncall-service), IncidentAckClient (ACK via Slack)
+│       ├── client/                # OncallClient (queries oncall-service), IncidentAckClient (ACK via Slack, inactive until backlog #0-35)
 │       ├── slack/                 # SlackActionService, SlackSignatureVerifier, SlackMessageStore
 │       └── kafka/                 # IncidentEventConsumer
 │

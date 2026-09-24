@@ -184,8 +184,11 @@ Service tokens (`JwtUtils.generateServiceToken(serviceName, tenantId)`) used to 
 have. Every service-to-service HTTP call was a 401, hidden because the clients fail open. The
 filter now recognises a token by its `serviceName` claim and builds a `ServicePrincipal`
 (`ROLE_SERVICE`, tenant from the signed claim), but only if the token's `aud` claim names the
-service that received it (`ServiceNames`; a filter built without a service name, like
-auth-service's, accepts none). Without the audience check a token minted to call oncall-service
+service that received it (`ServiceNames`; a filter built without a service name accepts none).
+auth-service accepted none until backlog #0-21/#0-30; it now accepts `aud=auth-service` for one
+`ROLE_SERVICE` endpoint, `GET /api/v1/internal/slack-workspace`. Decided in #0-30: another service
+that needs auth-service-owned tenant data pulls it over this kind of narrow HTTP call and caches it
+briefly — not Kafka replication of that data. Without the audience check a token minted to call oncall-service
 would authenticate on every service, and any endpoint that is only `authenticated()` would accept it. No HTTP filter reads `X-Tenant-Id`; the header the
 clients still send is informational only. `ServiceTokenProvider.getToken(tenantId)` caches one token
 per (tenant, audience) (bounded; the tenant id comes from Kafka payloads and is validated: 1-100
@@ -248,9 +251,20 @@ clients is probably inactive (backlog #0-23); the scheduler's PENDING retry is t
 stay below the 4-minute ShedLock (validated at startup), and loads at most `batch-size` entries,
 oldest first.
 
-Slack does not post to the shared channel unless `broadcast-enabled` (default false). Slack is
-still one workspace and one bot token for the whole platform, so DMs only work for users in that
-workspace (backlog #0-21). oncall-service restricts the by-user endpoint to SERVICE and ADMIN; a
+Slack is per tenant (backlog #0-21): auth-service's `SlackWorkspace` holds each tenant's bot token
+(AES-256-GCM under `slack.encryption-key`, deliberately not the MFA key), default channel and
+broadcast flag (default false); one active workspace per tenant, admin-pasted token, no OAuth
+install. notification-service reads it through `CachingSlackWorkspaceClient` (60 s TTL; caches
+"no workspace", never a failure) wrapping `SlackWorkspaceClientImpl` (the Resilience4j proxy — keep
+the cache outside it, a self-call bypasses the proxy). "No workspace" = skip Slack; auth-service
+down = `SlackWorkspaceLookupUnavailableException`, the router skips only Slack, unless Slack was the
+sole reachable channel (then PENDING/#0-19 window, reason `SLACK_WORKSPACE_UNAVAILABLE`). Not the
+#0-19 "hold everything" pattern on purpose: this lookup picks a channel, not the recipient. No
+channel send is retried later (backlog #0-32). Signing secret stays global (per Slack App), which
+is exactly why messages have no ACK button now: a pasted token comes from the tenant's own App,
+whose callbacks that secret can't verify. ACK via Slack returns with the OAuth "Add to Slack"
+install (backlog #0-35) — Slack OAuth as a client for workspace install, unrelated to user login,
+which stays on the platform's own JWTs (the README's rejection of Keycloak etc. is unaffected). oncall-service restricts the by-user endpoint to SERVICE and ADMIN; a
 user with several concurrent entries gets the most recently started one, so only the contact
 details are meaningful, not the role.
 
