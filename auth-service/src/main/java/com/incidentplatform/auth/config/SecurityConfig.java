@@ -3,6 +3,7 @@ package com.incidentplatform.auth.config;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.ServiceNames;
 import com.incidentplatform.shared.security.TokenRevocationChecker;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
@@ -93,11 +94,26 @@ public class SecurityConfig {
      *
      * <p>{@code @Primary} ensures this bean wins over the
      * {@code @ConditionalOnMissingBean} default in SharedSecurityAutoConfiguration.
+     *
+     * <h2>Fixed (backlog #0-21/#0-30): auth-service now accepts one narrow
+     * service-token audience</h2>
+     * Until now this called the 2-arg constructor, so {@code expectedAudience}
+     * was {@code null} and every service token was rejected here — a
+     * deliberate choice, documented in {@link JwtAuthFilter}'s own Javadoc,
+     * because nothing ever needed to call auth-service. That changed with
+     * backlog #0-21: notification-service needs to read a tenant's Slack
+     * workspace connection, which only auth-service holds. Passing
+     * {@link ServiceNames#AUTH_SERVICE} here does not reopen auth-service to
+     * service callers generally — {@link JwtAuthFilter} still requires the
+     * token's {@code aud} claim to name this exact service, so only a token
+     * minted specifically to call auth-service authenticates, and only the
+     * one internal endpoint that requires {@code ROLE_SERVICE} accepts it.
+     * See backlog #0-30 for the full decision record.
      */
     @Bean
     public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils,
                                        TokenRevocationChecker revocationChecker) {
-        return new JwtAuthFilter(jwtUtils, revocationChecker);
+        return new JwtAuthFilter(jwtUtils, revocationChecker, ServiceNames.AUTH_SERVICE);
     }
 
     @Bean

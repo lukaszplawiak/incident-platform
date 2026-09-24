@@ -54,7 +54,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "jwt.refresh-token-ttl=P30D",
         "spring.application.name=auth-service",
         "security.cors.allowed-origins=http://localhost:4200",
-        "mfa.encryption-key=dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE="
+        "mfa.encryption-key=dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE=",
+        "slack.encryption-key=c2xhY2sta2V5LTMyLWJ5dGVzLWZvci1kZXYtb25seSE="
 })
 @DisplayName("AuthController")
 class AuthControllerSecurityTest {

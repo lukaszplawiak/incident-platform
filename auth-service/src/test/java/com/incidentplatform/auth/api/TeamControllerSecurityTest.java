@@ -87,7 +87,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "jwt.access-token-ttl=PT15M",
         "jwt.service-token-ttl=PT1H",
         "spring.application.name=auth-service",
-        "mfa.encryption-key=dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE="
+        "mfa.encryption-key=dGVzdC1rZXktMzItYnl0ZXMtZm9yLWRldi1vbmx5ISE=",
+        "slack.encryption-key=c2xhY2sta2V5LTMyLWJ5dGVzLWZvci1kZXYtb25seSE="
 })
 @DisplayName("TeamController — security")
 class TeamControllerSecurityTest {
