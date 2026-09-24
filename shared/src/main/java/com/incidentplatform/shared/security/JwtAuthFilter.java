@@ -77,8 +77,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     /**
      * Constructor with explicit revocation checker and no service tokens.
-     * Used by auth-service which wires in {@code TokenRevocationService::isRevoked}
-     * and is never the target of a service-to-service call.
+     *
+     * <p>Historically used by auth-service, which wires in
+     * {@code TokenRevocationService::isRevoked} and was never the target of
+     * a service-to-service call at all. <b>Corrected (backlog #0-21/#0-30):
+     * auth-service now uses the 3-arg constructor instead</b>, with
+     * {@link ServiceNames#AUTH_SERVICE} as its audience — it accepts a
+     * service token on exactly one internal endpoint (a tenant's Slack
+     * workspace connection, read by notification-service), nothing more.
+     * This 2-arg overload remains for any future caller that genuinely
+     * wants revocation checking with no service-token audience at all.
      */
     public JwtAuthFilter(JwtUtils jwtUtils, TokenRevocationChecker revocationChecker) {
         this(jwtUtils, revocationChecker, null);
