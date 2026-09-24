@@ -39,13 +39,19 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-16](#0-16-decide-the-alertmanager-service-token-tenant-role-and-lifetime) | Decide the Alertmanager service token: tenant, role, lifetime | design | High | Open |
 | [0-17](#0-17-alert-on-service_client_fallback_totalreasonauth) | Alert on `service_client_fallback_total{reason="auth"}` | tech-debt | Medium | Open |
 | [0-20](#0-20-tenant-owned-fallback-contact) | Tenant-owned fallback contact | design | Medium | Open |
-| [0-21](#0-21-slack-is-one-workspace-for-the-whole-platform) | Slack is one workspace for the whole platform | design | High | Open |
+| [0-21](#0-21-slack-is-one-workspace-for-the-whole-platform) | Slack is one workspace for the whole platform | design | High | In progress |
 | [0-22](#0-22-the-operator-alert-is-email-only) | The operator alert is email only | tech-debt | Low | Open |
 | [0-23](#0-23-the-oncall-retry-is-probably-inactive) | The `oncall` `@Retry` is probably inactive | tech-debt | Low | Open |
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
 | [0-29](#0-29-staging-and-prod-k8s-overlays-are-wholesale-swapped-not-just-their-namespace) | staging and prod k8s overlays are wholesale swapped, not just their `namespace:` | bug | Low | Open |
+| [0-30](#0-30-auth-service-has-no-sanctioned-way-to-be-called-by-another-service) | auth-service has no sanctioned way to be called by another service | design | High | In progress |
+| [0-31](#0-31-auth-service-identityconfig-split-evaluated-and-deferred) | auth-service identity/config split — evaluated and deferred | design | Low | Open |
+| [0-32](#0-32-no-notification-channel-is-retried-after-a-failed-send) | No notification channel is retried after a failed send | design | Medium | Open |
+| [0-33](#0-33-unify-caching-on-caffeine-once-a-third-cache-appears) | Unify caching on Caffeine once a third cache appears | tech-debt | Low | Open |
+| [0-34](#0-34-servicetokenprovider-cache-has-no-metrics) | `ServiceTokenProvider` cache has no metrics | tech-debt | Low | Open |
+| [0-35](#0-35-slack-install-via-oauth-add-to-slack-brings-back-ack-via-slack) | Slack install via OAuth ("Add to Slack") brings back ACK via Slack | design | Medium | Open |
 
 ---
 
@@ -142,7 +148,7 @@ and existing Testcontainers-based tests still pass.
 **Problem.** CLAUDE.md forbids `TODO`/`FIXME` without a backlog reference. These have none; some
 sit near comments that cite other items, so triage each one:
 
-- `auth-service`: `AuthServiceApplication` (future service split); `User` and
+- `auth-service`: `AuthServiceApplication` (future service split — now linked, backlog #0-31); `User` and
   `UserManagementService` (Data Vault)
 - `escalation-service`: `EscalationScheduler` (outbox for the escalation event, see backlog #0-4)
 - `incident-service`: `IncidentKafkaConsumer` (per-severity topics); `IncidentCommandService`
@@ -279,6 +285,10 @@ token is the right credential for an external alert source.
 (`Authorization: ApiKey ipl_<prefix>.<secret>`, scope `alerts:ingest`, per tenant, revocable);
 `ApiKeyAuthFilter` already reads that header, and Prometheus documents `authorization.type` as
 configurable, which still has to be verified against the Alertmanager version in `docker-compose.yml`.
+Note for (3): `ApiKeyAuthFilter` is wired only in auth-service today — ingestion-service would need either
+that filter plus a way to validate the key, which lives in auth-service, or an HTTP lookup into
+auth-service. How another service reads auth-service-owned data is decided once in backlog #0-30 (narrow
+HTTP pull with a service token, `aud=auth-service`); build on that instead of re-deciding it here.
 (4) Take the tenant from the alert label: rejected in review, since whoever writes the rules would
 choose the tenant.
 
@@ -323,7 +333,7 @@ is worth weighing together with the tenant-owned contact.
 
 ### 0-21. Slack is one workspace for the whole platform
 
-**Type:** design · **Priority:** High · **Status:** Open
+**Type:** design · **Priority:** High · **Status:** In progress
 
 **Problem.** `notification.channels.slack` has one `bot-token`, one `channel` and one `signing-secret` for
 the whole platform (one k8s `Secret` per environment). That is a single-organisation design. In a
@@ -383,6 +393,19 @@ tenant recorded in the button), not a requirement.
 The README paragraph "Why Slack Bot Token instead of Incoming Webhook?" still describes channel posts and should be
 updated with the same change.
 
+**Implementation (option B).** auth-service: `SlackWorkspace` (`V17__create_slack_workspaces.sql`, one active row per
+tenant, bot token AES-256-GCM under its own `slack.encryption-key`), admin API `/api/v1/slack-workspace` (install /
+view masked / revoke; manual bot-token paste, no OAuth install flow yet), and `GET /api/v1/internal/slack-workspace`
+for `ROLE_SERVICE` with `aud=auth-service` only (backlog #0-30). notification-service: `SlackWorkspaceClientImpl`
+(HTTP, `@Retry`/`@CircuitBreaker`) behind `CachingSlackWorkspaceClient` (60 s TTL, 404 cached, failures not);
+global `bot-token`/`channel`/`broadcast-enabled` removed. "No workspace" skips Slack like a missing Slack id; an
+auth-service outage throws `SlackWorkspaceLookupUnavailableException` and skips only Slack (the rest is sent), except
+when Slack was the only reachable channel — then the entry stays PENDING for the #0-19 retry window and becomes
+`UNDELIVERABLE (SLACK_WORKSPACE_UNAVAILABLE)` after it. The Slack message itself is not retried: backlog #0-32.
+`team_id` is stored but not used in routing yet. **ACK via Slack is off:** with a pasted token the tenant's own App
+signs button clicks, which the platform-wide `SLACK_SIGNING_SECRET` can't verify, so messages no longer carry the
+Acknowledge button (backlog #0-35).
+
 ---
 
 ### 0-22. The operator alert is email only
@@ -390,8 +413,8 @@ updated with the same change.
 **Type:** tech-debt · **Priority:** Low · **Status:** Open
 
 **Problem.** The content-free alert for an UNDELIVERABLE notification (backlog #0-18) is sent by email only.
-`SlackNotificationChannel.send` attaches an ACK button bound to the incident id and stores the message, which
-an operator alert must not do, so Slack and SMS operator alerts need a plain-message path of their own.
+`SlackNotificationChannel.send` posts into the tenant's own workspace (backlog #0-21) and stores the message
+against the incident id, which an operator alert must not do, so Slack and SMS operator alerts need a plain-message path of their own.
 Without an operator address only the ERROR log and the `notification.undeliverable` metric remain, and an
 alert on that metric is backlog #0-17.
 The email is limited to one per tenant and reason per interval, in memory and per replica; a cross-replica limit
@@ -490,6 +513,219 @@ believes they're targeting, not only the namespace label.
 never caught up to), then swap the two file bodies (or move the files) wholesale — editing only the `namespace:`
 line in each, as a narrower read of this bug might suggest, would leave the replica counts, resource limits, HPA
 target and image tags mismatched.
+
+---
+
+### 0-30. auth-service has no sanctioned way to be called by another service
+
+**Type:** design · **Priority:** High · **Status:** In progress
+
+**Problem.** `JwtAuthFilter`'s own Javadoc states auth-service "is never the target of a service-to-service call",
+and until now that was true: `SecurityConfig.jwtAuthFilter(...)` wires the 2-arg constructor (no `expectedAudience`),
+so every service token is rejected there, by design (backlog #0-11's audience check fails closed for a filter built
+without a name). This was a reasonable default for as long as nothing needed it — every fact a caller needs about
+itself already lives in its own JWT claims (`userId`/`tenantId`/`roles`/`teamIds`), so no service ever had to call
+back into auth-service to look anything up.
+
+That stopped being true once the platform needed a second *kind* of data: not "who is calling", but "a setting or
+secret the *tenant* owns, stored in auth-service, needed by a *different* service at runtime" (backlog #0-21's Slack
+bot token is the first concrete case). This gap was found independently at least twice before without ever being
+closed: backlog #0-16 (Alertmanager's `system` tenant) names the same shape of problem, and — found while
+investigating this item — the `ApiKeyAuthFilter`/`ApiKeyLookupService` path is **fully built in auth-service and
+completely dead everywhere else**: no other service wires `ApiKeyAuthFilter` into its `SecurityFilterChain` (each
+service's own chain is `@ConditionalOnMissingBean`, so the shared default that registers it never applies outside
+auth-service), so an `Authorization: ApiKey ...` request to, say, ingestion-service is never recognized by anything
+and falls through to 401. `ingestion-service`'s own security test manufactures a fake principal specifically because
+there is no real filter chain to exercise — confirmed by that test's own Javadoc.
+
+**Options considered.**
+1. **Narrow HTTP pull** — the calling service mints a service token with `aud=auth-service`
+   (`ServiceNames.AUTH_SERVICE`), auth-service's filter accepts *only* that audience on *one* new, explicitly scoped
+   endpoint, the caller caches the result briefly. Reuses the `ServiceTokenProvider`/`ServicePrincipal`/per-audience
+   mechanism already built and proven for #0-11 (oncall/incident/ingestion). Cost: auth-service's Javadoc claim of
+   "never a callee" becomes "never a callee except this one narrow, named exception" — must be corrected where it's
+   written, not just quietly outgrown.
+2. **Kafka event replication** — auth-service publishes change events for tenant-owned config (e.g.
+   `SlackWorkspaceInstalled`/`Revoked`) to a new topic; the reading service keeps a synced local read copy. Never
+   makes auth-service a callee, fits this platform's existing event-heavy style (outbox pattern, tenant-scoped
+   consumers everywhere), but costs a new topic + producer + consumer + local schema per data kind, adds eventual
+   consistency, and raises its own question of how a secret travels safely through Kafka (plaintext in the event,
+   which needs its own encryption-in-transit story, vs. a "changed" signal that still triggers an HTTP fetch — the
+   hybrid, which mostly cancels the point of not calling back into auth-service).
+
+**Decided.** Option 1 (narrow HTTP pull), first implemented for backlog #0-21. Rationale: the mechanism already
+exists and is already proven on three other services; a generic Kafka-replication mechanism for "any tenant-owned
+config another service might need" is a bigger, more speculative investment to make for a single current consumer.
+Revisit Kafka replication if more read paths into auth-service accumulate and the per-call cost starts to matter.
+
+**Follow-up.** Backlog #0-16's option 3 (Integration API key for Alertmanager) and any future tenant-owned setting
+another service needs to read (e.g. #0-20's fallback contact) should point at this decision instead of re-deciding
+the mechanism independently.
+
+---
+
+### 0-31. auth-service identity/config split — evaluated and deferred
+
+**Type:** design · **Priority:** Low · **Status:** Open
+
+**Context.** `AuthServiceApplication`'s own class Javadoc carries a `TODO (Backlog)` sketching a future split
+(`auth-service` → authentication only; `identity-service` → users/teams/tenant settings; `apikey-service` →
+machine-to-machine credentials, optional), explicitly flagged there as one of backlog #0-6's untracked TODOs. While
+scoping backlog #0-21/#0-30, a *different* two-way split (identity/AuthN vs. config/integration, i.e. `ApiKey` +
+`Integration` + `TenantSettings` together) was evaluated as an alternative to building #0-21 inside the existing
+monolith. **Rejected for now, evidence below.**
+
+**The TODO's own trigger doesn't apply yet.** Its stated criteria: *"Split when: independent scaling is needed,
+separate teams own auth vs identity, or compliance (PCI-DSS, SOC2) mandates credential isolation. Do NOT split
+prematurely."* None currently hold. Its own listed prerequisites also aren't done: a Redis credential cache for the
+login hot path (`AuthService.login()` fetches `User` in the same transaction today), an outbox pattern for the
+invite/user-deletion flow, and database separation.
+
+**Why the user-proposed grouping (ApiKey+Integration+TenantSettings) isn't a clean file-move either, found by
+reading the code:**
+- `ApiKeyLookupServiceImpl.buildPrincipal` eager-fetches `User` (`ApiKeyRepository.findActiveByHash` does
+  `LEFT JOIN FETCH k.ownerUser`) and reads `ownerUser.getRoleNames()`/`getEmail()` **in the same transaction, on
+  every API-key-authenticated request** — not a one-off reference, a hot-path one.
+- `Team` is needed by both proposed halves: `TeamService` (user-team membership, identity side) and
+  `Integration.team` + `ApiKeyLookupServiceImpl.resolveTeamId` (config side, same hot path as above).
+- `TenantSettings.isMfaRequired()` is read synchronously inside `AuthService.login()` — the TODO's own split
+  already anticipated this by keeping `tenant_settings` with `identity-service`, not with `apikey-service`,
+  which argues against grouping it with `Integration`/`ApiKey` as "config".
+- `UserManagementService.archiveUser()`/`anonymizeUser()` write `User` and revoke the user's personal `ApiKey`s in
+  one local `@Transactional` block today — a GDPR-relevant deletion flow that would become a distributed
+  transaction post-split, exactly the class of problem the TODO's own "outbox pattern" prerequisite exists to solve
+  first.
+- Two FK constraints would cross the boundary (`api_keys.owner_user_id → users`, `integrations.team_id → teams`,
+  both `ON DELETE SET NULL`) — schema-level, comparatively cheap — but the *ORM object-graph* coupling above is the
+  real cost, not the FK syntax.
+- The good news: the HTTP layer is already a clean boundary — none of the 6 controllers in auth-service mix both
+  concerns.
+
+**Decided.** Build backlog #0-21's new `SlackWorkspace` entity now, inside auth-service, shaped to require near-zero
+rework if a split ever happens: no JPA relation to `User`, `teamId` stored as a plain column (not a `@ManyToOne`),
+same flat-package convention `Integration`/`ApiKey` already use. Defer the actual split until the TODO's own trigger
+conditions are met.
+
+---
+
+### 0-32. No notification channel is retried after a failed send
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Problem.** Delivery is "at most once" per channel. `NotificationService.processEntry` tries each routed
+channel once (plus the in-call `@Retry` of the Slack/SMTP clients), records a failure in `notification_log`,
+and marks the queue entry SENT anyway. A Slack API outage, an SMTP timeout or a Twilio error therefore loses
+that channel's message for good. Backlog #0-21 adds one more cause: if auth-service cannot answer the
+tenant's Slack-workspace lookup, Slack is skipped for that notification while email/SMS go out. That was a
+deliberate choice: holding the whole entry (the #0-19 pattern) would make auth-service a hard dependency of
+email and SMS, and retrying only the auth-service case would make one config lookup more reliable than the
+send itself.
+
+**What already exists.** Idempotency in `notification_log` is keyed per channel (incident + tenant + event type
++ escalation level + channel). If an entry stayed PENDING after a partial send, the next cycle would skip the
+channels that already went out, so a per-channel retry needs no migration for that part.
+
+**Open questions.** (1) The router asks oncall-service again on every cycle, and the on-call can change between
+cycles: a retried Slack DM could go to someone other than the person who got the email. Pin the resolved
+recipient on the entry, or accept it? (2) What does an entry become when the retry window runs out after some
+channels were delivered? Not UNDELIVERABLE, since someone was reached. (3) `first_lookup_failure_at` is shared
+with the #0-19 lookup window, so a per-channel window probably needs its own column or table. (4) Which failures
+are worth retrying (5xx, timeout) and which are permanent (Slack `channel_not_found`, `invalid_auth`)?
+
+**Approach.** Per-channel delivery state (pending / sent / failed-permanent) with backoff and a bounded window,
+the same for every channel and cause. Not a Slack-only special case.
+
+---
+
+### 0-33. Unify caching on Caffeine once a third cache appears
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Context.** The codebase has two in-memory caches, both hand-rolled `ConcurrentHashMap`s with a TTL and a
+1000-entry cap (at the cap: evict expired, otherwise skip caching): `ServiceTokenProvider` (`shared`, one
+token per tenant and audience, valid until token expiry minus a buffer, `synchronized` refresh so one token
+is minted per miss) and `CachingSlackWorkspaceClient` (notification-service, backlog #0-21, 60 s TTL, caches
+"no workspace" but never a failure, no lock around the HTTP call on purpose). No service configures Spring's
+cache abstraction (`@EnableCaching`, `CacheManager`, Caffeine).
+
+**Why not now.** Two caches, both working, each with semantics that would need custom configuration in
+Caffeine (a per-entry `Expiry` for the token). Migrating means a new dependency, a change in `shared` (all 7
+services rebuild), and ordering the cache aspect against Resilience4j on the same bean — `@Cacheable` is
+applied by the same AOP proxy, so a self-call through `this` bypasses it exactly like the #0-21 circuit-breaker
+bug. The gain (LRU instead of "skip when full", built-in metrics, less duplicated code) is small for two sites.
+
+**Trigger.** A third cache. The likely one is the API-key lookup (`ApiKeyLookupServiceImpl.findActiveByHash`,
+once per API-key-authenticated request) when `ApiKeyAuthFilter` is wired outside auth-service (backlog
+#0-16 option 3, #0-30). It needs eviction on revoke (`@CacheEvict`), which is where the Spring abstraction
+pays off. At that point introduce one Caffeine `CacheManager` and migrate both existing caches with it.
+
+**Checked and deliberately not cached** (so nobody adds these believing they are missing):
+- On-call lookups (`OncallClientImpl`, escalation's `OncallServiceClient`): rotations and overrides change who
+  is on call; a stale entry pages the wrong person. Low volume, and #0-19's retry relies on fresh answers.
+- `TenantSettings.isMfaRequired` (once per login): a security setting — a cached "false" would let logins skip
+  MFA for a TTL after an admin enables it. One primary-key read.
+- `IncidentAckClient` (a write), `GeminiClientImpl` (unique input per postmortem).
+- Token revocation (`isRevoked`): already in Redis.
+
+---
+
+### 0-34. `ServiceTokenProvider` cache has no metrics
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** `ServiceTokenProvider` (`shared`) caches one service token per (tenant, audience), bounded at
+`MAX_CACHED_TENANTS` = 1000. When the map is full of live entries it returns an *uncached* token, which means
+minting a new JWT on every service-to-service call for that tenant. Today the only signal is a WARN log.
+There is no hit rate, no size and no count of refused puts, so nobody can tell whether the cap is too small
+or the refresh buffer too long. Every service calls another one through this class, so it runs on every
+tenant's notification, escalation and ACK path.
+
+**Approach.** Same as `CachingSlackWorkspaceClient` (backlog #0-21): a `CacheMeterBinder` subclass reading
+`LongAdder`s, registered under `cache="service-token"`, so the meters use Micrometer's standard names
+(`cache.gets{result=hit|miss}`, `cache.puts`, `cache.evictions`, `cache.size`) plus `cache.puts.skipped`.
+A miss is a call that reaches `refreshAndGet`. Count it once per minted token, not per thread that waited on
+the monitor and then found a fresh token (those are hits). `ServiceTokenProvider` is a `@Component` in `shared`, so
+the `MeterRegistry` becomes one more constructor parameter. That touches every test that builds the class with
+`new`, and a change in `shared` rebuilds all 7 services, which is why it was not folded into #0-21.
+
+**Relation to #0-33.** If the move to Caffeine happens first, the standard meters come from
+`CaffeineCacheMetrics` and this item reduces to tagging the cache. The meter names are the same either way,
+so dashboards built on this item survive #0-33.
+
+---
+
+### 0-35. Slack install via OAuth ("Add to Slack") brings back ACK via Slack
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Problem.** Backlog #0-21 connects a tenant's Slack by a manually pasted bot token. Without OAuth the only way an
+admin can get an `xoxb-` token is from a Slack App they created in their own workspace. Slack signs every
+interactive callback (a button click) with the signing secret of the App that posted the message, so each tenant's
+clicks are signed with a secret the platform does not have. `SlackSignatureVerifier` checks one platform-wide
+`SLACK_SIGNING_SECRET` and answers 401. The Acknowledge button was removed from messages rather than left to fail on
+every click. `/api/v1/slack/actions`, `SlackActionService` and `updateMessageAfterAck` are kept unchanged. Found by
+the #0-21 security review, where the DTO Javadoc (tenant's own App) and #0-21's reasoning for a global signing secret
+(one App) contradicted each other.
+
+**Options.**
+- **(B, recommended) One platform App, OAuth v2 install.** An admin, logged in with the platform's own JWT, starts
+  the install. The backend redirects to `slack.com/oauth/v2/authorize` with a signed, short-lived, single-use
+  `state` bound to tenant and admin. The callback exchanges `code` + client secret via `oauth.v2.access` and stores
+  the `xoxb-` token and `team.id` in the existing `SlackWorkspace`. The global signing secret is then correct and the
+  button comes back as it was. This is standard for multi-workspace Slack apps (PagerDuty, Opsgenie). **It is Slack
+  OAuth with the platform as the client, not an external identity provider for user login**, so the plan to stay on
+  the platform's own JWTs (README "Design Decisions") is unaffected. Needs: `SLACK_CLIENT_ID`/`SLACK_CLIENT_SECRET`,
+  public distribution enabled on the App (no Marketplace listing needed), an HTTPS redirect URL (a tunnel for local
+  development), and a callback that is public in the filter chain (a browser redirect carries no JWT), so its whole
+  security rests on `state`: test CSRF, replay and tenant mismatch.
+- **(A) Keep one App per tenant, store its signing secret too.** The webhook reads the unverified `payload.team.id`,
+  finds the workspace by `slack_team_id` (new internal auth-service lookup), verifies with that tenant's secret, then
+  checks that the button's tenant matches the workspace's. It works without OAuth, but it needs a second encrypted
+  secret (V18), manual Interactivity URL setup per tenant, and it becomes throwaway once (B) exists.
+- Socket Mode was considered: with one App per tenant it means one WebSocket and app-level token per tenant held
+  by notification-service. Rejected.
+
+**Approach.** (B) when Slack is actually used by tenants. Until then incidents are acknowledged in the app.
 
 ---
 

@@ -3,6 +3,8 @@ package com.incidentplatform.notification.channel;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
+import com.incidentplatform.notification.client.SlackWorkspaceClient;
+import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.slack.SlackMessageStore;
@@ -19,22 +21,26 @@ import org.springframework.web.client.RestClient;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
 import static com.github.tomakehurst.wiremock.client.WireMock.containing;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
 
 /**
  * Regression test for the bug documented in {@link SlackNotificationChannel#send}:
- * the Slack message {@code ts} returned by {@code sendWithAckButton} was
+ * the Slack message {@code ts} returned by {@code postIncidentMessage} (then {@code sendWithAckButton}) was
  * previously discarded entirely — {@link SlackMessageStore#save} was never
  * called anywhere in the codebase, so the "update every Slack message for
  * this incident after ACK" feature never worked in any deployment (not a
@@ -57,9 +63,13 @@ class SlackNotificationChannelSendTest {
     @Mock
     private SlackMessageStore messageStore;
 
+    @Mock
+    private SlackWorkspaceClient slackWorkspaceClient;
+
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final String TENANT_ID = "acme-corp";
     private static final String DEFAULT_CHANNEL = "#incidents";
+    private static final String BOT_TOKEN = "xoxb-test-token";
     private static final String SLACK_TS = "1700000000.123456";
 
     @BeforeEach
@@ -79,17 +89,26 @@ class SlackNotificationChannelSendTest {
     /**
      * @param broadcastEnabled whether every notification is also posted to the
      *                         shared channel (backlog #0-18); the tests that
-     *                         predate the flag exercise it with true
+     *                         predate the flag exercise it with true. Backlog
+     *                         #0-21: this is now per-tenant, read via {@link
+     *                         SlackWorkspaceClient} — stubbed here instead of
+     *                         set on {@link NotificationChannelProperties}.
      */
     private SlackNotificationChannel newChannel(boolean broadcastEnabled) {
         final NotificationChannelProperties properties = new NotificationChannelProperties(
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
                         new NotificationChannelProperties.Slack(
-                                true, "xoxb-test-token", DEFAULT_CHANNEL, "signing-secret",
-                                "http://localhost:" + wireMock.port(), broadcastEnabled),
+                                true, "signing-secret", "http://localhost:" + wireMock.port()),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 new NotificationChannelProperties.OperatorAlert("operator@test.com", null));
+
+        // lenient: setUp() always builds a channel, but not every test sends
+        // through it (isSlackUserIdPredicate) and some re-stub it via
+        // newChannel(false) — strict stubs would flag both as unnecessary.
+        lenient().when(slackWorkspaceClient.getWorkspace(TENANT_ID)).thenReturn(
+                Optional.of(new SlackWorkspaceClient.SlackWorkspaceInfo(
+                        BOT_TOKEN, DEFAULT_CHANNEL, broadcastEnabled, null)));
 
         // HTTP/1.1 only — WireMock standalone does not support HTTP/2, and
         // JdkClientHttpRequestFactory defaults to HTTP/2 which causes
@@ -105,7 +124,8 @@ class SlackNotificationChannelSendTest {
                         .requestFactory(new JdkClientHttpRequestFactory(httpClient)),
                 new ObjectMapper(),
                 properties,
-                messageStore);
+                messageStore,
+                slackWorkspaceClient);
     }
 
     @AfterEach
@@ -193,6 +213,57 @@ class SlackNotificationChannelSendTest {
         assertThat(SlackNotificationChannel.isSlackUserId("#incidents")).isFalse();
         assertThat(SlackNotificationChannel.isSlackUserId(" ")).isFalse();
         assertThat(SlackNotificationChannel.isSlackUserId(null)).isFalse();
+    }
+
+    @Test
+    @DisplayName("the message has no Acknowledge button — a click from a tenant's own Slack App can't pass signature verification (backlog #0-35)")
+    void messageHasNoAckButton() {
+        channel.send(buildRequest("U0123456789"));
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/chat.postMessage"))
+                .withRequestBody(containing("acknowledge_incident")));
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/chat.postMessage"))
+                .withRequestBody(containing("\"type\":\"actions\"")));
+        wireMock.verify(2, postRequestedFor(urlPathEqualTo("/chat.postMessage"))
+                .withRequestBody(containing("Acknowledge this incident in the Incident Platform app")));
+    }
+
+    @Test
+    @DisplayName("posts with the tenant's own bot token, read from its workspace (backlog #0-21)")
+    void postsWithTenantBotToken() {
+        channel.send(buildRequest("U0123456789"));
+
+        wireMock.verify(2, postRequestedFor(urlPathEqualTo("/chat.postMessage"))
+                .withHeader("Authorization", equalTo("Bearer " + BOT_TOKEN)));
+        then(slackWorkspaceClient).should().getWorkspace(TENANT_ID);
+    }
+
+    @Test
+    @DisplayName("no workspace for the tenant: nothing posted, fails loudly (router bypassed)")
+    void noWorkspaceFailsLoudly() {
+        given(slackWorkspaceClient.getWorkspace(TENANT_ID)).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                .isInstanceOf(NotificationException.class)
+                .hasMessageContaining("No active Slack workspace");
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/chat.postMessage")));
+        then(messageStore).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("auth-service unavailable: NotificationException (recorded as a failed channel), cause kept, nothing posted")
+    void lookupFailureBecomesNotificationException() {
+        final SlackWorkspaceLookupUnavailableException outage =
+                new SlackWorkspaceLookupUnavailableException("down", new RuntimeException());
+        given(slackWorkspaceClient.getWorkspace(TENANT_ID)).willThrow(outage);
+
+        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                .isInstanceOf(NotificationException.class)
+                .hasMessageContaining("auth-service unavailable")
+                .hasCause(outage);
+
+        wireMock.verify(0, postRequestedFor(urlPathEqualTo("/chat.postMessage")));
     }
 
     private NotificationRequest buildRequest(String recipient) {

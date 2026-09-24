@@ -258,6 +258,7 @@ services:
   # Required secrets (set in .env.example or environment):
   #   JWT_SECRET          — min 64 chars, same across all services
   #   MFA_ENCRYPTION_KEY  — 32-byte base64 (openssl rand -base64 32)
+  #   SLACK_ENCRYPTION_KEY — 32-byte base64 (openssl rand -base64 32), separate from MFA_ENCRYPTION_KEY
   #   POSTGRES_PASSWORD   — PostgreSQL password
   # ==========================================================
 
@@ -308,6 +309,9 @@ services:
       # MFA
       MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY}
       MFA_TOTP_ISSUER: ${MFA_TOTP_ISSUER:-IncidentPlatform}
+      # Slack workspace connections (backlog #0-21) — separate key from
+      # MFA_ENCRYPTION_KEY on purpose, see AesEncryptionConfig.
+      SLACK_ENCRYPTION_KEY: ${SLACK_ENCRYPTION_KEY}
       # Mail (optional — invite emails)
       MAIL_HOST: ${MAIL_HOST:-mailhog}
       MAIL_PORT: ${MAIL_PORT:-1025}
@@ -445,11 +449,14 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       INCIDENT_SERVICE_URL: http://incident-service:8082
       ONCALL_SERVICE_URL: http://oncall-service:8086
+      # Backlog #0-21/#0-30: SlackWorkspaceClient reads each tenant's Slack
+      # workspace connection from auth-service — SLACK_BOT_TOKEN below was
+      # removed, it's no longer a platform-wide secret held here.
+      AUTH_SERVICE_URL: http://auth-service:8087
       MAIL_HOST: ${MAIL_HOST:-mailhog}
       MAIL_PORT: ${MAIL_PORT:-1025}
       MAIL_USERNAME: ${MAIL_USERNAME:-}
       MAIL_PASSWORD: ${MAIL_PASSWORD:-}
-      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-xoxb-placeholder-not-a-real-token}
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-placeholder-signing-secret-not-real}
       # Dev only: mailhog catches it. The service has no default (empty means no operator email),
       # and the k8s ConfigMap ships it empty; never point a shared environment at a placeholder.

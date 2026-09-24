@@ -3,6 +3,7 @@ package com.incidentplatform.auth.repository;
 import com.incidentplatform.auth.domain.ApiKey;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.Role;
+import com.incidentplatform.auth.domain.SlackWorkspace;
 import com.incidentplatform.auth.domain.Team;
 import com.incidentplatform.auth.domain.TeamMember;
 import com.incidentplatform.auth.domain.TeamRole;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,6 +27,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Real-Postgres integration tests for {@code auth-service}'s repository
@@ -90,7 +93,10 @@ import static org.assertj.core.api.Assertions.assertThat;
         // test) fails to start without it. All-zero bytes: this is a
         // test-only key, never used for real encryption, only needs to
         // satisfy AesEncryptionService's 32-byte length check.
-        "mfa.encryption-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        "mfa.encryption-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        // Same reasoning as above, now for the second AesEncryptionService
+        // bean (backlog #0-21's slackEncryptionService).
+        "slack.encryption-key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 })
 @DisplayName("auth-service repositories — real Postgres integration")
 class AuthRepositoryIntegrationTest {
@@ -111,6 +117,7 @@ class AuthRepositoryIntegrationTest {
     @Autowired private UserRepository userRepository;
     @Autowired private AuthTokenRepository authTokenRepository;
     @Autowired private ApiKeyRepository apiKeyRepository;
+    @Autowired private SlackWorkspaceRepository slackWorkspaceRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     private static final String TENANT_ID = "test-tenant";
@@ -131,6 +138,76 @@ class AuthRepositoryIntegrationTest {
         return teamMemberRepository.saveAndFlush(member);
     }
 
+    /**
+     * Backlog #0-21: "one active Slack workspace per tenant" is enforced by the
+     * partial unique index in V17, not only by SlackWorkspaceService's 409 check —
+     * the index is what holds under two concurrent installs, where both service
+     * checks can pass before either insert. Only a real Postgres can prove a
+     * partial index (WHERE revoked_at IS NULL) behaves as intended. Each test
+     * uses its own tenant id so they can't collide through the index.
+     */
+    @Nested
+    @DisplayName("SlackWorkspaceRepository — partial unique index (V17)")
+    class SlackWorkspaceRepositoryTests {
+
+        private SlackWorkspace install(String tenantId) {
+            return SlackWorkspace.install(tenantId, null, "T0123456",
+                    "iv:ciphertext", "#incidents", false);
+        }
+
+        @Test
+        @DisplayName("a second active workspace for the same tenant is rejected by the database")
+        void secondActiveWorkspaceRejected() {
+            final String tenantId = "slack-dup-" + UUID.randomUUID();
+            slackWorkspaceRepository.saveAndFlush(install(tenantId));
+
+            // The constraint name is asserted, not just the exception type:
+            // SlackWorkspaceService maps a violation to 409 only when it names
+            // this index, so a Hibernate/driver change that stopped reporting it
+            // would silently turn a lost install race back into a 500.
+            assertThatThrownBy(() -> slackWorkspaceRepository.saveAndFlush(install(tenantId)))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasCauseInstanceOf(org.hibernate.exception.ConstraintViolationException.class)
+                    .cause()
+                    .extracting(e -> ((org.hibernate.exception.ConstraintViolationException) e)
+                            .getConstraintName())
+                    .isEqualTo("uq_slack_workspaces_active_tenant");
+        }
+
+        @Test
+        @DisplayName("after revoking, the tenant can install a new workspace; the revoked row stays for audit")
+        void reinstallAfterRevokeAllowed() {
+            final String tenantId = "slack-reinstall-" + UUID.randomUUID();
+            final SlackWorkspace first = slackWorkspaceRepository.saveAndFlush(install(tenantId));
+            first.revoke();
+            slackWorkspaceRepository.saveAndFlush(first);
+
+            final SlackWorkspace second = slackWorkspaceRepository.saveAndFlush(install(tenantId));
+
+            assertThat(slackWorkspaceRepository.findActiveByTenantIdAndRevokedAtIsNull(tenantId))
+                    .map(SlackWorkspace::getId).contains(second.getId());
+            assertThat(slackWorkspaceRepository.findByIdAndTenantId(first.getId(), tenantId))
+                    .hasValueSatisfying(ws -> assertThat(ws.isRevoked()).isTrue());
+        }
+
+        @Test
+        @DisplayName("active workspaces of different tenants don't collide")
+        void differentTenantsIndependent() {
+            slackWorkspaceRepository.saveAndFlush(install("slack-a-" + UUID.randomUUID()));
+            slackWorkspaceRepository.saveAndFlush(install("slack-b-" + UUID.randomUUID()));
+        }
+
+        @Test
+        @DisplayName("findByIdAndTenantId does not return another tenant's workspace")
+        void lookupIsTenantScoped() {
+            final SlackWorkspace ws = slackWorkspaceRepository.saveAndFlush(
+                    install("slack-owner-" + UUID.randomUUID()));
+
+            assertThat(slackWorkspaceRepository.findByIdAndTenantId(ws.getId(), "someone-else"))
+                    .isEmpty();
+        }
+    }
+
     @Nested
     @DisplayName("Flyway migrations")
     class Migrations {
@@ -145,7 +222,8 @@ class AuthRepositoryIntegrationTest {
         @DisplayName("core tables exist after migration")
         void coreTablesExist() {
             final List<String> tables = List.of(
-                    "users", "teams", "team_members", "auth_tokens", "api_keys");
+                    "users", "teams", "team_members", "auth_tokens", "api_keys",
+                    "slack_workspaces");
 
             for (final String table : tables) {
                 final Integer count = jdbcTemplate.queryForObject("""

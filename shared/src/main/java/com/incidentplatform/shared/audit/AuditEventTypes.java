@@ -95,5 +95,9 @@ public final class AuditEventTypes {
     public static final String INTEGRATION_CREATED = "INTEGRATION_CREATED";
     public static final String INTEGRATION_REVOKED = "INTEGRATION_REVOKED";
 
+    // ── Slack workspace (backlog #0-21) ─────────────────────────────────────
+    public static final String SLACK_WORKSPACE_INSTALLED = "SLACK_WORKSPACE_INSTALLED";
+    public static final String SLACK_WORKSPACE_REVOKED   = "SLACK_WORKSPACE_REVOKED";
+
     private AuditEventTypes() {}
 }

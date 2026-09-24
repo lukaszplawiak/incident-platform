@@ -10,13 +10,11 @@ import org.springframework.validation.annotation.Validated;
 /**
  * Strongly-typed, validated configuration for notification channels and the operator alert address.
  *
- * <p>Replaces seven {@code @Value} injections across four classes:
+ * <p>Replaces {@code @Value} injections across four classes:
  * <ul>
  *   <li>{@code EmailNotificationChannel}: {@code notification.channels.email.enabled},
  *       {@code notification.channels.email.from}</li>
- *   <li>{@code SlackNotificationChannel}: {@code notification.channels.slack.enabled},
- *       {@code notification.channels.slack.bot-token},
- *       {@code notification.channels.slack.channel}</li>
+ *   <li>{@code SlackNotificationChannel}: {@code notification.channels.slack.enabled}</li>
  *   <li>{@code SlackSignatureVerifier}: {@code notification.channels.slack.signing-secret}</li>
  *   <li>{@code SmsNotificationChannel}: {@code notification.channels.sms.enabled},
  *       {@code notification.channels.sms.from-number}</li>
@@ -36,9 +34,6 @@ import org.springframework.validation.annotation.Validated;
  *       from: ${NOTIFICATION_EMAIL_FROM:alerts@incidentplatform.com}
  *     slack:
  *       enabled: true
- *       bot-token: ${SLACK_BOT_TOKEN}
- *       channel: ${SLACK_CHANNEL:#incidents}
- *       broadcast-enabled: ${SLACK_BROADCAST_ENABLED:false}
  *       signing-secret: ${SLACK_SIGNING_SECRET}
  *       api-base-url: ${SLACK_API_BASE_URL:https://slack.com/api}
  *     sms:
@@ -55,6 +50,14 @@ import org.springframework.validation.annotation.Validated;
  * and receives only content-free alerts (tenant id, incident id, event type, reason).
  * It has no default, so an unconfigured deployment sends no email rather than sending
  * one to a placeholder such as {@code oncall@example.com}.
+ *
+ * <h2>Fixed (backlog #0-21): bot-token/channel/broadcast-enabled are no longer global</h2>
+ * {@code Slack} used to carry the platform's one bot token, one channel and one
+ * broadcast flag — a single-organisation design (see {@code SlackNotificationChannel}'s
+ * own Javadoc). Each tenant's own bot token, default channel and broadcast flag now live
+ * in auth-service's {@code SlackWorkspace} and are read per notification via {@code
+ * SlackWorkspaceClient}. {@code signing-secret} and {@code api-base-url} stay global here —
+ * verified against Slack's own docs that the signing secret is per-App, not per-workspace.
  */
 @ConfigurationProperties(prefix = "notification")
 @Validated
@@ -88,12 +91,6 @@ public record NotificationChannelProperties(
     public record Slack(
             boolean enabled,
 
-            @NotBlank(message = "notification.channels.slack.bot-token must not be blank")
-            String botToken,
-
-            @NotBlank(message = "notification.channels.slack.channel must not be blank")
-            String channel,
-
             @NotBlank(message = "notification.channels.slack.signing-secret must not be blank")
             String signingSecret,
 
@@ -103,14 +100,7 @@ public record NotificationChannelProperties(
             // previously, being unable to test the HTTP call at all).
             // Defaults to the real Slack API in application.yml.
             @NotBlank(message = "notification.channels.slack.api-base-url must not be blank")
-            String apiBaseUrl,
-
-            // Backlog #0-18: when true, every notification is also posted to the
-            // one shared channel above, whatever its recipient — for every tenant.
-            // False by default: in a multi-tenant deployment that would send each
-            // tenant's incident text to one channel. A single-organisation
-            // deployment that wants its team channel opts in explicitly.
-            boolean broadcastEnabled
+            String apiBaseUrl
     ) {}
 
     public record Sms(

@@ -2,9 +2,7 @@ package com.incidentplatform.auth.service;
 
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -14,12 +12,14 @@ import java.security.SecureRandom;
 import java.util.Base64;
 
 /**
- * AES-256-GCM encryption for MFA secrets stored in the database.
+ * AES-256-GCM encryption for secrets stored in the database that must be
+ * read back in plaintext (unlike a password/API-key hash, which never is).
  *
  * <h2>Why AES-256-GCM</h2>
- * TOTP verification requires the original secret (to generate the expected
- * code and compare). BCrypt/Argon2 are one-way — they cannot be used here.
- * AES-256-GCM provides:
+ * TOTP verification requires the original MFA secret (to generate the
+ * expected code and compare); a Slack bot token must be handed back to
+ * notification-service as-is to call the Slack API. BCrypt/Argon2 are
+ * one-way — they cannot be used for either. AES-256-GCM provides:
  * <ul>
  *   <li><b>Confidentiality:</b> ciphertext is meaningless without the key</li>
  *   <li><b>Integrity:</b> GCM authentication tag detects tampering</li>
@@ -27,11 +27,20 @@ import java.util.Base64;
  *       secrets produce different ciphertexts</li>
  * </ul>
  *
+ * <h2>One class, independently-keyed instances (backlog #0-21)</h2>
+ * This class used to be a single {@code @Service} bound to one
+ * {@code mfa.encryption-key}. It is now a plain, unmanaged helper — the key
+ * is still supplied via the constructor, but {@link AesEncryptionConfig}
+ * produces two separately-named {@code @Bean}s from it (one per
+ * {@code mfa.encryption-key}, one per {@code slack.encryption-key}), so a
+ * compromise of one key does not expose data encrypted under the other.
+ * Consumers inject the one they need via {@code @Qualifier}.
+ *
  * <h2>Separation of concerns</h2>
- * The encryption key ({@code MFA_ENCRYPTION_KEY}) lives in the environment —
- * never in the database or source code. Even a full DB dump is useless without
- * the key. Key rotation requires re-encrypting all secrets (a planned
- * operational procedure, not an emergency).
+ * The encryption key lives in the environment — never in the database or
+ * source code. Even a full DB dump is useless without the key. Key rotation
+ * requires re-encrypting all secrets under that key (a planned operational
+ * procedure, not an emergency).
  *
  * <h2>Output format</h2>
  * {@code base64(iv) + ":" + base64(ciphertext+tag)}
@@ -39,10 +48,9 @@ import java.util.Base64;
  * GCM tag is 128 bits (16 bytes) — appended to ciphertext by JCE.
  *
  * <h2>Key format</h2>
- * {@code MFA_ENCRYPTION_KEY} must be a 32-byte base64-encoded key.
+ * Each key must be a 32-byte base64-encoded value.
  * Generate with: {@code openssl rand -base64 32}
  */
-@Service
 public class AesEncryptionService {
 
     private static final String ALGORITHM       = "AES/GCM/NoPadding";
@@ -52,12 +60,11 @@ public class AesEncryptionService {
     private final SecretKey secretKey;
     private final SecureRandom secureRandom = new SecureRandom();
 
-    public AesEncryptionService(
-            @Value("${mfa.encryption-key}") String base64Key) {
+    public AesEncryptionService(String base64Key) {
         final byte[] keyBytes = Base64.getDecoder().decode(base64Key);
         if (keyBytes.length != 32) {
             throw new IllegalArgumentException(
-                    "MFA_ENCRYPTION_KEY must be a 32-byte base64-encoded key. " +
+                    "Encryption key must be a 32-byte base64-encoded key. " +
                             "Generate with: openssl rand -base64 32");
         }
         this.secretKey = new SecretKeySpec(keyBytes, "AES");
@@ -119,7 +126,7 @@ public class AesEncryptionService {
             // GCM tag mismatch — data has been tampered with
             throw new BusinessException(
                     ErrorCodes.UNAUTHORIZED,
-                    "MFA secret integrity check failed — possible tampering",
+                    "Encrypted value integrity check failed — possible tampering",
                     HttpStatus.UNAUTHORIZED);
         } catch (Exception e) {
             throw new RuntimeException("AES-GCM decryption failed", e);

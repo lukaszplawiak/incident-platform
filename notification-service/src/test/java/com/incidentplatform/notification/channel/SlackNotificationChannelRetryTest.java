@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.channel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.notification.client.SlackWorkspaceClient;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.slack.SlackMessageStore;
@@ -32,7 +33,12 @@ class SlackNotificationChannelRetryTest {
     @Mock
     private SlackMessageStore messageStore;
 
+    @Mock
+    private SlackWorkspaceClient slackWorkspaceClient;
+
     private SlackNotificationChannel channel;
+
+    private static final String BOT_TOKEN = "xoxb-test-token";
 
     @BeforeEach
     void setUp() {
@@ -40,19 +46,19 @@ class SlackNotificationChannelRetryTest {
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
                         new NotificationChannelProperties.Slack(
-                                true, "xoxb-test-token", "#incidents", "signing-secret",
-                                "http://localhost", false),
+                                true, "signing-secret", "http://localhost"),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 new NotificationChannelProperties.OperatorAlert("operator@test.com", null));
         channel = new SlackNotificationChannel(
                 RestClient.builder(),
                 new ObjectMapper(),
                 properties,
-                messageStore);
+                messageStore,
+                slackWorkspaceClient);
     }
 
     @Nested
-    @DisplayName("sendWithAckButtonFallback")
+    @DisplayName("postIncidentMessageFallback")
     class FallbackMethod {
 
         @Test
@@ -64,7 +70,7 @@ class SlackNotificationChannelRetryTest {
 
             // when / then
             assertThatThrownBy(() ->
-                    channel.sendWithAckButtonFallback("#incidents", request, cause))
+                    channel.postIncidentMessageFallback("#incidents", request, BOT_TOKEN, cause))
                     .isInstanceOf(NotificationException.class)
                     .hasMessageContaining("after retries")
                     .hasMessageContaining("#incidents")
@@ -80,7 +86,7 @@ class SlackNotificationChannelRetryTest {
 
             // when / then
             assertThatThrownBy(() ->
-                    channel.sendWithAckButtonFallback("U0123456789", request, cause))
+                    channel.postIncidentMessageFallback("U0123456789", request, BOT_TOKEN, cause))
                     .isInstanceOf(NotificationException.class)
                     .hasMessageContaining("U0123456789");
         }
@@ -95,8 +101,8 @@ class SlackNotificationChannelRetryTest {
 
             // when
             try {
-                channel.sendWithAckButtonFallback(
-                        "#incidents", request, originalCause);
+                channel.postIncidentMessageFallback(
+                        "#incidents", request, BOT_TOKEN, originalCause);
             } catch (NotificationException e) {
                 // then
                 assertThat(e.getCause()).isSameAs(originalCause);

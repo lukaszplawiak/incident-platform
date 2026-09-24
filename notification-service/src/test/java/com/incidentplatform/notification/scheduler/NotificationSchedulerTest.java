@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.scheduler;
 
 import com.incidentplatform.notification.client.OncallLookupUnavailableException;
+import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.config.NotificationSchedulerProperties;
 import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
@@ -81,6 +82,51 @@ class NotificationSchedulerTest {
      * entry stays PENDING and is retried for a bounded window; after it the
      * entry is parked as UNDELIVERABLE (which also tells the operator).
      */
+    /**
+     * Backlog #0-21: the router only lets an auth-service outage through when
+     * Slack was the contact's sole reachable channel. The scheduler then applies
+     * the same retry window as the on-call lookup, with its own give-up reason.
+     */
+    @Nested
+    @DisplayName("auth-service unavailable, Slack the only channel (backlog #0-21)")
+    class SlackWorkspaceUnavailable {
+
+        private void failSlackLookupFor(NotificationQueueEntry entry) {
+            willThrow(new SlackWorkspaceLookupUnavailableException("down", new RuntimeException()))
+                    .given(notificationService).processEntry(entry);
+        }
+
+        @Test
+        @DisplayName("inside the retry window the entry is left PENDING and the first failure recorded")
+        void staysPendingInsideTheWindow() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failSlackLookupFor(entry);
+
+            scheduler.processPendingNotifications();
+
+            then(persistenceService).should().recordLookupFailure(entry);
+            then(notificationService).should(never()).markUndeliverable(any(), any());
+            then(persistenceService).should(never()).markFailed(any(), any());
+        }
+
+        @Test
+        @DisplayName("past the retry window the entry is parked as UNDELIVERABLE (SLACK_WORKSPACE_UNAVAILABLE), not ONCALL_UNAVAILABLE")
+        void undeliverableAfterTheWindow() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            ReflectionTestUtils.setField(entry, "firstLookupFailureAt",
+                    Instant.now().minus(Duration.ofMinutes(11)));
+            given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+            failSlackLookupFor(entry);
+
+            scheduler.processPendingNotifications();
+
+            then(notificationService).should()
+                    .markUndeliverable(entry, UndeliverableReason.SLACK_WORKSPACE_UNAVAILABLE);
+            then(persistenceService).should(never()).markFailed(any(), any());
+        }
+    }
+
     @Nested
     @DisplayName("oncall-service unavailable (backlog #0-19)")
     class OncallUnavailable {

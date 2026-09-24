@@ -3,6 +3,8 @@ package com.incidentplatform.notification.router;
 import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.client.OncallClient;
 import com.incidentplatform.notification.client.OncallLookupUnavailableException;
+import com.incidentplatform.notification.client.SlackWorkspaceClient;
+import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.domain.Severity;
@@ -43,6 +45,13 @@ class NotificationRouterTest {
     private FakeChannel slackChannel;
     private FakeChannel smsChannel;
 
+    // Backlog #0-21: every tenant in these tests has an active Slack workspace
+    // unless a test says otherwise, so the pre-#0-21 routing tests keep
+    // asserting exactly what they did before.
+    private SlackWorkspaceClient slackWorkspaceClient;
+    private static final SlackWorkspaceClient.SlackWorkspaceInfo WORKSPACE =
+            new SlackWorkspaceClient.SlackWorkspaceInfo("xoxb-test", null, false, null);
+
     private static final String TENANT_ID = "test-tenant";
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final OncallClient.OncallInfo PRIMARY_CONTACT =
@@ -59,9 +68,12 @@ class NotificationRouterTest {
         when(oncallClient.getCurrentOncall(anyString(), any(), anyString()))
                 .thenReturn(Optional.of(PRIMARY_CONTACT));
 
+        slackWorkspaceClient = mock(SlackWorkspaceClient.class);
+        when(slackWorkspaceClient.getWorkspace(TENANT_ID)).thenReturn(Optional.of(WORKSPACE));
+
         router = new NotificationRouter(
                 List.of(emailChannel, slackChannel, smsChannel),
-                oncallClient);
+                oncallClient, slackWorkspaceClient);
     }
 
     @Nested
@@ -253,7 +265,7 @@ class NotificationRouterTest {
             final NotificationRouter routerWithDisabledSms =
                     new NotificationRouter(
                             List.of(emailChannel, slackChannel, disabledSms),
-                            oncallClient);
+                            oncallClient, slackWorkspaceClient);
 
             // when
             final var result = routerWithDisabledSms.route(
@@ -288,7 +300,8 @@ class NotificationRouterTest {
         void setUpRouter() {
             oncallClient = mock(OncallClient.class);
             isolatedRouter = new NotificationRouter(
-                    List.of(emailChannel, slackChannel, smsChannel), oncallClient);
+                    List.of(emailChannel, slackChannel, smsChannel), oncallClient,
+                    slackWorkspaceClient);
         }
 
         @ParameterizedTest
@@ -392,7 +405,7 @@ class NotificationRouterTest {
         void allChannelsDisabled() {
             final NotificationRouter disabledRouter = new NotificationRouter(
                     List.of(new FakeChannel(EMAIL, false), new FakeChannel(SLACK, false),
-                            new FakeChannel(SMS, false)), oncallClient);
+                            new FakeChannel(SMS, false)), oncallClient, slackWorkspaceClient);
 
             final var routing = disabledRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
                     Severity.CRITICAL, "High CPU", null, null);
@@ -411,6 +424,105 @@ class NotificationRouterTest {
             assertThatThrownBy(() -> isolatedRouter.route(INCIDENT_OPENED, INCIDENT_ID,
                     TENANT_ID, Severity.CRITICAL, "High CPU", null, null))
                     .isInstanceOf(OncallLookupUnavailableException.class);
+        }
+    }
+
+    /**
+     * Backlog #0-21: Slack needs the tenant's own workspace. "Not installed" is a
+     * normal skip; "auth-service unavailable" skips only Slack while anything else
+     * can go out, and propagates only when Slack was the sole way to reach the
+     * contact — see {@code SlackWorkspaceLookupUnavailableException}.
+     */
+    @Nested
+    @DisplayName("tenant's Slack workspace (backlog #0-21)")
+    class SlackWorkspace {
+
+        private OncallClient oncallClient;
+        private NotificationRouter workspaceRouter;
+
+        @BeforeEach
+        void setUpRouter() {
+            oncallClient = mock(OncallClient.class);
+            when(oncallClient.getCurrentOncall(anyString(), any(), anyString()))
+                    .thenReturn(Optional.of(PRIMARY_CONTACT));
+            workspaceRouter = new NotificationRouter(
+                    List.of(emailChannel, slackChannel, smsChannel), oncallClient,
+                    slackWorkspaceClient);
+        }
+
+        @Test
+        @DisplayName("no Slack workspace for the tenant: Slack is skipped and reported, email still goes out")
+        void noWorkspaceSkipsSlack() {
+            when(slackWorkspaceClient.getWorkspace(TENANT_ID)).thenReturn(Optional.empty());
+
+            final var routing = workspaceRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null, null);
+
+            assertThat(routing.isUndeliverable()).isFalse();
+            assertThat(routing.requests()).extracting(cr -> cr.channel().channelName())
+                    .containsExactly(EMAIL);
+            assertThat(routing.skippedChannels()).containsExactly(SLACK);
+        }
+
+        @Test
+        @DisplayName("no Slack workspace on a Slack-only event: undeliverable (NO_REACHABLE_CHANNEL) — a real answer, not an outage")
+        void noWorkspaceOnSlackOnlyEvent() {
+            when(slackWorkspaceClient.getWorkspace(TENANT_ID)).thenReturn(Optional.empty());
+
+            final var routing = workspaceRouter.route(INCIDENT_ACKNOWLEDGED, INCIDENT_ID,
+                    TENANT_ID, Severity.CRITICAL, "High CPU", null, null);
+
+            assertThat(routing.isUndeliverable()).isTrue();
+            assertThat(routing.undeliverableReason())
+                    .isEqualTo(UndeliverableReason.NO_REACHABLE_CHANNEL);
+        }
+
+        @Test
+        @DisplayName("auth-service unavailable: only Slack is skipped, email goes out, route() does not throw")
+        void lookupFailureSkipsOnlySlack() {
+            when(slackWorkspaceClient.getWorkspace(TENANT_ID))
+                    .thenThrow(new SlackWorkspaceLookupUnavailableException("down", new RuntimeException()));
+
+            final var routing = workspaceRouter.route(INCIDENT_ESCALATED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null, null);
+
+            assertThat(routing.isUndeliverable()).isFalse();
+            assertThat(routing.requests()).extracting(cr -> cr.channel().channelName())
+                    .containsExactlyInAnyOrder(EMAIL, SMS);
+            assertThat(routing.skippedChannels()).containsExactly(SLACK);
+        }
+
+        @Test
+        @DisplayName("auth-service unavailable on a Slack-only event: the failure propagates — not read as undeliverable")
+        void lookupFailurePropagatesWhenSlackIsTheOnlyChannel() {
+            when(slackWorkspaceClient.getWorkspace(TENANT_ID))
+                    .thenThrow(new SlackWorkspaceLookupUnavailableException("down", new RuntimeException()));
+
+            assertThatThrownBy(() -> workspaceRouter.route(INCIDENT_ACKNOWLEDGED, INCIDENT_ID,
+                    TENANT_ID, Severity.CRITICAL, "High CPU", null, null))
+                    .isInstanceOf(SlackWorkspaceLookupUnavailableException.class);
+        }
+
+        @Test
+        @DisplayName("a contact without a usable Slack id never costs an auth-service lookup")
+        void noLookupWithoutSlackId() {
+            when(oncallClient.getCurrentOncall(anyString(), any(), anyString()))
+                    .thenReturn(Optional.of(new OncallClient.OncallInfo(
+                            "u", "Email Only", "only@acme.com", null, null, "PRIMARY")));
+
+            workspaceRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null, null);
+
+            then(slackWorkspaceClient).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("the workspace is looked up for the notification's own tenant")
+        void lookupIsTenantScoped() {
+            workspaceRouter.route(INCIDENT_OPENED, INCIDENT_ID, TENANT_ID,
+                    Severity.CRITICAL, "High CPU", null, null);
+
+            then(slackWorkspaceClient).should().getWorkspace(TENANT_ID);
         }
     }
 
@@ -437,7 +549,7 @@ class NotificationRouterTest {
                             "+48111111111", "UPRIMARY", "PRIMARY")));
             escalationRouter = new NotificationRouter(
                     List.of(emailChannel, slackChannel, smsChannel),
-                    oncallClient);
+                    oncallClient, slackWorkspaceClient);
         }
 
         private String recipientOn(List<NotificationRouter.ChannelRequest> result,

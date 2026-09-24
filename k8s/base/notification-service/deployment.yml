@@ -46,11 +46,10 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: JWT_SECRET
-            - name: SLACK_BOT_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: app-secrets
-                  key: SLACK_BOT_TOKEN
+            # SLACK_BOT_TOKEN removed (backlog #0-21): each tenant's own bot
+            # token now lives in auth-service's SlackWorkspace, read via
+            # AUTH_SERVICE_URL (app-config) + SlackWorkspaceClient, not a
+            # platform-wide secret here any more.
             - name: SLACK_SIGNING_SECRET
               valueFrom:
                 secretKeyRef:

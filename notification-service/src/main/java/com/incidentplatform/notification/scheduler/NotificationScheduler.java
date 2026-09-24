@@ -1,6 +1,7 @@
 package com.incidentplatform.notification.scheduler;
 
 import com.incidentplatform.notification.client.OncallLookupUnavailableException;
+import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.config.NotificationSchedulerProperties;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.domain.UndeliverableReason;
@@ -175,7 +176,16 @@ public class NotificationScheduler {
             try {
                 notificationService.processEntry(entry);
             } catch (OncallLookupUnavailableException e) {
-                if (handleLookupUnavailable(entry, e)) {
+                if (handleLookupUnavailable(entry, e, "oncall-service",
+                        UndeliverableReason.ONCALL_UNAVAILABLE)) {
+                    leftPending++;
+                }
+            } catch (SlackWorkspaceLookupUnavailableException e) {
+                // Backlog #0-21: only reaches here when Slack was the contact's sole
+                // reachable channel (the router skips Slack otherwise), so holding the
+                // entry delays nothing else. Same retry window as the on-call lookup.
+                if (handleLookupUnavailable(entry, e, "auth-service",
+                        UndeliverableReason.SLACK_WORKSPACE_UNAVAILABLE)) {
                     leftPending++;
                 }
             } catch (Exception e) {
@@ -197,8 +207,8 @@ public class NotificationScheduler {
         }
 
         if (leftPending > 0) {
-            log.warn("Notification outbox: oncall-service is unavailable — {} " +
-                            "entries stay PENDING and are retried for up to {} " +
+            log.warn("Notification outbox: a routing lookup (oncall-service or " +
+                            "auth-service) is unavailable — {} entries stay PENDING and are retried for up to {} " +
                             "from their first failed lookup",
                     leftPending, lookupRetryWindow);
         }
@@ -220,10 +230,20 @@ public class NotificationScheduler {
      * <p>Before #0-19, the outage was read as "nobody on call": the entry was
      * marked SENT and never retried.
      *
+     * <p>Backlog #0-21 reuses the same window for auth-service's Slack-workspace
+     * lookup, in the one case the router lets it through (Slack was the only
+     * reachable channel). Both share {@code first_lookup_failure_at}: one entry
+     * waits on at most one lookup per cycle, and reusing the column avoids a
+     * migration for a second, parallel window.
+     *
+     * @param dependency   the service that could not answer, for logs only
+     * @param giveUpReason recorded when the window is used up
      * @return true if the entry was left PENDING for another attempt
      */
     private boolean handleLookupUnavailable(NotificationQueueEntry entry,
-                                            OncallLookupUnavailableException cause) {
+                                            RuntimeException cause,
+                                            String dependency,
+                                            UndeliverableReason giveUpReason) {
         // Only the first failure is recorded; the entry loaded on later cycles already
         // has it, and writing again would cost a SELECT and a transaction per entry
         // per cycle for nothing.
@@ -244,20 +264,20 @@ public class NotificationScheduler {
         final Duration failingFor = Duration.between(since, Instant.now());
 
         if (failingFor.compareTo(lookupRetryWindow) < 0) {
-            log.debug("oncall-service unavailable — entry stays PENDING: " +
+            log.debug("{} unavailable — entry stays PENDING: " +
                             "incidentId={}, eventType={}, failingFor={}, error={}",
-                    entry.getIncidentId(), entry.getEventType(), failingFor,
+                    dependency, entry.getIncidentId(), entry.getEventType(), failingFor,
                     cause.getMessage());
             return true;
         }
 
-        log.error("oncall-service still unavailable after the retry window — " +
+        log.error("{} still unavailable after the retry window — " +
                         "giving up: incidentId={}, eventType={}, failingFor={}",
-                entry.getIncidentId(), entry.getEventType(), failingFor);
+                dependency, entry.getIncidentId(), entry.getEventType(), failingFor);
 
         try {
             notificationService.markUndeliverable(
-                    entry, UndeliverableReason.ONCALL_UNAVAILABLE);
+                    entry, giveUpReason);
         } catch (Exception e) {
             log.error("Failed to mark queue entry as UNDELIVERABLE: " +
                             "incidentId={}, error={}",

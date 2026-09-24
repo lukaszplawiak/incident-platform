@@ -151,3 +151,11 @@ mfa:
 
   totp:
     issuer: ${MFA_TOTP_ISSUER:IncidentPlatform}
+
+slack:
+  # AES-256-GCM key for encrypting each tenant's Slack bot token at rest
+  # (backlog #0-21). Deliberately separate from mfa.encryption-key — see
+  # AesEncryptionConfig for why. REQUIRED — service will refuse to start
+  # if not set. Generate: openssl rand -base64 32
+  # Set via SLACK_ENCRYPTION_KEY environment variable.
+  encryption-key: ${SLACK_ENCRYPTION_KEY}

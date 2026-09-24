@@ -6,6 +6,8 @@ import com.incidentplatform.notification.channel.NotificationException;
 import com.incidentplatform.notification.channel.SlackNotificationChannel;
 import com.incidentplatform.notification.client.IncidentAckClient;
 import com.incidentplatform.notification.client.OncallClient;
+import com.incidentplatform.notification.client.SlackWorkspaceClient;
+import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.router.NotificationEventTypes;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
@@ -34,6 +36,7 @@ public class SlackActionService {
     private final SlackNotificationChannel slackChannel;
     private final SlackMessageStore messageStore;
     private final OncallClient oncallClient;
+    private final SlackWorkspaceClient slackWorkspaceClient;
     private final ObjectMapper objectMapper;
     private final AuditEventPublisher auditEventPublisher;
 
@@ -41,12 +44,14 @@ public class SlackActionService {
                               SlackNotificationChannel slackChannel,
                               SlackMessageStore messageStore,
                               OncallClient oncallClient,
+                              SlackWorkspaceClient slackWorkspaceClient,
                               ObjectMapper objectMapper,
                               AuditEventPublisher auditEventPublisher) {
         this.incidentAckClient = incidentAckClient;
         this.slackChannel = slackChannel;
         this.messageStore = messageStore;
         this.oncallClient = oncallClient;
+        this.slackWorkspaceClient = slackWorkspaceClient;
         this.objectMapper = objectMapper;
         this.auditEventPublisher = auditEventPublisher;
     }
@@ -152,6 +157,20 @@ public class SlackActionService {
      * happened — see {@link SlackNotificationChannel#updateMessageFallback}'s
      * own Javadoc for the other half of this fix.
      *
+     * <h2>Fixed (backlog #0-21): the ACK update now uses the acknowledging
+     * tenant's own bot token</h2>
+     * This method already carried {@code tenantId} through the whole ACK
+     * round-trip (embedded server-side in the button's own {@code value}
+     * field, which Slack echoes back unmodified) — it just never used it to
+     * select a bot token, so every ACK update posted with the one global
+     * token regardless of which tenant's incident was acknowledged. It now
+     * resolves the tenant's workspace once via {@link SlackWorkspaceClient}
+     * and passes that token to every {@code updateMessageAfterAck} call
+     * below. If no workspace is configured (or auth-service could not be
+     * reached), every channel is treated as failed — the same
+     * {@code failedChannels}/audit-event path used for any other per-channel
+     * update failure, not a special case.
+     *
      * <p>Now: each channel's update is tried independently (one
      * channel's {@link NotificationException} doesn't stop the others
      * from being attempted — same principle {@code NotificationService
@@ -180,25 +199,39 @@ public class SlackActionService {
 
         final List<String> failedChannels = new ArrayList<>();
 
-        if (tryUpdateMessage(channel, messageTs, acknowledgedByName, minimalRequest)) {
-            messageStore.remove(incidentId, channel);
-        } else {
-            failedChannels.add(channel);
-        }
-
+        // Read once regardless of botToken below — used both to attempt every
+        // other channel's update and, if the token can't be resolved, to
+        // report every channel as failed (its size is also part of the
+        // audit event message further down).
         final List<String> otherChannels =
                 messageStore.findAllChannelsForIncident(incidentId);
 
-        for (final String otherChannel : otherChannels) {
-            if (otherChannel.equals(channel)) continue;
+        // Resolved once per ACK, not per channel — same workspace/token for
+        // every message being updated for this incident.
+        final String botToken = resolveBotToken(tenantId, incidentId);
 
-            final String ts = messageStore.find(incidentId, otherChannel).orElse(null);
-            if (ts == null) continue;
-
-            if (tryUpdateMessage(otherChannel, ts, acknowledgedByName, minimalRequest)) {
-                messageStore.remove(incidentId, otherChannel);
+        if (botToken == null) {
+            failedChannels.add(channel);
+            failedChannels.addAll(otherChannels.stream()
+                    .filter(c -> !c.equals(channel)).toList());
+        } else {
+            if (tryUpdateMessage(channel, messageTs, acknowledgedByName, minimalRequest, botToken)) {
+                messageStore.remove(incidentId, channel);
             } else {
-                failedChannels.add(otherChannel);
+                failedChannels.add(channel);
+            }
+
+            for (final String otherChannel : otherChannels) {
+                if (otherChannel.equals(channel)) continue;
+
+                final String ts = messageStore.find(incidentId, otherChannel).orElse(null);
+                if (ts == null) continue;
+
+                if (tryUpdateMessage(otherChannel, ts, acknowledgedByName, minimalRequest, botToken)) {
+                    messageStore.remove(incidentId, otherChannel);
+                } else {
+                    failedChannels.add(otherChannel);
+                }
             }
         }
 
@@ -236,6 +269,36 @@ public class SlackActionService {
     }
 
     /**
+     * The acknowledging tenant's bot token, or null when no message can be
+     * updated. Both "no workspace" and "auth-service unavailable" end the same
+     * way here — every channel is reported as failed through the existing
+     * {@code failedChannels}/audit path — but are logged differently, because
+     * they mean different things to whoever reads the log: a configuration
+     * change (workspace revoked after the message was posted) versus an outage.
+     * The ACK itself has already been recorded in incident-service by this
+     * point; only the cosmetic message update is lost, so there is nothing to
+     * retry here (backlog #0-32 covers per-channel retry in general).
+     */
+    private String resolveBotToken(String tenantId, UUID incidentId) {
+        try {
+            final String botToken = slackWorkspaceClient.getWorkspace(tenantId)
+                    .map(SlackWorkspaceClient.SlackWorkspaceInfo::botToken)
+                    .orElse(null);
+            if (botToken == null) {
+                log.error("No active Slack workspace for tenant — cannot update " +
+                                "any Slack message after ACK: incidentId={}, tenant={}",
+                        incidentId, tenantId);
+            }
+            return botToken;
+        } catch (SlackWorkspaceLookupUnavailableException e) {
+            log.error("auth-service unavailable — cannot update any Slack message " +
+                            "after ACK: incidentId={}, tenant={}, error={}",
+                    incidentId, tenantId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * @return true if the update succeeded, false if it failed after
      *         {@link SlackNotificationChannel}'s own retries were
      *         exhausted (its fallback rethrows {@link NotificationException}
@@ -243,10 +306,11 @@ public class SlackActionService {
      */
     private boolean tryUpdateMessage(String channel, String messageTs,
                                      String acknowledgedByName,
-                                     NotificationRequest request) {
+                                     NotificationRequest request,
+                                     String botToken) {
         try {
             slackChannel.updateMessageAfterAck(
-                    channel, messageTs, acknowledgedByName, request);
+                    channel, messageTs, acknowledgedByName, request, botToken);
             return true;
         } catch (NotificationException e) {
             // Already logged with full detail inside updateMessageFallback —

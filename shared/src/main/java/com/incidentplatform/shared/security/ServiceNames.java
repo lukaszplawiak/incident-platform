@@ -18,6 +18,19 @@ public final class ServiceNames {
     public static final String INCIDENT_SERVICE  = "incident-service";
     public static final String INGESTION_SERVICE = "ingestion-service";
 
+    /**
+     * Added (backlog #0-21/#0-30): auth-service was deliberately never a valid
+     * service-token audience — its {@link JwtAuthFilter} was wired with no
+     * {@code expectedAudience}, so it rejected every service token (see that
+     * class's own Javadoc history). This is the one narrow exception: a
+     * tenant's Slack workspace connection lives in auth-service and
+     * notification-service needs to read it, so auth-service now accepts a
+     * service token minted for exactly this audience, on exactly one
+     * internal endpoint. Not a general reopening — see backlog #0-30 for the
+     * decision and its alternative (Kafka event replication).
+     */
+    public static final String AUTH_SERVICE = "auth-service";
+
     private ServiceNames() {
     }
 }
