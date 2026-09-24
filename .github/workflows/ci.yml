@@ -361,12 +361,15 @@ jobs:
 
       - name: Start the stack
         env:
-          # Only JWT_SECRET and MFA_ENCRYPTION_KEY have no default in
-          # docker-compose.yml — everything else falls back safely for
-          # a smoke test. Dummy CI-only values, never used anywhere
-          # real.
+          # Only JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY
+          # have no default in docker-compose.yml — everything else falls
+          # back safely for a smoke test. Dummy CI-only values, never used
+          # anywhere real. SLACK_ENCRYPTION_KEY (backlog #0-21) is a
+          # different key from MFA_ENCRYPTION_KEY on purpose — auth-service
+          # refuses to start without it.
           JWT_SECRET: ci-smoke-test-secret-not-for-real-use-minimum-64-characters-long-k8s
           MFA_ENCRYPTION_KEY: n8WIymtbGNC8V61F6BVDfbswbkBLJNqY9bi+GYJEt5M=
+          SLACK_ENCRYPTION_KEY: XrKj1e9X/qBW4x1/woM+mZoYIMkRaNap0Qs8Id+ujE8=
         run: |
           docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 300 \
             postgres redis kafka \
