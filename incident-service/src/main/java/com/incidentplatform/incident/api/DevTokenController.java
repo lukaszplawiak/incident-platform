@@ -1,6 +1,7 @@
 package com.incidentplatform.incident.api;
 
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.ReservedTenants;
 import com.incidentplatform.shared.security.SecurityRoles;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -79,6 +80,14 @@ public class DevTokenController {
                     SecurityRoles.ROLE_ADMIN + "," + SecurityRoles.ROLE_RESPONDER
                             + "," + SecurityRoles.ROLE_INGESTOR)
             List<String> roles) {
+
+        // Backlog #0-16: reserved tenant ids (platform-operator, the legacy
+        // "system") are never handed out, not even locally — a dev token must
+        // not be a way into the operator tenant's incidents.
+        if (ReservedTenants.isReserved(tenantId)) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", "tenantId '" + tenantId.trim() + "' is reserved by the platform"));
+        }
 
         final UUID userId = UUID.randomUUID();
         final String email = "dev-user@" + tenantId + ".local";
