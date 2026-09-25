@@ -13,9 +13,11 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -25,15 +27,20 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -63,7 +70,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(AlertIngestionController.class)
 @ContextConfiguration(classes = AlertIngestionControllerSecurityTest.TestApplication.class)
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
+// The shared auto-configuration supplies the real ApiKeyAuthFilter, the no-op
+// TokenRevocationChecker and CORS — @WebMvcTest does not load it on its own.
+@ImportAutoConfiguration(SharedSecurityAutoConfiguration.class)
 @TestPropertySource(properties = {
+        "security.cors.allowed-origins=http://localhost:4200",
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
         "jwt.access-token-ttl=PT15M",
         "jwt.service-token-ttl=PT1H",
@@ -79,11 +90,8 @@ class AlertIngestionControllerSecurityTest {
             "com.incidentplatform.shared.exception"
     })
     static class TestApplication {
-
-        @org.springframework.context.annotation.Bean
-        public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
-            return new JwtAuthFilter(jwtUtils);
-        }
+        // No JwtAuthFilter bean here any more: SecurityConfig declares its own
+        // (backlog #0-16, no service-token audience), and that one is under test.
     }
 
     @Autowired
@@ -107,6 +115,14 @@ class AlertIngestionControllerSecurityTest {
     @MockitoBean
     private ServiceTokenProvider serviceTokenProvider;
 
+    // Replaces RemoteApiKeyLookupService (tested on its own): the real
+    // ApiKeyAuthFilter runs in the real chain, only the introspection answer is
+    // stubbed.
+    @MockitoBean
+    private ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService;
+
+    private static final String RAW_KEY = "ipl_test-integration-key";
+
     private static final String TENANT_ID = "test-tenant";
     private static final UUID USER_ID = UUID.randomUUID();
 
@@ -123,6 +139,8 @@ class AlertIngestionControllerSecurityTest {
         // #28) — default to a plausible IP so tests reaching the rate
         // limiter get a realistic argument, not null.
         given(clientIpResolver.resolve(any())).willReturn("203.0.113.1");
+        given(apiKeyLookupService.lookup(anyString(), any()))
+                .willReturn(new ApiKeyAuthFilter.ApiKeyLookupResult.Invalid());
     }
 
     @AfterEach
@@ -229,16 +247,27 @@ class AlertIngestionControllerSecurityTest {
         }
 
         @Test
-        @DisplayName("200 for ROLE_SERVICE")
-        void returns200ForService() throws Exception {
-            given(alertIngestionService.ingest(any(), any(), any(), any()))
-                    .willReturn(buildSummary());
-
+        @DisplayName("403 for ROLE_SERVICE — backlog #0-16 removed hasRole('SERVICE') from ingest")
+        void returns403ForService() throws Exception {
             mockMvc.perform(post("/api/v1/alerts/prometheus")
                             .with(principal("ROLE_SERVICE"))
                             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                             .content(PROMETHEUS_PAYLOAD))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isForbidden());
+            then(alertIngestionService).should(never()).ingest(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("403 for a purpose-token principal — deny by default on every route")
+        void returns403ForPurposeToken() throws Exception {
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .with(authentication(new UsernamePasswordAuthenticationToken(
+                                    new IntrospectionPrincipal("ingestion-service"), null,
+                                    List.of(new SimpleGrantedAuthority(
+                                            SecurityRoles.API_KEY_INTROSPECTION)))))
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isForbidden());
         }
 
         @Test
@@ -285,6 +314,108 @@ class AlertIngestionControllerSecurityTest {
                             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                             .content(PROMETHEUS_PAYLOAD))
                     .andExpect(status().isForbidden());
+        }
+    }
+
+    // ── POST /{source} — the real ApiKeyAuthFilter in this chain (#0-16) ────
+
+    @Nested
+    @DisplayName("POST /alerts/{source} — Integration API key through the real filter")
+    class IngestWithApiKeyHeader {
+
+        /** What RemoteApiKeyLookupService builds from an introspection answer. */
+        private ApiKeyAuthFilter.ApiKeyLookupResult authenticatedKey(String... scopes) {
+            return new ApiKeyAuthFilter.ApiKeyLookupResult.Authenticated(new UserPrincipal(
+                    USER_ID, "operator-tenant", "api-key:" + USER_ID, List.of(),
+                    List.of(), List.of(), true, List.of(scopes), null));
+        }
+
+        @Test
+        @DisplayName("200 for 'Authorization: ApiKey ipl_...' with alerts:ingest, tenant taken from the key")
+        void apiKeySchemeIsAccepted() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(authenticatedKey(ApiScopes.ALERTS_INGEST));
+            given(alertIngestionService.ingest(any(), any(), any(), any()))
+                    .willReturn(buildSummary());
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isOk());
+
+            then(rateLimitingService).should().tryConsume(eq("operator-tenant"), anyString());
+        }
+
+        @Test
+        @DisplayName("200 for 'Authorization: Bearer ipl_...' — Alertmanager's default scheme")
+        void bearerSchemeIsAccepted() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(authenticatedKey(ApiScopes.ALERTS_INGEST));
+            given(alertIngestionService.ingest(any(), any(), any(), any()))
+                    .willReturn(buildSummary());
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("403 for a valid key without the alerts:ingest scope")
+        void keyWithoutScopeIsForbidden() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(authenticatedKey("incidents:read"));
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("401 + WWW-Authenticate for an unknown or revoked key — the sender must not retry")
+        void invalidKeyIs401() throws Exception {
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isUnauthorized())
+                    .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE,
+                            org.hamcrest.Matchers.startsWith("ApiKey ")));
+            then(alertIngestionService).should(never()).ingest(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("503 + Retry-After when the key cannot be checked — Alertmanager retries 5xx, not 401")
+        void unavailableIs503() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(new ApiKeyAuthFilter.ApiKeyLookupResult.Unavailable(
+                            Duration.ofSeconds(30)));
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(header().string(HttpHeaders.RETRY_AFTER, "30"));
+        }
+
+        @Test
+        @DisplayName("429 + Retry-After when the client IP has too many failed authentications")
+        void throttledIs429() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(new ApiKeyAuthFilter.ApiKeyLookupResult.Throttled(
+                            Duration.ofSeconds(60)));
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isTooManyRequests())
+                    .andExpect(header().string(HttpHeaders.RETRY_AFTER, "60"));
         }
     }
 
