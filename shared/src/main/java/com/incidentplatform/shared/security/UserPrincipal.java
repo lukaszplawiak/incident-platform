@@ -38,8 +38,11 @@ public record UserPrincipal(
 
         /**
          * UUIDs of teams the user belongs to.
-         * Populated from JWT {@code teamIds} claim. Empty for API key principals
-         * (team membership not relevant for machine-to-machine calls).
+         * Populated from JWT {@code teamIds} claim. For an Integration API key
+         * principal: the team of the key's Integration (at most one), which
+         * ingestion-service reads to route the alert; empty if it has none.
+         * Corrected (backlog #0-16): this said API key principals always have
+         * no teams, which neither API key lookup does.
          */
         List<UUID> teamIds,
 

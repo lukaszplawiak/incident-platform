@@ -18,6 +18,10 @@ public final class ErrorCodes {
     public static final String VALIDATION_FAILED        = "VALIDATION_FAILED";
     public static final String INVALID_PARAMETER_TYPE   = "INVALID_PARAMETER_TYPE";
     public static final String UNAUTHORIZED             = "UNAUTHORIZED";
+    /** Backlog #0-16: the credential could not be checked right now; retry (503). */
+    public static final String AUTHENTICATION_UNAVAILABLE = "AUTHENTICATION_UNAVAILABLE";
+    /** Backlog #0-16: too many failed API key authentications from this client (429). */
+    public static final String TOO_MANY_FAILED_AUTHENTICATIONS = "TOO_MANY_FAILED_AUTHENTICATIONS";
     public static final String FORBIDDEN                = "FORBIDDEN";
     public static final String OPTIMISTIC_LOCK_CONFLICT = "OPTIMISTIC_LOCK_CONFLICT";
     public static final String INTERNAL_SERVER_ERROR    = "INTERNAL_SERVER_ERROR";

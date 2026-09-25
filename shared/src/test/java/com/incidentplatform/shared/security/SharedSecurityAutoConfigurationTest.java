@@ -55,6 +55,12 @@ class SharedSecurityAutoConfigurationTest {
         UnauthorizedEntryPoint unauthorizedEntryPoint() {
             return new UnauthorizedEntryPoint(new ObjectMapper());
         }
+
+        /** Every service has one (JacksonAutoConfiguration); the ApiKeyAuthFilter bean needs it. */
+        @Bean
+        ObjectMapper objectMapper() {
+            return new ObjectMapper();
+        }
     }
 
     /**

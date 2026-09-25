@@ -53,6 +53,12 @@ public final class SecurityRoles {
     public static final String ROLE_RESPONDER = "ROLE_RESPONDER";
     public static final String ROLE_INGESTOR  = "ROLE_INGESTOR";
     public static final String ROLE_SERVICE   = "ROLE_SERVICE";
+    /**
+     * Authority of an {@link IntrospectionPrincipal} (backlog #0-16). Never in a
+     * {@code roles} claim: {@link JwtAuthFilter} grants it from a token's
+     * {@code purpose} claim, and only where that purpose is accepted.
+     */
+    public static final String ROLE_API_KEY_INTROSPECTION = "ROLE_API_KEY_INTROSPECTION";
 
     // ── Short form (no prefix) ───────────────────────────────────────────
     // The standard choice for Spring Security's own hasRole()/hasAnyRole(),
@@ -65,6 +71,7 @@ public final class SecurityRoles {
     public static final String RESPONDER = "RESPONDER";
     public static final String INGESTOR  = "INGESTOR";
     public static final String SERVICE   = "SERVICE";
+    public static final String API_KEY_INTROSPECTION = "API_KEY_INTROSPECTION";
 
     private SecurityRoles() {}
 }

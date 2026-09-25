@@ -38,6 +38,8 @@ import java.util.regex.Pattern;
  *   <li><b>Service token</b> — issued internally by {@link ServiceTokenProvider}
  *       for inter-service calls. Longer TTL
  *       ({@code jwt.service-token-ttl}, default PT1H).</li>
+ *   <li><b>Purpose token</b> — a service token for one operation that acts for
+ *       no tenant ({@link #generatePurposeToken}, backlog #0-16).</li>
  * </ul>
  *
  * <h2>Security</h2>
@@ -60,13 +62,7 @@ public class JwtUtils {
     public static final String CLAIM_TEAM_IDS     = "teamIds";
     public static final String CLAIM_MANAGED_TEAM_IDS = "managedTeamIds";
     public static final String CLAIM_SESSION_ID   = "sessionId";
-
-    /**
-     * Tenant id of tokens that act for no real tenant (the Alertmanager
-     * ingestor token). Named so that the choice is visible at the call
-     * site instead of being a string literal buried in token generation.
-     */
-    public static final String SYSTEM_TENANT_ID = "system";
+    public static final String CLAIM_PURPOSE      = "purpose";
 
     /**
      * Shape accepted for the tenant id of a <em>service</em> token: 1-100
@@ -233,8 +229,9 @@ public class JwtUtils {
      * {@link ServicePrincipal}). Every tenant-scoped query on the receiving
      * side is filtered by the tenant from the token, so a call for a real
      * tenant needs that tenant in the signed claim — not in a header, which
-     * no filter reads. Callers that genuinely act for no tenant (the
-     * Alertmanager token) pass {@link #SYSTEM_TENANT_ID} explicitly.
+     * no filter reads. A call that genuinely acts for no tenant uses a purpose
+     * token instead ({@link #generatePurposeToken}, backlog #0-16); the
+     * "system" tenant constant the old Alertmanager token used is gone.
      *
      * <p>The {@code aud} claim names the service the token is for, and
      * {@link JwtAuthFilter} accepts a service token only where {@code aud}
@@ -279,6 +276,64 @@ public class JwtUtils {
                 "tenantId={}, expiresAt={}", serviceName, audience, tenantId, expiration);
 
         return token;
+    }
+
+    /**
+     * Generates a purpose-scoped service token (backlog #0-16): valid for one
+     * operation ({@code purpose}, one of {@link TokenPurposes}) on one target
+     * service ({@code aud}), acting for <em>no</em> tenant. TTL is
+     * {@code jwt.service-token-ttl}, like other service tokens.
+     *
+     * <p>It deliberately has neither a {@code tenantId}, a {@code serviceName}
+     * nor a {@code roles} claim, so {@link JwtAuthFilter} can never take it
+     * through the service-token or the user branch: it is authenticated only
+     * by the purpose branch, only in a service that accepts that purpose, and
+     * becomes an {@link IntrospectionPrincipal}. The caller is in {@code sub}.
+     * It carries a {@code jti}, so it is revocable once revocation is checked
+     * outside auth-service (backlog #0-3).
+     *
+     * @throws IllegalArgumentException if any argument is blank
+     */
+    public String generatePurposeToken(String serviceName, String purpose,
+                                       String audience) {
+        if (serviceName == null || serviceName.isBlank()) {
+            throw new IllegalArgumentException("serviceName must not be blank");
+        }
+        if (purpose == null || purpose.isBlank()) {
+            throw new IllegalArgumentException("purpose must not be blank");
+        }
+        if (audience == null || audience.isBlank()) {
+            throw new IllegalArgumentException("audience must not be blank");
+        }
+
+        final Instant now        = Instant.now();
+        final Instant expiration = now.plus(properties.serviceTokenTtl());
+
+        final String token = Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .subject(serviceName)
+                .audience().add(audience).and()
+                .claim(CLAIM_PURPOSE, purpose)
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(expiration))
+                .signWith(secretKey)
+                .compact();
+
+        log.debug("Purpose token generated: service={}, purpose={}, audience={}, " +
+                "expiresAt={}", serviceName, purpose, audience, expiration);
+
+        return token;
+    }
+
+    /**
+     * Extracts the {@code purpose} claim. Present only on purpose-scoped
+     * service tokens ({@link #generatePurposeToken}).
+     */
+    public Optional<String> extractPurpose(Claims claims) {
+        final String purpose = claims.get(CLAIM_PURPOSE, String.class);
+        return purpose == null || purpose.isBlank()
+                ? Optional.empty()
+                : Optional.of(purpose);
     }
 
     /**

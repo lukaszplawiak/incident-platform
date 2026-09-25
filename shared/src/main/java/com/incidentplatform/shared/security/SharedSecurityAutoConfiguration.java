@@ -1,11 +1,18 @@
 package com.incidentplatform.shared.security;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.authorization.AuthenticatedAuthorizationManager;
+import org.springframework.security.authorization.AuthorizationDecision;
+import org.springframework.security.authorization.AuthorizationManager;
+import org.springframework.security.authorization.AuthorizationResult;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -17,6 +24,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.List;
+import java.util.function.Supplier;
 
 /**
  * Auto-configuration that registers a default {@link SecurityFilterChain}
@@ -110,24 +118,27 @@ public class SharedSecurityAutoConfiguration {
     };
 
     /**
-     * No-op API key lookup — used by all services except auth-service.
-     * auth-service provides its own {@code ApiKeyLookupServiceImpl} bean
-     * which overrides this via {@code @ConditionalOnMissingBean}.
-     *
-     * <p>Other services currently reject all API key requests with 401.
-     * Future: API gateway pre-validates keys before routing to services.
+     * No-op API key lookup — used by every service that does not validate API
+     * keys: every key is {@code Invalid}, so a request presenting one gets 401.
+     * auth-service ({@code ApiKeyLookupServiceImpl}, its own table) and
+     * ingestion-service ({@code RemoteApiKeyLookupService}, introspection into
+     * auth-service, backlog #0-16) provide their own bean, and this one backs
+     * off via {@code @ConditionalOnMissingBean}. Corrected (backlog #0-16):
+     * this said a future API gateway would validate keys; the decision taken
+     * is introspection by the service that needs it (#0-30 pattern).
      */
     @Bean
     @ConditionalOnMissingBean(ApiKeyAuthFilter.ApiKeyLookupService.class)
     public ApiKeyAuthFilter.ApiKeyLookupService noOpApiKeyLookupService() {
-        return rawKey -> java.util.Optional.empty();
+        return (rawKey, request) -> new ApiKeyAuthFilter.ApiKeyLookupResult.Invalid();
     }
 
     @Bean
     @ConditionalOnMissingBean(ApiKeyAuthFilter.class)
     public ApiKeyAuthFilter apiKeyAuthFilter(
-            ApiKeyAuthFilter.ApiKeyLookupService lookupService) {
-        return new ApiKeyAuthFilter(lookupService);
+            ApiKeyAuthFilter.ApiKeyLookupService lookupService,
+            ObjectMapper objectMapper) {
+        return new ApiKeyAuthFilter(lookupService, objectMapper);
     }
 
     /**
@@ -196,9 +207,54 @@ public class SharedSecurityAutoConfiguration {
                 .addFilterBefore(apiKeyAuthFilter, JwtAuthFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(PUBLIC_PATHS).permitAll()
-                        .anyRequest().authenticated()
+                        .anyRequest().access(authenticatedExceptPurposeTokens())
                 )
                 .build();
+    }
+
+    /**
+     * {@code authenticated()}, except for an {@link IntrospectionPrincipal}
+     * (backlog #0-16). Use it for a chain's {@code anyRequest()} in place of
+     * {@code authenticated()}.
+     *
+     * <p>A purpose token acts for no tenant and is valid for exactly one
+     * operation. Spring Security's {@code authenticated()} would admit it to
+     * every route that has no stricter rule, so the one route that needs it
+     * allows {@link SecurityRoles#API_KEY_INTROSPECTION} explicitly and every
+     * other route falls through to this rule: deny by default rather than
+     * relying on each controller to fail on a principal it does not expect
+     * (the concern of backlog #0-14). Only auth-service accepts purpose tokens
+     * today; using this in the default chain as well costs nothing and keeps
+     * the rule true if another service ever accepts one.
+     */
+    public static AuthorizationManager<RequestAuthorizationContext>
+            authenticatedExceptPurposeTokens() {
+        final AuthenticatedAuthorizationManager<RequestAuthorizationContext> authenticated =
+                AuthenticatedAuthorizationManager.authenticated();
+        return new AuthorizationManager<>() {
+
+            @Override
+            public AuthorizationResult authorize(Supplier<Authentication> authentication,
+                                                 RequestAuthorizationContext context) {
+                if (isPurposeToken(authentication.get())) {
+                    return new AuthorizationDecision(false);
+                }
+                return authenticated.authorize(authentication, context);
+            }
+
+            /** Required by the interface in Spring Security 6.x; delegates. */
+            @Override
+            @SuppressWarnings({"deprecation", "removal"})
+            public AuthorizationDecision check(Supplier<Authentication> authentication,
+                                               RequestAuthorizationContext context) {
+                return (AuthorizationDecision) authorize(authentication, context);
+            }
+        };
+    }
+
+    private static boolean isPurposeToken(Authentication authentication) {
+        return authentication != null
+                && authentication.getPrincipal() instanceof IntrospectionPrincipal;
     }
 
     /**
