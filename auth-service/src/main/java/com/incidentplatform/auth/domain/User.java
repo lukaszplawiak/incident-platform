@@ -40,7 +40,7 @@ import java.util.UUID;
  * historical references (audit logs, incident assignments) remain valid.
  * Anonymization is <strong>irreversible</strong>.
  *
- * <h2>Data Vault TODO</h2>
+ * <h2>Data Vault TODO (backlog #0-48)</h2>
  * The current approach stores PII (email, password_hash) directly on
  * this entity. A cleaner GDPR solution is the Data Vault pattern:
  * <pre>
@@ -69,9 +69,9 @@ public class User {
     @Column(name = "tenant_id", nullable = false)
     private String tenantId;
 
-    // TODO (Data Vault): email and password_hash should live in a separate
-    // personal_data table to enable clean GDPR erasure without in-place
-    // anonymization. See class Javadoc for details.
+    // TODO (backlog #0-48, Data Vault): email and password_hash should live
+    // in a separate personal_data table to enable clean GDPR erasure without
+    // in-place anonymization. See class Javadoc for details.
     @Column(name = "email", nullable = false)
     private String email;
 
@@ -253,7 +253,7 @@ public class User {
      * ({@code TeamMemberRepository.deleteByUserId()}) before calling this
      * method, as {@code TeamMember} is not cascaded from User.
      *
-     * <h3>Data Vault TODO</h3>
+     * <h3>Data Vault TODO (backlog #0-48)</h3>
      * With the Data Vault pattern this method would be replaced by a single
      * {@code DELETE FROM personal_data WHERE user_id = ?} — no risk of
      * residual PII, no in-place replacement needed.
