@@ -22,7 +22,8 @@
 # Alertmanager does NOT expand environment variables. Everything dynamic comes
 # from *_file fields read at notification time, from ./secrets (gitignored),
 # mounted read-only at /etc/alertmanager/secrets:
-#   deadmans-switch-url    URL the Watchdog is POSTed to every minute. Locally:
+#   deadmans-switch-url    URL the Watchdog is POSTed to about every 2 minutes
+#                          (see route 1). Locally:
 #                          copy docker/deadmans-switch-url.example. In a real
 #                          deployment: a healthchecks.io / Dead Man's Snitch /
 #                          Grafana IRM heartbeat URL, which pages when pings stop.
@@ -49,8 +50,11 @@ route:
   repeat_interval: 4h
 
   routes:
-    # 1. Heartbeat. Sent every minute; repeat_interval is rounded up to a
-    #    multiple of group_interval, so both are 1m. No continue: the Watchdog
+    # 1. Heartbeat. repeat_interval is rounded up to a multiple of
+    #    group_interval, so both are 1m; a repeat goes out only on a
+    #    group_interval tick once repeat_interval has passed, which in practice
+    #    is every other tick (observed: about every 2 minutes). A real dead
+    #    man's switch needs a period above that. No continue: the Watchdog
     #    must never reach ingestion-service.
     - matchers:
         - alertname = "Watchdog"
