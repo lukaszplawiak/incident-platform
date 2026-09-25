@@ -10,10 +10,15 @@ import com.incidentplatform.auth.domain.TeamRole;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.domain.UserRole;
 import com.incidentplatform.auth.dto.AcceptInviteRequest;
+import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.dto.ResetPasswordRequest;
+import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
+import com.incidentplatform.auth.service.AesEncryptionService;
 import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.InviteService;
+import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.PasswordService;
+import com.incidentplatform.auth.service.TotpService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
 import jakarta.persistence.EntityManager;
@@ -21,6 +26,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -33,6 +39,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -135,10 +145,16 @@ class AuthRepositoryIntegrationTest {
     @Autowired private InviteService inviteService;
     @Autowired private PasswordService passwordService;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private MfaService mfaService;
+    @Autowired private TotpService totpService;
+    @Autowired @Qualifier("mfaEncryptionService") private AesEncryptionService mfaEncryptionService;
 
     // The service-level tests (backlog #0-50) publish audit events; this
     // context has no Kafka, and what is published is not under test here.
     @MockitoBean private AuditEventPublisher auditEventPublisher;
+    // MFA lockout state lives in Redis, which this context does not have;
+    // an unconfigured mock means "not locked", and lockout is not under test.
+    @MockitoBean private BruteForceProtectionService bruteForceProtectionService;
 
     private static final String TENANT_ID = "test-tenant";
 
@@ -287,7 +303,8 @@ class AuthRepositoryIntegrationTest {
      * {@code LazyInitializationException} — accept-invite, reset-password
      * and refresh rotation all failed on a real database, while the service
      * unit tests (repositories mocked) passed. MFA goes through the same
-     * {@code consumeToken} path.
+     * {@code consumeToken} path; its test needed backlog #0-51 first, since
+     * MFA tokens could not be stored at all.
      *
      * <p>Each test flushes and clears after its setup, so the service loads
      * the token (and its lazy {@code User}) from the database exactly as a
@@ -360,6 +377,97 @@ class AuthRepositoryIntegrationTest {
             assertThat(result.rawRefreshToken()).isNotEqualTo(rawRefresh);
             assertThatThrownBy(() -> authTokenService.rotateRefreshToken(rawRefresh))
                     .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("MFA verification with a TOTP code logs the user in and records the time step (backlog #0-51)")
+        void mfaVerificationWorks() throws Exception {
+            final User user = persistUser("mfa@example.com", List.of("ROLE_RESPONDER"));
+            final String secret = totpService.generateSecret();
+            user.storePendingMfaSecret(mfaEncryptionService.encrypt(secret));
+            user.enableMfa();
+            userRepository.save(user);
+            final String rawMfaToken = authTokenService.generateMfaSessionToken(user, TENANT_ID);
+            startFreshRequest();
+
+            final LoginResponse response =
+                    mfaService.verifyMfaToken(rawMfaToken, currentTotpCode(secret));
+            entityManager.flush();
+
+            assertThat(response.accessToken()).isNotBlank();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT mfa_last_used_time_step FROM users WHERE id = ?",
+                    Long.class, user.getId())).isNotNull();
+            assertThatThrownBy(() -> authTokenService.consumeToken(
+                    rawMfaToken, AuthToken.Type.MFA_SESSION))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        /**
+         * RFC 6238 (HMAC-SHA1, 30 s step, 6 digits), written independently of
+         * {@code TotpService} so this test does not verify the service against
+         * itself. The service accepts ±1 step, so a step boundary between
+         * computing and verifying the code does not make the test flaky.
+         */
+        private String currentTotpCode(String base32Secret) throws Exception {
+            final long timeStep = Instant.now().getEpochSecond() / 30;
+            final Mac mac = Mac.getInstance("HmacSHA1");
+            mac.init(new SecretKeySpec(base32Decode(base32Secret), "RAW"));
+            final byte[] hash = mac.doFinal(ByteBuffer.allocate(8).putLong(timeStep).array());
+            final int offset = hash[hash.length - 1] & 0x0F;
+            final int binary = ((hash[offset] & 0x7F) << 24)
+                    | ((hash[offset + 1] & 0xFF) << 16)
+                    | ((hash[offset + 2] & 0xFF) << 8)
+                    | (hash[offset + 3] & 0xFF);
+            return String.format("%06d", binary % 1_000_000);
+        }
+
+        /** RFC 4648 base32, no padding — the alphabet TOTP secrets use. */
+        private byte[] base32Decode(String base32) {
+            final String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+            final ByteArrayOutputStream out = new ByteArrayOutputStream();
+            int buffer = 0;
+            int bits = 0;
+            for (final char c : base32.toUpperCase().toCharArray()) {
+                buffer = (buffer << 5) | alphabet.indexOf(c);
+                bits += 5;
+                if (bits >= 8) {
+                    out.write((buffer >> (bits - 8)) & 0xFF);
+                    bits -= 8;
+                }
+            }
+            return out.toByteArray();
+        }
+    }
+
+    /**
+     * Backlog #0-51: {@code chk_auth_token_type} listed three token types
+     * while {@link AuthToken.Type} had five, so every MFA token INSERT failed
+     * on a real database and MFA login was a 500. Storing one token of every
+     * enum value keeps the enum and the constraint in step: adding a type
+     * without widening the constraint in a migration fails here.
+     */
+    @Nested
+    @DisplayName("AuthToken types vs. chk_auth_token_type (backlog #0-51)")
+    class TokenTypes {
+
+        @Test
+        @DisplayName("a token of every AuthToken.Type can be stored")
+        void everyTypeCanBeStored() {
+            final User user = persistUser("types@example.com", List.of("ROLE_RESPONDER"));
+
+            for (final AuthToken.Type type : AuthToken.Type.values()) {
+                authTokenRepository.saveAndFlush(AuthToken.create(
+                        user, TENANT_ID, "hash-type-" + type, type,
+                        Instant.now().plusSeconds(3600)));
+            }
+
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT type FROM auth_tokens WHERE user_id = ?",
+                    String.class, user.getId()))
+                    .containsExactlyInAnyOrderElementsOf(
+                            java.util.Arrays.stream(AuthToken.Type.values())
+                                    .map(Enum::name).toList());
         }
     }
 
