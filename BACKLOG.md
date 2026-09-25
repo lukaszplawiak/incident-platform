@@ -35,7 +35,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-13](#0-13-asymmetric-service-tokens-or-mtls-for-service-identity) | Asymmetric service tokens or mTLS for service identity | design | Medium | Open |
 | [0-14](#0-14-by-slack-is-open-to-any-authenticated-role) | `GET /by-slack/{id}` is open to any authenticated role | tech-debt | Low | Open |
 | [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
-| [0-16](#0-16-decide-the-alertmanager-service-token-tenant-role-and-lifetime) | Decide the Alertmanager service token: tenant, role, lifetime | design | High | Open |
 | [0-17](#0-17-alert-on-service_client_fallback_totalreasonauth) | Alert on `service_client_fallback_total{reason="auth"}` | tech-debt | Medium | Open |
 | [0-20](#0-20-tenant-owned-fallback-contact) | Tenant-owned fallback contact | design | Medium | Open |
 | [0-22](#0-22-the-operator-alert-is-email-only) | The operator alert is email only | tech-debt | Low | Open |
@@ -50,6 +49,16 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-34](#0-34-servicetokenprovider-cache-has-no-metrics) | `ServiceTokenProvider` cache has no metrics | tech-debt | Low | Open |
 | [0-35](#0-35-slack-install-via-oauth-add-to-slack-brings-back-ack-via-slack) | Slack install via OAuth ("Add to Slack") brings back ACK via Slack | design | Medium | Open |
 | [0-36](#0-36-nothing-checks-entity-index-annotations-against-the-real-schema) | Nothing checks entity `@Index` annotations against the real schema | tech-debt | Low | Open |
+| [0-37](#0-37-ingest-rate-limiter-answers-429-which-alertmanager-drops-without-retry) | Ingest rate limiter answers 429, which Alertmanager drops without retry | design | Medium | Open |
+| [0-38](#0-38-integration-key-format-has-no-checksum-and-a-separator-inside-its-alphabet) | Integration key format has no checksum and a separator inside its alphabet | tech-debt | Low | Open |
+| [0-39](#0-39-kafka-tenant-resolution-no-headerpayload-match-check-producers-without-the-tenant-header) | Kafka tenant resolution: no header/payload match check, producers without the tenant header | tech-debt | Medium | Open |
+| [0-40](#0-40-dead-letter-topics-have-no-consumer-or-replay-tooling) | Dead-letter topics have no consumer or replay tooling | design | Medium | Open |
+| [0-41](#0-41-teamid-from-event-payloads-is-not-validated-against-the-tenants-teams) | `teamId` from event payloads is not validated against the tenant's teams | design | Low | Open |
+| [0-42](#0-42-kubernetes-mail_host-points-at-a-mailhog-that-does-not-exist) | Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist | bug | Low | Open |
+| [0-43](#0-43-api-key-introspection-can-be-amplified-from-many-ips) | API key introspection can be amplified from many IPs | design | Low | Open |
+| [0-44](#0-44-concurrent-cache-misses-for-one-api-key-each-call-auth-service) | Concurrent cache misses for one API key each call auth-service | tech-debt | Low | Open |
+| [0-45](#0-45-api-key-usage-write-holds-a-second-auth-service-db-connection) | API key usage write holds a second auth-service DB connection | tech-debt | Low | Open |
+| [0-46](#0-46-personal-api-keys-can-be-granted-scopes-their-owners-role-does-not-allow) | Personal API keys can be granted scopes their owner's role does not allow | bug | Low | Open |
 
 ---
 
@@ -243,60 +252,17 @@ real service token to this endpoint.
 
 ---
 
-### 0-16. Decide the Alertmanager service token: tenant, role, lifetime
-
-**Type:** design · **Priority:** High · **Status:** Open
-
-**Context.** Alertmanager is part of the optional local monitoring stack (README "Step 5"; it is not
-deployed in `k8s/`). It posts to `/api/v1/alerts/prometheus` with a 30-day JWT that
-`AlertManagerTokenRefresher` and `scripts/generate-alertmanager-token.sh` mint with
-`tenantId = "system"`, `ROLE_SERVICE` and (since backlog #0-11) `aud = ingestion-service`. Before #0-11
-`JwtAuthFilter` rejected that token, so Alertmanager never authenticated; now it does.
-
-`system` is intentional: four rules in `docker/prometheus.rules.yml` about the platform itself
-(`IpRateLimitExceeded`, `IncidentServiceDown`, `KafkaConsumerLag*`) carry `tenantId: system`. So the
-question is not "which tenant?" but how to make `system` a real operator tenant and whether a service
-token is the right credential for an external alert source.
-
-**Findings (by reading the code, not run).**
-- A `tenantId` label does not choose the tenant: the normalizer copies labels into metadata and the
-  tenant comes only from the caller's token. The misleading comment in `prometheus.rules.yml` is fixed.
-- No `system` tenant is defined anywhere: no seed, migration, users or on-call. In development you can
-  enter it with `/dev/token?tenantId=system`; otherwise nobody owns those incidents.
-- The name is not reserved: tenant ids are free-form strings.
-- The token is `ROLE_SERVICE`, and ingest accepts `hasRole('SERVICE')`, so any service token minted for
-  the target tenant can post alerts, not only Alertmanager's. The script's comment says `ROLE_INGESTOR`.
-- The token has no `jti` (it cannot be revoked) and lives 30 days.
-
-**Options.** (1) Keep `system`: reserve the name and give that tenant users and on-call.
-(2) Narrow the role to ingest only. (3) Replace the JWT with an Integration API key
-(`Authorization: ApiKey ipl_<prefix>.<secret>`, scope `alerts:ingest`, per tenant, revocable);
-`ApiKeyAuthFilter` already reads that header, and Prometheus documents `authorization.type` as
-configurable, which still has to be verified against the Alertmanager version in `docker-compose.yml`.
-Note for (3): `ApiKeyAuthFilter` is wired only in auth-service today — ingestion-service would need either
-that filter plus a way to validate the key, which lives in auth-service, or an HTTP lookup into
-auth-service. How another service reads auth-service-owned data is decided once in backlog #0-30 (Done, PR #422:
-narrow HTTP pull with a service token, `aud=auth-service`, recorded in `.ai/context/project.md`); build on that
-instead of re-deciding it here.
-(4) Take the tenant from the alert label: rejected in review, since whoever writes the rules would
-choose the tenant.
-
-**Deliverable.** A recorded decision, then an implementation item. Backlog #0-1 is done, so this is ready to revisit. Related:
-backlog #0-13, #0-17.
-
----
-
 ### 0-17. Alert on `service_client_fallback_total{reason="auth"}`
 
 **Type:** tech-debt · **Priority:** Medium · **Status:** Open
 
 **Problem.** Fail-open clients count every fallback in `service.client.fallback{client,target,reason}`
 (backlog #0-11), and `reason="auth"` (401/403) is a misconfiguration, not an outage. Nothing alerts on
-it. `docker/prometheus.rules.yml` is not the place yet: its alerts reach ingestion through Alertmanager and
-become incidents of the tenant in Alertmanager's token (currently `system`), so an alert about the
-platform itself depends on how that operator tenant is set up in backlog #0-16.
-Also: `service.client.fallback` does not say which operation fell back (for example a target lookup or a PRIMARY lookup); an
-`operation` tag needs a change in `shared`.
+it. Also: `service.client.fallback` does not say which operation fell back (for example a target lookup or a PRIMARY
+lookup); an `operation` tag needs a change in `shared`.
+**Unblocked by #0-16 (Done):** a rule in `docker/prometheus.rules.yml` with `scope: platform` now reaches the
+operator — by email if `severity: critical` (out of band, `docker/alertmanager.yml`), and as an incident of the
+reserved `platform-operator` tenant in any case. Earlier it would have become an incident of the unowned `system` tenant.
 
 ---
 
@@ -614,6 +580,177 @@ risk, but readers lose the at-a-glance list.
 **Approach.** (1), added to each service's existing Postgres integration test, or a small shared test helper
 in `shared`'s test utilities if one fits.
 
+
+---
+
+### 0-37. Ingest rate limiter answers 429, which Alertmanager drops without retry
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found while researching #0-16, not run)
+
+**Problem.** `AlertIngestionController` answers 429 when the tenant or IP bucket is empty (around line 199).
+Alertmanager's webhook notifier retries only network errors and 5xx and drops every 4xx, 429 included
+(`notify/util.go`, `notify/webhook/webhook.go` in prometheus/alertmanager; the PagerDuty/Opsgenie notifiers add 429
+to their retry codes, the webhook one does not). A tenant over its limit therefore loses its pages silently until
+the next group flush, which is the failure the platform exists to prevent.
+
+**Decide.** (1) 503 + `Retry-After` for webhook sources, so the sender retries within its flush window. (2) A limit
+that does not reject per request (queue, or shed low severities first). (3) Keep 429 and document the loss.
+Related: the response-code contract from #0-16 (a definite "no" is 4xx, "don't know / try later" is 503).
+
+---
+
+### 0-38. Integration key format has no checksum and a separator inside its alphabet
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open
+
+**Problem.** `ApiKeyHasher` produces `ipl_` + a base64url body. `_` and `-` are part of that alphabet, so the
+separator can also appear inside the body (GitHub chose `_` for its token prefixes because it is not in their
+body alphabet). There is no checksum, so a malformed key cannot be rejected without a lookup, and secret
+scanning (GitHub's partner program asks for a unique prefix, high entropy and a 32-bit checksum) is weaker.
+Entropy (24 random bytes, 192 bits) is fine.
+
+**Work.** A new format, e.g. `ipl_` + base62 body + 6-character CRC32. Accept both formats during a transition.
+Stored hashes need no migration, because the hash covers the full raw key.
+
+**Acceptance.** New keys carry a checksum; a key with a bad checksum gets 401 without a lookup.
+
+---
+
+### 0-39. Kafka tenant resolution: no header/payload match check, producers without the tenant header
+
+**Type:** tech-debt · **Priority:** Medium · **Status:** Open (found by code reading, not run)
+
+**Problem.** `TenantKafkaRecordResolver` takes `X-Tenant-Id` first and falls back to the payload `tenantId`,
+without checking that the two agree when both are present. `AuditEventConsumer` ignores the header and trusts the
+payload. auth-service, notification-service and postmortem-service do not configure
+`TenantKafkaProducerInterceptor`, and `AuditEventKafkaSender` / `DeadLetterPublisher` do not stamp the header
+themselves. No authorization decision depends on this today; it is a consistency gap in the Kafka leg of the
+tenant-isolation invariant.
+
+**Work.** Every producer stamps the header; the resolver dead-letters a record whose header and payload tenant
+differ; `AuditEventConsumer` resolves through the resolver like the other consumers.
+
+---
+
+### 0-40. Dead-letter topics have no consumer or replay tooling
+
+**Type:** design · **Priority:** Medium · **Status:** Open
+
+**Problem.** `alerts.dead-letter`, `incidents.dead-letter`, `escalation.dead-letter`, `notification.dead-letter`
+and `postmortem.dead-letter` are written by `DeadLetterPublisher` and read by nothing. A dead-lettered alert or
+lifecycle event is lost unless someone reads the topic by hand, and nothing says that it happened.
+
+**Decide.** (1) Alert on dead-letter growth (a metric plus a rule routed to the operator route from #0-16).
+(2) A replay tool or endpoint, and who may use it: replaying a record re-enters tenant data into the pipeline, so
+it needs the same per-record tenant resolution as the original consumers.
+
+---
+
+### 0-41. `teamId` from event payloads is not validated against the tenant's teams
+
+**Type:** design · **Priority:** Low · **Status:** Open (found by code reading, not run)
+
+**Problem.** `teamId` travels in `UnifiedAlertDto` and every `IncidentEvent` and is used for routing
+(`IncidentCreationService`, escalation-service's `IncidentEventConsumer`, notification-service's
+`NotificationRouter`) without checking that the team belongs to the tenant. The oncall lookups it feeds are
+tenant-scoped, so a wrong id finds nobody rather than another tenant's people; the effect is a missed PRIMARY
+lookup, not a leak.
+
+**Decide.** Validate once where the id enters the platform (at incident creation, pulling from auth-service per the
+#0-30 pattern), or accept and document it next to #0-12.
+
+
+---
+
+### 0-42. Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+
+**Problem.** `k8s/base/infrastructure/app-config.yml` sets `MAIL_HOST: "mailhog"` and the dev overlay's comment says
+the operator email is "caught by the same mailhog", but no manifest deploys a mail server. auth-service also requires
+SMTP auth and STARTTLS (`mail.smtp.auth: true`, `starttls.required: true`) and notification-service requires auth,
+so neither can send to a plain dev catcher. docker-compose had both gaps until backlog #0-16 added Mailpit and
+overrode those properties with `SPRING_MAIL_PROPERTIES_*` environment variables for the compose stack.
+
+**Work.** Deploy Mailpit in the dev overlay with the same overrides (or point `MAIL_HOST` at a real relay per
+overlay), so dev on Kubernetes delivers invites and operator emails.
+
+---
+
+### 0-43. API key introspection can be amplified from many IPs
+
+**Type:** design · **Priority:** Low · **Status:** Open (accepted residual risk of #0-16, found in review, not run)
+
+**Problem.** Every unknown `ipl_…` key sent to ingestion-service is one introspection call to auth-service.
+`AuthFailureRateLimiter` bounds that per client IP (10 failures, refilled per 60 s), and the negative cache
+(`CachingApiKeyIntrospectionClient`, 5 s, 1,000 entries) only helps when the same wrong key repeats. A sender
+with many IPs and a fresh random key per request therefore turns its request rate into auth-service calls,
+up to the IP bucket capacity times the number of IPs. It cannot authenticate (192-bit keys), and under
+sustained load the `api-key-introspection` breaker opens, so ingest answers 503: the failure mode is
+unavailability of key authentication, not a bypass. It also hurts valid keys that are not in the positive
+cache while the breaker is open.
+
+**Decide.** (1) Accept and document (today's state). (2) A global cap on introspection calls per second in
+ingestion-service (bulkhead or rate limiter on the client), so an attack degrades only uncached keys.
+(3) Reject malformed keys offline first, which needs the checksum from #0-38. (4) Edge rate limiting (the
+Cloudflare/Ingress layers in `application.yml`'s rate-limiting comment). (2) and (3) are cheap together.
+
+---
+
+### 0-44. Concurrent cache misses for one API key each call auth-service
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in review, not run)
+
+**Problem.** `CachingApiKeyIntrospectionClient.introspect` checks its maps and on a miss calls the delegate
+directly, with no per-key coalescing. When an active key's entry expires (every 60 s), N concurrent requests
+with that key send N introspection calls instead of one. Negligible at today's traffic; it grows with the
+concurrency of a single integration and with the number of ingestion-service replicas.
+
+**Work (when a high-throughput integration appears).** Single-flight per key hash (a map of in-flight
+futures), or a cache library with an async loader — which is also the trigger for #0-33. Keep the rule that
+failures are never cached.
+
+---
+
+### 0-45. API key usage write holds a second auth-service DB connection
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in review, not run)
+
+**Problem.** `ApiKeyIntrospectionService.resolve` runs in a read-only transaction and calls
+`ApiKeyUsageRecorder.recordUsage`, whose `last_used_at` update runs in `REQUIRES_NEW`: the outer transaction
+is suspended and a second Hikari connection is taken for the update. auth-service's pool is 5
+(`maximum-pool-size`). The write is throttled (once per `api-key.usage.write-interval`, default 5 min, per
+key), so this matters only when many distinct keys miss the introspection cache at once — for example after
+an ingestion-service restart (cold cache), when every integration's first request lands together.
+
+**Work.** Load-test that cold-cache burst first. If the pool saturates: raise `maximum-pool-size`, or do the
+write after the read transaction has ended (not nested), or hand it to a bounded executor with the metric
+kept. The synchronous `REQUIRES_NEW` design is documented in `ApiKeyUsageRecorder`; a change reverses it and
+should say so there.
+
+---
+
+### 0-46. Personal API keys can be granted scopes their owner's role does not allow
+
+**Type:** bug · **Priority:** Low · **Status:** Open (found in #0-16 review, by reading the code, not run)
+
+**Problem.** `ApiKeyScope.allowedForRole` decides which scopes a PERSONAL key may carry, and its own Javadoc
+says a personal key "cannot be granted scopes beyond what the owner's tenant-level role permits". But it
+only knows `ROLE_ADMIN` and `ROLE_RESPONDER`: every scope except `teams:write` is allowed to a RESPONDER,
+including `alerts:ingest`, while the ingest endpoint lets a JWT in only with `INGESTOR` or `ADMIN`. So a
+RESPONDER can create a personal key that does what their own token cannot. The same mapping decides every
+other scope, so the check is not a real "no more than the owner" rule, only a hand-kept list. `ROLE_INGESTOR`
+owners are not handled at all (they get no scope).
+
+**Latent today.** The only scope check in the codebase is ingest's `hasScope(alerts:ingest)`, and #0-16 closed
+that path: auth-service's introspection answers `active:false` for every PERSONAL key, so none reaches
+ingestion-service. Inside auth-service, `ApiKeyLookupServiceImpl` gives a personal key its owner's current
+roles and no endpoint checks a scope. It becomes a real bug as soon as any endpoint is guarded by a scope.
+
+**Work.** Derive "allowed for role" from the same rule the endpoint enforces (e.g. `alerts:ingest` requires
+`INGESTOR` or `ADMIN`), handle every role in `SecurityRoles`, and decide what happens to existing personal
+keys whose scopes their owner no longer qualifies for (reject at use, or revoke). Test per role and scope.
+
 ---
 
 ## Done
@@ -631,6 +768,7 @@ in `shared`'s test utilities if one fits.
 | 0-21 | Slack is per tenant: each tenant connects its own workspace (`SlackWorkspace`, V17, one active per tenant via a partial unique index, bot token AES-256-GCM under a separate `slack.encryption-key`, admin API `/api/v1/slack-workspace`, manual token paste). notification-service reads it through `CachingSlackWorkspaceClient` (60 s TTL, bounded, Micrometer `cache.*` meters) over `SlackWorkspaceClientImpl` (Resilience4j, fallback throws). The global bot token/channel/broadcast config is gone. An auth-service outage skips only Slack, except when Slack was the only channel (PENDING, then `SLACK_WORKSPACE_UNAVAILABLE`). ACK via Slack is off until the OAuth install: #0-35. Follow-ups: #0-32, #0-33, #0-34 | PR #422 |
 | 0-30 | Decided and implemented: a service that needs auth-service-owned tenant data pulls it over a narrow HTTP call with a service token `aud=auth-service`, accepted on exactly one `ROLE_SERVICE` endpoint (`GET /api/v1/internal/slack-workspace`), cached briefly by the caller. Kafka replication was rejected for a single consumer. Decision recorded in `.ai/context/project.md` and CLAUDE.md; the identity/config split it raised is #0-31 | PR #422 |
 | 0-9 | `NotificationLog`'s `@Index` list named V1's three indexes, dropped by V2 (and V5 replaced one of V2's); it now mirrors V2/V5 and says the migrations are the source of truth. A check against the real schema is #0-36 | PR #424 |
+| 0-16 | Alert sources authenticate with Integration API keys (A1): ingestion-service runs `ApiKeyAuthFilter` (`ApiKey`/`Bearer ipl_…`) and introspects the key's SHA-256 in auth-service with a tenant-less purpose token accepted on that one route only (deny by default elsewhere); 60 s cache = revocation window; 401 = definite "no", 503 + `Retry-After` = can't check; per-IP failed-auth limiter before the lookup; `hasRole('SERVICE')` removed from ingest, and ingestion accepts no service tokens. Platform alerts out of band (B3): Watchdog to a dead man's switch, critical to operator email, all to the reserved `platform-operator` tenant (invite-bootstrapped admin). Alertmanager/Prometheus pinned, rules/routes validated in CI. The 30-day `system` token, its refresher and script are gone. Only TENANT keys introspect as active (a personal key gets `active:false`). Decision in `.ai/context/project.md`. Follow-ups: #0-37..#0-46 | PR (number filled after opening) |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

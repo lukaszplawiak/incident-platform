@@ -229,7 +229,7 @@ T+10m*: Still no ACK   → Level 2 (MANAGER)   IncidentEscalatedEvent → Email 
 
 The channel set is chosen by **event type**, not by escalation level (`NotificationRouter`): `INCIDENT_OPENED` → Email + Slack, `INCIDENT_ESCALATED` → Email + Slack + SMS, `INCIDENT_ACKNOWLEDGED` → Slack, `INCIDENT_RESOLVED` → Email + Slack, `INCIDENT_CLOSED` → Email.
 
-escalation-service resolves the SECONDARY (level 1) or MANAGER (level 2) on-call user through oncall-service and puts that user in `IncidentEscalatedEvent.escalateTo`. notification-service stores `escalateTo` and the escalation level on its outbox entry, and each escalation level is now queued and sent at most once per channel (idempotency is keyed on incident + tenant + event type + escalation level, so the level-2 notification is no longer discarded as a duplicate of level 1). `escalationLevel` is required and must be an integer in 1..2; anything else is routed to `notification.dead-letter` rather than queued. A malformed `escalateTo` is ignored with a warning, not dead-lettered. When an entry is sent, `NotificationRouter` notifies the `escalateTo` user: it looks up that user's current on-call entry in oncall-service (`GET /api/v1/oncall/current/by-user/{userId}`, tenant and user id matched together) and uses their email, Slack id and phone. If there is no target, or the target is not on call, the escalation goes to the tenant's PRIMARY on-call as before. Other event types notify the PRIMARY on-call, resolved with the incident's `teamId` when it has one (falling back to tenant-wide otherwise, backlog #0-12) — the same team-scoped lookup the escalation fallback uses. **Tenant content only reaches members of that tenant** (the on-call contact details are entered by the tenant and are not verified against membership yet, backlog #0-24): there is no fallback address. A channel the on-call user has no address for is skipped (a WARN and `notification.channel_skipped{channel,event_type}`; a Slack id must start with `U`, anything else is no Slack address), and if nobody in the tenant can be notified the queue entry becomes `UNDELIVERABLE`; it is counted in `notification.undeliverable{event_type,reason}`, audited for the tenant as `NOTIFICATION_UNDELIVERABLE` (a type of its own, distinct from `NOTIFICATION_FAILED`, a failed send), and for opened and escalated incidents the platform operator gets a content-free email (tenant id, incident id, event type, reason) at `NOTIFICATION_OPERATOR_ALERT_EMAIL`. That address has no default: if it is unset no email is sent and only the ERROR log and the metric remain, so set it for every environment (the Kubernetes ConfigMap `app-config` carries an empty `NOTIFICATION_OPERATOR_ALERT_EMAIL`; each overlay patches it — dev mirrors docker-compose's mailhog address, staging/prod carry a placeholder to replace before a real deployment, backlog #0-26). Alerts are limited to one email per tenant and reason per `NOTIFICATION_OPERATOR_ALERT_MIN_INTERVAL` (default `PT15M`). If oncall-service cannot answer, the entry stays `PENDING` and is retried until the lookup has been failing for `NOTIFICATION_LOOKUP_RETRY_WINDOW` (default `PT10M`, measured from the first failed lookup and not from creation) before it becomes `UNDELIVERABLE`; a run of the scheduler loads at most `NOTIFICATION_SCHEDULER_BATCH_SIZE` entries (default `200`, oldest first) and stops after `NOTIFICATION_SCHEDULER_PROCESSING_BUDGET` (default `PT3M`; it must stay below the 4-minute lock, which is checked at startup). SMTP calls have 5-second timeouts (`MAIL_SMTP_*_TIMEOUT_MS`). Slack is per tenant (backlog #0-21): each tenant's own workspace, bot token, default channel and broadcast flag (off by default) come from auth-service, cached for 60 s. A tenant without a workspace has Slack skipped like any other missing address. If auth-service cannot answer, only Slack is skipped and the other channels go out (counted in `service_client_fallback_total{client="slack-workspace"}`); when Slack was the only reachable channel the entry stays `PENDING` within the same retry window and then becomes `UNDELIVERABLE` with reason `SLACK_WORKSPACE_UNAVAILABLE`. A failed channel send is not retried later (backlog #0-32).
+escalation-service resolves the SECONDARY (level 1) or MANAGER (level 2) on-call user through oncall-service and puts that user in `IncidentEscalatedEvent.escalateTo`. notification-service stores `escalateTo` and the escalation level on its outbox entry, and each escalation level is now queued and sent at most once per channel (idempotency is keyed on incident + tenant + event type + escalation level, so the level-2 notification is no longer discarded as a duplicate of level 1). `escalationLevel` is required and must be an integer in 1..2; anything else is routed to `notification.dead-letter` rather than queued. A malformed `escalateTo` is ignored with a warning, not dead-lettered. When an entry is sent, `NotificationRouter` notifies the `escalateTo` user: it looks up that user's current on-call entry in oncall-service (`GET /api/v1/oncall/current/by-user/{userId}`, tenant and user id matched together) and uses their email, Slack id and phone. If there is no target, or the target is not on call, the escalation goes to the tenant's PRIMARY on-call as before. Other event types notify the PRIMARY on-call, resolved with the incident's `teamId` when it has one (falling back to tenant-wide otherwise, backlog #0-12) — the same team-scoped lookup the escalation fallback uses. **Tenant content only reaches members of that tenant** (the on-call contact details are entered by the tenant and are not verified against membership yet, backlog #0-24): there is no fallback address. A channel the on-call user has no address for is skipped (a WARN and `notification.channel_skipped{channel,event_type}`; a Slack id must start with `U`, anything else is no Slack address), and if nobody in the tenant can be notified the queue entry becomes `UNDELIVERABLE`; it is counted in `notification.undeliverable{event_type,reason}`, audited for the tenant as `NOTIFICATION_UNDELIVERABLE` (a type of its own, distinct from `NOTIFICATION_FAILED`, a failed send), and for opened and escalated incidents the platform operator gets a content-free email (tenant id, incident id, event type, reason) at `NOTIFICATION_OPERATOR_ALERT_EMAIL`. That address has no default: if it is unset no email is sent and only the ERROR log and the metric remain, so set it for every environment (the Kubernetes ConfigMap `app-config` carries an empty `NOTIFICATION_OPERATOR_ALERT_EMAIL`; each overlay patches it — dev mirrors docker-compose's Mailpit address, staging/prod carry a placeholder to replace before a real deployment, backlog #0-26). Alerts are limited to one email per tenant and reason per `NOTIFICATION_OPERATOR_ALERT_MIN_INTERVAL` (default `PT15M`). If oncall-service cannot answer, the entry stays `PENDING` and is retried until the lookup has been failing for `NOTIFICATION_LOOKUP_RETRY_WINDOW` (default `PT10M`, measured from the first failed lookup and not from creation) before it becomes `UNDELIVERABLE`; a run of the scheduler loads at most `NOTIFICATION_SCHEDULER_BATCH_SIZE` entries (default `200`, oldest first) and stops after `NOTIFICATION_SCHEDULER_PROCESSING_BUDGET` (default `PT3M`; it must stay below the 4-minute lock, which is checked at startup). SMTP calls have 5-second timeouts (`MAIL_SMTP_*_TIMEOUT_MS`). Slack is per tenant (backlog #0-21): each tenant's own workspace, bot token, default channel and broadcast flag (off by default) come from auth-service, cached for 60 s. A tenant without a workspace has Slack skipped like any other missing address. If auth-service cannot answer, only Slack is skipped and the other channels go out (counted in `service_client_fallback_total{client="slack-workspace"}`); when Slack was the only reachable channel the entry stays `PENDING` within the same retry window and then becomes `UNDELIVERABLE` with reason `SLACK_WORKSPACE_UNAVAILABLE`. A failed channel send is not retried later (backlog #0-32).
 
 Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK at any point cancels all pending tasks. ShedLock prevents duplicate job execution across multiple replicas. The escalation level is written back to the incident by incident-service, which consumes `IncidentEscalatedEvent` from `incidents.lifecycle`.
 
@@ -247,6 +247,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 
 - **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set explicitly
 - **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts only `aud=auth-service`, on its one internal endpoint for a tenant's Slack workspace — backlog #0-30) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
+- **Alert source authentication** (backlog #0-16): external alert sources — a tenant's Alertmanager, Wazuh, and the platform's own Alertmanager (as the reserved `platform-operator` tenant) — send an Integration API key (`Authorization: ApiKey ipl_…` or `Bearer ipl_…`). ingestion-service sends only its SHA-256 to auth-service's introspection endpoint, with a tenant-less *purpose token* that auth-service accepts on that one route and nowhere else, and caches active keys for at most 60 s (the revocation window). A definite "no" is `401`; "can't check right now" is `503` + `Retry-After`, because Alertmanager retries 5xx but drops every 4xx. ingestion-service accepts no service tokens. Tenant ids `platform-operator` and `system` are reserved
 - **Dev endpoints**: `DevTokenController` gated with `@Profile({"local", "dev"})` plus a fail-fast startup guard as a second line of defence — never available in production
 - **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8097) — never co-located with the business API
 - **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in access logs
@@ -417,7 +418,6 @@ The CI badge at the top of this README reflects the current status of the `main`
 - Java 21
 - Docker Desktop (minimum 4GB RAM allocated)
 - `jq` — command-line JSON formatter (`brew install jq` on macOS)
-- Python 3 — required for `scripts/generate-alertmanager-token.sh` (standard library only, no pip install needed)
 
 ### Step 1 — Start infrastructure
 
@@ -561,12 +561,43 @@ docker compose up -d
 
 ### Step 5 — (Optional) Start monitoring stack
 
-The monitoring stack (Prometheus, Alertmanager, Grafana, kafka-exporter) requires
-a pre-generated JWT token. Generate it once before starting:
+The monitoring stack (Prometheus, Alertmanager, Grafana, kafka-exporter, plus Mailpit and a
+heartbeat sink) watches the platform itself. Alertmanager sends the platform's own alerts three
+ways (backlog #0-16, `docker/alertmanager.yml`):
+
+- **Watchdog** (always firing) → a dead man's switch URL every minute. Locally the
+  `heartbeat-sink` container logs it; in a real deployment use a healthchecks.io / Dead Man's
+  Snitch / Grafana IRM heartbeat, which pages when the pings stop.
+- **Critical platform alerts** → email to the operator (Mailpit locally), out of band, so they
+  still arrive when ingestion-service, Kafka or notification-service is the thing that broke.
+- **Everything** → ingestion-service, as incidents of the reserved `platform-operator` tenant.
+  Alertmanager authenticates with that tenant's Integration API key, like any tenant's
+  Alertmanager does.
+
+One-time setup (needs the services from Step 4 running). auth-service invites the operator
+tenant's first admin at startup when `OPERATOR_ADMIN_EMAIL` is set (`docker/.env` for Option B,
+`platform.operator.bootstrap.admin-email` in auth-service's `application-local.yml` for Option A):
 
 ```bash
-export JWT_SECRET="local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only"
-./scripts/generate-alertmanager-token.sh
+# 1. Dead man's switch URL (local stand-in)
+cp docker/deadmans-switch-url.example docker/secrets/deadmans-switch-url
+
+# 2. Accept the operator admin's invite: open Mailpit (http://localhost:8025), copy the token from
+#    the invite email, then set a password
+curl -s -X POST http://localhost:8087/api/v1/auth/accept-invite \
+  -H "Content-Type: application/json" \
+  -d '{"token": "<invite token>", "password": "<password>"}'
+
+# 3. Log in to the operator tenant
+OP_TOKEN=$(curl -s -X POST http://localhost:8087/api/v1/auth/login \
+  -H "X-Tenant-Id: platform-operator" -H "Content-Type: application/json" \
+  -d '{"email": "ops@incident-platform.local", "password": "<password>"}' | jq -r .accessToken)
+
+# 4. Create the integration; its API key is shown once — store it as Alertmanager's secret
+curl -s -X POST http://localhost:8087/api/v1/integrations \
+  -H "Authorization: Bearer $OP_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name": "platform-alertmanager", "source": "prometheus"}' \
+  | jq -r .apiKey | tr -d '\n' > docker/secrets/platform-operator-api-key
 ```
 
 Then start the monitoring stack:
@@ -580,12 +611,18 @@ docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafan
 | Prometheus | http://localhost:9090 | — |
 | Alertmanager | http://localhost:9093 | — |
 | Grafana | http://localhost:3000 | admin / admin |
+| Mailpit (operator email, invites) | http://localhost:8025 | — |
+| Heartbeat sink | `docker logs incident-heartbeat-sink` | — |
 
 > The monitoring stack is optional for local development — all 7 services run and process
-> alerts without it. Start it when you want to observe metrics dashboards or test real
-> Alertmanager → ingestion-service alert routing.
+> alerts without it.
 >
-> Token expires after 30 days. Regenerate with the same script before expiry.
+> The key does not expire. To rotate it, create a new integration, overwrite
+> `docker/secrets/platform-operator-api-key` (Alertmanager reads the file on every request, no
+> restart), then delete the old integration. ingestion-service caches a key's validity for at most
+> 60 s, so a revoked key stops working within a minute. If auth-service is down, ingest answers
+> `503` + `Retry-After` and Alertmanager retries; a wrong or revoked key gets `401`, which it does
+> not retry.
 
 ### Step 6 — Verify all services are up
 
@@ -623,8 +660,8 @@ Port 8097: UP
 > **Monitoring stack note**: Prometheus, Alertmanager, Grafana and kafka-exporter
 > are part of the `docker-compose.yml` setup only — they are not deployed in Kubernetes.
 > In a production Kubernetes environment, monitoring is typically handled by a separate
-> stack (e.g. `kube-prometheus-stack` via Helm). The `scripts/generate-alertmanager-token.sh`
-> script is only needed for the local docker-compose setup.
+> stack (e.g. `kube-prometheus-stack` via Helm), configured with the same routes as
+> `docker/alertmanager.yml` and a `platform-operator` Integration API key as a Secret.
 
 ### Prerequisites
 
@@ -820,7 +857,6 @@ echo "Token: ${TOKEN:0:50}..."
 ```bash
 curl -s -X POST http://localhost:8081/api/v1/alerts/prometheus \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" \
   -H "Content-Type: application/json" \
   -d '{
     "alerts": [{
@@ -842,7 +878,6 @@ curl -s -X POST http://localhost:8081/api/v1/alerts/prometheus \
 ```bash
 curl -s -X POST http://incident-platform.local/api/v1/alerts/prometheus \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" \
   -H "Content-Type: application/json" \
   -d '{
     "alerts": [{
@@ -875,8 +910,7 @@ Expected:
 **Local:**
 ```bash
 curl -s http://localhost:8082/api/v1/incidents \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" | jq '.content[]'
+  -H "Authorization: Bearer $TOKEN" | jq '.content[]'
 ```
 
 **Kubernetes** — the Ingress JWT_SECRET differs from the local secret. Generate a token via port-forward to get one signed by the cluster:
@@ -886,8 +920,7 @@ sleep 2
 TOKEN_K8S=$(curl -s "http://localhost:8082/dev/token?tenantId=test-tenant" | jq -r .token)
 
 curl -s http://incident-platform.local/api/v1/incidents \
-  -H "Authorization: Bearer $TOKEN_K8S" \
-  -H "X-Tenant-Id: test-tenant" | jq '.content[]'
+  -H "Authorization: Bearer $TOKEN_K8S" | jq '.content[]'
 ```
 
 Expected:
@@ -909,7 +942,6 @@ INCIDENT_ID="<id from previous response>"
 
 curl -s -X PATCH http://localhost:8082/api/v1/incidents/$INCIDENT_ID/status \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" \
   -H "Content-Type: application/json" \
   -d '{"status": "ACKNOWLEDGED"}' | jq .
 ```
@@ -929,7 +961,6 @@ Expected:
 ```bash
 curl -s -X PATCH http://localhost:8082/api/v1/incidents/$INCIDENT_ID/status \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" \
   -H "Content-Type: application/json" \
   -d '{"status": "RESOLVED"}' | jq .
 ```
@@ -949,16 +980,14 @@ After resolving, `postmortem-service` automatically calls the Gemini API and gen
 
 ```bash
 curl -s http://localhost:8085/api/v1/postmortems/incident/$INCIDENT_ID \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" | jq .
+  -H "Authorization: Bearer $TOKEN" | jq .
 ```
 
 ### Step 6 — Check the audit log
 
 ```bash
 curl -s http://localhost:8082/api/v1/incidents/$INCIDENT_ID/audit \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" | jq '.[]'
+  -H "Authorization: Bearer $TOKEN" | jq '.[]'
 ```
 
 Shows the full chronological timeline of every event across all services for this incident — created, acknowledged, resolved, notifications sent, postmortem generated.
@@ -970,7 +999,6 @@ For notifications and escalations to reach the right person:
 ```bash
 curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
   -H "Authorization: Bearer $TOKEN" \
-  -H "X-Tenant-Id: test-tenant" \
   -H "Content-Type: application/json" \
   -d '{
     "userId": "11111111-1111-1111-1111-111111111111",
@@ -1076,7 +1104,7 @@ incident-platform/
 │       ├── service/               # AlertIngestionService, DeduplicationService
 │       ├── ratelimit/             # RateLimitingService (bucket4j + Redis), RateLimitingConfig, RedisRateLimitConfig
 │       ├── normalizer/            # PrometheusNormalizer, WazuhNormalizer, GenericNormalizer
-│       └── alertmanager/          # AlertManagerTokenRefresher (generates ingestor JWT on startup)
+│       └── apikey/                # Integration API keys: introspection client into auth-service + 60 s cache
 │
 ├── incident-service/              # port 8082 — incident lifecycle
 │   └── src/main/java/
@@ -1112,15 +1140,15 @@ incident-platform/
 │       ├── api/                   # OncallScheduleController
 │       └── service/               # OncallScheduleService (overlap detection, current on-call)
 │
-├── scripts/
-│   └── generate-alertmanager-token.sh  # Generates JWT token for Alertmanager — run once before starting the stack
-│
 ├── docker/
 │   ├── docker-compose.yml         # Full stack: infrastructure + all 7 application services
 │   ├── .env.example               # Environment variable template — copy to .env and fill in
 │   ├── prometheus.yml             # Scrape config for all 7 services (management ports 8091-8097) + kafka-exporter
-│   ├── prometheus.rules.yml       # Alert rules: infrastructure, ingestion, incident-service, Kafka lag, JVM
-│   ├── alertmanager.yml           # Alert routing to ingestion-service webhook, credentials_file auth
+│   ├── prometheus.rules.yml       # Alert rules (scope: platform): Watchdog, infrastructure, ingestion, incident-service, Kafka lag, JVM
+│   ├── prometheus.rules.test.yml  # promtool unit tests for the rules (run in CI)
+│   ├── alertmanager.yml           # Routes: Watchdog → dead man's switch, critical → operator email, all → ingestion (ApiKey)
+│   ├── deadmans-switch-url.example # Local heartbeat URL — copy to secrets/deadmans-switch-url
+│   ├── secrets/                   # gitignored: platform-operator-api-key, deadmans-switch-url
 │   └── grafana/
 │       └── provisioning/          # Grafana datasource auto-provisioning
 │
