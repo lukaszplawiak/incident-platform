@@ -565,9 +565,11 @@ The monitoring stack (Prometheus, Alertmanager, Grafana, kafka-exporter, plus Ma
 heartbeat sink) watches the platform itself. Alertmanager sends the platform's own alerts three
 ways (backlog #0-16, `docker/alertmanager.yml`):
 
-- **Watchdog** (always firing) → a dead man's switch URL every minute. Locally the
-  `heartbeat-sink` container logs it; in a real deployment use a healthchecks.io / Dead Man's
-  Snitch / Grafana IRM heartbeat, which pages when the pings stop.
+- **Watchdog** (always firing) → a dead man's switch URL about every 2 minutes (the route sets
+  1 minute, but Alertmanager only repeats on a `group_interval` tick after `repeat_interval` has
+  passed, so in practice every other tick). Locally the `heartbeat-sink` container logs it; in a
+  real deployment use a healthchecks.io / Dead Man's Snitch / Grafana IRM heartbeat, which pages
+  when the pings stop — give it a period and grace time comfortably above 2 minutes (e.g. 5 min).
 - **Critical platform alerts** → email to the operator (Mailpit locally), out of band, so they
   still arrive when ingestion-service, Kafka or notification-service is the thing that broke.
 - **Everything** → ingestion-service, as incidents of the reserved `platform-operator` tenant.
@@ -589,16 +591,33 @@ curl -s -X POST http://localhost:8087/api/v1/auth/accept-invite \
   -d '{"token": "<invite token>", "password": "<password>"}'
 
 # 3. Log in to the operator tenant
-OP_TOKEN=$(curl -s -X POST http://localhost:8087/api/v1/auth/login \
+OP_LOGIN=$(curl -s -X POST http://localhost:8087/api/v1/auth/login \
   -H "X-Tenant-Id: platform-operator" -H "Content-Type: application/json" \
-  -d '{"email": "ops@incident-platform.local", "password": "<password>"}' | jq -r .accessToken)
+  -d '{"email": "ops@incident-platform.local", "password": "<password>"}')
+OP_TOKEN=$(echo "$OP_LOGIN" | jq -r .accessToken)
+OP_USER_ID=$(echo "$OP_LOGIN" | jq -r .userId)
 
 # 4. Create the integration; its API key is shown once — store it as Alertmanager's secret
 curl -s -X POST http://localhost:8087/api/v1/integrations \
   -H "Authorization: Bearer $OP_TOKEN" -H "Content-Type: application/json" \
   -d '{"name": "platform-alertmanager", "source": "prometheus"}' \
   | jq -r .apiKey | tr -d '\n' > docker/secrets/platform-operator-api-key
+
+# 5. Put the operator admin on call (PRIMARY) for the operator tenant — see below
+curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
+  -H "Authorization: Bearer $OP_TOKEN" -H "Content-Type: application/json" \
+  -d "$(jq -n --arg u "$OP_USER_ID" '{userId: $u, userName: "Platform operator",
+        email: "ops@incident-platform.local", role: "PRIMARY",
+        startsAt: (now|todate), endsAt: ((now + 365*86400)|todate)}')"
 ```
+
+Step 5 matters because the `platform-operator` tenant is an ordinary tenant for notifications:
+an incident's content goes only to that tenant's on-call PRIMARY (backlog #0-18; the platform's
+alerts carry no team, so the tenant-wide PRIMARY is used). Without an on-call entry every platform
+incident is marked `UNDELIVERABLE`, and the operator only gets a content-free
+"[PLATFORM] Notification undeliverable (NO_ONCALL)" email instead of the incident. The critical
+alerts' direct email from Alertmanager does not depend on this. Renew or replace the entry before
+`endsAt`, and in a real deployment schedule a rotation instead of one long entry.
 
 Then start the monitoring stack:
 
