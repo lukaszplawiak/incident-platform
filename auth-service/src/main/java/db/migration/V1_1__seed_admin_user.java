@@ -2,6 +2,7 @@ package db.migration;
 
 import org.flywaydb.core.api.migration.BaseJavaMigration;
 import org.flywaydb.core.api.migration.Context;
+import com.incidentplatform.shared.security.ReservedTenants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
@@ -73,6 +74,11 @@ public class V1_1__seed_admin_user extends BaseJavaMigration {
         final String email = env("ADMIN_EMAIL", DEFAULT_EMAIL);
         final String password = env("ADMIN_PASSWORD", DEFAULT_PASSWORD);
         final String tenantId = env("ADMIN_TENANT_ID", DEFAULT_TENANT);
+        // Backlog #0-16: the seed is where a tenant id is chosen from config, so
+        // it must not create a platform-reserved tenant (platform-operator, the
+        // legacy "system"). Throwing fails the migration and startup, on a fresh
+        // database only: this Java migration has no checksum and never re-runs.
+        ReservedTenants.requireNotReserved(tenantId);
 
         if (DEFAULT_PASSWORD.equals(password)) {
             log.warn("Bootstrap admin is using the default password 'changeme'. " +

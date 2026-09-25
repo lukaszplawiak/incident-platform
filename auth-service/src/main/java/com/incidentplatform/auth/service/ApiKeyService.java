@@ -19,7 +19,6 @@ import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -264,24 +263,5 @@ public class ApiKeyService {
         apiKeyRepository.revokeAllPersonalKeysForUser(userId, Instant.now());
         log.info("All personal API keys revoked for user: userId={}, tenant={}",
                 userId, tenantId);
-    }
-
-    // ── Record usage (async) ──────────────────────────────────────────────
-
-    /**
-     * Updates {@code last_used_at} asynchronously — called after every
-     * successful API key authentication.
-     *
-     * <p>Async to avoid adding a synchronous DB write to every hot request.
-     * Best-effort: if this fails, the key still works — we just lose
-     * the usage timestamp precision.
-     */
-    @Async
-    @Transactional
-    public void recordUsageAsync(UUID keyId) {
-        apiKeyRepository.findById(keyId).ifPresent(key -> {
-            key.recordUsage();
-            apiKeyRepository.save(key);
-        });
     }
 }

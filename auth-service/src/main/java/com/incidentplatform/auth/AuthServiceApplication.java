@@ -27,7 +27,7 @@ import org.springframework.context.annotation.ComponentScan;
  * to avoid distributed transaction complexity and HTTP latency on the login
  * hot path (AuthService.login() needs User credentials in the same transaction).
  *
- * <h2>TODO (Backlog): Future service split</h2>
+ * <h2>TODO (backlog #0-31): Future service split</h2>
  * When the system reaches a scale where independent deployment or independent
  * scaling of authentication vs identity management is required, this service
  * should be split into:
@@ -47,10 +47,15 @@ import org.springframework.context.annotation.ComponentScan;
  *       After split, auth-service would need to call identity-service via HTTP
  *       on every login — adding latency and a single point of failure.
  *       <br>
- *       <i>Recommended solution:</i> Redis credential cache populated by
- *       identity-service Kafka events ({@code UserCredentialsUpdatedEvent}),
- *       invalidated on password change or user archive. Cache hit = zero HTTP
- *       call on login path. This is the pattern used by Auth0 internally.
+ *       <i>Corrected (backlog #0-16):</i> this used to recommend a Redis
+ *       credential cache populated by identity-service Kafka events. That
+ *       contradicts the platform decision of backlog #0-30: a service that
+ *       needs data another service owns pulls it over a narrow HTTP call with
+ *       a service token and caches it briefly (as notification-service does
+ *       for Slack workspaces and ingestion-service for API keys), rather than
+ *       keeping a Kafka-fed replica whose revocations can lag without bound.
+ *       If the login path ever makes that call too slow, revisit #0-30 with
+ *       measurements; do not start from event replication.
  *   </li>
  *
  *   <li><b>Distributed transaction in invite flow</b> —

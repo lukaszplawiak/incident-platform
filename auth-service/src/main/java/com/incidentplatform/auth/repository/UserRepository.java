@@ -46,6 +46,13 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByEmailAndTenantId(String email, String tenantId);
 
     /**
+     * Whether a tenant has any user at all, archived ones included — used by
+     * {@code OperatorTenantBootstrap} (backlog #0-16) to invite the first admin
+     * of the operator tenant exactly once.
+     */
+    boolean existsByTenantId(String tenantId);
+
+    /**
      * Lists all non-deleted users in a tenant — paginated.
      * Roles are NOT eagerly loaded — list endpoints don't need them.
      */

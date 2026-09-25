@@ -1,26 +1,25 @@
 package com.incidentplatform.auth.service;
 
 import com.incidentplatform.auth.domain.ApiKey;
-import com.incidentplatform.auth.domain.Integration;
-import com.incidentplatform.auth.repository.ApiKeyRepository;
-import com.incidentplatform.auth.repository.IntegrationRepository;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
+import com.incidentplatform.shared.security.ApiKeyAuthFilter.ApiKeyLookupResult;
+import jakarta.servlet.http.HttpServletRequest;
 import com.incidentplatform.shared.security.UserPrincipal;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
- * DB-backed implementation of {@link ApiKeyAuthFilter.ApiKeyLookupService}.
+ * DB-backed implementation of {@link ApiKeyAuthFilter.ApiKeyLookupService}
+ * for API keys sent to auth-service itself.
  *
- * <p>Called by {@link ApiKeyAuthFilter} on every API key request.
- * Looks up the key by SHA-256 hash, validates it, and builds a
- * {@link UserPrincipal} for the Spring Security context.
+ * <p>Called by {@link ApiKeyAuthFilter} on every API key request. Whether a
+ * key is active, and which team it routes to, is decided by
+ * {@link ApiKeyIntrospectionService#resolve} — the same code path that answers
+ * ingestion-service's introspection calls (backlog #0-16), so the two cannot
+ * disagree. This class only turns the result into a {@link UserPrincipal}.
  *
  * <h2>Principal construction</h2>
  * <ul>
@@ -34,63 +33,38 @@ import java.util.UUID;
  * </ul>
  *
  * <h2>Usage recording</h2>
- * Delegates to {@link ApiKeyService#recordUsageAsync} — the filter path
- * must not block on a DB write. Usage recording is best-effort.
+ * Done inside {@link ApiKeyIntrospectionService#resolve} by
+ * {@link ApiKeyUsageRecorder}, throttled and best-effort.
  */
 @Service
 public class ApiKeyLookupServiceImpl
         implements ApiKeyAuthFilter.ApiKeyLookupService {
 
-    private static final Logger log =
-            LoggerFactory.getLogger(ApiKeyLookupServiceImpl.class);
-
-    private final ApiKeyRepository apiKeyRepository;
-    private final IntegrationRepository integrationRepository;
+    private final ApiKeyIntrospectionService introspectionService;
     private final ApiKeyHasher apiKeyHasher;
-    private final ApiKeyService apiKeyService;
 
-    public ApiKeyLookupServiceImpl(ApiKeyRepository apiKeyRepository,
-                                   IntegrationRepository integrationRepository,
-                                   ApiKeyHasher apiKeyHasher,
-                                   ApiKeyService apiKeyService) {
-        this.apiKeyRepository      = apiKeyRepository;
-        this.integrationRepository = integrationRepository;
-        this.apiKeyHasher          = apiKeyHasher;
-        this.apiKeyService         = apiKeyService;
+    public ApiKeyLookupServiceImpl(ApiKeyIntrospectionService introspectionService,
+                                   ApiKeyHasher apiKeyHasher) {
+        this.introspectionService = introspectionService;
+        this.apiKeyHasher         = apiKeyHasher;
     }
 
+    /**
+     * Never {@code Unavailable} or {@code Throttled}: the table is local, and a
+     * database outage fails the request like any other query would.
+     */
     @Override
     @Transactional(readOnly = true)
-    public Optional<UserPrincipal> lookup(String rawKey) {
-        final String hash = apiKeyHasher.hash(rawKey);
-
-        final Optional<ApiKey> keyOpt = apiKeyRepository.findActiveByHash(hash);
-
-        if (keyOpt.isEmpty()) {
-            log.debug("API key not found or revoked (hash prefix: {}...)",
-                    hash.substring(0, 8));
-            return Optional.empty();
-        }
-
-        final ApiKey apiKey = keyOpt.get();
-
-        if (apiKey.isExpired()) {
-            log.debug("API key expired: keyId={}", apiKey.getId());
-            return Optional.empty();
-        }
-
-        // Record usage asynchronously — best-effort, non-blocking
-        apiKeyService.recordUsageAsync(apiKey.getId());
-
-        final UserPrincipal principal = buildPrincipal(apiKey);
-        return Optional.of(principal);
+    public ApiKeyLookupResult lookup(String rawKey, HttpServletRequest request) {
+        return introspectionService.resolve(apiKeyHasher.hash(rawKey))
+                .<ApiKeyLookupResult>map(active -> new ApiKeyLookupResult.Authenticated(
+                        buildPrincipal(active.apiKey(), active.teamId())))
+                .orElseGet(ApiKeyLookupResult.Invalid::new);
     }
 
-    private UserPrincipal buildPrincipal(ApiKey apiKey) {
+    private UserPrincipal buildPrincipal(ApiKey apiKey, UUID teamId) {
         final List<String> roles;
         final UUID userId;
-        // teamId — resolved from Integration for routing alerts to correct team
-        final UUID teamId = resolveTeamId(apiKey);
 
         if (apiKey.isTenant()) {
             roles  = List.of("ROLE_RESPONDER");
@@ -120,21 +94,5 @@ public class ApiKeyLookupServiceImpl
                 null // sessionId — not applicable; API keys authenticate
                 // machine-to-machine calls, not a human login session
         );
-    }
-
-    /**
-     * Resolves the teamId for an API key that belongs to an Integration.
-     *
-     * <p>Integration keys have {@code integrationId} set — one JOIN fetches
-     * the team. Personal keys and manually-created Tenant keys return null.
-     */
-    private UUID resolveTeamId(ApiKey apiKey) {
-        if (apiKey.getIntegrationId() == null) {
-            return null;
-        }
-        return integrationRepository.findById(apiKey.getIntegrationId())
-                .filter(Integration::isActive)
-                .map(i -> i.getTeam() != null ? i.getTeam().getId() : null)
-                .orElse(null);
     }
 }

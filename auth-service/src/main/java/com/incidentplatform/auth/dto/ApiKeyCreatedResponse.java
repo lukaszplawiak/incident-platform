@@ -22,7 +22,8 @@ public record ApiKeyCreatedResponse(
 
         /**
          * The full raw API key — shown ONCE, never stored.
-         * Format: {@code ipl_<prefix8>.<random32>}
+         * Format: {@code ipl_<random32>}, no separator — see {@code ApiKeyHasher}
+         * (corrected in backlog #0-16; the dotted form was never generated).
          */
         String rawKey,
 

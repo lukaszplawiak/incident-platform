@@ -159,3 +159,18 @@ slack:
   # if not set. Generate: openssl rand -base64 32
   # Set via SLACK_ENCRYPTION_KEY environment variable.
   encryption-key: ${SLACK_ENCRYPTION_KEY}
+api-key:
+  usage:
+    # Backlog #0-16: last_used_at is written at most once per key per interval
+    # (a conditional UPDATE, see ApiKeyUsageRecorder), so a busy integration
+    # does not turn every introspection into a write.
+    write-interval: ${API_KEY_USAGE_WRITE_INTERVAL:PT5M}
+
+platform:
+  operator:
+    bootstrap:
+      # Backlog #0-16: when set, auth-service invites this address as the first
+      # admin of the reserved platform-operator tenant (once; no-op while the
+      # tenant has any user). The operator tenant receives the platform's own
+      # alerts as incidents. Empty = no bootstrap.
+      admin-email: ${OPERATOR_ADMIN_EMAIL:}
