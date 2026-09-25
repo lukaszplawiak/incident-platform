@@ -86,11 +86,15 @@ public class SecurityConfig {
                         // Backlog #0-1: contact details of one user, for
                         // notification-service. An exact-path rule above does not
                         // cover this path, so without this line it would fall
-                        // through to anyRequest().authenticated() and any role
+                        // through to the anyRequest() rule and any role
                         // could read a user's email and phone number.
                         .requestMatchers("/api/v1/oncall/current/by-user/*")
                         .hasAnyRole(SecurityRoles.SERVICE, SecurityRoles.ADMIN)
-                        .anyRequest().authenticated()
+                        // Backlog #0-16: not authenticated() — a purpose token (tenant-less,
+                        // valid for one operation) is denied here even if this service's
+                        // JwtAuthFilter is ever given an accepted purpose.
+                        .anyRequest().access(
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens())
                 )
                 .build();
     }
