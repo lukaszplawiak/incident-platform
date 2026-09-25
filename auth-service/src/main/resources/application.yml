@@ -170,7 +170,14 @@ platform:
   operator:
     bootstrap:
       # Backlog #0-16: when set, auth-service invites this address as the first
-      # admin of the reserved platform-operator tenant (once; no-op while the
-      # tenant has any user). The operator tenant receives the platform's own
-      # alerts as incidents. Empty = no bootstrap.
+      # admin of the reserved platform-operator tenant, which receives the
+      # platform's own alerts as incidents. Empty = no bootstrap.
       admin-email: ${OPERATOR_ADMIN_EMAIL:}
+      # Backlog #0-49: a reconciler (OperatorTenantBootstrap) checks shortly after
+      # startup and then at this interval that the tenant has an admin who can
+      # log in, and re-invites the configured admin when their invite
+      # permanently failed or expired. Metric: platform.operator.admin.pending,
+      # refreshed read-only on every replica (the reconcile runs on one).
+      initial-delay-ms: ${OPERATOR_BOOTSTRAP_INITIAL_DELAY_MS:30000}
+      reconcile-interval-ms: ${OPERATOR_BOOTSTRAP_RECONCILE_INTERVAL_MS:3600000}
+      gauge-refresh-interval-ms: ${OPERATOR_BOOTSTRAP_GAUGE_REFRESH_INTERVAL_MS:300000}
