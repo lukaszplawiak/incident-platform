@@ -287,6 +287,54 @@ jobs:
           echo "Every service with a Dockerfile has a matching k8s Deployment."
 
   # ──────────────────────────────────────────────────────────
+  # Validate the monitoring config (backlog #0-16)
+  #
+  # Alertmanager and Prometheus only read their config at startup, and
+  # the CI smoke test deliberately does not start them, so a broken
+  # route, rule or inhibit rule would only show up when someone runs
+  # the monitoring stack. Runs the pinned images' own tools:
+  #   promtool check config  (prometheus.yml + the rules file)
+  #   promtool test rules    (docker/prometheus.rules.test.yml)
+  #   amtool check-config + route tests (Watchdog never reaches the
+  #   webhook, critical alerts reach both email and webhook)
+  # Image tags must stay equal to docker/docker-compose.yml.
+  # ──────────────────────────────────────────────────────────
+  validate-monitoring-config:
+    name: Validate Monitoring Config
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Prometheus config and rule tests
+        run: |
+          docker run --rm -v "$PWD/docker:/cfg" -w /cfg --entrypoint promtool \
+            prom/prometheus:v3.13.3 check config prometheus.yml
+          docker run --rm -v "$PWD/docker:/cfg" -w /cfg --entrypoint promtool \
+            prom/prometheus:v3.13.3 test rules prometheus.rules.test.yml
+
+      - name: Alertmanager config and routing
+        run: |
+          amtool() {
+            docker run --rm -v "$PWD/docker:/cfg" -w /cfg --entrypoint amtool \
+              prom/alertmanager:v0.34.1 "$@"
+          }
+          amtool check-config alertmanager.yml
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=deadmans-switch \
+            alertname=Watchdog scope=platform severity=none
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email \
+            alertname=AlertmanagerNotificationsFailing scope=platform severity=high
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email,platform-webhook \
+            alertname=PlatformServiceDown scope=platform severity=critical service=auth-service
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=platform-webhook \
+            alertname=JvmMemoryHigh scope=platform severity=high
+
+  # ──────────────────────────────────────────────────────────
   # Job 5: Smoke test — boot the real stack via docker compose and
   # confirm every service reports healthy.
   #

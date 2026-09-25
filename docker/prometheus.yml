@@ -89,3 +89,20 @@ scrape_configs:
       - targets: ['kafka-exporter:9308']
         labels:
           service: 'kafka'
+
+  # ----------------------------------------------------------------
+  # Meta-monitoring (backlog #0-16): Alertmanager's own metrics feed
+  # the AlertmanagerNotificationsFailing rule, Prometheus's own the
+  # dashboards. Neither was scraped before.
+  # ----------------------------------------------------------------
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          service: 'alertmanager'
+
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'
