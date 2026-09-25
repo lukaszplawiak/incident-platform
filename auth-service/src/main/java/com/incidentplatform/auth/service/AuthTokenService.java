@@ -192,8 +192,8 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
                         HttpStatus.UNAUTHORIZED);
             });
 
-    final int claimed = tokenRepository.markUsedIfUnused(
-            token.getId(), Instant.now());
+    final Instant now = Instant.now();
+    final int claimed = tokenRepository.markUsedIfUnused(token.getId(), now);
 
     if (claimed == 0) {
         log.warn("Token consumption lost a concurrent race — already " +
@@ -210,7 +210,9 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
     // the returned token, but returning an object that still claims
     // usedAt == null after this method's own name says otherwise
     // would be a correctness trap waiting for the next caller that does.
-    token.markUsed();
+    // The same instant as the UPDATE, so the token (still managed since
+    // backlog #0-50) matches its row exactly.
+    token.markUsed(now);
 
     log.info("Token consumed: type={}, userId={}, tenant={}",
             expectedType, token.getUser().getId(), token.getTenantId());

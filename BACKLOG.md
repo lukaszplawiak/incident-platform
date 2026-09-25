@@ -60,6 +60,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-45](#0-45-api-key-usage-write-holds-a-second-auth-service-db-connection) | API key usage write holds a second auth-service DB connection | tech-debt | Low | Open |
 | [0-46](#0-46-personal-api-keys-can-be-granted-scopes-their-owners-role-does-not-allow) | Personal API keys can be granted scopes their owner's role does not allow | bug | Low | Open |
 | [0-48](#0-48-user-pii-lives-on-the-users-row-erasure-is-in-place-anonymization) | User PII lives on the `users` row; erasure is in-place anonymization | design | Low | Open |
+| [0-49](#0-49-the-operator-admin-invite-is-lost-for-good-if-mail-fails-at-first-startup) | The operator admin invite is lost for good if mail fails at first startup | bug | Medium | Open |
 
 ---
 
@@ -776,6 +777,45 @@ and backups) or plan the split, when a customer or audit requires stronger erasu
 
 ---
 
+### 0-49. The operator admin invite is lost for good if mail fails at first startup
+
+**Type:** bug · **Priority:** Medium · **Status:** Open (found 2026-09-25 while setting up the local monitoring stack)
+
+**Problem.** `OperatorTenantBootstrap` (#0-16) creates the `platform-operator` tenant's first admin and
+invites them by email, but only when the tenant has no users (`existsByTenantId`). The invite goes through
+the auth email outbox, which gives up after its retry limit (`PERMANENTLY_FAILED`, a few minutes with the
+defaults) and nulls the raw token. If SMTP is down or misconfigured during that window, nothing can recover:
+`resend-invite` needs an admin of that tenant, the only user is the one who never got the invite, and a
+restart skips the bootstrap because a user exists. The operator tenant, which receives the platform's own
+alerts, stays without an admin until someone deletes the user row by hand. Seen locally when Mailpit was not
+running at the first start.
+
+The same dead end follows if the email is delivered but nobody accepts it before the invite token expires
+(7 days).
+
+**Decided (option A): the bootstrap checks the goal, not the step.** On every start, `OperatorTenantBootstrap`:
+
+- skips only when the operator tenant has an admin who has accepted an invite (`password_hash` set);
+- creates the admin by invite when the tenant has no user (today's behaviour);
+- when the configured admin exists but has not accepted, and their latest invite is `PERMANENTLY_FAILED` or
+  they have no valid INVITE token left, re-invites them through the existing
+  `ResendInviteService.resendInvite` (invalidates old tokens, new outbox entry, audit event), with
+  `TenantContext` set as for `createUser`; a replica that loses the race gets its 409 "already queued" and
+  logs it at INFO;
+- otherwise (invite sent or queued, token still valid) sends nothing, so restarts do not spam the admin;
+- while the admin has not accepted, logs a WARN at every start naming the state (pending / re-invited).
+
+Recovery needs a restart; the WARN says so. Rejected: a `@Scheduled` + ShedLock job repeating the same check
+(a permanent job for a one-time bootstrap; revisit if restarts prove too slow), never giving up on INVITE
+emails in the outbox (keeps the raw token in the database longer and does not cover an expired token), and a
+manual `reinvite` flag (a break-glass path the operator has to know about instead of a fix).
+
+**Tests.** Testcontainers: permanently failed invite + bootstrap → a new PENDING invite, old token unusable;
+expired token → re-invite; sent invite with a valid token + bootstrap → nothing queued; accepted admin →
+skip. Unit: the 409 race and the WARN.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -793,6 +833,7 @@ and backups) or plan the split, when a customer or audit requires stronger erasu
 | 0-9 | `NotificationLog`'s `@Index` list named V1's three indexes, dropped by V2 (and V5 replaced one of V2's); it now mirrors V2/V5 and says the migrations are the source of truth. A check against the real schema is #0-36 | PR #424 |
 | 0-16 | Alert sources authenticate with Integration API keys (A1): ingestion-service runs `ApiKeyAuthFilter` (`ApiKey`/`Bearer ipl_…`) and introspects the key's SHA-256 in auth-service with a tenant-less purpose token accepted on that one route only (deny by default elsewhere); 60 s cache = revocation window; 401 = definite "no", 503 + `Retry-After` = can't check; per-IP failed-auth limiter before the lookup; `hasRole('SERVICE')` removed from ingest, and ingestion accepts no service tokens. Platform alerts out of band (B3): Watchdog to a dead man's switch, critical to operator email, all to the reserved `platform-operator` tenant (invite-bootstrapped admin). Alertmanager/Prometheus pinned, rules/routes validated in CI. The 30-day `system` token, its refresher and script are gone. Only TENANT keys introspect as active (a personal key gets `active:false`). Decision in `.ai/context/project.md`. Follow-ups: #0-37..#0-46 | PR #425 |
 | 0-47 | Creating a user by invite failed on a real database (bug since `e7290db1`, exposed by #0-16's `OperatorTenantBootstrap`, which crashed auth-service at startup): `User.version` and `SlackWorkspace.version` were initialised to `0L`, so Spring Data saw a new entity as existing, `save()` merged instead of persisting and `UserService.createUser` kept the transient instance (`TransientPropertyValueException AuthToken.user -> User`). Both fields are now left `null` until persist; a Testcontainers test saves a new `User` + `AuthToken` the way production does. Unit tests mock repositories and V1_1 seeds users by SQL, so nothing caught it | PR #426 |
+| 0-50 | Accept-invite, reset-password and refresh-token rotation failed with `LazyInitializationException` on a real database (bug since `f3d05fd`): `AuthTokenRepository.markUsedIfUnused` had `clearAutomatically = true`, so `consumeToken` detached the token and its lazy `User` proxy before every caller used `token.getUser()`. The single-row claim no longer clears the persistence context; `consumeToken` sets the same `usedAt` in memory. Testcontainers tests now drive accept-invite, reset-password and refresh rotation through the real services; MFA goes through the same `consumeToken` path (service unit tests mock the repositories, and #0-47 had kept anyone from reaching accept-invite) | PR (number filled after opening) |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

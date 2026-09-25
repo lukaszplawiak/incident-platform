@@ -141,8 +141,25 @@ public class AuthToken {
         return !isExpired() && !isUsed();
     }
 
+    /**
+     * Sets {@code usedAt} in memory only. This is <strong>not</strong> how a
+     * single-use token is consumed: {@code AuthTokenService.consumeToken}
+     * claims it first with {@code AuthTokenRepository.markUsedIfUnused}, the
+     * conditional UPDATE that lets exactly one concurrent caller win, and only
+     * then mirrors the result here. Since backlog #0-50 the token stays managed
+     * after that claim, so calling this on a token nobody claimed would be
+     * written by dirty checking as a plain, unconditional UPDATE, bypassing the
+     * race protection. Outside {@code consumeToken}, call it only where losing
+     * that race cannot matter (invalidating tokens, as {@code ResendInviteService}
+     * does), never to gate a one-time action.
+     */
     public void markUsed() {
-        this.usedAt = Instant.now();
+        markUsed(Instant.now());
+    }
+
+    /** As {@link #markUsed()}, at the instant the claiming UPDATE used. */
+    public void markUsed(Instant usedAt) {
+        this.usedAt = usedAt;
     }
 
     public UUID getId() { return id; }
