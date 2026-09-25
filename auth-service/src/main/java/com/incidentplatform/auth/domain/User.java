@@ -91,10 +91,21 @@ public class User {
     /**
      * Optimistic locking version counter — prevents lost updates when two
      * concurrent requests modify the same user.
+     *
+     * <h2>Fixed (backlog #0-47): no initializer</h2>
+     * This was {@code = 0L} since {@code @Version} was added (e7290db1).
+     * Spring Data decides whether an entity is new from a non-primitive
+     * {@code @Version} being {@code null}, so a new {@code User} looked
+     * existing: {@code save()} ran {@code merge()} and returned a managed
+     * copy, while {@code UserService.createUser} kept using the transient
+     * original — the {@code AuthToken} saved next failed with
+     * {@code TransientPropertyValueException}, breaking every invite and
+     * crashing {@code OperatorTenantBootstrap} at startup. Hibernate sets the
+     * value to 0 on persist, so the column's {@code NOT NULL} still holds.
      */
     @Version
     @Column(name = "version", nullable = false)
-    private Long version = 0L;
+    private Long version;
 
     /** Archiving timestamp. {@code null} = active. Reversible via restore(). */
     @Column(name = "archived_at")

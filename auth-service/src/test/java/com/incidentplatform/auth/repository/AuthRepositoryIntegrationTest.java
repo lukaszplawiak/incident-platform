@@ -8,6 +8,8 @@ import com.incidentplatform.auth.domain.Team;
 import com.incidentplatform.auth.domain.TeamMember;
 import com.incidentplatform.auth.domain.TeamRole;
 import com.incidentplatform.auth.domain.User;
+import com.incidentplatform.auth.domain.UserRole;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -119,6 +121,7 @@ class AuthRepositoryIntegrationTest {
     @Autowired private ApiKeyRepository apiKeyRepository;
     @Autowired private SlackWorkspaceRepository slackWorkspaceRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private EntityManager entityManager;
 
     private static final String TENANT_ID = "test-tenant";
 
@@ -205,6 +208,56 @@ class AuthRepositoryIntegrationTest {
 
             assertThat(slackWorkspaceRepository.findByIdAndTenantId(ws.getId(), "someone-else"))
                     .isEmpty();
+        }
+    }
+
+    /**
+     * Backlog #0-47: {@code User} and {@code SlackWorkspace} initialised their
+     * {@code @Version} field to {@code 0L}, so Spring Data's
+     * {@code isNew()} (which, for a non-primitive version, means "version is
+     * null") treated a brand-new entity as existing: {@code save()} ran
+     * {@code merge()} and returned a managed <em>copy</em>, leaving the
+     * caller's instance transient. {@code UserService.createUser} ignores the
+     * return value of {@code save()}, so the {@code AuthToken} it then saved
+     * referenced a transient {@code User} and the flush failed with
+     * {@code TransientPropertyValueException}. The existing tests never saw
+     * it because {@link #persistUser} uses the return value of
+     * {@code saveAndFlush}. These tests deliberately use the instance they
+     * passed in, the way production code does.
+     */
+    @Nested
+    @DisplayName("New-entity detection (backlog #0-47)")
+    class NewEntityDetection {
+
+        @Test
+        @DisplayName("save() persists a new User in place, so an AuthToken can reference the same instance")
+        void newUserIsPersistedNotMerged() {
+            final User user = User.register(TENANT_ID, "new-invitee@example.com");
+            user.getRoles().add(UserRole.grant(user, TENANT_ID, "ROLE_RESPONDER"));
+
+            userRepository.save(user);
+            authTokenRepository.saveAndFlush(AuthToken.create(
+                    user, TENANT_ID, "hash-new-user", AuthToken.Type.INVITE,
+                    Instant.now().plusSeconds(3600)));
+
+            assertThat(entityManager.contains(user)).isTrue();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT version FROM users WHERE id = ?", Long.class, user.getId()))
+                    .isZero();
+        }
+
+        @Test
+        @DisplayName("save() persists a new SlackWorkspace in place and starts its version at 0")
+        void newSlackWorkspaceIsPersistedNotMerged() {
+            final SlackWorkspace workspace = SlackWorkspace.install(
+                    "slack-new-" + UUID.randomUUID(), null, "T0123456",
+                    "iv:ciphertext", "#incidents", false);
+
+            slackWorkspaceRepository.save(workspace);
+            entityManager.flush();
+
+            assertThat(entityManager.contains(workspace)).isTrue();
+            assertThat(workspace.getVersion()).isZero();
         }
     }
 

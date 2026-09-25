@@ -85,9 +85,14 @@ public class SlackWorkspace {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    /**
+     * No initializer (backlog #0-47): {@code null} is how Spring Data
+     * recognises a new entity; {@code 0L} made {@code save()} merge instead of
+     * persist. See {@link User}'s version field.
+     */
     @Version
     @Column(name = "version", nullable = false)
-    private Long version = 0L;
+    private Long version;
 
     protected SlackWorkspace() {}
 

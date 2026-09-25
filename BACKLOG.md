@@ -775,3 +775,4 @@ keys whose scopes their owner no longer qualifies for (reject at use, or revoke)
 
 Move an item here, with its PR, when it is finished. Items completed before this file existed are
 not listed.
+| 0-47 | Creating a user by invite failed on a real database (bug since `e7290db1`, exposed by #0-16's `OperatorTenantBootstrap`, which crashed auth-service at startup): `User.version` and `SlackWorkspace.version` were initialised to `0L`, so Spring Data saw a new entity as existing, `save()` merged instead of persisting and `UserService.createUser` kept the transient instance (`TransientPropertyValueException AuthToken.user -> User`). Both fields are now left `null` until persist; a Testcontainers test saves a new `User` + `AuthToken` the way production does. Unit tests mock repositories and V1_1 seeds users by SQL, so nothing caught it | PR (number filled after opening) |
