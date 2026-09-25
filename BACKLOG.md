@@ -59,6 +59,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-44](#0-44-concurrent-cache-misses-for-one-api-key-each-call-auth-service) | Concurrent cache misses for one API key each call auth-service | tech-debt | Low | Open |
 | [0-45](#0-45-api-key-usage-write-holds-a-second-auth-service-db-connection) | API key usage write holds a second auth-service DB connection | tech-debt | Low | Open |
 | [0-46](#0-46-personal-api-keys-can-be-granted-scopes-their-owners-role-does-not-allow) | Personal API keys can be granted scopes their owner's role does not allow | bug | Low | Open |
+| [0-48](#0-48-user-pii-lives-on-the-users-row-erasure-is-in-place-anonymization) | User PII lives on the `users` row; erasure is in-place anonymization | design | Low | Open |
 
 ---
 
@@ -156,7 +157,7 @@ and existing Testcontainers-based tests still pass.
 sit near comments that cite other items, so triage each one:
 
 - `auth-service`: `AuthServiceApplication` (future service split — now linked, backlog #0-31); `User` and
-  `UserManagementService` (Data Vault)
+  `UserManagementService` (Data Vault — now linked, backlog #0-48)
 - `escalation-service`: `EscalationScheduler` (outbox for the escalation event, see backlog #0-4)
 - `incident-service`: `IncidentKafkaConsumer` (per-severity topics); `IncidentCommandService`
 - `ingestion-service`: `AlertKafkaProducer` (envelope pattern)
@@ -753,6 +754,28 @@ keys whose scopes their owner no longer qualifies for (reject at use, or revoke)
 
 ---
 
+### 0-48. User PII lives on the `users` row; erasure is in-place anonymization
+
+**Type:** design · **Priority:** Low · **Status:** Open (was an untracked `TODO (Data Vault)`, see #0-6)
+
+**Problem.** `User` stores `email` and `password_hash` on the `users` row. GDPR erasure
+(`UserManagementService.anonymizeUser` → `User.anonymize`) overwrites them in place with a placeholder
+and keeps the row, so historical references (audit log, incident assignments) stay valid. The residual
+risk: any copy of the email outside that row (a cache, a log line, another service, a backup) can still
+be linked to the user's UUID, and every new PII column has to be remembered in `anonymize()`.
+
+**Option considered ("Data Vault" split).** Keep `users` PII-free (`id`, `tenant_id`, `active`, ...) and
+move PII to a `personal_data` table (`user_id` FK, `email`, `password_hash`, ...); erasure becomes
+`DELETE FROM personal_data WHERE user_id = ?`. Costs: a migration of existing rows, a join on the login path
+and on every email lookup (`findByEmailAndTenantId`, the unique email-per-tenant constraint moves with it),
+and it does not by itself remove copies held elsewhere.
+
+**Work.** Decide whether the in-place approach is enough (document what "erased" covers, including logs
+and backups) or plan the split, when a customer or audit requires stronger erasure guarantees. The
+`TODO`s in `User` and `UserManagementService` point here.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -769,6 +792,7 @@ keys whose scopes their owner no longer qualifies for (reject at use, or revoke)
 | 0-30 | Decided and implemented: a service that needs auth-service-owned tenant data pulls it over a narrow HTTP call with a service token `aud=auth-service`, accepted on exactly one `ROLE_SERVICE` endpoint (`GET /api/v1/internal/slack-workspace`), cached briefly by the caller. Kafka replication was rejected for a single consumer. Decision recorded in `.ai/context/project.md` and CLAUDE.md; the identity/config split it raised is #0-31 | PR #422 |
 | 0-9 | `NotificationLog`'s `@Index` list named V1's three indexes, dropped by V2 (and V5 replaced one of V2's); it now mirrors V2/V5 and says the migrations are the source of truth. A check against the real schema is #0-36 | PR #424 |
 | 0-16 | Alert sources authenticate with Integration API keys (A1): ingestion-service runs `ApiKeyAuthFilter` (`ApiKey`/`Bearer ipl_…`) and introspects the key's SHA-256 in auth-service with a tenant-less purpose token accepted on that one route only (deny by default elsewhere); 60 s cache = revocation window; 401 = definite "no", 503 + `Retry-After` = can't check; per-IP failed-auth limiter before the lookup; `hasRole('SERVICE')` removed from ingest, and ingestion accepts no service tokens. Platform alerts out of band (B3): Watchdog to a dead man's switch, critical to operator email, all to the reserved `platform-operator` tenant (invite-bootstrapped admin). Alertmanager/Prometheus pinned, rules/routes validated in CI. The 30-day `system` token, its refresher and script are gone. Only TENANT keys introspect as active (a personal key gets `active:false`). Decision in `.ai/context/project.md`. Follow-ups: #0-37..#0-46 | PR (number filled after opening) |
+| 0-47 | Creating a user by invite failed on a real database (bug since `e7290db1`, exposed by #0-16's `OperatorTenantBootstrap`, which crashed auth-service at startup): `User.version` and `SlackWorkspace.version` were initialised to `0L`, so Spring Data saw a new entity as existing, `save()` merged instead of persisting and `UserService.createUser` kept the transient instance (`TransientPropertyValueException AuthToken.user -> User`). Both fields are now left `null` until persist; a Testcontainers test saves a new `User` + `AuthToken` the way production does. Unit tests mock repositories and V1_1 seeds users by SQL, so nothing caught it | PR (number filled after opening) |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

@@ -40,7 +40,7 @@ import java.util.UUID;
  * historical references (audit logs, incident assignments) remain valid.
  * Anonymization is <strong>irreversible</strong>.
  *
- * <h2>Data Vault TODO</h2>
+ * <h2>Data Vault TODO (backlog #0-48)</h2>
  * The current approach stores PII (email, password_hash) directly on
  * this entity. A cleaner GDPR solution is the Data Vault pattern:
  * <pre>
@@ -69,9 +69,9 @@ public class User {
     @Column(name = "tenant_id", nullable = false)
     private String tenantId;
 
-    // TODO (Data Vault): email and password_hash should live in a separate
-    // personal_data table to enable clean GDPR erasure without in-place
-    // anonymization. See class Javadoc for details.
+    // TODO (backlog #0-48, Data Vault): email and password_hash should live
+    // in a separate personal_data table to enable clean GDPR erasure without
+    // in-place anonymization. See class Javadoc for details.
     @Column(name = "email", nullable = false)
     private String email;
 
@@ -91,10 +91,21 @@ public class User {
     /**
      * Optimistic locking version counter — prevents lost updates when two
      * concurrent requests modify the same user.
+     *
+     * <h2>Fixed (backlog #0-47): no initializer</h2>
+     * This was {@code = 0L} since {@code @Version} was added (e7290db1).
+     * Spring Data decides whether an entity is new from a non-primitive
+     * {@code @Version} being {@code null}, so a new {@code User} looked
+     * existing: {@code save()} ran {@code merge()} and returned a managed
+     * copy, while {@code UserService.createUser} kept using the transient
+     * original — the {@code AuthToken} saved next failed with
+     * {@code TransientPropertyValueException}, breaking every invite and
+     * crashing {@code OperatorTenantBootstrap} at startup. Hibernate sets the
+     * value to 0 on persist, so the column's {@code NOT NULL} still holds.
      */
     @Version
     @Column(name = "version", nullable = false)
-    private Long version = 0L;
+    private Long version;
 
     /** Archiving timestamp. {@code null} = active. Reversible via restore(). */
     @Column(name = "archived_at")
@@ -242,7 +253,7 @@ public class User {
      * ({@code TeamMemberRepository.deleteByUserId()}) before calling this
      * method, as {@code TeamMember} is not cascaded from User.
      *
-     * <h3>Data Vault TODO</h3>
+     * <h3>Data Vault TODO (backlog #0-48)</h3>
      * With the Data Vault pattern this method would be replaced by a single
      * {@code DELETE FROM personal_data WHERE user_id = ?} — no risk of
      * residual PII, no in-place replacement needed.

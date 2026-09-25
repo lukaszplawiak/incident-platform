@@ -216,7 +216,7 @@ public class UserManagementService {
      * a bare UUID without accompanying email/name is not personal data
      * under GDPR (no re-identification possible without the PII that was erased).
      *
-     * <h3>Data Vault TODO</h3>
+     * <h3>Data Vault TODO (backlog #0-48)</h3>
      * This in-place anonymization approach has residual risk: if any other
      * system has cached the email, it may still be linkable to this UUID.
      * The Data Vault pattern (separate personal_data table, DELETE on erasure)
