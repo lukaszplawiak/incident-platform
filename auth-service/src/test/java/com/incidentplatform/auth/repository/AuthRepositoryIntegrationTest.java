@@ -9,6 +9,13 @@ import com.incidentplatform.auth.domain.TeamMember;
 import com.incidentplatform.auth.domain.TeamRole;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.domain.UserRole;
+import com.incidentplatform.auth.dto.AcceptInviteRequest;
+import com.incidentplatform.auth.dto.ResetPasswordRequest;
+import com.incidentplatform.auth.service.AuthTokenService;
+import com.incidentplatform.auth.service.InviteService;
+import com.incidentplatform.auth.service.PasswordService;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.exception.BusinessException;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -18,7 +25,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -122,6 +131,14 @@ class AuthRepositoryIntegrationTest {
     @Autowired private SlackWorkspaceRepository slackWorkspaceRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private EntityManager entityManager;
+    @Autowired private AuthTokenService authTokenService;
+    @Autowired private InviteService inviteService;
+    @Autowired private PasswordService passwordService;
+    @Autowired private PasswordEncoder passwordEncoder;
+
+    // The service-level tests (backlog #0-50) publish audit events; this
+    // context has no Kafka, and what is published is not under test here.
+    @MockitoBean private AuditEventPublisher auditEventPublisher;
 
     private static final String TENANT_ID = "test-tenant";
 
@@ -258,6 +275,91 @@ class AuthRepositoryIntegrationTest {
 
             assertThat(entityManager.contains(workspace)).isTrue();
             assertThat(workspace.getVersion()).isZero();
+        }
+    }
+
+    /**
+     * Backlog #0-50: {@code AuthTokenService.consumeToken} claims the token
+     * with a bulk UPDATE, and every caller then works with
+     * {@code token.getUser()}. With {@code clearAutomatically = true} on that
+     * UPDATE the persistence context was cleared, the {@code User} proxy was
+     * detached, and the first real field access threw
+     * {@code LazyInitializationException} — accept-invite, reset-password
+     * and refresh rotation all failed on a real database, while the service
+     * unit tests (repositories mocked) passed. MFA goes through the same
+     * {@code consumeToken} path.
+     *
+     * <p>Each test flushes and clears after its setup, so the service loads
+     * the token (and its lazy {@code User}) from the database exactly as a
+     * fresh request does. Without that, the setup's managed {@code User}
+     * would be returned instead of a proxy and hide the bug.
+     */
+    @Nested
+    @DisplayName("Token consumption through the services (backlog #0-50)")
+    class TokenConsumptionThroughServices {
+
+        private String passwordHashOf(UUID userId) {
+            return jdbcTemplate.queryForObject(
+                    "SELECT password_hash FROM users WHERE id = ?", String.class, userId);
+        }
+
+        private void startFreshRequest() {
+            entityManager.flush();
+            entityManager.clear();
+        }
+
+        @Test
+        @DisplayName("accept-invite sets the invited user's password")
+        void acceptInviteSetsPassword() {
+            final User user = User.register(TENANT_ID, "accepts@example.com");
+            user.getRoles().add(UserRole.grant(user, TENANT_ID, "ROLE_RESPONDER"));
+            userRepository.save(user);
+            final String rawToken = authTokenService.generateInviteToken(user, TENANT_ID);
+            startFreshRequest();
+
+            inviteService.acceptInvite(
+                    new AcceptInviteRequest(rawToken, "a-long-enough-password"));
+            entityManager.flush();
+
+            assertThat(passwordEncoder.matches(
+                    "a-long-enough-password", passwordHashOf(user.getId()))).isTrue();
+        }
+
+        @Test
+        @DisplayName("reset-password stores the new password and ends every session")
+        void resetPasswordPersistsNewPasswordAndRevokesSessions() {
+            final User user = persistUser("resets@example.com", List.of("ROLE_RESPONDER"));
+            final String rawRefresh = authTokenService.generateRefreshToken(
+                    user, TENANT_ID, UUID.randomUUID());
+            final String rawReset = authTokenService.generatePasswordResetToken(user, TENANT_ID);
+            startFreshRequest();
+
+            passwordService.resetPassword(
+                    new ResetPasswordRequest(rawReset, "a-new-password"), TENANT_ID);
+            entityManager.flush();
+
+            assertThat(passwordEncoder.matches(
+                    "a-new-password", passwordHashOf(user.getId()))).isTrue();
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(rawRefresh))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("refresh rotation issues a new token pair and consumes the old refresh token")
+        void refreshRotationWorks() {
+            final User user = persistUser("refreshes@example.com", List.of("ROLE_RESPONDER"));
+            final String rawRefresh = authTokenService.generateRefreshToken(
+                    user, TENANT_ID, UUID.randomUUID());
+            startFreshRequest();
+
+            final AuthTokenService.RotationResult result =
+                    authTokenService.rotateRefreshToken(rawRefresh);
+            entityManager.flush();
+
+            assertThat(result.accessToken()).isNotBlank();
+            assertThat(result.rawRefreshToken()).isNotEqualTo(rawRefresh);
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(rawRefresh))
+                    .isInstanceOf(BusinessException.class);
         }
     }
 

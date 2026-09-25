@@ -89,8 +89,21 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
      * needs no dependency on Hibernate's flush timing to behave
      * correctly — the affected-row count is unambiguous the moment this
      * statement executes, in any transactional context.
+     *
+     * <h2>Fixed (backlog #0-50): no {@code clearAutomatically}</h2>
+     * This query carried {@code clearAutomatically = true} since the change
+     * above (f3d05fd), like the bulk queries below. Unlike them, it touches
+     * exactly one row that its only caller already holds:
+     * {@code AuthTokenService.consumeToken} loads the token, runs this, and
+     * then updates that same token in memory. Clearing the persistence context
+     * detached the token and its lazy {@code User} proxy, and every caller of
+     * {@code consumeToken} then reads or changes {@code token.getUser()}:
+     * accept-invite, reset-password, MFA and refresh rotation all failed with
+     * {@code LazyInitializationException}. Without the clear, the token stays
+     * managed and in step with the row, because {@code consumeToken} sets the
+     * same {@code usedAt} in memory.
      */
-    @Modifying(clearAutomatically = true)
+    @Modifying
     @Query("""
             UPDATE AuthToken t
             SET t.usedAt = :now
