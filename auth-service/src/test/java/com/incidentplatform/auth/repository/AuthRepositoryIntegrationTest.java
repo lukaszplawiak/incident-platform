@@ -1,6 +1,8 @@
 package com.incidentplatform.auth.repository;
 
 import com.incidentplatform.auth.domain.ApiKey;
+import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.SlackWorkspace;
@@ -140,6 +142,7 @@ class AuthRepositoryIntegrationTest {
     @Autowired private ApiKeyRepository apiKeyRepository;
     @Autowired private SlackWorkspaceRepository slackWorkspaceRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private AuthEmailOutboxRepository authEmailOutboxRepository;
     @Autowired private EntityManager entityManager;
     @Autowired private AuthTokenService authTokenService;
     @Autowired private InviteService inviteService;
@@ -468,6 +471,41 @@ class AuthRepositoryIntegrationTest {
                     .containsExactlyInAnyOrderElementsOf(
                             java.util.Arrays.stream(AuthToken.Type.values())
                                     .map(Enum::name).toList());
+        }
+    }
+
+    /**
+     * Backlog #0-53: the latest-entry lookup returned {@code Optional}
+     * from an {@code ORDER BY} query with no row limit, so a user with more than
+     * one outbox entry of a type (every resent invite, every repeated password
+     * reset) made it throw instead of returning the newest entry.
+     */
+    @Nested
+    @DisplayName("AuthEmailOutboxRepository — latest entry (backlog #0-53)")
+    class AuthEmailOutboxRepositoryTests {
+
+        private AuthEmailOutbox persistInvite(User user, String hash) {
+            final AuthToken token = authTokenRepository.saveAndFlush(AuthToken.create(
+                    user, TENANT_ID, hash, AuthToken.Type.INVITE,
+                    Instant.now().plusSeconds(3600)));
+            return authEmailOutboxRepository.saveAndFlush(
+                    AuthEmailOutbox.invitePending(user, token, "raw-" + hash));
+        }
+
+        @Test
+        @DisplayName("returns the newest of several entries")
+        void returnsNewestOfSeveral() {
+            final User user = persistUser("outbox@example.com", List.of("ROLE_RESPONDER"));
+            // At most one PENDING/FAILED entry per user and type (partial unique
+            // index, V7), so the older one is done, as it is before a resend.
+            final AuthEmailOutbox older = persistInvite(user, "hash-outbox-1");
+            older.markPermanentlyFailed("smtp down");
+            authEmailOutboxRepository.saveAndFlush(older);
+            final AuthEmailOutbox newest = persistInvite(user, "hash-outbox-2");
+
+            assertThat(authEmailOutboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
+                    user.getId(), AuthEmailType.INVITE))
+                    .map(AuthEmailOutbox::getId).contains(newest.getId());
         }
     }
 

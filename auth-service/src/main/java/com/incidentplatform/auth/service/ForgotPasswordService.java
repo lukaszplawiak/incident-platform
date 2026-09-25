@@ -107,7 +107,7 @@ public class ForgotPasswordService {
         // The existing entry will be dispatched within 30 seconds.
         // This prevents abuse by repeated rapid submissions.
         final boolean alreadyPending = outboxRepository
-                .findLatestByUserIdAndType(user.getId(), AuthEmailType.PASSWORD_RESET)
+                .findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(user.getId(), AuthEmailType.PASSWORD_RESET)
                 .filter(e -> e.getStatus() == AuthEmailStatus.PENDING)
                 .isPresent();
 

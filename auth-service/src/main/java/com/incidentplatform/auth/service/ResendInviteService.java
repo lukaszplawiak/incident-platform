@@ -108,7 +108,7 @@ public class ResendInviteService {
 
         // Guard: no point resending if there's already a PENDING entry
         // (scheduler will send it within 30 seconds)
-        outboxRepository.findLatestByUserIdAndType(userId, AuthEmailType.INVITE).ifPresent(latest -> {
+        outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(userId, AuthEmailType.INVITE).ifPresent(latest -> {
             if (latest.getStatus() == AuthEmailStatus.PENDING) {
                 throw new BusinessException(
                         ErrorCodes.BUSINESS_RULE_VIOLATION,
