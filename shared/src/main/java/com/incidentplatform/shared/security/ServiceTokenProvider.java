@@ -79,6 +79,17 @@ public class ServiceTokenProvider {
     private final ConcurrentHashMap<CacheKey, TokenHolder> tokensByTenant =
             new ConcurrentHashMap<>();
 
+    /** One purpose token per (purpose, audience) — see {@link #getPurposeToken}. */
+    private record PurposeKey(String purpose, String audience) { }
+
+    /**
+     * Purpose tokens, keyed by a fixed set of constants
+     * ({@link TokenPurposes} x {@link ServiceNames}), so this map is bounded by
+     * construction and needs none of the eviction logic of the tenant map.
+     */
+    private final ConcurrentHashMap<PurposeKey, TokenHolder> tokensByPurpose =
+            new ConcurrentHashMap<>();
+
     public ServiceTokenProvider(
             JwtUtils jwtUtils,
             @Value("${spring.application.name:unknown-service}") String serviceName) {
@@ -116,6 +127,49 @@ public class ServiceTokenProvider {
             return current.token();
         }
         return refreshAndGet(key);
+    }
+
+    /**
+     * Returns a valid purpose-scoped token (backlog #0-16) for one operation on
+     * one target service, acting for no tenant — see
+     * {@link JwtUtils#generatePurposeToken}. Cached and refreshed like
+     * {@link #getToken(String, String)}.
+     *
+     * @param purpose  one of {@link TokenPurposes}
+     * @param audience the service being called, one of {@link ServiceNames}
+     * @throws IllegalArgumentException if either is blank
+     */
+    public String getPurposeToken(String purpose, String audience) {
+        if (purpose == null || purpose.isBlank()) {
+            throw new IllegalArgumentException("purpose must not be blank");
+        }
+        if (audience == null || audience.isBlank()) {
+            throw new IllegalArgumentException(
+                    "audience must not be blank — a purpose token is valid " +
+                            "for one target service");
+        }
+        final PurposeKey key = new PurposeKey(purpose, audience);
+        final TokenHolder current = tokensByPurpose.get(key);
+        if (current != null && current.isValid()) {
+            return current.token();
+        }
+        return refreshPurposeToken(key);
+    }
+
+    /** Same double-checked refresh as {@link #refreshAndGet}. */
+    private synchronized String refreshPurposeToken(PurposeKey key) {
+        final TokenHolder current = tokensByPurpose.get(key);
+        if (current != null && current.isValid()) {
+            return current.token();
+        }
+        final String token = jwtUtils.generatePurposeToken(
+                serviceName, key.purpose(), key.audience());
+        final Instant expiresAt = Instant.now().plus(jwtUtils.getServiceTokenTtl());
+        tokensByPurpose.put(key, new TokenHolder(token, expiresAt));
+
+        log.debug("Purpose token refreshed: service={}, purpose={}, audience={}, " +
+                "expiresAt={}", serviceName, key.purpose(), key.audience(), expiresAt);
+        return token;
     }
 
     /**

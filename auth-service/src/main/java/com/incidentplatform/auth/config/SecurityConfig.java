@@ -1,9 +1,12 @@
 package com.incidentplatform.auth.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.ServiceNames;
+import com.incidentplatform.shared.security.TokenPurposes;
 import com.incidentplatform.shared.security.TokenRevocationChecker;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
@@ -17,6 +20,8 @@ import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfigurationSource;
+
+import java.util.Set;
 
 /**
  * auth-service security configuration.
@@ -80,8 +85,9 @@ public class SecurityConfig {
      */
     @Bean
     public ApiKeyAuthFilter apiKeyAuthFilter(
-            ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService) {
-        return new ApiKeyAuthFilter(apiKeyLookupService);
+            ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService,
+            ObjectMapper objectMapper) {
+        return new ApiKeyAuthFilter(apiKeyLookupService, objectMapper);
     }
 
     /**
@@ -110,10 +116,18 @@ public class SecurityConfig {
      * one internal endpoint that requires {@code ROLE_SERVICE} accepts it.
      * See backlog #0-30 for the full decision record.
      */
+    /*
+     * Added (backlog #0-16): auth-service also accepts one purpose token,
+     * TokenPurposes.API_KEY_INTROSPECTION — ingestion-service asking which
+     * tenant an Integration API key belongs to. That token acts for no tenant,
+     * so it is allowed on exactly one route below and denied on every other by
+     * authenticatedExceptPurposeTokens().
+     */
     @Bean
     public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils,
                                        TokenRevocationChecker revocationChecker) {
-        return new JwtAuthFilter(jwtUtils, revocationChecker, ServiceNames.AUTH_SERVICE);
+        return new JwtAuthFilter(jwtUtils, revocationChecker, ServiceNames.AUTH_SERVICE,
+                Set.of(TokenPurposes.API_KEY_INTROSPECTION));
     }
 
     @Bean
@@ -142,7 +156,14 @@ public class SecurityConfig {
                         // was blocked pending MFA configuration; see AuthService.login())
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/setup-required").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/enable-required").permitAll()
-                        .anyRequest().authenticated()
+                        // Backlog #0-16: the only route an IntrospectionPrincipal may
+                        // reach; the controller repeats the rule with @PreAuthorize.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/internal/api-keys/introspect")
+                        .hasRole(SecurityRoles.API_KEY_INTROSPECTION)
+                        // Deny by default for purpose tokens (backlog #0-16, #0-14):
+                        // authenticated() would let one reach every route below.
+                        .anyRequest().access(
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens())
                 )
                 .build();
     }

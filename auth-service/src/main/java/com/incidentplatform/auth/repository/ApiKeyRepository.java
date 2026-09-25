@@ -88,4 +88,19 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
             @Param("now") Instant now);
 
     Optional<ApiKey> findByIdAndTenantId(UUID id, String tenantId);
+
+    /**
+     * Sets {@code last_used_at} to {@code now} unless it was already set at or
+     * after {@code threshold} (backlog #0-16). The condition lives in SQL so
+     * that concurrent requests and several auth-service replicas together
+     * write at most once per interval, without reading the row first.
+     *
+     * @return number of rows updated (0 when the key was used recently)
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ApiKey k SET k.lastUsedAt = :now " +
+            "WHERE k.id = :id AND (k.lastUsedAt IS NULL OR k.lastUsedAt < :threshold)")
+    int touchLastUsedAt(@Param("id") UUID id,
+                        @Param("now") Instant now,
+                        @Param("threshold") Instant threshold);
 }

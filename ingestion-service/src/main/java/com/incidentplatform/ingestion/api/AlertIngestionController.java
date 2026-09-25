@@ -67,7 +67,14 @@ public class AlertIngestionController {
     }
 
     /**
-     * Fixed: the scope check below previously used a bare string literal
+     * Removed (backlog #0-16): {@code hasRole('SERVICE')}. It let any service
+     * token minted for a tenant post alerts into it, and its only intended
+     * caller, the platform's Alertmanager, now uses an Integration API key of
+     * the operator tenant ({@code alerts:ingest} scope, below) like every other
+     * external alert source. ingestion-service no longer accepts service tokens
+     * at all ({@code SecurityConfig}).
+     *
+     * <p>Fixed: the scope check below previously used a bare string literal
      * ({@code 'alerts:ingest'}), independently duplicating the value
      * auth-service's {@code ApiKeyScope.ALERTS_INGEST} enum defines —
      * an unwrapped contract between two services with nothing to detect
@@ -84,7 +91,6 @@ public class AlertIngestionController {
             produces = MediaType.APPLICATION_JSON_VALUE
     )
     @PreAuthorize("hasRole('INGESTOR') or hasRole('ADMIN') "
-            + "or hasRole('SERVICE') "
             + "or (principal instanceof T(com.incidentplatform.shared.security.UserPrincipal) "
             + "and principal.hasScope(T(com.incidentplatform.shared.security.ApiScopes).ALERTS_INGEST))")
     @Operation(
@@ -100,13 +106,17 @@ public class AlertIngestionController {
                     content = @Content(schema = @Schema(
                             implementation = Map.class))),
             @ApiResponse(responseCode = "401",
-                    description = "Missing or invalid JWT token"),
+                    description = "Missing or invalid credential (JWT or Integration API key)"),
             @ApiResponse(responseCode = "403",
                     description = "Insufficient permissions"),
             @ApiResponse(responseCode = "413",
                     description = "Payload too large (max 1MB)"),
             @ApiResponse(responseCode = "429",
-                    description = "Too many requests — rate limit exceeded")
+                    description = "Too many requests — rate limit exceeded, or too many " +
+                            "failed API key authentications from this client"),
+            @ApiResponse(responseCode = "503",
+                    description = "The API key could not be checked right now (auth-service " +
+                            "unavailable) — retry; see Retry-After")
     })
     public ResponseEntity<IngestionSummary> ingestAlerts(
             @Parameter(

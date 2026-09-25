@@ -1,70 +1,145 @@
-# Alertmanager configuration
-# Receives alerts from Prometheus and routes them to the ingestion-service webhook.
+# Alertmanager configuration for the platform's OWN monitoring (backlog #0-16)
 #
-# Authentication: Alertmanager reads a Bearer token (ROLE_SERVICE JWT) from a file
-# at runtime on every request — not once at startup from an environment variable.
-# This enables automatic token rotation: AlertManagerTokenRefresher refreshes the
-# file every 24 days, and Alertmanager picks up the new token without restart.
+# Every alert here comes from docker/prometheus.rules.yml and is about the
+# platform itself (label scope: platform). Tenants run their own Alertmanager
+# with their own Integration API key; that traffic never passes through here.
 #
-# Before starting the stack, generate the token once:
-#   export JWT_SECRET="your-64-char-secret"
-#   ./scripts/generate-alertmanager-token.sh
+# Routing (first matching route wins unless it says continue: true):
+#   1. Watchdog            -> external dead man's switch, nothing else
+#   2. AlertmanagerNotificationsFailing -> operator email only, never the
+#      webhook that may be the one failing
+#   3. critical platform   -> operator email (out of band) AND, via continue,
+#      the platform webhook (history and postmortems in the operator tenant)
+#   4. everything else     -> platform webhook only
 #
-# The token is written to docker/secrets/alertmanager-token which is mounted
-# into the Alertmanager container at /etc/alertmanager/secrets/alertmanager-token.
-# docker/secrets/ is in .gitignore — never committed to the repository.
+# Why the out-of-band paths: a system must not be the only channel that reports
+# its own failure. When ingestion-service, Kafka or notification-service is
+# down, an alert about it cannot travel through them; the email and the dead
+# man's switch do not depend on any of them. incident.io keeps a backup pager
+# for the same reason, and PagerDuty's 2025-08-28 Kafka outage degraded its own
+# notification path for hours.
+#
+# Alertmanager does NOT expand environment variables. Everything dynamic comes
+# from *_file fields read at notification time, from ./secrets (gitignored),
+# mounted read-only at /etc/alertmanager/secrets:
+#   deadmans-switch-url    URL the Watchdog is POSTed to every minute. Locally:
+#                          copy docker/deadmans-switch-url.example. In a real
+#                          deployment: a healthchecks.io / Dead Man's Snitch /
+#                          Grafana IRM heartbeat URL, which pages when pings stop.
+#   platform-operator-api-key
+#                          Integration API key (ipl_...) of the reserved
+#                          platform-operator tenant, scope alerts:ingest, for
+#                          the platform webhook (see receiver, README Step 5).
 
 global:
   resolve_timeout: 5m
   http_config:
     follow_redirects: true
+  # Dev only: mailpit (docker-compose) accepts plain SMTP without auth. A real
+  # deployment points this at its relay with TLS and smtp_auth_password_file.
+  smtp_smarthost: 'mailpit:1025'
+  smtp_from: 'alertmanager@incident-platform.local'
+  smtp_require_tls: false
 
 route:
-  receiver: incident-platform-webhook
-  group_by: ['alertname', 'tenantId', 'severity']
+  receiver: platform-webhook
+  group_by: ['alertname', 'service', 'severity']
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
 
   routes:
+    # 1. Heartbeat. Sent every minute; repeat_interval is rounded up to a
+    #    multiple of group_interval, so both are 1m. No continue: the Watchdog
+    #    must never reach ingestion-service.
     - matchers:
-        - severity = "critical"
-      receiver: incident-platform-webhook
+        - alertname = "Watchdog"
+      receiver: deadmans-switch
+      group_by: ['alertname']
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
+
+    # 2. Alertmanager itself cannot deliver: tell the operator by email only.
+    - matchers:
+        - alertname = "AlertmanagerNotificationsFailing"
+      receiver: operator-email
       group_wait: 10s
       repeat_interval: 1h
 
+    # 3. Critical platform alerts: email now, and continue to route 4 so the
+    #    same alert also becomes an incident of the operator tenant.
     - matchers:
-        - severity = "high"
-      receiver: incident-platform-webhook
-      group_wait: 30s
-      repeat_interval: 2h
+        - scope = "platform"
+        - severity = "critical"
+      receiver: operator-email
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    # 4. All platform alerts into the platform (operator tenant).
+    - matchers:
+        - scope = "platform"
+      receiver: platform-webhook
 
 receivers:
-  - name: incident-platform-webhook
+  - name: deadmans-switch
+    webhook_configs:
+      - url_file: '/etc/alertmanager/secrets/deadmans-switch-url'
+        send_resolved: false
+        timeout: 10s
+
+  - name: operator-email
+    email_configs:
+      # Literal on purpose: Alertmanager has no env expansion. Keep it equal to
+      # NOTIFICATION_OPERATOR_ALERT_EMAIL in docker-compose.yml, the address that
+      # already receives notification-service's content-free operator alerts.
+      - to: 'operator@incident-platform.local'
+        send_resolved: true
+
+  - name: platform-webhook
     webhook_configs:
       - url: 'http://host.docker.internal:8081/api/v1/alerts/prometheus'
         send_resolved: true
+        # Per attempt. Alertmanager retries network errors and 5xx (not 4xx)
+        # until the group_interval deadline; without a timeout one hung request
+        # would use up that whole window.
+        timeout: 10s
         http_config:
+          # Fixed (backlog #0-16): this used to be a 30-day ROLE_SERVICE JWT
+          # for tenant "system" that could not be revoked, minted by
+          # ingestion-service itself. Now an Integration API key of the
+          # platform-operator tenant, revocable in auth-service like any
+          # tenant's key (ingestion-service caches the answer for at most 60 s).
+          # "type: ApiKey" makes Alertmanager send "Authorization: ApiKey ipl_...".
           authorization:
-            type: Bearer
-            # credentials_file is read on every outgoing request — not once at startup.
-            # This means AlertManagerTokenRefresher can rotate the file and Alertmanager
-            # picks up the new token automatically without restart.
-            #
-            # Filename must match exactly what AlertManagerTokenRefresher writes
-            # (ALERTMANAGER_TOKEN_FILE_PATH in docker-compose.yml,
-            # /etc/secrets/alertmanager-token there — same file, mounted at a
-            # different container path here) and what
-            # scripts/generate-alertmanager-token.sh writes for the initial
-            # bootstrap token. All three previously used different filenames
-            # (alertmanager-token.txt / alertmanager-token / token) — none of
-            # them actually matched, so this mechanism could not have worked
-            # even for the very first, manually-bootstrapped token.
-            credentials_file: '/etc/alertmanager/secrets/alertmanager-token'
+            type: ApiKey
+            # credentials_file is read on every outgoing request, not once at
+            # startup, so the key can be rotated without a restart.
+            credentials_file: '/etc/alertmanager/secrets/platform-operator-api-key'
 
 inhibit_rules:
+  # Fixed (backlog #0-16): the only rule here used to target severity "warning",
+  # which no rule in prometheus.rules.yml uses, so it never inhibited anything.
+
+  # A service that is down explains its error-rate, JVM and ingestion symptoms.
+  - source_matchers:
+      - alertname = "PlatformServiceDown"
+    target_matchers:
+      - alertname =~ "HighHttpErrorRate|JvmMemoryHigh|JvmGcPauseHigh|AlertIngestionErrorRateHigh"
+    equal: ['service']
+
+  # Critical lag supersedes high lag on the same consumer group and topic.
+  - source_matchers:
+      - alertname = "KafkaConsumerLagCritical"
+    target_matchers:
+      - alertname = "KafkaConsumerLagHigh"
+    equal: ['consumergroup', 'topic']
+
+  # Generic: a critical alert silences lower severities of the same alert on
+  # the same service.
   - source_matchers:
       - severity = "critical"
     target_matchers:
-      - severity = "warning"
-    equal: ['alertname', 'instance']
+      - severity =~ "high|medium|low"
+    equal: ['alertname', 'service']

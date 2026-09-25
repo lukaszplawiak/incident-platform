@@ -22,12 +22,14 @@ import java.util.UUID;
  * Long-lived API credential for machine-to-machine integrations.
  *
  * <h2>Key format</h2>
- * Raw key: {@code ipl_<prefix8>.<random32>} — 43 characters total.
+ * Raw key: {@code ipl_<random32>} — 36 characters, no separator inside
+ * (corrected in backlog #0-16; this said {@code ipl_<prefix8>.<random32>},
+ * a format {@code ApiKeyHasher} never produced — see backlog #65 there).
  * <ul>
  *   <li>{@code ipl_} — platform prefix, distinguishes from other secrets</li>
- *   <li>{@code <prefix8>} — first 8 chars stored in {@link #keyPrefix} for
- *       UI display ("...ending in abc12345") without revealing the secret</li>
- *   <li>{@code <random32>} — cryptographically random, 192-bit entropy</li>
+ *   <li>{@code <random32>} — 24 random bytes as base64url, 192-bit entropy</li>
+ *   <li>{@link #keyPrefix} — the first 8 characters of {@code <random32>},
+ *       stored for UI display without revealing the secret</li>
  * </ul>
  * Only the SHA-256 hash ({@link #keyHash}) is stored. Raw key shown once.
  *
@@ -41,6 +43,16 @@ import java.util.UUID;
  * <h2>Scopes</h2>
  * Each key grants a subset of {@link ApiKeyScope} values. Checked by
  * {@code ApiKeyAuthFilter} on every request via {@link #hasScope}.
+ *
+ * <h2>Last used</h2>
+ * {@link #lastUsedAt} is written only by {@code ApiKeyUsageRecorder}, with a
+ * conditional UPDATE that writes at most once per
+ * {@code api-key.usage.write-interval} (default 5 minutes), so it is precise
+ * to that interval plus ingestion-service's introspection cache TTL.
+ * Fixed (backlog #0-16): V13's comment says it is updated asynchronously on
+ * every request; in fact it was never persisted (no {@code @EnableAsync}, and
+ * the write joined a read-only transaction). V13 is left unedited because an
+ * applied migration must not change.
  *
  * <h2>Revocation</h2>
  * Soft-revoked via {@link #revoke()} — sets {@link #revokedAt}.
@@ -151,14 +163,6 @@ public class ApiKey {
 
     public void revoke() {
         this.revokedAt = Instant.now();
-    }
-
-    /**
-     * Records that this key was used. Called asynchronously to avoid
-     * adding a synchronous DB write to every authenticated request.
-     */
-    public void recordUsage() {
-        this.lastUsedAt = Instant.now();
     }
 
     // ── validation ────────────────────────────────────────────────────────

@@ -142,22 +142,52 @@ services:
         condition: service_healthy
 
   # ----------------------------------------------------------
+  # Mailpit: SMTP on 1025, web UI http://localhost:8025
+  #
+  # Catches every email sent in the local stack: the operator email route of
+  # Alertmanager (backlog #0-16) and the platform's own mail (MAIL_HOST below).
+  # MAIL_HOST defaulted to "mailhog", but no such service existed, so no email
+  # was ever caught locally. MailHog is unmaintained; Mailpit is its maintained
+  # successor with the same ports.
+  # ----------------------------------------------------------
+  mailpit:
+    image: axllent/mailpit:v1.31.2
+    container_name: incident-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+  # ----------------------------------------------------------
+  # Heartbeat sink (dev stand-in for a dead man's switch service)
+  #
+  # Receives Alertmanager's Watchdog every minute and logs it
+  # (docker logs incident-heartbeat-sink). A real deployment points
+  # docker/secrets/deadmans-switch-url at healthchecks.io, Dead Man's Snitch
+  # or a Grafana IRM heartbeat instead, which pages when the pings stop.
+  # ----------------------------------------------------------
+  heartbeat-sink:
+    image: mendhak/http-https-echo:42
+    container_name: incident-heartbeat-sink
+    restart: unless-stopped
+    environment:
+      HTTP_PORT: 8080
+
+  # ----------------------------------------------------------
   # Alertmanager: http://localhost:9093
   #
-  # Routes Prometheus alerts to ingestion-service webhook.
-  # Authenticates via Bearer token (ROLE_SERVICE JWT) read from file.
+  # Routes the platform's own alerts (docker/alertmanager.yml, backlog #0-16):
+  # Watchdog to the dead man's switch, critical alerts to the operator by email,
+  # everything to the ingestion-service webhook.
   #
-  # REQUIRED - generate token before starting the stack:
-  #   export JWT_SECRET="your-64-char-secret"
-  #   ./scripts/generate-alertmanager-token.sh
-  #
-  # Token is written to docker/secrets/alertmanager-token and mounted
-  # into the container at /etc/alertmanager/secrets/alertmanager-token.
-  # Alertmanager reads the file on every outgoing request — token rotation
-  # is handled automatically by AlertManagerTokenRefresher in ingestion-service.
+  # REQUIRED files in docker/secrets/ (gitignored, mounted read-only):
+  #   deadmans-switch-url  cp docker/deadmans-switch-url.example docker/secrets/deadmans-switch-url
+  #   platform-operator-api-key  Integration API key of the platform-operator
+  #                        tenant for the ingestion-service webhook, see README Step 5
+  # Alertmanager reads both on every outgoing request, not once at startup.
   # ----------------------------------------------------------
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.34.1
     container_name: incident-alertmanager
     restart: unless-stopped
     ports:
@@ -170,6 +200,9 @@ services:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'
       - '--web.listen-address=:9093'
+    depends_on:
+      - mailpit
+      - heartbeat-sink
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -183,7 +216,7 @@ services:
   # Prometheus: http://localhost:9090
   # ----------------------------------------------------------
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.13.3
     container_name: incident-prometheus
     restart: unless-stopped
     ports:
@@ -313,11 +346,21 @@ services:
       # MFA_ENCRYPTION_KEY on purpose, see AesEncryptionConfig.
       SLACK_ENCRYPTION_KEY: ${SLACK_ENCRYPTION_KEY}
       # Mail (optional — invite emails)
-      MAIL_HOST: ${MAIL_HOST:-mailhog}
+      MAIL_HOST: ${MAIL_HOST:-mailpit}
       MAIL_PORT: ${MAIL_PORT:-1025}
       MAIL_USERNAME: ${MAIL_USERNAME:-}
       MAIL_PASSWORD: ${MAIL_PASSWORD:-}
       INVITE_EMAIL_FROM: ${INVITE_EMAIL_FROM:-noreply@incident-platform.local}
+      # Dev only (backlog #0-16, #0-42): application.yml requires SMTP auth and
+      # STARTTLS, which mailpit does not offer, so no invite was ever delivered
+      # locally. Overridden here for the compose stack only; a real relay keeps
+      # both. Spring binds each variable to the matching spring.mail.properties key.
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED: "false"
+      # Backlog #0-16: first admin of the reserved platform-operator tenant,
+      # invited once at startup (OperatorTenantBootstrap). Empty = no bootstrap.
+      OPERATOR_ADMIN_EMAIL: ${OPERATOR_ADMIN_EMAIL:-}
       # App
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8087}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
@@ -361,16 +404,11 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      ALERTMANAGER_TOKEN_FILE_PATH: /etc/secrets/alertmanager-token
-      ALERTMANAGER_TOKEN_REFRESH_ENABLED: "true"
+      # Integration API keys are checked by introspection into auth-service
+      # (backlog #0-16). If auth-service is down, ingest answers 503 and the
+      # sender retries, so no depends_on: ingestion starts without it.
+      AUTH_SERVICE_URL: http://auth-service:8087
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
-    volumes:
-      # NOT :ro — AlertManagerTokenRefresher must be able to write the
-      # rotated token here (docker/secrets/alertmanager-token). This
-      # directory contains only that one generated file (see
-      # scripts/generate-alertmanager-token.sh), nothing else, so
-      # granting write access here doesn't expose any other secret.
-      - ./secrets:/etc/secrets
     depends_on:
       kafka:
         condition: service_healthy
@@ -453,12 +491,15 @@ services:
       # workspace connection from auth-service — SLACK_BOT_TOKEN below was
       # removed, it's no longer a platform-wide secret held here.
       AUTH_SERVICE_URL: http://auth-service:8087
-      MAIL_HOST: ${MAIL_HOST:-mailhog}
+      MAIL_HOST: ${MAIL_HOST:-mailpit}
       MAIL_PORT: ${MAIL_PORT:-1025}
       MAIL_USERNAME: ${MAIL_USERNAME:-}
       MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      # Dev only (backlog #0-16, #0-42): see auth-service above.
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-placeholder-signing-secret-not-real}
-      # Dev only: mailhog catches it. The service has no default (empty means no operator email),
+      # Dev only: mailpit catches it. The service has no default (empty means no operator email),
       # and the k8s ConfigMap ships it empty; never point a shared environment at a placeholder.
       NOTIFICATION_OPERATOR_ALERT_EMAIL: ${NOTIFICATION_OPERATOR_ALERT_EMAIL:-operator@incident-platform.local}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}

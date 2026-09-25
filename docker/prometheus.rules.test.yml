@@ -1,0 +1,68 @@
+# Unit tests for docker/prometheus.rules.yml (backlog #0-16).
+#   promtool test rules docker/prometheus.rules.test.yml
+# Run in CI by the "Validate monitoring config" step.
+
+rule_files:
+  - prometheus.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # The Watchdog fires unconditionally, from the first evaluation.
+  - interval: 1m
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              scope: platform
+            exp_annotations:
+              summary: "Alerting pipeline heartbeat (always firing)"
+              description: "This alert is always firing. If the dead man's switch stops receiving it, Prometheus or Alertmanager is down or cannot send notifications.\n"
+
+  # Failed notifications fire only after 5 minutes of sustained failures,
+  # and not at all while the counter is flat.
+  - interval: 1m
+    input_series:
+      - series: 'alertmanager_notifications_failed_total{integration="webhook",reason="serverError"}'
+        values: '0+1x20'
+      - series: 'alertmanager_notifications_failed_total{integration="email",reason="other"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              integration: webhook
+            exp_annotations:
+              summary: "Alertmanager cannot deliver webhook notifications"
+              description: "Alertmanager has been failing to send webhook notifications for at least 5 minutes. Platform alerts sent through that integration are not arriving.\n"
+
+  # Any of the services down is critical (email route), Alertmanager itself is not
+  # matched by the job regex.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="auth-service",service="auth-service"}'
+        values: '0x5'
+      - series: 'up{job="ingestion-service",service="ingestion-service"}'
+        values: '1x5'
+      - series: 'up{job="alertmanager",service="alertmanager"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PlatformServiceDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: auth-service
+              service: auth-service
+            exp_annotations:
+              summary: "auth-service is down"
+              description: "auth-service has been unreachable for Prometheus for more than 1 minute.\n"

@@ -16,6 +16,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -50,6 +51,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String MDC_REQUEST_ID = "requestId";
     private static final String MDC_USER_ID = "userId";
+    /**
+     * Prefix of an Integration API key. {@code Bearer ipl_...} is an API key
+     * sent with the common Bearer scheme (backlog #0-16): it is
+     * {@link ApiKeyAuthFilter}'s to handle, and parsing it as a JWT here would
+     * only log a spurious "Invalid JWT token" warning on every such request.
+     */
+    private static final String API_KEY_PREFIX = "ipl_";
 
     private final JwtUtils jwtUtils;
 
@@ -69,10 +77,17 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final String expectedAudience;
 
     /**
+     * {@link TokenPurposes} this service accepts (backlog #0-16). Empty means
+     * none (fail closed) — the case for every service except auth-service,
+     * which accepts {@link TokenPurposes#API_KEY_INTROSPECTION}.
+     */
+    private final Set<String> acceptedPurposes;
+
+    /**
      * Default constructor — no revocation checking and no service tokens.
      */
     public JwtAuthFilter(JwtUtils jwtUtils) {
-        this(jwtUtils, jti -> false, null);
+        this(jwtUtils, jti -> false, null, Set.of());
     }
 
     /**
@@ -89,7 +104,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
      * wants revocation checking with no service-token audience at all.
      */
     public JwtAuthFilter(JwtUtils jwtUtils, TokenRevocationChecker revocationChecker) {
-        this(jwtUtils, revocationChecker, null);
+        this(jwtUtils, revocationChecker, null, Set.of());
     }
 
     /**
@@ -99,9 +114,25 @@ public class JwtAuthFilter extends OncePerRequestFilter {
      */
     public JwtAuthFilter(JwtUtils jwtUtils, TokenRevocationChecker revocationChecker,
                          String expectedAudience) {
+        this(jwtUtils, revocationChecker, expectedAudience, Set.of());
+    }
+
+    /**
+     * Constructor for a service that also accepts purpose-scoped tokens
+     * (backlog #0-16): a token whose {@code purpose} claim is in
+     * {@code acceptedPurposes} and whose {@code aud} is
+     * {@code expectedAudience} authenticates as an
+     * {@link IntrospectionPrincipal}, with no tenant. The route that needs it
+     * must allow {@link SecurityRoles#API_KEY_INTROSPECTION} explicitly, and
+     * every other route must deny it
+     * ({@link SharedSecurityAutoConfiguration#authenticatedExceptPurposeTokens}).
+     */
+    public JwtAuthFilter(JwtUtils jwtUtils, TokenRevocationChecker revocationChecker,
+                         String expectedAudience, Set<String> acceptedPurposes) {
         this.jwtUtils = jwtUtils;
         this.revocationChecker = revocationChecker;
         this.expectedAudience = expectedAudience;
+        this.acceptedPurposes = Set.copyOf(acceptedPurposes);
     }
 
     @Override
@@ -146,6 +177,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         if (jtiOpt.isPresent() && revocationChecker.isRevoked(jtiOpt.get())) {
             log.warn("Revoked JWT presented: jti={}, request={}",
                     jtiOpt.get(), request.getRequestURI());
+            return;
+        }
+
+        // Added (backlog #0-16): a purpose token acts for no tenant and must
+        // not reach the service-token branch below, which requires one. It is
+        // checked first, and the purpose branch itself refuses a token that
+        // also carries a tenantId or serviceName claim.
+        final Optional<String> purposeOpt = jwtUtils.extractPurpose(claims);
+        if (purposeOpt.isPresent()) {
+            authenticatePurpose(request, claims, purposeOpt.get());
             return;
         }
 
@@ -259,6 +300,53 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 "request={}", serviceName, tenantId, request.getRequestURI());
     }
 
+    /**
+     * Authenticates a purpose-scoped token ({@code purpose} claim present,
+     * backlog #0-16). Requires the purpose to be accepted by this service, an
+     * {@code aud} claim naming this service, and <em>no</em> {@code tenantId}
+     * or {@code serviceName} claim: a token that tries to be both a purpose
+     * token and a tenant-bound service token is malformed, not a stronger
+     * credential. {@link TenantContext} is deliberately left unset.
+     */
+    private void authenticatePurpose(HttpServletRequest request,
+                                     Claims claims,
+                                     String purpose) {
+        if (!acceptedPurposes.contains(purpose)) {
+            log.warn("Purpose token not accepted by this service rejected: " +
+                    "purpose={}, request={}", purpose, request.getRequestURI());
+            return;
+        }
+        if (expectedAudience == null || expectedAudience.isBlank()
+                || !jwtUtils.extractAudience(claims).contains(expectedAudience)) {
+            log.warn("Purpose token not issued for this service rejected: " +
+                    "purpose={}, request={}", purpose, request.getRequestURI());
+            return;
+        }
+        if (jwtUtils.extractTenantId(claims).isPresent()
+                || jwtUtils.extractServiceName(claims).isPresent()) {
+            log.warn("Purpose token carrying tenantId/serviceName rejected: " +
+                    "purpose={}, request={}", purpose, request.getRequestURI());
+            return;
+        }
+        final String caller = claims.getSubject();
+        if (caller == null || caller.isBlank()) {
+            log.warn("Purpose token without subject rejected: purpose={}, request={}",
+                    purpose, request.getRequestURI());
+            return;
+        }
+
+        final IntrospectionPrincipal principal = new IntrospectionPrincipal(caller);
+        final UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(
+                        principal, null, principal.getAuthorities());
+        authentication.setDetails(
+                new WebAuthenticationDetailsSource().buildDetails(request));
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        log.debug("Purpose authentication set: caller={}, purpose={}, request={}",
+                caller, purpose, request.getRequestURI());
+    }
+
     private Optional<String> extractBearerToken(HttpServletRequest request) {
         final String authHeader = request.getHeader(AUTHORIZATION_HEADER);
         if (authHeader == null || !authHeader.startsWith(BEARER_PREFIX)) {
@@ -268,6 +356,9 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         final String token = authHeader.substring(BEARER_PREFIX.length()).trim();
         if (token.isBlank()) {
             log.warn("Empty Bearer token in Authorization header");
+            return Optional.empty();
+        }
+        if (token.startsWith(API_KEY_PREFIX)) {
             return Optional.empty();
         }
 

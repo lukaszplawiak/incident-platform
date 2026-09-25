@@ -16,7 +16,9 @@ public final class ServiceNames {
 
     public static final String ONCALL_SERVICE    = "oncall-service";
     public static final String INCIDENT_SERVICE  = "incident-service";
-    public static final String INGESTION_SERVICE = "ingestion-service";
+    // Removed (backlog #0-16): INGESTION_SERVICE. Its only caller was the
+    // platform Alertmanager's service token; ingestion-service now accepts no
+    // service tokens and authenticates alert sources by Integration API key.
 
     /**
      * Added (backlog #0-21/#0-30): auth-service was deliberately never a valid

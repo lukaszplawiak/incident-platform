@@ -59,7 +59,11 @@ public class SecurityConfig {
                         // actually existed, leaving /ws/** fully
                         // unauthenticated end to end.
                         .requestMatchers("/ws/**").permitAll()
-                        .anyRequest().authenticated()
+                        // Backlog #0-16: not authenticated() — a purpose token (tenant-less,
+                        // valid for one operation) is denied here even if this service's
+                        // JwtAuthFilter is ever given an accepted purpose.
+                        .anyRequest().access(
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens())
                 )
                 .build();
     }

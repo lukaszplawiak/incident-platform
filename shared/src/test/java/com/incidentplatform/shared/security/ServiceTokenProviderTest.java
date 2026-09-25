@@ -319,4 +319,60 @@ class ServiceTokenProviderTest {
             assertThat(Set.copyOf(results)).hasSize(1);
         }
     }
+
+    // ─── purpose tokens (backlog #0-16) ───────────────────────────────────────
+
+    @Nested
+    @DisplayName("purpose tokens")
+    class PurposeTokens {
+
+        private static final String PURPOSE = TokenPurposes.API_KEY_INTROSPECTION;
+        private static final String AUTH = ServiceNames.AUTH_SERVICE;
+
+        @Test
+        @DisplayName("mints a purpose token once and serves it from the cache")
+        void cachesPurposeToken() {
+            given(jwtUtils.generatePurposeToken(SERVICE_NAME, PURPOSE, AUTH))
+                    .willReturn(FAKE_TOKEN);
+
+            assertThat(provider.getPurposeToken(PURPOSE, AUTH)).isEqualTo(FAKE_TOKEN);
+            assertThat(provider.getPurposeToken(PURPOSE, AUTH)).isEqualTo(FAKE_TOKEN);
+
+            then(jwtUtils).should(times(1)).generatePurposeToken(SERVICE_NAME, PURPOSE, AUTH);
+        }
+
+        @Test
+        @DisplayName("never mints a tenant-bound service token for a purpose")
+        void neverUsesTenantPath() {
+            given(jwtUtils.generatePurposeToken(anyString(), anyString(), anyString()))
+                    .willReturn(FAKE_TOKEN);
+
+            provider.getPurposeToken(PURPOSE, AUTH);
+
+            then(jwtUtils).should(times(0))
+                    .generateServiceToken(anyString(), anyString(), anyString());
+        }
+
+        @Test
+        @DisplayName("re-mints once the cached token is inside the refresh buffer")
+        void refreshesNearExpiry() {
+            // TTL shorter than the 300 s refresh buffer: every cached token is
+            // already "expiring", so each call mints a new one
+            given(jwtUtils.getServiceTokenTtl()).willReturn(Duration.ofSeconds(60));
+            given(jwtUtils.generatePurposeToken(SERVICE_NAME, PURPOSE, AUTH))
+                    .willReturn("t1", "t2");
+
+            assertThat(provider.getPurposeToken(PURPOSE, AUTH)).isEqualTo("t1");
+            assertThat(provider.getPurposeToken(PURPOSE, AUTH)).isEqualTo("t2");
+        }
+
+        @Test
+        @DisplayName("rejects a blank purpose or audience")
+        void rejectsBlank() {
+            assertThatThrownBy(() -> provider.getPurposeToken(" ", AUTH))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> provider.getPurposeToken(PURPOSE, null))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
 }

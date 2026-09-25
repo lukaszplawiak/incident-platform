@@ -642,5 +642,34 @@ class AuthRepositoryIntegrationTest {
 
             assertThat(result).isEmpty();
         }
+
+        /**
+         * Backlog #0-16: last_used_at is written by one conditional UPDATE, at
+         * most once per interval. The condition is in SQL, so only a real
+         * database proves it.
+         */
+        @Test
+        @DisplayName("touchLastUsedAt writes when unset or older than the threshold, not when recent")
+        void touchLastUsedAtIsConditional() {
+            final ApiKey key = apiKeyRepository.saveAndFlush(ApiKey.createTenant(
+                    TENANT_ID, "Usage key", "hash-usage-key", "ak_live_",
+                    List.of("alerts:ingest"), null));
+            final Instant t0 = Instant.parse("2026-09-24T10:00:00Z");
+
+            assertThat(apiKeyRepository.touchLastUsedAt(key.getId(), t0, t0.minusSeconds(300)))
+                    .as("first use, last_used_at is NULL").isEqualTo(1);
+
+            final Instant t1 = t0.plusSeconds(60);
+            assertThat(apiKeyRepository.touchLastUsedAt(key.getId(), t1, t1.minusSeconds(300)))
+                    .as("used 60 s ago, inside the 5 min interval").isZero();
+
+            final Instant t2 = t0.plusSeconds(301);
+            assertThat(apiKeyRepository.touchLastUsedAt(key.getId(), t2, t2.minusSeconds(300)))
+                    .as("used 301 s ago, outside the interval").isEqualTo(1);
+
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT last_used_at FROM api_keys WHERE id = ?",
+                    java.sql.Timestamp.class, key.getId()).toInstant()).isEqualTo(t2);
+        }
     }
 }

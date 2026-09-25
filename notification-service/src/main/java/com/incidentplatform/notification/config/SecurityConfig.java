@@ -44,7 +44,11 @@ public class SecurityConfig {
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
                         // Slack sends signed callbacks without JWT — verified by SlackSignatureVerifier
                         .requestMatchers("/api/v1/slack/actions").permitAll()
-                        .anyRequest().authenticated()
+                        // Backlog #0-16: not authenticated() — a purpose token (tenant-less,
+                        // valid for one operation) is denied here even if this service's
+                        // JwtAuthFilter is ever given an accepted purpose.
+                        .anyRequest().access(
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens())
                 )
                 .build();
     }

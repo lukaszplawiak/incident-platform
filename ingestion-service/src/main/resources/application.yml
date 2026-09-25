@@ -33,21 +33,9 @@ spring:
       properties:
         enable.idempotence: true
         interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor
-    consumer:
-      group-id: ingestion-service
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      auto-offset-reset: earliest
-      enable-auto-commit: false
-      properties:
-        interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaConsumerInterceptor
-        max.poll.interval.ms: 30000
-        session.timeout.ms: 15000
-        heartbeat.interval.ms: 5000
-        max.poll.records: 10
-    listener:
-      ack-mode: MANUAL_IMMEDIATE
-      concurrency: 3
+    # No consumer: ingestion-service only produces (alerts.raw, alerts.resolved,
+    # alerts.dead-letter) and has no @KafkaListener. The consumer/listener
+    # block that used to be here configured nothing (removed with backlog #0-16).
 
   security:
     user:
@@ -116,6 +104,17 @@ ingestion:
   trusted-proxies: []
   prometheus:
     max-batch-size: ${PROMETHEUS_MAX_BATCH_SIZE:500}
+  client:
+    # Timeouts of calls to other services — today only API key introspection
+    # into auth-service (backlog #0-16). Short: the call sits on an alert's
+    # request path, and a timeout answers 503 so the sender retries.
+    connect-timeout-seconds: ${INGESTION_CLIENT_CONNECT_TIMEOUT:2}
+    read-timeout-seconds: ${INGESTION_CLIENT_READ_TIMEOUT:3}
+
+# auth-service answers which tenant an Integration API key belongs to
+# (POST /api/v1/internal/api-keys/introspect, backlog #0-16, the #0-30 pattern).
+auth-service:
+  base-url: ${AUTH_SERVICE_URL:http://localhost:8087}
 
 deduplication:
   ttl: ${DEDUPLICATION_TTL:PT5M}
@@ -206,6 +205,41 @@ resilience4j:
           - io.lettuce.core.RedisConnectionException
           - java.net.ConnectException
 
+      # ApiKeyIntrospectionClientImpl (backlog #0-16) — same shape as
+      # notification-service's slack-workspace breaker (#0-30). {"active":false}
+      # is a normal answer returned inside the proxied method, so a burst of
+      # wrong keys never opens the circuit and locks out valid ones. Only an
+      # unreachable auth-service, a 5xx or an unparseable body counts. A 4xx
+      # (e.g. auth-service rejecting our purpose token) is not recorded as a
+      # failure but still reaches the fallback: 503 to the sender, and
+      # service_client_fallback_total{reason="auth"}.
+      api-key-introspection:
+        register-health-indicator: true
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 15s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+          - java.lang.IllegalStateException
+
+  retry:
+    instances:
+      # One quick retry of the introspection call. @Retry wraps @CircuitBreaker
+      # (Resilience4j's default aspect order), so it sees what the breaker's
+      # fallback throws — ApiKeyIntrospectionUnavailableException — not the
+      # original ResourceAccessException; that is the exception listed here
+      # (unlike notification-service's oncall retry, backlog #0-23).
+      # ApiKeyIntrospectionClientResilienceTest checks it with the real proxies.
+      api-key-introspection:
+        max-attempts: ${API_KEY_INTROSPECTION_RETRY_MAX_ATTEMPTS:2}
+        wait-duration: ${API_KEY_INTROSPECTION_RETRY_WAIT_MS:100ms}
+        retry-exceptions:
+          - com.incidentplatform.ingestion.apikey.ApiKeyIntrospectionUnavailableException
+
 # ================================================================
 # Rate Limiting — multi-layer DDoS protection (Layer 3)
 #
@@ -245,18 +279,13 @@ rate-limiting:
     capacity: ${RATE_LIMIT_IP_CAPACITY:50}
     refill-tokens: ${RATE_LIMIT_IP_REFILL:5}
     refill-period-seconds: ${RATE_LIMIT_IP_PERIOD:1}
-alertmanager:
-  # Path to the file where the Alertmanager ingestor token is written.
-  # Must match the credentials_file path mounted into the Alertmanager container.
-  # Leave blank to disable automatic token refresh (e.g. in CI/test environments).
-  token-file-path: ${ALERTMANAGER_TOKEN_FILE_PATH:}
-
-  # Enable/disable automatic token refresh.
-  token-refresh-enabled: ${ALERTMANAGER_TOKEN_REFRESH_ENABLED:true}
-
-  # Token refresh delay in ms — defaults to 80% of jwt.access-token-ttl (PT15M * 0.8).
-  # Override explicitly if needed, e.g. after changing jwt.access-token-ttl.
-  # token-refresh-delay-ms: 69120000
+  # Failed API key authentications per client IP, checked before a key is
+  # sent to auth-service (AuthFailureRateLimiter, backlog #0-16). Only
+  # failures consume; a key in the introspection cache is never throttled.
+  auth-failure:
+    capacity: ${RATE_LIMIT_AUTH_FAILURE_CAPACITY:10}
+    refill-tokens: ${RATE_LIMIT_AUTH_FAILURE_REFILL:10}
+    refill-period-seconds: ${RATE_LIMIT_AUTH_FAILURE_PERIOD:60}
 
 security:
   cors:

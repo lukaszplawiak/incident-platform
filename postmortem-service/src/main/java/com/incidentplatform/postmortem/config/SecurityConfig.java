@@ -23,7 +23,8 @@ import org.springframework.web.cors.CorsConfigurationSource;
  * <h2>Defense in depth</h2>
  * <ul>
  *   <li>Layer 1 — {@link SecurityFilterChain}: every request must carry a
- *       valid JWT ({@code anyRequest().authenticated()}). Unauthenticated
+ *       valid JWT ({@code anyRequest()}, which also denies purpose tokens,
+ *       backlog #0-16). Unauthenticated
  *       requests receive {@code 401 Unauthorized} via
  *       {@link UnauthorizedEntryPoint}.</li>
  *   <li>Layer 2 — {@code @PreAuthorize} on each controller method: only
@@ -56,7 +57,11 @@ public class SecurityConfig {
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
-                        .anyRequest().authenticated()
+                        // Backlog #0-16: not authenticated() — a purpose token (tenant-less,
+                        // valid for one operation) is denied here even if this service's
+                        // JwtAuthFilter is ever given an accepted purpose.
+                        .anyRequest().access(
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens())
                 )
                 .build();
     }
