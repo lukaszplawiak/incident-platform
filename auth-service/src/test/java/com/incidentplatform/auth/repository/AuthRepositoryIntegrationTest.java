@@ -3,6 +3,7 @@ package com.incidentplatform.auth.repository;
 import com.incidentplatform.auth.bootstrap.OperatorTenantBootstrap;
 import com.incidentplatform.auth.domain.ApiKey;
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.Role;
@@ -21,7 +22,10 @@ import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.InviteService;
 import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.PasswordService;
+import com.incidentplatform.auth.service.AuthEmailPersistenceService;
+import com.incidentplatform.auth.service.ForgotPasswordService;
 import com.incidentplatform.auth.service.ResendInviteService;
+import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.auth.service.UserService;
 import com.incidentplatform.shared.security.ReservedTenants;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -155,6 +159,8 @@ class AuthRepositoryIntegrationTest {
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private UserService userService;
     @Autowired private ResendInviteService resendInviteService;
+    @Autowired private ForgotPasswordService forgotPasswordService;
+    @Autowired private AuthEmailPersistenceService authEmailPersistenceService;
     @Autowired private MfaService mfaService;
     @Autowired private TotpService totpService;
     @Autowired @Qualifier("mfaEncryptionService") private AesEncryptionService mfaEncryptionService;
@@ -491,28 +497,298 @@ class AuthRepositoryIntegrationTest {
     @DisplayName("AuthEmailOutboxRepository — latest entry (backlog #0-53)")
     class AuthEmailOutboxRepositoryTests {
 
-        private AuthEmailOutbox persistInvite(User user, String hash) {
-            final AuthToken token = authTokenRepository.saveAndFlush(AuthToken.create(
-                    user, TENANT_ID, hash, AuthToken.Type.INVITE,
-                    Instant.now().plusSeconds(3600)));
-            return authEmailOutboxRepository.saveAndFlush(
-                    AuthEmailOutbox.invitePending(user, token, "raw-" + hash));
-        }
-
         @Test
         @DisplayName("returns the newest of several entries")
         void returnsNewestOfSeveral() {
             final User user = persistUser("outbox@example.com", List.of("ROLE_RESPONDER"));
-            // At most one PENDING/FAILED entry per user and type (partial unique
-            // index, V7), so the older one is done, as it is before a resend.
-            final AuthEmailOutbox older = persistInvite(user, "hash-outbox-1");
-            older.markPermanentlyFailed("smtp down");
-            authEmailOutboxRepository.saveAndFlush(older);
-            final AuthEmailOutbox newest = persistInvite(user, "hash-outbox-2");
+            final AuthEmailOutbox older = authEmailOutboxRepository.saveAndFlush(AuthEmailOutbox.request(
+                    user, AuthEmailType.INVITE, java.time.Duration.ofDays(7)));
+            jdbcTemplate.update("UPDATE auth_email_outbox SET created_at = created_at - INTERVAL '1 minute' "
+                    + "WHERE id = ?", older.getId());
+            final AuthEmailOutbox newest = authEmailOutboxRepository.saveAndFlush(AuthEmailOutbox.request(
+                    user, AuthEmailType.INVITE, java.time.Duration.ofDays(7)));
 
             assertThat(authEmailOutboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
                     user.getId(), AuthEmailType.INVITE))
                     .map(AuthEmailOutbox::getId).contains(newest.getId());
+        }
+    }
+
+    /**
+     * Backlog #0-52: the auth email outbox as a send intent, against the real
+     * schema — the two scheduler lanes, the conditional UPDATEs and the V19
+     * CHECKs, each step of an attempt ({@code AuthEmailPersistenceService}) with
+     * real tokens, the scheduler superseding older requests, resend-invite and
+     * forgot-password next to a request still being retried, and the purge.
+     */
+    @Nested
+    @DisplayName("AuthEmailOutbox as a send intent (backlog #0-52)")
+    class AuthEmailOutboxSendIntent {
+
+        private static final java.time.Duration INVITE_LIFETIME = java.time.Duration.ofDays(7);
+        private static final java.time.Duration RESET_LIFETIME = java.time.Duration.ofMinutes(15);
+        private static final java.time.Duration NO_TOLERANCE = java.time.Duration.ZERO;
+
+        private final org.springframework.data.domain.Pageable page =
+                org.springframework.data.domain.PageRequest.of(0, 10);
+
+        private AuthEmailOutbox request(User user, AuthEmailType type) {
+            return authEmailOutboxRepository.saveAndFlush(AuthEmailOutbox.request(
+                    user, type, type == AuthEmailType.INVITE ? INVITE_LIFETIME : RESET_LIFETIME));
+        }
+
+        private User invitedUser(String email) {
+            return userRepository.saveAndFlush(User.forTesting(
+                    null, TENANT_ID, email, null, true, List.of("ROLE_RESPONDER")));
+        }
+
+        private void ageBy(AuthEmailOutbox entry, String interval) {
+            jdbcTemplate.update("UPDATE auth_email_outbox SET created_at = created_at - CAST(? AS INTERVAL), "
+                    + "next_attempt_at = next_attempt_at - CAST(? AS INTERVAL) WHERE id = ?",
+                    interval, interval, entry.getId());
+        }
+
+        private AuthEmailOutbox reload(AuthEmailOutbox entry) {
+            entityManager.flush();
+            entityManager.clear();
+            return authEmailOutboxRepository.findById(entry.getId()).orElseThrow();
+        }
+
+        private List<String> statuses(User user, String emailType) {
+            return jdbcTemplate.queryForList("""
+                    SELECT status FROM auth_email_outbox
+                    WHERE user_id = ? AND email_type = ? ORDER BY created_at
+                    """, String.class, user.getId(), emailType);
+        }
+
+        @Test
+        @DisplayName("the table holds no token: no raw_token or token_id column")
+        void noTokenColumns() {
+            assertThat(jdbcTemplate.queryForList("""
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'auth_email_outbox'
+                    """, String.class)).doesNotContain("raw_token", "token_id");
+        }
+
+        @Test
+        @DisplayName("a request copies email and tenant and is due at once, with a deadline of its lifetime")
+        void requestShape() {
+            final User user = invitedUser("shape@example.com");
+
+            final AuthEmailOutbox entry = reload(request(user, AuthEmailType.INVITE));
+
+            assertThat(entry.getStatus()).isEqualTo(AuthEmailStatus.PENDING);
+            assertThat(entry.getTenantId()).isEqualTo(TENANT_ID);
+            assertThat(entry.getEmail()).isEqualTo("shape@example.com");
+            assertThat(entry.getNextAttemptAt()).isEqualTo(entry.getCreatedAt());
+            assertThat(java.time.Duration.between(entry.getCreatedAt(), entry.getDeadline()))
+                    .isEqualTo(INVITE_LIFETIME);
+        }
+
+        @Test
+        @DisplayName("PENDING lane: due entries, oldest due first; a future one waits")
+        void pendingLane() {
+            final AuthEmailOutbox older = request(invitedUser("lane-p1@example.com"), AuthEmailType.INVITE);
+            ageBy(older, "1 minute");
+            final AuthEmailOutbox newer = request(invitedUser("lane-p2@example.com"), AuthEmailType.INVITE);
+            final AuthEmailOutbox future = request(invitedUser("lane-p3@example.com"), AuthEmailType.INVITE);
+            jdbcTemplate.update("UPDATE auth_email_outbox SET next_attempt_at = NOW() + INTERVAL '1 hour' "
+                    + "WHERE id = ?", future.getId());
+            entityManager.clear();
+
+            assertThat(authEmailOutboxRepository.findDuePending(Instant.now().plusSeconds(1), page))
+                    .extracting(AuthEmailOutbox::getId)
+                    .containsExactly(older.getId(), newer.getId());
+        }
+
+        @Test
+        @DisplayName("retry lane: FAILED entries whose next attempt has come, none of the PENDING ones")
+        void retryLane() {
+            final Instant now = Instant.now();
+            final AuthEmailOutbox due = request(invitedUser("lane-f1@example.com"), AuthEmailType.INVITE);
+            final AuthEmailOutbox later = request(invitedUser("lane-f2@example.com"), AuthEmailType.INVITE);
+            request(invitedUser("lane-f3@example.com"), AuthEmailType.INVITE);
+            assertThat(authEmailOutboxRepository.markFailed(due.getId(), "smtp down", now.minusSeconds(5)))
+                    .isEqualTo(1);
+            assertThat(authEmailOutboxRepository.markFailed(later.getId(), "smtp down", now.plusSeconds(3600)))
+                    .isEqualTo(1);
+            entityManager.clear();
+
+            assertThat(authEmailOutboxRepository.findDueFailed(now, page))
+                    .extracting(AuthEmailOutbox::getId).containsExactly(due.getId());
+            assertThat(reload(due).getAttempts()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("the conditional UPDATEs change an entry only while it is open")
+        void conditionalUpdates() {
+            final AuthEmailOutbox entry = request(invitedUser("cond@example.com"), AuthEmailType.INVITE);
+
+            assertThat(authEmailOutboxRepository.markSent(entry.getId(), Instant.now())).isEqualTo(1);
+            assertThat(authEmailOutboxRepository.markSent(entry.getId(), Instant.now())).isZero();
+            assertThat(authEmailOutboxRepository.markFailed(entry.getId(), "late", Instant.now())).isZero();
+            assertThat(authEmailOutboxRepository.close(entry.getId(), AuthEmailStatus.SUPERSEDED, "late"))
+                    .isZero();
+
+            final AuthEmailOutbox sent = reload(entry);
+            assertThat(sent.getStatus()).isEqualTo(AuthEmailStatus.SENT);
+            assertThat(sent.getNextAttemptAt()).isNull();
+            assertThat(sent.getSentAt()).isNotNull();
+            assertThat(sent.getAttempts()).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("V19 rejects an open entry without a next attempt, and a terminal one with it")
+        void nextAttemptCheck() {
+            final AuthEmailOutbox entry = request(invitedUser("check@example.com"), AuthEmailType.INVITE);
+
+            assertThatThrownBy(() -> jdbcTemplate.update(
+                    "UPDATE auth_email_outbox SET status = 'SENT' WHERE id = ?", entry.getId()))
+                    .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        }
+
+        @Test
+        @DisplayName("prepareAttempt creates a working token and invalidates the user's earlier one")
+        void prepareAttemptCreatesToken() {
+            final User user = invitedUser("prepare@example.com");
+            final String earlier = authTokenService.generateInviteToken(user, TENANT_ID);
+            final AuthEmailOutbox entry = request(user, AuthEmailType.INVITE);
+            entityManager.clear();
+
+            final AuthEmailPersistenceService.Attempt attempt =
+                    authEmailPersistenceService.prepareAttempt(entry, Instant.now(), NO_TOLERANCE);
+
+            assertThat(attempt).isInstanceOf(AuthEmailPersistenceService.Attempt.Send.class);
+            final String raw = ((AuthEmailPersistenceService.Attempt.Send) attempt).rawToken();
+            assertThat(authTokenService.peekToken(raw, AuthToken.Type.INVITE).getUser().getId())
+                    .isEqualTo(user.getId());
+            assertThat(authTokenRepository.findValidByUserIdAndType(
+                    user.getId(), AuthToken.Type.INVITE, Instant.now()))
+                    .singleElement()
+                    .extracting(AuthToken::getId)
+                    .isEqualTo(((AuthEmailPersistenceService.Attempt.Send) attempt).tokenId());
+            assertThatThrownBy(() -> authTokenService.peekToken(earlier, AuthToken.Type.INVITE))
+                    .as("the earlier link no longer works");
+        }
+
+        @Test
+        @DisplayName("a failed attempt invalidates its token and schedules the next one")
+        void recordFailedInvalidatesToken() {
+            final User user = invitedUser("failed@example.com");
+            final AuthEmailOutbox entry = request(user, AuthEmailType.INVITE);
+            final AuthEmailPersistenceService.Attempt.Send send = (AuthEmailPersistenceService.Attempt.Send)
+                    authEmailPersistenceService.prepareAttempt(entry, Instant.now(), NO_TOLERANCE);
+            final Instant next = Instant.now().plusSeconds(60);
+
+            assertThat(authEmailPersistenceService.recordFailed(
+                    entry.getId(), send.tokenId(), "smtp down", next, Instant.now())).isTrue();
+
+            assertThat(authTokenRepository.findValidByUserIdAndType(
+                    user.getId(), AuthToken.Type.INVITE, Instant.now())).isEmpty();
+            final AuthEmailOutbox failed = reload(entry);
+            assertThat(failed.getStatus()).isEqualTo(AuthEmailStatus.FAILED);
+            assertThat(failed.getNextAttemptAt()).isEqualTo(next.truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+        }
+
+        @Test
+        @DisplayName("an older request is superseded by a newer one when the scheduler reaches it")
+        void olderRequestSuperseded() {
+            final User user = invitedUser("newer@example.com");
+            final AuthEmailOutbox older = request(user, AuthEmailType.INVITE);
+            ageBy(older, "1 minute");
+            request(user, AuthEmailType.INVITE);
+            entityManager.clear();
+            final AuthEmailOutbox olderRead = authEmailOutboxRepository.findById(older.getId()).orElseThrow();
+
+            assertThat(authEmailPersistenceService.prepareAttempt(olderRead, Instant.now(), NO_TOLERANCE))
+                    .isEqualTo(new AuthEmailPersistenceService.Attempt.Closed(
+                            AuthEmailStatus.SUPERSEDED, "replaced by a newer request"));
+            assertThat(statuses(user, "INVITE")).containsExactly("SUPERSEDED", "PENDING");
+        }
+
+        @Test
+        @DisplayName("an invite of a user who has meanwhile set a password is superseded")
+        void acceptedInviteSuperseded() {
+            final User user = invitedUser("accepted@example.com");
+            final AuthEmailOutbox entry = request(user, AuthEmailType.INVITE);
+            jdbcTemplate.update("UPDATE users SET password_hash = 'set' WHERE id = ?", user.getId());
+            entityManager.clear();
+
+            assertThat(authEmailPersistenceService.prepareAttempt(entry, Instant.now(), NO_TOLERANCE))
+                    .isEqualTo(new AuthEmailPersistenceService.Attempt.Closed(
+                            AuthEmailStatus.SUPERSEDED, "invite already accepted"));
+        }
+
+        @Test
+        @DisplayName("an entry past its deadline is given up without a token being created")
+        void deadlinePassed() {
+            final User user = invitedUser("late@example.com");
+            final AuthEmailOutbox entry = request(user, AuthEmailType.PASSWORD_RESET);
+
+            final AuthEmailPersistenceService.Attempt attempt = authEmailPersistenceService.prepareAttempt(
+                    entry, entry.getDeadline().plusSeconds(1), NO_TOLERANCE);
+
+            assertThat(attempt).isInstanceOfSatisfying(AuthEmailPersistenceService.Attempt.Closed.class,
+                    closed -> assertThat(closed.status()).isEqualTo(AuthEmailStatus.PERMANENTLY_FAILED));
+            assertThat(authTokenRepository.findValidByUserIdAndType(
+                    user.getId(), AuthToken.Type.PASSWORD_RESET, Instant.now())).isEmpty();
+        }
+
+        /**
+         * Before #0-52 both paths had to close a FAILED row before inserting
+         * theirs (a partial unique index allowed one open row per user and
+         * type), and lost to a concurrent scheduler write with a 409 or 500.
+         * Now they only insert.
+         */
+        @Test
+        @DisplayName("resend-invite next to a request still being retried just adds a request")
+        void resendNextToFailed() {
+            final User user = invitedUser("resend-failed@example.com");
+            final AuthEmailOutbox failed = request(user, AuthEmailType.INVITE);
+            ageBy(failed, "1 minute");
+            authEmailOutboxRepository.markFailed(failed.getId(), "smtp down", Instant.now().plusSeconds(60));
+            entityManager.clear();
+
+            TenantContext.set(TENANT_ID);
+            try {
+                resendInviteService.resendInvite(user.getId());
+                entityManager.flush();
+            } finally {
+                TenantContext.clear();
+            }
+
+            assertThat(statuses(user, "INVITE")).containsExactly("FAILED", "PENDING");
+        }
+
+        @Test
+        @DisplayName("forgot-password next to a request still being retried just adds a request")
+        void forgotPasswordNextToFailed() {
+            final User user = persistUser("reset-failed@example.com", List.of("ROLE_RESPONDER"));
+            final AuthEmailOutbox failed = request(user, AuthEmailType.PASSWORD_RESET);
+            ageBy(failed, "1 minute");
+            authEmailOutboxRepository.markFailed(failed.getId(), "smtp down", Instant.now().plusSeconds(60));
+            entityManager.clear();
+
+            forgotPasswordService.initiateReset("reset-failed@example.com", TENANT_ID);
+            entityManager.flush();
+
+            assertThat(statuses(user, "PASSWORD_RESET")).containsExactly("FAILED", "PENDING");
+        }
+
+        @Test
+        @DisplayName("the purge deletes terminal entries older than the cutoff and keeps open ones")
+        void purge() {
+            final User user = invitedUser("purge@example.com");
+            final AuthEmailOutbox sent = request(user, AuthEmailType.INVITE);
+            authEmailOutboxRepository.markSent(sent.getId(), Instant.now());
+            final AuthEmailOutbox open = request(user, AuthEmailType.PASSWORD_RESET);
+            jdbcTemplate.update("UPDATE auth_email_outbox SET created_at = created_at - INTERVAL '40 days'");
+
+            final int deleted = authEmailOutboxRepository.deleteTerminalCreatedBefore(
+                    Instant.now().minus(java.time.Duration.ofDays(30)));
+
+            assertThat(deleted).isEqualTo(1);
+            assertThat(authEmailOutboxRepository.findById(open.getId())).isPresent();
         }
     }
 
@@ -551,16 +827,21 @@ class AuthRepositoryIntegrationTest {
                     """, String.class, user.getId());
         }
 
+        /** The scheduler's steps for the latest invite: create the token, then sent or given up. */
         private void finishLatestInvite(User user, boolean permanentlyFailed) {
             final AuthEmailOutbox latest = authEmailOutboxRepository
                     .findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
                             user.getId(), AuthEmailType.INVITE).orElseThrow();
+            final AuthEmailPersistenceService.Attempt.Send send =
+                    (AuthEmailPersistenceService.Attempt.Send) authEmailPersistenceService.prepareAttempt(
+                            latest, Instant.now(), java.time.Duration.ZERO);
             if (permanentlyFailed) {
-                latest.markPermanentlyFailed("smtp down");
+                authEmailPersistenceService.recordGivenUp(latest.getId(), send.tokenId(), "smtp down",
+                        Instant.now());
             } else {
-                latest.markSent();
+                authEmailPersistenceService.recordSent(latest.getId(), Instant.now());
             }
-            authEmailOutboxRepository.saveAndFlush(latest);
+            entityManager.flush();
             entityManager.clear();
         }
 
@@ -572,10 +853,11 @@ class AuthRepositoryIntegrationTest {
             assertThat(user.getRoleNames()).containsExactly("ROLE_ADMIN");
             assertThat(inviteStatuses(user)).containsExactly("PENDING");
 
-            user.setPasswordHash("accepted");
-            userRepository.saveAndFlush(user);
-            entityManager.clear();
             finishLatestInvite(user, false);
+            final User accepting = operatorAdmin();
+            accepting.setPasswordHash("accepted");
+            userRepository.saveAndFlush(accepting);
+            entityManager.clear();
             run();
 
             assertThat(userRepository.existsActiveAcceptedUserWithRole(OP_TENANT, Role.ROLE_ADMIN))
@@ -588,17 +870,17 @@ class AuthRepositoryIntegrationTest {
         void permanentlyFailedInviteIsReissued() {
             run();
             final User user = operatorAdmin();
-            final UUID firstTokenId = authTokenRepository.findValidByUserIdAndType(
-                    user.getId(), AuthToken.Type.INVITE, Instant.now()).getFirst().getId();
             finishLatestInvite(user, true);
+            assertThat(authTokenRepository.findValidByUserIdAndType(
+                    user.getId(), AuthToken.Type.INVITE, Instant.now()))
+                    .as("the undelivered token was invalidated").isEmpty();
 
             run();
 
             assertThat(inviteStatuses(user)).containsExactly("PERMANENTLY_FAILED", "PENDING");
+            finishLatestInvite(user, false);
             assertThat(authTokenRepository.findValidByUserIdAndType(
-                    user.getId(), AuthToken.Type.INVITE, Instant.now()))
-                    .singleElement()
-                    .extracting(AuthToken::getId).isNotEqualTo(firstTokenId);
+                    user.getId(), AuthToken.Type.INVITE, Instant.now())).hasSize(1);
         }
 
         @Test

@@ -576,6 +576,15 @@ ways (backlog #0-16, `docker/alertmanager.yml`):
   Alertmanager authenticates with that tenant's Integration API key, like any tenant's
   Alertmanager does.
 
+Invite and password reset emails of every tenant ride out an SMTP outage (backlog #0-52). A request
+only queues the email; auth-service creates the token when it sends it (only its hash is stored), so
+the link is valid for its full lifetime — 7 days for an invite, 15 minutes for a reset — from the moment
+it goes out. A failed send is retried after 1 min, 5 min, 30 min, 2 h and then every 6 h
+(`INVITE_EMAIL_RETRY_BACKOFF`) until the request's own deadline (the same 7 days / 15 minutes after it was
+made). When sends keep failing for 30 minutes with none succeeding, `AuthEmailDeliveryFailing` (critical)
+fires; each email given up is reported by `AuthEmailPermanentlyFailed` (high) — resend the invite, or have
+the user request a new reset.
+
 One-time setup (needs the services from Step 4 running). auth-service invites the operator
 tenant's first admin about 30 s after startup when `OPERATOR_ADMIN_EMAIL` is set (`docker/.env` for
 Option B, `platform.operator.bootstrap.admin-email` in auth-service's `application-local.yml` for

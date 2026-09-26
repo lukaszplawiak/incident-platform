@@ -1,14 +1,9 @@
 package com.incidentplatform.auth.service;
 
-import com.incidentplatform.auth.domain.AuthToken;
-import com.incidentplatform.auth.domain.AuthEmailOutbox;
-import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
-import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
@@ -23,7 +18,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -31,7 +25,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 
@@ -40,8 +33,7 @@ import static org.mockito.BDDMockito.then;
 class UserServiceTest {
 
     @Mock private UserRepository userRepository;
-    @Mock private AuthTokenService authTokenService;
-    @Mock private AuthEmailOutboxRepository outboxRepository;
+    @Mock private AuthEmailRequestService emailRequests;
     @Mock private AuditEventPublisher auditEventPublisher;
 
     private UserService service;
@@ -52,8 +44,7 @@ class UserServiceTest {
     @BeforeEach
     void setUp() {
         service = new UserService(
-                userRepository, authTokenService,
-                outboxRepository, auditEventPublisher);
+                userRepository, emailRequests, auditEventPublisher);
         TenantContext.set(TENANT_ID);
     }
 
@@ -114,33 +105,21 @@ class UserServiceTest {
                     .containsExactlyInAnyOrder("ROLE_ADMIN", "ROLE_RESPONDER");
         }
 
+        /**
+         * Backlog #0-52: creating a user only queues the invite; the token is
+         * created by AuthEmailScheduler when it sends the email.
+         */
         @Test
-        @DisplayName("calls generateInviteTokenWithEntity with saved user and tenantId")
-        void callsGenerateInviteTokenWithEntity() {
+        @DisplayName("queues an invite request for the saved user, and creates no token")
+        void queuesInviteRequest() {
             givenUserCreationSucceeds();
 
             service.createUser(new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
 
-            then(authTokenService).should()
-                    .generateInviteTokenWithEntity(any(User.class), anyString());
-        }
-
-        @Test
-        @DisplayName("writes PENDING outbox entry with raw token and token entity")
-        void writesPendingOutboxEntry() {
-            givenUserCreationSucceeds();
-
-            service.createUser(new CreateUserRequest(EMAIL, List.of("ROLE_ADMIN")));
-
-            final ArgumentCaptor<AuthEmailOutbox> captor =
-                    ArgumentCaptor.forClass(AuthEmailOutbox.class);
-            then(outboxRepository).should().save(captor.capture());
-
-            final AuthEmailOutbox saved = captor.getValue();
-            assertThat(saved.getEmail()).isEqualTo(EMAIL);
-            assertThat(saved.getStatus()).isEqualTo(AuthEmailStatus.PENDING);
-            assertThat(saved.getRawToken()).isEqualTo("raw-invite-token");
-            assertThat(saved.getRawToken()).isNotNull();
+            final ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+            then(emailRequests).should().requestInvite(captor.capture());
+            assertThat(captor.getValue().getEmail()).isEqualTo(EMAIL);
+            assertThat(captor.getValue().getTenantId()).isEqualTo(TENANT_ID);
         }
 
         @Test
@@ -162,19 +141,6 @@ class UserServiceTest {
             given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
-
-            final AuthToken mockToken = AuthToken.create(
-                    User.forTesting(UUID.randomUUID(), TENANT_ID, EMAIL,
-                            null, true, List.of()),
-                    TENANT_ID, "hash", AuthToken.Type.INVITE,
-                    Instant.now().plusSeconds(3600));
-
-            given(authTokenService.generateInviteTokenWithEntity(
-                    any(User.class), anyString()))
-                    .willReturn(new GeneratedToken("raw-invite-token", mockToken));
-
-            given(outboxRepository.save(any(AuthEmailOutbox.class)))
                     .willAnswer(inv -> inv.getArgument(0));
         }
     }
@@ -205,7 +171,7 @@ class UserServiceTest {
         }
 
         @Test
-        @DisplayName("does not persist user, generate token, or write outbox on duplicate")
+        @DisplayName("does not persist the user or queue an invite on duplicate")
         void doesNotPersistOnDuplicate() {
             final User existing = User.forTesting(
                     UUID.randomUUID(), TENANT_ID, EMAIL,
@@ -220,8 +186,7 @@ class UserServiceTest {
                     .isInstanceOf(BusinessException.class);
 
             then(userRepository).shouldHaveNoMoreInteractions();
-            then(authTokenService).shouldHaveNoInteractions();
-            then(outboxRepository).shouldHaveNoInteractions();
+            then(emailRequests).shouldHaveNoInteractions();
         }
     }
 
@@ -238,18 +203,6 @@ class UserServiceTest {
             given(userRepository.findByEmailAndTenantId(
                     EMAIL, "company-abc")).willReturn(Optional.empty());
             given(userRepository.save(any(User.class)))
-                    .willAnswer(inv -> inv.getArgument(0));
-
-            final AuthToken mockToken = AuthToken.create(
-                    User.forTesting(UUID.randomUUID(), "company-abc", EMAIL,
-                            null, true, List.of()),
-                    "company-abc", "hash", AuthToken.Type.INVITE,
-                    Instant.now().plusSeconds(3600));
-
-            given(authTokenService.generateInviteTokenWithEntity(
-                    any(User.class), anyString()))
-                    .willReturn(new GeneratedToken("token", mockToken));
-            given(outboxRepository.save(any()))
                     .willAnswer(inv -> inv.getArgument(0));
 
             final CreateUserResponse response = service.createUser(

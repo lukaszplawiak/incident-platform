@@ -249,6 +249,18 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   for an admin who can log in, re-invites through `ResendInviteService` when the invite permanently
   failed or expired, never creates a second admin or deletes a user (an unexpected state is an ERROR
   for a human), and exports `platform.operator.admin.pending`, alerted by `OperatorAdminNotActivated`.
+- **Auth email outbox = intent to send** (#0-52): a request (`UserService`, `ResendInviteService`,
+  `ForgotPasswordService`) only INSERTs through `AuthEmailRequestService`; `AuthEmailScheduler` is the only
+  writer afterwards. Per attempt it closes entries no longer worth sending (SUPERSEDED: a newer request of the
+  type, an accepted invite, a missing user; PERMANENTLY_FAILED: deadline passed), otherwise invalidates the
+  user's earlier tokens of the type and creates the token it sends — no raw token is stored anywhere, and the
+  link is valid for its full lifetime from sending. Failed sends are retried on `AuthEmailRetryPolicy`'s backoff
+  until the entry's deadline (7 days / 15 minutes), in two lanes (`processPending`, `retryFailed`) with their own
+  batches and a processing budget validated against the ShedLock. State changes are conditional UPDATEs, not
+  `@Version`. Counters `auth.email.send`, `auth.email.permanently_failed`; alerts `AuthEmailDeliveryFailing`,
+  `AuthEmailPermanentlyFailed`; terminal rows are purged after `invite.email.retention`. V19 dropped and
+  recreated the table (not in production yet). From the first production release, every migration must stay
+  compatible with the previous release (expand/contract), since pods of both run during a rollout.
 - Follow-ups: #0-37 (429), #0-38 (key format/checksum), #0-43 (introspection amplification from many IPs, accepted residual risk), #0-40 (DLT alerting to the operator route),
   #0-17 (fallback alert, now unblocked).
 
