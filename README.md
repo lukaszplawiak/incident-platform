@@ -577,8 +577,16 @@ ways (backlog #0-16, `docker/alertmanager.yml`):
   Alertmanager does.
 
 One-time setup (needs the services from Step 4 running). auth-service invites the operator
-tenant's first admin at startup when `OPERATOR_ADMIN_EMAIL` is set (`docker/.env` for Option B,
-`platform.operator.bootstrap.admin-email` in auth-service's `application-local.yml` for Option A):
+tenant's first admin about 30 s after startup when `OPERATOR_ADMIN_EMAIL` is set (`docker/.env` for
+Option B, `platform.operator.bootstrap.admin-email` in auth-service's `application-local.yml` for
+Option A). It then checks every hour until that admin has accepted, and sends a fresh invite if the
+email permanently failed (e.g. SMTP was down) or the 7-day invite expired, so a lost invite needs
+no restart and no database edit (backlog #0-49). While no admin can log in, auth-service reports
+`platform_operator_admin_pending = 1` and `OperatorAdminNotActivated` fires after an hour. If the
+tenant's users need a human (the log says so: e.g. `OPERATOR_ADMIN_EMAIL` was changed after the
+first invite went to another address, which was never accepted), auth-service does not create a
+second admin or delete anyone; remove the unaccepted user and the next check invites the
+configured address:
 
 ```bash
 # 1. Dead man's switch URL (local stand-in)

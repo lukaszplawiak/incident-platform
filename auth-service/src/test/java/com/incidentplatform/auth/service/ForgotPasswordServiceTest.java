@@ -124,7 +124,7 @@ class ForgotPasswordServiceTest {
             final User user = buildUser();
             given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.of(user));
-            given(outboxRepository.findLatestByUserIdAndType(
+            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
                     USER_ID, AuthEmailType.PASSWORD_RESET))
                     .willReturn(Optional.empty());
             given(authTokenService.generatePasswordResetTokenWithEntity(
@@ -143,7 +143,7 @@ class ForgotPasswordServiceTest {
             final User user = buildUser();
             given(userRepository.findByEmailAndTenantId(
                     EMAIL, TENANT_ID)).willReturn(Optional.of(user));
-            given(outboxRepository.findLatestByUserIdAndType(
+            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
                     USER_ID, AuthEmailType.PASSWORD_RESET))
                     .willReturn(Optional.empty());
             given(authTokenService.generatePasswordResetTokenWithEntity(
@@ -181,7 +181,7 @@ class ForgotPasswordServiceTest {
                             AuthToken.Type.PASSWORD_RESET,
                             Instant.now().plusSeconds(900)),
                     "existing-raw-token");
-            given(outboxRepository.findLatestByUserIdAndType(
+            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
                     USER_ID, AuthEmailType.PASSWORD_RESET))
                     .willReturn(Optional.of(existing));
 
@@ -205,7 +205,7 @@ class ForgotPasswordServiceTest {
                             Instant.now().plusSeconds(900)),
                     "old-raw-token");
             failed.markPermanentlyFailed("SMTP down");
-            given(outboxRepository.findLatestByUserIdAndType(
+            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
                     USER_ID, AuthEmailType.PASSWORD_RESET))
                     .willReturn(Optional.of(failed));
             given(authTokenService.generatePasswordResetTokenWithEntity(

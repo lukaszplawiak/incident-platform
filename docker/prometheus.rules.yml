@@ -194,6 +194,27 @@ groups:
             {{ $labels.service }} has been unreachable for Prometheus for more
             than 1 minute.
 
+      - alert: OperatorAdminNotActivated
+        # Backlog #0-49: auth-service's OperatorTenantBootstrap reports 1 while the
+        # platform-operator tenant has no admin who can log in (invite lost or
+        # expired and being reissued, or users a human has to fix). The gauge
+        # exists only when OPERATOR_ADMIN_EMAIL is set; every replica refreshes
+        # it from the database every 5 min (not only the one running the
+        # reconcile), so max() reflects the real state. Critical, so it reaches the operator by email
+        # (Alertmanager's own SMTP, not auth-service's mail settings).
+        expr: |
+          max(platform_operator_admin_pending) == 1
+        for: 1h
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "The platform-operator tenant has no admin who can log in"
+          description: >
+            For more than 1 hour the operator tenant has had no active admin who
+            accepted an invite. See the OperatorTenantBootstrap lines in the
+            auth-service log and README Step 5.
+
       - alert: HighHttpErrorRate
         # Fire when > 1% of requests to any service return 5xx
         expr: |

@@ -243,8 +243,12 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   pipeline it would report on fails).
 - **Reserved tenants** (`ReservedTenants`): `platform-operator` and the legacy `system` are refused
   wherever a tenant id is chosen (seed, dev token). The operator tenant's first admin is created by
-  invite at auth-service startup (`OperatorTenantBootstrap`, `OPERATOR_ADMIN_EMAIL`); the admin creates
-  the integration, and the key lives only in Alertmanager's `credentials_file`.
+  invite (`OperatorTenantBootstrap`, `OPERATOR_ADMIN_EMAIL`); the admin creates the integration, and
+  the key lives only in Alertmanager's `credentials_file`. Since #0-49 that class is a reconciler
+  (`@Scheduled` + ShedLock, ~30 s after start, then hourly), not a one-shot startup runner: it checks
+  for an admin who can log in, re-invites through `ResendInviteService` when the invite permanently
+  failed or expired, never creates a second admin or deletes a user (an unexpected state is an ERROR
+  for a human), and exports `platform.operator.admin.pending`, alerted by `OperatorAdminNotActivated`.
 - Follow-ups: #0-37 (429), #0-38 (key format/checksum), #0-43 (introspection amplification from many IPs, accepted residual risk), #0-40 (DLT alerting to the operator route),
   #0-17 (fallback alert, now unblocked).
 

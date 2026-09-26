@@ -66,3 +66,34 @@ tests:
             exp_annotations:
               summary: "auth-service is down"
               description: "auth-service has been unreachable for Prometheus for more than 1 minute.\n"
+
+  # Operator admin not activated (backlog #0-49): fires after 1 hour of the
+  # gauge at 1 on any replica, and not while it is 0.
+  - interval: 1m
+    input_series:
+      - series: 'platform_operator_admin_pending{job="auth-service",instance="auth-1"}'
+        values: '1x90'
+      - series: 'platform_operator_admin_pending{job="auth-service",instance="auth-2"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: OperatorAdminNotActivated
+        exp_alerts: []
+      - eval_time: 75m
+        alertname: OperatorAdminNotActivated
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "The platform-operator tenant has no admin who can log in"
+              description: "For more than 1 hour the operator tenant has had no active admin who accepted an invite. See the OperatorTenantBootstrap lines in the auth-service log and README Step 5.\n"
+
+  - interval: 1m
+    input_series:
+      - series: 'platform_operator_admin_pending{job="auth-service",instance="auth-1"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 75m
+        alertname: OperatorAdminNotActivated
+        exp_alerts: []

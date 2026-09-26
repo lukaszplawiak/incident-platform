@@ -82,14 +82,18 @@ public interface AuthEmailOutboxRepository
 
     /**
      * Finds the most recent outbox entry for a user and email type.
-     * Used by resend-invite and forgot-password flows to check
-     * current status before creating a new entry.
+     * Used by resend-invite, forgot-password and the operator admin
+     * reconciler to check current status before creating a new entry.
+     *
+     * <h2>Fixed (backlog #0-53): {@code findFirst}, not an unlimited query</h2>
+     * This was a JPQL {@code ORDER BY e.createdAt DESC} query returning
+     * {@code Optional} with no row limit. Spring Data runs such a query as a
+     * single-result query, so as soon as a user had two entries of a type
+     * (the second resend of an invite, a repeated password reset) it threw
+     * {@code IncorrectResultSizeDataAccessException} instead of returning the
+     * newest one. The derived {@code findFirst...OrderBy...} form limits the
+     * query to one row.
      */
-    @Query("SELECT e FROM AuthEmailOutbox e " +
-            "WHERE e.user.id = :userId " +
-            "AND e.emailType = :emailType " +
-            "ORDER BY e.createdAt DESC")
-    Optional<AuthEmailOutbox> findLatestByUserIdAndType(
-            @Param("userId") UUID userId,
-            @Param("emailType") AuthEmailType emailType);
+    Optional<AuthEmailOutbox> findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
+            UUID userId, AuthEmailType emailType);
 }

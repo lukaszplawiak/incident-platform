@@ -46,9 +46,12 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByEmailAndTenantId(String email, String tenantId);
 
     /**
-     * Whether a tenant has any user at all, archived ones included — used by
-     * {@code OperatorTenantBootstrap} (backlog #0-16) to invite the first admin
-     * of the operator tenant exactly once.
+     * Whether a tenant has any user that is neither archived nor anonymized —
+     * {@code @SQLRestriction} applies to derived queries too (checked in
+     * {@code AuthRepositoryIntegrationTest}; this Javadoc used to say archived
+     * users were included). Used by {@code OperatorTenantBootstrap} (backlog
+     * #0-16, #0-49) to tell an empty operator tenant, where it invites the first
+     * admin, from one whose users need a human.
      */
     boolean existsByTenantId(String tenantId);
 
@@ -113,4 +116,24 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             @Param("tenantId") String tenantId,
             @Param("role") Role role,
             @Param("excludeUserId") UUID excludeUserId);
+
+    /**
+     * Whether a tenant has an active user holding the role who has accepted
+     * their invite (has a password) — i.e. someone who can actually log in.
+     *
+     * <p>Used by {@code OperatorTenantBootstrap} (backlog #0-49): the operator
+     * tenant is set up only once such an admin exists; a user who was invited
+     * but never accepted does not count.
+     */
+    @Query("""
+            SELECT COUNT(u) > 0 FROM User u
+            JOIN u.roles r
+            WHERE u.tenantId = :tenantId
+            AND r.role = :role
+            AND u.active = true
+            AND u.passwordHash IS NOT NULL
+            """)
+    boolean existsActiveAcceptedUserWithRole(
+            @Param("tenantId") String tenantId,
+            @Param("role") Role role);
 }

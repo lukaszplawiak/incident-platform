@@ -358,8 +358,9 @@ services:
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED: "false"
-      # Backlog #0-16: first admin of the reserved platform-operator tenant,
-      # invited once at startup (OperatorTenantBootstrap). Empty = no bootstrap.
+      # Backlog #0-16/#0-49: first admin of the reserved platform-operator tenant,
+      # invited ~30 s after startup and re-invited if that invite is lost or
+      # expires (OperatorTenantBootstrap, hourly check). Empty = no bootstrap.
       OPERATOR_ADMIN_EMAIL: ${OPERATOR_ADMIN_EMAIL:-}
       # App
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8087}

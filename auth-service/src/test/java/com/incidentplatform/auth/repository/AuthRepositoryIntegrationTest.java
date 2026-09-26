@@ -1,6 +1,9 @@
 package com.incidentplatform.auth.repository;
 
+import com.incidentplatform.auth.bootstrap.OperatorTenantBootstrap;
 import com.incidentplatform.auth.domain.ApiKey;
+import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.SlackWorkspace;
@@ -18,6 +21,10 @@ import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.InviteService;
 import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.PasswordService;
+import com.incidentplatform.auth.service.ResendInviteService;
+import com.incidentplatform.auth.service.UserService;
+import com.incidentplatform.shared.security.ReservedTenants;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.incidentplatform.auth.service.TotpService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -140,11 +147,14 @@ class AuthRepositoryIntegrationTest {
     @Autowired private ApiKeyRepository apiKeyRepository;
     @Autowired private SlackWorkspaceRepository slackWorkspaceRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private AuthEmailOutboxRepository authEmailOutboxRepository;
     @Autowired private EntityManager entityManager;
     @Autowired private AuthTokenService authTokenService;
     @Autowired private InviteService inviteService;
     @Autowired private PasswordService passwordService;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private UserService userService;
+    @Autowired private ResendInviteService resendInviteService;
     @Autowired private MfaService mfaService;
     @Autowired private TotpService totpService;
     @Autowired @Qualifier("mfaEncryptionService") private AesEncryptionService mfaEncryptionService;
@@ -468,6 +478,167 @@ class AuthRepositoryIntegrationTest {
                     .containsExactlyInAnyOrderElementsOf(
                             java.util.Arrays.stream(AuthToken.Type.values())
                                     .map(Enum::name).toList());
+        }
+    }
+
+    /**
+     * Backlog #0-53: the latest-entry lookup returned {@code Optional}
+     * from an {@code ORDER BY} query with no row limit, so a user with more than
+     * one outbox entry of a type (every resent invite, every repeated password
+     * reset) made it throw instead of returning the newest entry.
+     */
+    @Nested
+    @DisplayName("AuthEmailOutboxRepository — latest entry (backlog #0-53)")
+    class AuthEmailOutboxRepositoryTests {
+
+        private AuthEmailOutbox persistInvite(User user, String hash) {
+            final AuthToken token = authTokenRepository.saveAndFlush(AuthToken.create(
+                    user, TENANT_ID, hash, AuthToken.Type.INVITE,
+                    Instant.now().plusSeconds(3600)));
+            return authEmailOutboxRepository.saveAndFlush(
+                    AuthEmailOutbox.invitePending(user, token, "raw-" + hash));
+        }
+
+        @Test
+        @DisplayName("returns the newest of several entries")
+        void returnsNewestOfSeveral() {
+            final User user = persistUser("outbox@example.com", List.of("ROLE_RESPONDER"));
+            // At most one PENDING/FAILED entry per user and type (partial unique
+            // index, V7), so the older one is done, as it is before a resend.
+            final AuthEmailOutbox older = persistInvite(user, "hash-outbox-1");
+            older.markPermanentlyFailed("smtp down");
+            authEmailOutboxRepository.saveAndFlush(older);
+            final AuthEmailOutbox newest = persistInvite(user, "hash-outbox-2");
+
+            assertThat(authEmailOutboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
+                    user.getId(), AuthEmailType.INVITE))
+                    .map(AuthEmailOutbox::getId).contains(newest.getId());
+        }
+    }
+
+    /**
+     * Backlog #0-49: the operator admin reconciler against the real repositories,
+     * {@code UserService} and {@code ResendInviteService} — the paths its unit
+     * test mocks. Each step flushes and clears, as separate scheduler runs would.
+     */
+    @Nested
+    @DisplayName("Operator admin reconciler (backlog #0-49)")
+    class OperatorAdminReconciliation {
+
+        private static final String OP_TENANT = ReservedTenants.PLATFORM_OPERATOR;
+        private static final String OP_EMAIL = "ops-reconcile@example.com";
+
+        private OperatorTenantBootstrap reconciler() {
+            return new OperatorTenantBootstrap(OP_EMAIL, userRepository, authTokenRepository,
+                    authEmailOutboxRepository, userService, resendInviteService,
+                    new SimpleMeterRegistry());
+        }
+
+        private void run() {
+            reconciler().scheduledReconcile();
+            entityManager.flush();
+            entityManager.clear();
+        }
+
+        private User operatorAdmin() {
+            return userRepository.findByEmailAndTenantId(OP_EMAIL, OP_TENANT).orElseThrow();
+        }
+
+        private List<String> inviteStatuses(User user) {
+            return jdbcTemplate.queryForList("""
+                    SELECT status FROM auth_email_outbox
+                    WHERE user_id = ? AND email_type = 'INVITE' ORDER BY created_at
+                    """, String.class, user.getId());
+        }
+
+        private void finishLatestInvite(User user, boolean permanentlyFailed) {
+            final AuthEmailOutbox latest = authEmailOutboxRepository
+                    .findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
+                            user.getId(), AuthEmailType.INVITE).orElseThrow();
+            if (permanentlyFailed) {
+                latest.markPermanentlyFailed("smtp down");
+            } else {
+                latest.markSent();
+            }
+            authEmailOutboxRepository.saveAndFlush(latest);
+            entityManager.clear();
+        }
+
+        @Test
+        @DisplayName("first run invites the admin; once they accept, runs change nothing")
+        void invitesThenStopsOnceAccepted() {
+            run();
+            final User user = operatorAdmin();
+            assertThat(user.getRoleNames()).containsExactly("ROLE_ADMIN");
+            assertThat(inviteStatuses(user)).containsExactly("PENDING");
+
+            user.setPasswordHash("accepted");
+            userRepository.saveAndFlush(user);
+            entityManager.clear();
+            finishLatestInvite(user, false);
+            run();
+
+            assertThat(userRepository.existsActiveAcceptedUserWithRole(OP_TENANT, Role.ROLE_ADMIN))
+                    .isTrue();
+            assertThat(inviteStatuses(user)).containsExactly("SENT");
+        }
+
+        @Test
+        @DisplayName("a permanently failed invite is reissued and the old token stops working")
+        void permanentlyFailedInviteIsReissued() {
+            run();
+            final User user = operatorAdmin();
+            final UUID firstTokenId = authTokenRepository.findValidByUserIdAndType(
+                    user.getId(), AuthToken.Type.INVITE, Instant.now()).getFirst().getId();
+            finishLatestInvite(user, true);
+
+            run();
+
+            assertThat(inviteStatuses(user)).containsExactly("PERMANENTLY_FAILED", "PENDING");
+            assertThat(authTokenRepository.findValidByUserIdAndType(
+                    user.getId(), AuthToken.Type.INVITE, Instant.now()))
+                    .singleElement()
+                    .extracting(AuthToken::getId).isNotEqualTo(firstTokenId);
+        }
+
+        @Test
+        @DisplayName("a sent invite with a valid token is left alone")
+        void sentValidInviteIsLeftAlone() {
+            run();
+            final User user = operatorAdmin();
+            finishLatestInvite(user, false);
+
+            run();
+
+            assertThat(inviteStatuses(user)).containsExactly("SENT");
+        }
+
+        @Test
+        @DisplayName("a sent invite whose token expired is reissued")
+        void expiredInviteIsReissued() {
+            run();
+            final User user = operatorAdmin();
+            finishLatestInvite(user, false);
+            jdbcTemplate.update("""
+                    UPDATE auth_tokens SET expires_at = NOW() - INTERVAL '1 hour'
+                    WHERE user_id = ? AND type = 'INVITE'
+                    """, user.getId());
+
+            run();
+
+            assertThat(inviteStatuses(user)).containsExactly("SENT", "PENDING");
+        }
+
+        @Test
+        @DisplayName("existsByTenantId does not see archived users (@SQLRestriction)")
+        void existsByTenantIdIgnoresArchivedUsers() {
+            run();
+            final User user = operatorAdmin();
+            user.archive();
+            userRepository.saveAndFlush(user);
+            entityManager.clear();
+
+            assertThat(userRepository.existsByTenantId(OP_TENANT)).isFalse();
         }
     }
 

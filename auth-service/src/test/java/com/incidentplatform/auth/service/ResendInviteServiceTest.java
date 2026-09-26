@@ -148,7 +148,7 @@ class ResendInviteServiceTest {
 
             final AuthEmailOutbox permanentlyFailed =
                     buildOutboxEntry(user, AuthEmailStatus.PERMANENTLY_FAILED);
-            given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
+            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(USER_ID, AuthEmailType.INVITE))
                     .willReturn(Optional.of(permanentlyFailed));
             givenNoExistingValidTokens();
             givenTokenGenerationSucceeds();
@@ -169,7 +169,7 @@ class ResendInviteServiceTest {
 
             final AuthEmailOutbox sent =
                     buildOutboxEntry(user, AuthEmailStatus.SENT);
-            given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
+            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(USER_ID, AuthEmailType.INVITE))
                     .willReturn(Optional.of(sent));
             givenNoExistingValidTokens();
             givenTokenGenerationSucceeds();
@@ -229,7 +229,7 @@ class ResendInviteServiceTest {
 
             final AuthEmailOutbox pending =
                     buildOutboxEntry(user, AuthEmailStatus.PENDING);
-            given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
+            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(USER_ID, AuthEmailType.INVITE))
                     .willReturn(Optional.of(pending));
 
             assertThatThrownBy(() -> service.resendInvite(USER_ID))
@@ -257,7 +257,7 @@ class ResendInviteServiceTest {
     }
 
     private void givenNoExistingOutboxEntry() {
-        given(outboxRepository.findLatestByUserIdAndType(USER_ID, AuthEmailType.INVITE))
+        given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(USER_ID, AuthEmailType.INVITE))
                 .willReturn(Optional.empty());
     }
 
