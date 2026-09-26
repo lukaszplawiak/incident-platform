@@ -1,13 +1,11 @@
 package com.incidentplatform.auth.service;
 
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
-import com.incidentplatform.auth.domain.AuthEmailType;
-import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
+import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,21 +13,17 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
@@ -37,8 +31,8 @@ import static org.mockito.Mockito.never;
 class ForgotPasswordServiceTest {
 
     @Mock private UserRepository userRepository;
-    @Mock private AuthTokenService authTokenService;
     @Mock private AuthEmailOutboxRepository outboxRepository;
+    @Mock private AuthEmailRequestService emailRequests;
     @Mock private WorkSimulator workSimulator;
 
     private ForgotPasswordService service;
@@ -50,13 +44,27 @@ class ForgotPasswordServiceTest {
     @BeforeEach
     void setUp() {
         service = new ForgotPasswordService(
-                userRepository, authTokenService, outboxRepository, workSimulator);
+                userRepository, outboxRepository, emailRequests, workSimulator);
         TenantContext.set(TENANT_ID);
     }
 
     @AfterEach
     void tearDown() {
         TenantContext.clear();
+    }
+
+    private User givenUser() {
+        final User user = User.forTesting(USER_ID, TENANT_ID, EMAIL,
+                "bcrypt-hash", true, List.of("ROLE_RESPONDER"));
+        given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID)).willReturn(Optional.of(user));
+        return user;
+    }
+
+    private void latestRequest(AuthEmailStatus status) {
+        final AuthEmailOutbox entry = mock(AuthEmailOutbox.class);
+        given(entry.getStatus()).willReturn(status);
+        given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
+                USER_ID, AuthEmailType.PASSWORD_RESET)).willReturn(Optional.of(entry));
     }
 
     // ── user enumeration protection ───────────────────────────────────────
@@ -66,44 +74,27 @@ class ForgotPasswordServiceTest {
     class UserEnumerationProtection {
 
         @Test
-        @DisplayName("does nothing when email not found — no exception, no token")
+        @DisplayName("does nothing when email not found — no exception, no request")
         void doesNothingWhenEmailNotFound() {
-            given(userRepository.findByEmailAndTenantId(
-                    EMAIL, TENANT_ID)).willReturn(Optional.empty());
+            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID)).willReturn(Optional.empty());
 
             // Must NOT throw — caller always returns 202
             service.initiateReset(EMAIL, TENANT_ID);
 
-            then(authTokenService).shouldHaveNoInteractions();
+            then(emailRequests).shouldHaveNoInteractions();
             then(outboxRepository).shouldHaveNoInteractions();
-        }
-
-        @Test
-        @DisplayName("does nothing silently for soft-deleted user")
-        void doesNothingForSoftDeletedUser() {
-            // @SQLRestriction("deleted_at IS NULL") on User excludes soft-deleted automatically
-            given(userRepository.findByEmailAndTenantId(
-                    EMAIL, TENANT_ID)).willReturn(Optional.empty());
-
-            service.initiateReset(EMAIL, TENANT_ID);
-
-            then(authTokenService).shouldHaveNoInteractions();
         }
 
         /**
          * Regression test for the fix documented in this class's Javadoc:
-         * WorkSimulator was fully built (a calibrated bean in SchedulerConfig)
-         * but never actually injected into or called from this class — the
-         * "user not found" path returned after only a fast DB lookup, with
-         * no timing-equalisation against the "user exists" path below,
-         * leaving user-enumeration-via-timing layer 2 protection effectively
-         * absent despite being documented as implemented.
+         * WorkSimulator was built but never called, so the "user not found"
+         * path returned after only a fast DB lookup. Its calibration against
+         * the "user exists" path is tracked as backlog #0-56.
          */
         @Test
         @DisplayName("calls workSimulator.simulate() when email is not found — timing attack mitigation")
         void callsWorkSimulatorWhenEmailNotFound() {
-            given(userRepository.findByEmailAndTenantId(
-                    EMAIL, TENANT_ID)).willReturn(Optional.empty());
+            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID)).willReturn(Optional.empty());
 
             service.initiateReset(EMAIL, TENANT_ID);
 
@@ -111,127 +102,52 @@ class ForgotPasswordServiceTest {
         }
     }
 
-    // ── successful reset initiation ───────────────────────────────────────
+    // ── queueing the reset ────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("initiateReset — success")
-    class InitiateResetSuccess {
+    @DisplayName("initiateReset — user exists")
+    class UserExists {
 
         @Test
-        @DisplayName("does NOT call workSimulator.simulate() when email is found — " +
-                "that path already does the real work being timed against")
-        void doesNotCallWorkSimulatorWhenEmailFound() {
-            final User user = buildUser();
-            given(userRepository.findByEmailAndTenantId(
-                    EMAIL, TENANT_ID)).willReturn(Optional.of(user));
+        @DisplayName("queues a password-reset request and nothing else (backlog #0-52)")
+        void queuesRequest() {
+            final User user = givenUser();
             given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
-                    USER_ID, AuthEmailType.PASSWORD_RESET))
-                    .willReturn(Optional.empty());
-            given(authTokenService.generatePasswordResetTokenWithEntity(
-                    any(), anyString()))
-                    .willReturn(buildTokenResult(user));
-            given(outboxRepository.save(any())).willAnswer(i -> i.getArgument(0));
+                    USER_ID, AuthEmailType.PASSWORD_RESET)).willReturn(Optional.empty());
 
             service.initiateReset(EMAIL, TENANT_ID);
 
+            then(emailRequests).should().requestPasswordReset(user);
             then(workSimulator).shouldHaveNoInteractions();
         }
 
         @Test
-        @DisplayName("generates PASSWORD_RESET token and writes PENDING outbox entry")
-        void generatesTokenAndWritesOutboxEntry() {
-            final User user = buildUser();
-            given(userRepository.findByEmailAndTenantId(
-                    EMAIL, TENANT_ID)).willReturn(Optional.of(user));
-            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
-                    USER_ID, AuthEmailType.PASSWORD_RESET))
-                    .willReturn(Optional.empty());
-            given(authTokenService.generatePasswordResetTokenWithEntity(
-                    any(), anyString()))
-                    .willReturn(buildTokenResult(user));
-            given(outboxRepository.save(any())).willAnswer(i -> i.getArgument(0));
+        @DisplayName("does nothing when a reset is already PENDING — idempotency guard")
+        void noOpWhenPending() {
+            givenUser();
+            latestRequest(AuthEmailStatus.PENDING);
 
             service.initiateReset(EMAIL, TENANT_ID);
 
-            then(authTokenService).should()
-                    .generatePasswordResetTokenWithEntity(eq(user), eq(TENANT_ID));
-
-            final ArgumentCaptor<AuthEmailOutbox> captor =
-                    ArgumentCaptor.forClass(AuthEmailOutbox.class);
-            then(outboxRepository).should().save(captor.capture());
-
-            final AuthEmailOutbox saved = captor.getValue();
-            assertThat(saved.getEmailType()).isEqualTo(AuthEmailType.PASSWORD_RESET);
-            assertThat(saved.getStatus()).isEqualTo(AuthEmailStatus.PENDING);
-            assertThat(saved.getRawToken()).isEqualTo("raw-reset-token");
-            assertThat(saved.getEmail()).isEqualTo(EMAIL);
+            then(emailRequests).shouldHaveNoInteractions();
         }
 
+        /**
+         * Backlog #0-52: a FAILED request is not closed here — the scheduler
+         * supersedes it once it sees the newer one — so this path never writes
+         * to an existing row and cannot answer anything but 202.
+         */
         @Test
-        @DisplayName("does not write outbox when reset already PENDING — idempotency guard")
-        void doesNotWriteWhenAlreadyPending() {
-            final User user = buildUser();
-            given(userRepository.findByEmailAndTenantId(
-                    EMAIL, TENANT_ID)).willReturn(Optional.of(user));
-
-            // Simulate existing PENDING entry
-            final AuthEmailOutbox existing = AuthEmailOutbox.passwordResetPending(
-                    user,
-                    AuthToken.create(user, TENANT_ID, "hash",
-                            AuthToken.Type.PASSWORD_RESET,
-                            Instant.now().plusSeconds(900)),
-                    "existing-raw-token");
-            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
-                    USER_ID, AuthEmailType.PASSWORD_RESET))
-                    .willReturn(Optional.of(existing));
+        @DisplayName("queues a new request next to one still being retried, without touching it")
+        void queuesNextToFailed() {
+            final User user = givenUser();
+            latestRequest(AuthEmailStatus.FAILED);
 
             service.initiateReset(EMAIL, TENANT_ID);
 
-            then(authTokenService).shouldHaveNoInteractions();
+            then(emailRequests).should().requestPasswordReset(user);
             then(outboxRepository).should(never()).save(any());
+            then(outboxRepository).should(never()).saveAndFlush(any());
         }
-
-        @Test
-        @DisplayName("writes new outbox entry when previous was PERMANENTLY_FAILED")
-        void writesNewEntryWhenPreviousPermanentlyFailed() {
-            final User user = buildUser();
-            given(userRepository.findByEmailAndTenantId(
-                    EMAIL, TENANT_ID)).willReturn(Optional.of(user));
-
-            final AuthEmailOutbox failed = AuthEmailOutbox.passwordResetPending(
-                    user,
-                    AuthToken.create(user, TENANT_ID, "hash",
-                            AuthToken.Type.PASSWORD_RESET,
-                            Instant.now().plusSeconds(900)),
-                    "old-raw-token");
-            failed.markPermanentlyFailed("SMTP down");
-            given(outboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
-                    USER_ID, AuthEmailType.PASSWORD_RESET))
-                    .willReturn(Optional.of(failed));
-            given(authTokenService.generatePasswordResetTokenWithEntity(
-                    any(), anyString()))
-                    .willReturn(buildTokenResult(user));
-            given(outboxRepository.save(any())).willAnswer(i -> i.getArgument(0));
-
-            service.initiateReset(EMAIL, TENANT_ID);
-
-            then(authTokenService).should()
-                    .generatePasswordResetTokenWithEntity(any(), anyString());
-        }
-    }
-
-    // ── helpers ───────────────────────────────────────────────────────────
-
-    private User buildUser() {
-        return User.forTesting(USER_ID, TENANT_ID, EMAIL,
-                "bcrypt-hash", true, List.of("ROLE_RESPONDER"));
-    }
-
-    private GeneratedToken buildTokenResult(User user) {
-        final AuthToken token = AuthToken.create(
-                user, TENANT_ID, "hash",
-                AuthToken.Type.PASSWORD_RESET,
-                Instant.now().plusSeconds(900));
-        return new GeneratedToken("raw-reset-token", token);
     }
 }

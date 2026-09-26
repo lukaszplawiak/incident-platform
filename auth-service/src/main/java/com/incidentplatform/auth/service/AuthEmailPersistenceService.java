@@ -1,77 +1,154 @@
 package com.incidentplatform.auth.service;
 
+import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailStatus;
+import com.incidentplatform.auth.domain.AuthEmailType;
+import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.incidentplatform.auth.repository.AuthTokenRepository;
+import com.incidentplatform.auth.repository.UserRepository;
+import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Isolates the short, independent database writes involved in processing
- * the auth email outbox from the real SMTP call that sits between them.
+ * The short, independent database transactions around each auth email send,
+ * so none is open while the scheduler waits on SMTP.
  *
  * <h2>Fixed: one transaction spanning an entire batch of SMTP sends</h2>
- * {@code AuthEmailScheduler.processPending()}/{@code retryFailed()}
- * previously wrapped their whole loop — including every
- * {@code AuthEmailService.sendInviteEmail}/{@code sendPasswordResetEmail}
- * call inside it, real blocking {@code JavaMailSender.send()} SMTP calls —
- * in a single {@code @Transactional}. That held a database connection open
- * for the cumulative duration of every SMTP send in the batch, not just
- * one. Mirrors the exact anti-pattern {@code postmortem-service}'s
- * {@code PostmortemPersistenceService} was built to avoid (see that
- * class's own Javadoc) — same fix applied here: each database write below
- * is its own short, independent transaction, acquiring and releasing a
- * connection in milliseconds, with no transaction open while the scheduler
- * is waiting on SMTP.
+ * {@code AuthEmailScheduler} once wrapped its whole loop — every blocking
+ * {@code JavaMailSender.send()} in the batch — in a single
+ * {@code @Transactional}, holding a database connection for all of them. Same
+ * fix as {@code postmortem-service}'s {@code PostmortemPersistenceService}:
+ * each method here is its own short transaction.
+ *
+ * <h2>One attempt (backlog #0-52)</h2>
+ * {@link #prepareAttempt} decides whether the entry is still worth sending and,
+ * if so, creates the token the email will carry — invalidating the user's
+ * earlier tokens of that type first, so only the newest link works — and
+ * commits it before the send (the link must work the moment the email lands).
+ * The raw token exists only in memory and in the email. Then the scheduler
+ * sends, and records the outcome with {@link #recordSent}, {@link #recordFailed}
+ * or {@link #recordGivenUp}; a failed send also invalidates the token it did
+ * not deliver.
+ *
+ * <p>Every change to the outbox row is a conditional UPDATE that applies only
+ * while the row is PENDING or FAILED. The scheduler is its only writer; the
+ * guard covers a run that outlived its ShedLock, and each method reports
+ * whether it changed the row so the caller never logs an outcome it did not
+ * record.
  */
 @Service
 public class AuthEmailPersistenceService {
 
-    private static final Logger log =
-            LoggerFactory.getLogger(AuthEmailPersistenceService.class);
-
     private final AuthEmailOutboxRepository outboxRepository;
+    private final AuthTokenRepository tokenRepository;
+    private final AuthTokenService tokenService;
+    private final UserRepository userRepository;
 
-    public AuthEmailPersistenceService(AuthEmailOutboxRepository outboxRepository) {
+    public AuthEmailPersistenceService(AuthEmailOutboxRepository outboxRepository,
+                                       AuthTokenRepository tokenRepository,
+                                       AuthTokenService tokenService,
+                                       UserRepository userRepository) {
         this.outboxRepository = outboxRepository;
+        this.tokenRepository  = tokenRepository;
+        this.tokenService     = tokenService;
+        this.userRepository   = userRepository;
     }
 
-    /** Marks the entry SENT after a successful SMTP dispatch. */
-    @Transactional
-    public void markSent(UUID entryId) {
-        outboxRepository.findById(entryId).ifPresentOrElse(entry -> {
-            entry.markSent();
-            outboxRepository.save(entry);
-        }, () -> log.warn("markSent: outbox entry no longer exists — " +
-                "skipping: entryId={}", entryId));
-    }
-
-    /**
-     * Marks the entry FAILED — a transient failure the scheduler will
-     * retry later, not yet at {@code maxRetryAttempts}.
-     */
-    @Transactional
-    public void markFailed(UUID entryId, String errorMessage) {
-        outboxRepository.findById(entryId).ifPresentOrElse(entry -> {
-            entry.markFailed(errorMessage);
-            outboxRepository.save(entry);
-        }, () -> log.warn("markFailed: outbox entry no longer exists — " +
-                "skipping: entryId={}", entryId));
+    /** What {@link #prepareAttempt} decided. */
+    public sealed interface Attempt {
+        /** Send the email with this token. */
+        record Send(String rawToken, UUID tokenId) implements Attempt {}
+        /** The entry was closed without an attempt. */
+        record Closed(AuthEmailStatus status, String reason) implements Attempt {}
+        /** The entry was no longer PENDING or FAILED; nothing was done. */
+        record AlreadyClosed() implements Attempt {}
     }
 
     /**
-     * Marks the entry PERMANENTLY_FAILED — retry budget exhausted, or the
-     * entry has no raw token and can never be sent. Requires manual
-     * investigation; the scheduler will not pick this entry up again.
+     * Closes the entry if it is no longer worth sending, otherwise creates the
+     * token for this attempt.
+     *
+     * <ul>
+     *   <li>SUPERSEDED — the user is gone (deleted or archived), an invite was
+     *       already accepted, or a newer request of this type exists.</li>
+     *   <li>PERMANENTLY_FAILED — the deadline, plus {@code deadlineTolerance}
+     *       for the scheduler's own latency, has passed. The tolerance lets
+     *       the last attempt {@code AuthEmailRetryPolicy} schedules at the
+     *       deadline itself still go out when the run picking it up starts a
+     *       little later.</li>
+     * </ul>
      */
     @Transactional
-    public void markPermanentlyFailed(UUID entryId, String errorMessage) {
-        outboxRepository.findById(entryId).ifPresentOrElse(entry -> {
-            entry.markPermanentlyFailed(errorMessage);
-            outboxRepository.save(entry);
-        }, () -> log.warn("markPermanentlyFailed: outbox entry no longer exists — " +
-                "skipping: entryId={}", entryId));
+    public Attempt prepareAttempt(AuthEmailOutbox entry, Instant now, Duration deadlineTolerance) {
+        final Optional<User> user =
+                userRepository.findByIdAndTenantId(entry.getUserId(), entry.getTenantId());
+        final String supersededBecause = user.isEmpty()
+                ? "user no longer exists"
+                : entry.getEmailType() == AuthEmailType.INVITE && user.get().getPasswordHash() != null
+                ? "invite already accepted"
+                : outboxRepository.existsByUserIdAndEmailTypeAndCreatedAtAfter(
+                        entry.getUserId(), entry.getEmailType(), entry.getCreatedAt())
+                ? "replaced by a newer request"
+                : null;
+        if (supersededBecause != null) {
+            return close(entry, AuthEmailStatus.SUPERSEDED, supersededBecause);
+        }
+        if (now.isAfter(entry.getDeadline().plus(deadlineTolerance))) {
+            return close(entry, AuthEmailStatus.PERMANENTLY_FAILED,
+                    "deadline " + entry.getDeadline() + " passed before the email could be sent");
+        }
+
+        tokenRepository.invalidateValidTokens(
+                entry.getUserId(), entry.getEmailType().tokenType(), now);
+        final GeneratedToken token = switch (entry.getEmailType()) {
+            case INVITE -> tokenService.generateInviteTokenWithEntity(user.get(), entry.getTenantId());
+            case PASSWORD_RESET ->
+                    tokenService.generatePasswordResetTokenWithEntity(user.get(), entry.getTenantId());
+        };
+        return new Attempt.Send(token.rawToken(), token.token().getId());
+    }
+
+    private Attempt close(AuthEmailOutbox entry, AuthEmailStatus status, String reason) {
+        return outboxRepository.close(entry.getId(), status, reason) == 1
+                ? new Attempt.Closed(status, reason)
+                : new Attempt.AlreadyClosed();
+    }
+
+    /** @return whether the entry was still open and is now SENT */
+    @Transactional
+    public boolean recordSent(UUID entryId, Instant now) {
+        return outboxRepository.markSent(entryId, now) == 1;
+    }
+
+    /**
+     * FAILED, to be tried again at {@code nextAttemptAt}; the token of the
+     * failed attempt is invalidated.
+     *
+     * @return whether the entry was still open and is now FAILED
+     */
+    @Transactional
+    public boolean recordFailed(UUID entryId, UUID tokenId, String error,
+                                Instant nextAttemptAt, Instant now) {
+        tokenRepository.markUsedIfUnused(tokenId, now);
+        return outboxRepository.markFailed(entryId, error, nextAttemptAt) == 1;
+    }
+
+    /**
+     * PERMANENTLY_FAILED after a failed send with no time left for another;
+     * the token of the failed attempt is invalidated.
+     *
+     * @return whether the entry was still open and is now PERMANENTLY_FAILED
+     */
+    @Transactional
+    public boolean recordGivenUp(UUID entryId, UUID tokenId, String error, Instant now) {
+        tokenRepository.markUsedIfUnused(tokenId, now);
+        return outboxRepository.markGivenUpAfterAttempt(entryId, error) == 1;
     }
 }

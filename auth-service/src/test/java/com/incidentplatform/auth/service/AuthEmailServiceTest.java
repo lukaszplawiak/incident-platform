@@ -38,8 +38,9 @@ class AuthEmailServiceTest {
     @BeforeEach
     void setUp() {
         final InviteEmailProperties properties = new InviteEmailProperties(
-                FROM_ADDRESS, APP_BASE_URL, 3,
-                java.time.Duration.ofSeconds(30), 15, 30_000L, 300_000L);
+                FROM_ADDRESS, APP_BASE_URL, 15, 30_000L,
+                java.util.List.of(java.time.Duration.ofMinutes(1)),
+                java.time.Duration.ofMinutes(2), java.time.Duration.ofDays(30));
         emailService = new AuthEmailService(mailSender, properties);
     }
 
@@ -85,7 +86,9 @@ class AuthEmailServiceTest {
             // base URL — different base URLs produce different links
             final InviteEmailProperties stagingProperties = new InviteEmailProperties(
                     FROM_ADDRESS, "https://staging.example.com",
-                    3, java.time.Duration.ofSeconds(30), 15, 30_000L, 300_000L);
+                    15, 30_000L,
+                    java.util.List.of(java.time.Duration.ofMinutes(1)),
+                    java.time.Duration.ofMinutes(2), java.time.Duration.ofDays(30));
             final AuthEmailService serviceWithDifferentUrl =
                     new AuthEmailService(mailSender, stagingProperties);
 

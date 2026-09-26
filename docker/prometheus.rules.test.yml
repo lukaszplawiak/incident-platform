@@ -97,3 +97,63 @@ tests:
       - eval_time: 75m
         alertname: OperatorAdminNotActivated
         exp_alerts: []
+
+  # Auth email delivery failing (backlog #0-52): failures and no success for
+  # 30 minutes fire it; a success in the window keeps it quiet.
+  - interval: 1m
+    input_series:
+      - series: 'auth_email_send_total{job="auth-service",instance="auth-1",type="INVITE",outcome="failed"}'
+        values: '0+1x90'
+      - series: 'auth_email_send_total{job="auth-service",instance="auth-1",type="INVITE",outcome="sent"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AuthEmailDeliveryFailing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: AuthEmailDeliveryFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "auth-service cannot send invite or password reset emails"
+              description: "Every invite and password reset email auth-service tried to send in the last 30 minutes failed, for more than 30 minutes. Check the SMTP settings and the AuthEmailScheduler lines in the auth-service log.\n"
+
+  - interval: 1m
+    input_series:
+      - series: 'auth_email_send_total{job="auth-service",instance="auth-1",type="INVITE",outcome="failed"}'
+        values: '0+1x90'
+      - series: 'auth_email_send_total{job="auth-service",instance="auth-1",type="PASSWORD_RESET",outcome="sent"}'
+        values: '0+1x90'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: AuthEmailDeliveryFailing
+        exp_alerts: []
+
+  # Auth email permanently failed (backlog #0-52): fires per type and reason
+  # after an increase, and resolves an hour later.
+  - interval: 1m
+    input_series:
+      - series: 'auth_email_permanently_failed_total{job="auth-service",instance="auth-1",type="INVITE",reason="RETRY_WINDOW_EXHAUSTED"}'
+        values: '0x10 1x80'
+      - series: 'auth_email_permanently_failed_total{job="auth-service",instance="auth-1",type="PASSWORD_RESET",reason="TOKEN_EXPIRED"}'
+        values: '0x90'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AuthEmailPermanentlyFailed
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuthEmailPermanentlyFailed
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              type: INVITE
+              reason: RETRY_WINDOW_EXHAUSTED
+            exp_annotations:
+              summary: "INVITE email given up without being sent (RETRY_WINDOW_EXHAUSTED)"
+              description: "auth-service gave up at least one INVITE email in the last hour (RETRY_WINDOW_EXHAUSTED). The recipient never got the link. The auth-service ERROR log names the user; resend the invite, or ask the user to request a new password reset.\n"
+      - eval_time: 85m
+        alertname: AuthEmailPermanentlyFailed
+        exp_alerts: []

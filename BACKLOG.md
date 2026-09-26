@@ -60,7 +60,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-45](#0-45-api-key-usage-write-holds-a-second-auth-service-db-connection) | API key usage write holds a second auth-service DB connection | tech-debt | Low | Open |
 | [0-46](#0-46-personal-api-keys-can-be-granted-scopes-their-owners-role-does-not-allow) | Personal API keys can be granted scopes their owner's role does not allow | bug | Low | Open |
 | [0-48](#0-48-user-pii-lives-on-the-users-row-erasure-is-in-place-anonymization) | User PII lives on the `users` row; erasure is in-place anonymization | design | Low | Open |
-| [0-52](#0-52-auth-emails-give-up-after-about-15-minutes-of-smtp-trouble) | Auth emails give up after about 15 minutes of SMTP trouble | design | Medium | Open |
+| [0-55](#0-55-auth-email-failures-do-not-tell-an-smtp-outage-from-a-rejected-address) | Auth email failures do not tell an SMTP outage from a rejected address | design | Low | Open |
+| [0-56](#0-56-forgot-password-leaks-whether-an-account-exists-through-response-time) | forgot-password leaks whether an account exists through response time | design | Medium | Open |
 
 ---
 
@@ -346,7 +347,9 @@ and `recordLookupFailure`) save a detached entity, which is a merge that writes 
 That is safe today only because ShedLock serialises the scheduler; a run that outlives the lock, or an old pod during a
 rollout, could overwrite another writer's status (for example the catch-all `markFailed` over an UNDELIVERABLE).
 
-**Approach.** Add a `version` column (its own Flyway migration — V7 went to backlog #0-12's `team_id`
+**Approach.** Either `@Version` as below, or what auth-service's `AuthEmailOutbox` does since #0-52: the scheduler as
+the only writer, each transition a conditional `UPDATE ... WHERE id = ? AND status IN (...)` whose row count says
+whether it applied. Add a `version` column (its own Flyway migration — V7 went to backlog #0-12's `team_id`
 column, so this one is V8) and `@Version`, and decide how the scheduler treats
 an `OptimisticLockingFailureException` (skip the entry; the next cycle reloads it).
 
@@ -465,7 +468,10 @@ with the #0-19 lookup window, so a per-channel window probably needs its own col
 are worth retrying (5xx, timeout) and which are permanent (Slack `channel_not_found`, `invalid_auth`)?
 
 **Approach.** Per-channel delivery state (pending / sent / failed-permanent) with backoff and a bounded window,
-the same for every channel and cause. Not a Slack-only special case.
+the same for every channel and cause. Not a Slack-only special case. Precedent since #0-52: auth-service's
+`auth_email_outbox` (`next_attempt_at`, `deadline`) with `AuthEmailRetryPolicy` (backoff list, last step repeats,
+bounded by a deadline, the last attempt moved to it), one writer with state-guarded conditional UPDATEs, and counters
+for sends and give-ups.
 
 ---
 
@@ -777,23 +783,52 @@ and backups) or plan the split, when a customer or audit requires stronger erasu
 
 ---
 
-### 0-52. Auth emails give up after about 15 minutes of SMTP trouble
+### 0-55. Auth email failures do not tell an SMTP outage from a rejected address
 
-**Type:** design · **Priority:** Medium · **Status:** Open (found with #0-49)
+**Type:** design · **Priority:** Low · **Status:** Open (found with #0-52)
 
-**Problem.** `AuthEmailScheduler` retries a failed invite or password-reset email
-`invite.email.max-retry-attempts` times (default 3) every `retry-interval-ms` (default 5 min), then
-marks it `PERMANENTLY_FAILED` and drops the raw token. An SMTP outage or misconfiguration longer than
-about 15 minutes therefore loses every invite and reset sent in that window, for every tenant. The
-operator admin is covered by the #0-49 reconciler; everyone else needs an admin to resend, and a
-password reset needs the user to ask again.
+**Problem.** `AuthEmailScheduler` treats every failed send alike: counted as
+`auth.email.send{outcome="failed"}` and retried until the request's deadline. An SMTP connection or
+authentication failure (the platform's problem) and a recipient the server rejects with a permanent
+5xx, e.g. a typo in an invite address (the tenant's problem), look the same. So at low volume one
+rejected address fires `AuthEmailDeliveryFailing`, a critical email to the operator about a tenant's
+data, and a permanently rejected address is retried for 7 days for nothing.
 
-**Work.** Decide the retry policy: exponential backoff up to a cap (e.g. 1 min, 5 min, 30 min, 2 h,
-6 h), bounded by the token's own lifetime (7 days for an invite, 15 minutes for a reset, so a reset
-should stop much sooner), and how long the raw token may stay in `auth_email_outbox` (today it is
-nulled on send or permanent failure). Alert on `PERMANENTLY_FAILED` entries (a metric, routed like
-#0-49's), so a lost email is noticed, not found by accident. Test: a failure sequence reaches
-`PERMANENTLY_FAILED` only after the cap, and the raw token is gone afterwards.
+**Approach.** Classify the exception from `JavaMailSender`: connection / authentication / timeout
+(`MailAuthenticationException`, `MailSendException` caused by `ConnectException`,
+`SocketTimeoutException`) versus a rejected recipient (`SendFailedException` with invalid addresses,
+SMTP 5xx on RCPT). Tag the counter (`cause=transport|recipient|other`) and alert only on `transport`.
+Decide whether a permanent recipient rejection gives up at once (`PERMANENTLY_FAILED`, reason
+`RECIPIENT_REJECTED`) and how the tenant's admin learns about it (audit event, admin UI), since it
+is not the operator's to fix. Check how 4xx (greylisting, mailbox full) is reported, since that must
+keep being retried.
+
+**Also: bounces after acceptance.** An entry is SENT once the SMTP server accepts the message; a later bounce
+(mailbox does not exist, complaint) never reaches auth-service. With a real provider (SES, Postmark, SendGrid —
+none is configured yet, and Kubernetes' `MAIL_HOST` points at a missing host, #0-42) consume its bounce/complaint
+webhook or notification, mark the entry, and tell the tenant's admin, the same "tenant's problem, not the
+operator's" route as a rejected recipient.
+
+---
+
+### 0-56. forgot-password leaks whether an account exists through response time
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found with #0-52)
+
+**Problem.** `POST /api/v1/auth/forgot-password` always answers 202, but does different work on the request
+thread depending on the account: an unknown email sleeps in `WorkSimulator` (8–11 ms, calibrated once to the
+"user exists" path), a reset already PENDING returns after one read, and a new reset looks up the user
+and inserts the outbox request (since #0-52 the token is created later, by the scheduler). Each branch
+has its own latency, so response times measured at scale tell which emails have accounts. The calibration
+drifts with every change to the "user exists" path. The endpoint has no rate limit, which makes the
+measurement cheap and also lets anyone flood a mailbox with reset emails.
+
+**Approach.** (A) Take the work off the request path, as the OWASP Forgot Password Cheat Sheet suggests:
+the endpoint only records "reset requested (email, tenant)" and returns 202, the same single insert whether or
+not the account exists; a scheduled job (ShedLock) resolves the user, invalidates old tokens, creates the new
+one and writes the email outbox entry. `WorkSimulator` then goes away. Needs a table (and a retention rule for
+requests about unknown emails, which hold an email address). (D) Rate limit per IP and per email with bucket4j on
+Redis, the pattern ingestion-service already uses (#67), answering 202 either way.
 
 ---
 
@@ -817,6 +852,8 @@ nulled on send or permanent failure). Alert on `PERMANENTLY_FAILED` entries (a m
 | 0-50 | Accept-invite, reset-password and refresh-token rotation failed with `LazyInitializationException` on a real database (bug since `f3d05fd`): `AuthTokenRepository.markUsedIfUnused` had `clearAutomatically = true`, so `consumeToken` detached the token and its lazy `User` proxy before every caller used `token.getUser()`. The single-row claim no longer clears the persistence context; `consumeToken` sets the same `usedAt` in memory. Testcontainers tests now drive accept-invite, reset-password and refresh rotation through the real services; MFA goes through the same `consumeToken` path (service unit tests mock the repositories, and #0-47 had kept anyone from reaching accept-invite) | PR #428 |
 | 0-51 | MFA login failed with a 500 on a real database (bug since `372ac32`/`efe96a9`): `chk_auth_token_type` (V2/V6) allowed only INVITE, PASSWORD_RESET and REFRESH, while `AuthToken.Type` also has `MFA_SESSION` and `MFA_SETUP_REQUIRED`, so neither token could be stored. V18 widens the constraint to all five types. `AuthRepositoryIntegrationTest` now stores a token of every `AuthToken.Type` (a new type without a migration fails CI) and drives MFA verification with a TOTP code through the real `MfaService` | PR #430 |
 | 0-49 | The operator admin invite could be lost for good (email permanently failed while SMTP was down, or the 7-day token expired unaccepted): `OperatorTenantBootstrap` did nothing once the tenant had any user and `resend-invite` needs an admin. It is now a reconciler (`@Scheduled` + ShedLock, ~30 s after start, then hourly) that checks for an admin who can log in, re-invites the configured admin through `ResendInviteService` when the latest invite permanently failed or no valid token is left, leaves an invite in flight alone, and never creates a second admin or deletes a user (an unexpected state is an ERROR for a human). Gauge `platform.operator.admin.pending` + alert `OperatorAdminNotActivated` (critical, 1 h, promtool-tested). Rejected: re-invite only at startup, never giving up on INVITE emails, a manual reinvite flag. Outbox retry policy for all emails: #0-52 | PR #431 |
+| 0-52 | Auth emails (invite, password reset) no longer give up after 3 attempts 5 minutes apart. The outbox (V19, recreated) records the intent to send: the request path only INSERTs through `AuthEmailRequestService`, and `AuthEmailScheduler` is the only writer after that. Per attempt it closes entries no longer worth sending (SUPERSEDED: newer request, accepted invite, missing user; PERMANENTLY_FAILED: deadline passed), otherwise invalidates the user's earlier tokens of the type and creates the token it sends, so no raw token is ever stored and the link is valid for its full lifetime from sending. Failed sends are retried on `AuthEmailRetryPolicy`'s backoff (1m, 5m, 30m, 2h, then every 6h) until the deadline (7 days / 15 minutes); two lanes with their own batches, a processing budget checked against the ShedLock at startup, state-guarded conditional UPDATEs instead of `@Version` (one writer), a daily purge of terminal rows. Counters `auth.email.send{type,outcome}` and `auth.email.permanently_failed{type,reason}`, alerts `AuthEmailDeliveryFailing` (critical) and `AuthEmailPermanentlyFailed` (high), promtool-tested. Fixed with it: resend-invite / forgot-password over a FAILED entry returned 500 (unique index) or, with a concurrent scheduler write, 409 instead of forgot-password's 202 — they no longer touch existing rows. The table was dropped rather than migrated (not in production); from the first production release, schema changes must stay compatible with the previous release | PR #432 |
+| 0-54 | Closed by #0-52's redesign rather than by encryption: the outbox no longer stores the raw token at all — the scheduler creates the token when it sends the email and only its SHA-256 is kept, in `auth_tokens` | PR #432 |
 | 0-53 | `AuthEmailOutboxRepository.findLatestByUserIdAndType` returned `Optional` from an unlimited `ORDER BY` query, so the second resend of an invite or a repeated password reset threw `IncorrectResultSizeDataAccessException` (500). Replaced by the derived `findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc`; Testcontainers test with two entries | PR #431 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |

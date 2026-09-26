@@ -1,15 +1,12 @@
 package com.incidentplatform.auth.service;
 
-import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.domain.UserRole;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
-import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.TenantContext;
@@ -25,17 +22,14 @@ public class UserService {
     private static final Logger log = LoggerFactory.getLogger(UserService.class);
 
     private final UserRepository userRepository;
-    private final AuthTokenService authTokenService;
-    private final AuthEmailOutboxRepository outboxRepository;
+    private final AuthEmailRequestService emailRequests;
     private final AuditEventPublisher auditEventPublisher;
 
     public UserService(UserRepository userRepository,
-                       AuthTokenService authTokenService,
-                       AuthEmailOutboxRepository outboxRepository,
+                       AuthEmailRequestService emailRequests,
                        AuditEventPublisher auditEventPublisher) {
         this.userRepository = userRepository;
-        this.authTokenService = authTokenService;
-        this.outboxRepository = outboxRepository;
+        this.emailRequests = emailRequests;
         this.auditEventPublisher = auditEventPublisher;
     }
 
@@ -46,16 +40,15 @@ public class UserService {
      * <ol>
      *   <li>Duplicate email guard — 409 if email already exists in tenant</li>
      *   <li>INSERT user (no password — set later via accept-invite)</li>
-     *   <li>Generate invite token — raw token + SHA-256 hash saved to auth_tokens</li>
-     *   <li>INSERT invite_email_outbox (PENDING) — raw token stored temporarily</li>
-     *   <li>COMMIT — all three records written atomically</li>
+     *   <li>INSERT auth_email_outbox (PENDING invite request) — no token yet</li>
+     *   <li>COMMIT — both records written atomically</li>
      * </ol>
      *
      * <h2>What does NOT happen here</h2>
-     * No email is sent in this method. {@code InviteEmailScheduler} picks up
-     * the PENDING outbox entry (typically within 30 seconds) and sends the
-     * email with the invite link. The raw token is NULLed from the outbox
-     * after successful dispatch.
+     * No email is sent and no token is created in this method.
+     * {@code AuthEmailScheduler} picks up the PENDING request (typically
+     * within 30 seconds), creates the invite token — only its SHA-256 hash is
+     * stored — and sends the email with the link (backlog #0-52).
      *
      * <h2>Response</h2>
      * The response no longer contains {@code inviteToken} — the token goes
@@ -103,16 +96,9 @@ public class UserService {
         log.info("User created: userId={}, email={}, tenant={}, roles={}",
                 user.getId(), user.getEmail(), tenantId, request.roles());
 
-        // Generate invite token — returns both rawToken and the saved entity.
-        // We need the entity for the outbox FK and the rawToken for the email link.
-        final GeneratedToken tokenResult =
-                authTokenService.generateInviteTokenWithEntity(user, tenantId);
-
-        // Write outbox entry — rawToken stored temporarily until scheduler sends email.
-        // InviteEmailScheduler will null raw_token after successful dispatch.
-        final AuthEmailOutbox outboxEntry = AuthEmailOutbox.invitePending(
-                user, tokenResult.token(), tokenResult.rawToken());
-        outboxRepository.save(outboxEntry);
+        // Queue the invite email; AuthEmailScheduler creates the token when it
+        // sends it (backlog #0-52), so no credential is created or stored here.
+        emailRequests.requestInvite(user);
 
         auditEventPublisher.publishAuth(
                 user.getId(), tenantId,

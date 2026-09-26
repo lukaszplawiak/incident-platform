@@ -71,12 +71,12 @@ public class UserController {
             produces = MediaType.APPLICATION_JSON_VALUE
     )
     @PreAuthorize("hasRole('ADMIN')")
-    @Operation(summary = "Create a new user and generate invite token",
+    @Operation(summary = "Create a new user and send an invite",
             description = """
-                    Creates a new user account without a password.
-                    The invite token in the response must be shared securely with
-                    the new user — they call POST /api/v1/auth/accept-invite to set
-                    their password. Token expires after 7 days.
+                    Creates a new user account without a password and queues an
+                    invite email. The invite link (valid 7 days from sending)
+                    goes only to the user's inbox; they call
+                    POST /api/v1/auth/accept-invite to set their password.
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "User created"),

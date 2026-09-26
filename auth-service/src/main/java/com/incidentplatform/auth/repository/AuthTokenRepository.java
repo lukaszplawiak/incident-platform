@@ -33,10 +33,10 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
 
 
     /**
-     * Finds all valid (non-expired, non-used) INVITE tokens for a user.
-     * Used by the resend-invite flow to invalidate existing tokens before
-     * generating a new one — prevents multiple valid invite links being
-     * active simultaneously.
+     * Finds all valid (non-expired, non-used) tokens of a type for a user.
+     * Used by the operator admin reconciler to tell whether a sent invite
+     * can still be accepted. (Invalidating earlier tokens before a new email
+     * is {@link #invalidateValidTokens}, since backlog #0-52.)
      */
     @Query("""
             SELECT t FROM AuthToken t
@@ -111,6 +111,29 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
               AND t.usedAt IS NULL
             """)
     int markUsedIfUnused(@Param("id") UUID id, @Param("now") Instant now);
+
+    /**
+     * Invalidates every still-valid token of one type for a user (backlog
+     * #0-52). {@code AuthEmailScheduler} calls it right before it creates the
+     * token for an invite or password-reset email, so only the newest link a
+     * user was sent works. One statement, like {@link #invalidateAllRefreshTokens};
+     * no {@code clearAutomatically}, since the caller holds the {@code User}
+     * it creates the new token for (backlog #0-50).
+     *
+     * @return the number of tokens invalidated
+     */
+    @Modifying
+    @Query("""
+            UPDATE AuthToken t
+            SET t.usedAt = :now
+            WHERE t.user.id = :userId
+              AND t.type = :type
+              AND t.usedAt IS NULL
+              AND t.expiresAt > :now
+            """)
+    int invalidateValidTokens(@Param("userId") UUID userId,
+                              @Param("type") AuthToken.Type type,
+                              @Param("now") Instant now);
 
     /**
      * Bulk-invalidates every valid REFRESH token for a user — used by
