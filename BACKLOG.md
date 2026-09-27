@@ -62,6 +62,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-48](#0-48-user-pii-lives-on-the-users-row-erasure-is-in-place-anonymization) | User PII lives on the `users` row; erasure is in-place anonymization | design | Low | Open |
 | [0-55](#0-55-auth-email-failures-do-not-tell-an-smtp-outage-from-a-rejected-address) | Auth email failures do not tell an SMTP outage from a rejected address | design | Low | Open |
 | [0-56](#0-56-forgot-password-leaks-whether-an-account-exists-through-response-time) | forgot-password leaks whether an account exists through response time | design | Medium | Open |
+| [0-58](#0-58-shareds-kafka-tenant-classes-have-no-tests-of-their-own) | `shared`'s Kafka tenant classes have no tests of their own | tech-debt | Medium | Open |
+| [0-59](#0-59-ci-workflows-rely-on-the-repository-default-for-their-token-permissions) | CI workflows rely on the repository default for their token permissions | ci | Medium | Open |
 
 ---
 
@@ -832,6 +834,53 @@ Redis, the pattern ingestion-service already uses (#67), answering 202 either wa
 
 ---
 
+### 0-58. `shared`'s Kafka tenant classes have no tests of their own
+
+**Type:** tech-debt · **Priority:** Medium · **Status:** Open (found with #0-57)
+
+**Problem.** Once the JaCoCo agent attached (#0-57), `shared`'s own tests turned out to cover 0% of
+`TenantKafkaRecordResolver`, `TenantKafkaProducerInterceptor`, `TenantKafkaConsumerInterceptor`,
+`DeadLetterPublisher` and `GlobalExceptionHandler`, and little of `AuditEventKafkaSender` and
+`UnauthorizedEntryPoint`. Service tests use most of them (consumer tests in four services, security
+tests everywhere), often as mocks, and JaCoCo counts only a module's own tests. So the per-record
+tenant resolution that CLAUDE.md calls the most easily broken property has no test of its contract
+where it is defined: header first, payload `tenantId` fallback, dead-letter otherwise, and a blank or
+reserved tenant. `TenantKafkaConsumerInterceptor` has no test anywhere.
+
+**Work.** Unit tests in `shared` for each class's contract, starting with `TenantKafkaRecordResolver`
+and the two interceptors (a header/payload mismatch is #0-39, a separate decision). Until then, a PR
+that changes one of them fails CI's changed-lines coverage gate unless it adds those tests, which is
+the intended pressure.
+
+**Also below 60% (instruction coverage, measured with #0-57), not tenant-critical:** auth-service
+`IntegrationService`, `TenantSettingsService`, `TenantSettings`, `TeamMember`, `Integration`;
+incident-service `IncidentWebSocketPublisher`, `IncidentWebSocketController`,
+`IncidentEventOutboxPersistenceService`; notification-service `SlackActionService`, `SlackMessageTs`;
+postmortem-service `GeminiClientImpl`. Pick them up when they are next changed; the gate asks for it.
+
+---
+
+### 0-59. CI workflows rely on the repository default for their token permissions
+
+**Type:** ci · **Priority:** Medium · **Status:** Open (found with #0-57)
+
+**Problem.** `ci.yml` has no `permissions:` block, so its `GITHUB_TOKEN` gets whatever the repository
+setting grants. Today that is read-only (`default_workflow_permissions: read`), which is why the
+madrapps PR comment was never posted (#0-57). But the least privilege lives in a UI setting, not in
+code: switching it to "read and write" would hand a write token to every job that runs a PR's own
+code (tests, Docker builds, the compose smoke test), and no diff or review would show it. Only
+`snyk.yml` declares its own `permissions:`.
+
+**Approach.** Declare the token scope in every workflow, at workflow level, and widen per job only
+where a job needs it. Declaring `permissions:` sets every scope not listed to `none`, so list what the
+jobs actually use: for `ci.yml` at least `contents: read` (checkout, madrapps) and `pull-requests: read`
+(`dorny/paths-filter` lists a PR's files through the API; without it "Detect Changes" fails and takes the
+Docker builds and smoke test with it). Check the other workflows (OWASP Dependency-Check, Snyk,
+anything else under `.github/workflows/`) the same way. Ship it in its own PR, so its CI run shows
+whether any job needed a scope that was missed.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -855,6 +904,7 @@ Redis, the pattern ingestion-service already uses (#67), answering 202 either wa
 | 0-52 | Auth emails (invite, password reset) no longer give up after 3 attempts 5 minutes apart. The outbox (V19, recreated) records the intent to send: the request path only INSERTs through `AuthEmailRequestService`, and `AuthEmailScheduler` is the only writer after that. Per attempt it closes entries no longer worth sending (SUPERSEDED: newer request, accepted invite, missing user; PERMANENTLY_FAILED: deadline passed), otherwise invalidates the user's earlier tokens of the type and creates the token it sends, so no raw token is ever stored and the link is valid for its full lifetime from sending. Failed sends are retried on `AuthEmailRetryPolicy`'s backoff (1m, 5m, 30m, 2h, then every 6h) until the deadline (7 days / 15 minutes); two lanes with their own batches, a processing budget checked against the ShedLock at startup, state-guarded conditional UPDATEs instead of `@Version` (one writer), a daily purge of terminal rows. Counters `auth.email.send{type,outcome}` and `auth.email.permanently_failed{type,reason}`, alerts `AuthEmailDeliveryFailing` (critical) and `AuthEmailPermanentlyFailed` (high), promtool-tested. Fixed with it: resend-invite / forgot-password over a FAILED entry returned 500 (unique index) or, with a concurrent scheduler write, 409 instead of forgot-password's 202 — they no longer touch existing rows. The table was dropped rather than migrated (not in production); from the first production release, schema changes must stay compatible with the previous release | PR #432 |
 | 0-54 | Closed by #0-52's redesign rather than by encryption: the outbox no longer stores the raw token at all — the scheduler creates the token when it sends the email and only its SHA-256 is kept, in `auth_tokens` | PR #432 |
 | 0-53 | `AuthEmailOutboxRepository.findLatestByUserIdAndType` returned `Optional` from an unlimited `ORDER BY` query, so the second resend of an invite or a repeated password reset threw `IncorrectResultSizeDataAccessException` (500). Replaced by the derived `findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc`; Testcontainers test with two entries | PR #431 |
+| 0-57 | No coverage rule had ever run: surefire's explicit `<argLine>` replaced the `argLine` property set by `jacoco:prepare-agent`, so the agent never attached, no `jacoco.exec` was written and `jacoco:report`/`jacoco:check` skipped themselves in every module, locally and in CI. `<argLine>` now starts with `@{argLine}`. The PR comment (`madrapps/jacoco-report`) never failed a job either (its thresholds only pick an emoji), and was never posted (read-only `GITHUB_TOKEN`, error hidden by `continue-on-error`); it now writes to the job summary, keeping the job's token read-only. A new CI step runs `diff-cover` (pinned) over the JaCoCo XML and fails a PR when under 60% of its changed Java lines are covered, and a missing report fails it too. `report` now has the same excludes as `check`. Measured at the fix: every module above 60% LINE (`shared` lowest, 67.8%); `shared`'s tenant classes: #0-58 | PR #433 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

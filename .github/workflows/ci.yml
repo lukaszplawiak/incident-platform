@@ -27,6 +27,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Full history on a PR: the patch coverage gate below diffs against
+          # the base branch, which a shallow clone does not have. The values are
+          # strings on purpose: in an expression the number 0 is falsy, so
+          # `cond && 0 || 1` always yields 1; the string '0' is truthy.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -78,7 +84,14 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-      - name: Add coverage comment to PR
+      # Informational only: this action's min-coverage-* inputs choose the
+      # report's emoji, they never fail the job. The gate is the next step.
+      # Written to the job summary, not as a PR comment (backlog #0-57): a
+      # comment needs a token with pull-requests: write, and this job runs
+      # the PR's own tests, so it keeps the read-only default. The comment
+      # had never been posted: the read-only token got "Resource not
+      # accessible by integration", hidden by the action's continue-on-error.
+      - name: Coverage report to job summary
         uses: madrapps/jacoco-report@v1.8.0
         if: github.event_name == 'pull_request'
         with:
@@ -93,8 +106,45 @@ jobs:
             ${{ github.workspace }}/oncall-service/target/site/jacoco/jacoco.xml
           token: ${{ secrets.GITHUB_TOKEN }}
           title: Code Coverage Report
+          comment-type: summary
           min-coverage-overall: 60
           min-coverage-changed-files: 60
+
+      # Patch coverage gate (backlog #0-57): at least 60% of the Java lines a
+      # PR adds or changes must be covered by tests. Coverage per module is
+      # enforced separately by `jacoco:check` in `verify`; this step is what
+      # stops new code from landing untested. It reads the JaCoCo XML reports
+      # (same excludes as `check`: *Config, *Application, dto, domain events),
+      # so a diff that touches only excluded classes or no Java passes. The
+      # score is over all changed lines together; uncovered lines are listed
+      # per file in the log and the job summary. A missing report fails the
+      # step — that is how a detached JaCoCo agent went unnoticed before.
+      - name: Set up Python for diff-cover
+        if: github.event_name == 'pull_request'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Enforce coverage of changed lines
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          pip install --disable-pip-version-check 'diff-cover==10.6.0'
+          reports=()
+          roots=()
+          for m in shared auth-service ingestion-service incident-service notification-service escalation-service postmortem-service oncall-service; do
+            reports+=("$m/target/site/jacoco/jacoco.xml")
+            roots+=("$m/src/main/java")
+          done
+          rc=0
+          diff-cover "${reports[@]}" \
+            --src-roots "${roots[@]}" \
+            --compare-branch "origin/$BASE_REF" \
+            --fail-under 60 \
+            --format markdown:diff-coverage.md || rc=$?
+          if [ -f diff-coverage.md ]; then cat diff-coverage.md >> "$GITHUB_STEP_SUMMARY"; fi
+          exit $rc
 
   # ──────────────────────────────────────────────────────────
   # Job 2: Detect what changed
