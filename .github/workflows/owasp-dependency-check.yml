@@ -38,6 +38,13 @@ on:
 
   workflow_dispatch:
 
+# Declared, not left to the repository setting (backlog #0-59); every scope
+# not listed is `none`. Checkout is the only GITHUB_TOKEN use: the Maven
+# cache, actions/cache and upload-artifact go through the runner's own
+# Actions runtime token.
+permissions:
+  contents: read
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   OWASP_FAIL_THRESHOLD: 7

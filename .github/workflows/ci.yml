@@ -10,6 +10,16 @@ on:
   pull_request:
     branches: [ main ]
 
+# GITHUB_TOKEN scope is declared here, not left to the repository setting
+# (backlog #0-59): that setting lives in the UI, so switching it to "read and
+# write" would hand a write token to every job that runs a PR's own code
+# (tests, Docker builds, the smoke test) without any diff showing it.
+# Declaring `permissions:` sets every scope not listed to `none`. A job that
+# needs more declares its own block, which replaces this one (it does not add
+# to it), so such a job repeats `contents: read`.
+permissions:
+  contents: read
+
 jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Build, test and coverage
@@ -88,9 +98,10 @@ jobs:
       # report's emoji, they never fail the job. The gate is the next step.
       # Written to the job summary, not as a PR comment (backlog #0-57): a
       # comment needs a token with pull-requests: write, and this job runs
-      # the PR's own tests, so it keeps the read-only default. The comment
-      # had never been posted: the read-only token got "Resource not
-      # accessible by integration", hidden by the action's continue-on-error.
+      # the PR's own tests, so it keeps the workflow's read-only token
+      # (backlog #0-59). The comment had never been posted: the read-only
+      # token got "Resource not accessible by integration", hidden by the
+      # action's continue-on-error.
       - name: Coverage report to job summary
         uses: madrapps/jacoco-report@v1.8.0
         if: github.event_name == 'pull_request'
@@ -164,6 +175,12 @@ jobs:
   detect-changes:
     name: Detect Changes
     runs-on: ubuntu-latest
+    # On a pull_request, dorny/paths-filter lists the PR's files through the
+    # API, which needs pull-requests: read. Without it this job fails, and
+    # docker-build and the smoke test (which need its outputs) go with it.
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       services: ${{ steps.compute.outputs.services }}
       infra: ${{ steps.filter.outputs.infra }}
