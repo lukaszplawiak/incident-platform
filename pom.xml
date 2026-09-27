@@ -239,7 +239,16 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-surefire-plugin</artifactId>
                     <configuration>
+                        <!-- @{argLine} (backlog #0-57): jacoco:prepare-agent puts its
+                             -javaagent flag in the `argLine` property, and an explicit
+                             <argLine> replaces that property. Without @{argLine} the agent
+                             never attached, no jacoco.exec was written, and jacoco:report /
+                             jacoco:check were skipped in every module, locally and in CI,
+                             so the coverage gate had never run. @{...} is resolved by
+                             surefire when it forks the test JVM, after prepare-agent has set
+                             the property; ${argLine} would be resolved too early. -->
                         <argLine>
+                            @{argLine}
                             --add-opens java.base/java.lang=ALL-UNNAMED
                             --add-opens java.base/java.util=ALL-UNNAMED
                         </argLine>
@@ -306,6 +315,20 @@
                         <goals>
                             <goal>report</goal>
                         </goals>
+                        <!-- Same excludes as `check` below; keep the two lists equal.
+                             CI's patch coverage gate (diff-cover, backlog #0-57) reads this
+                             report, so a class that `check` excludes must not count there
+                             either. Not set at plugin level: prepare-agent would take it too,
+                             and for the agent `excludes` means "do not instrument". -->
+                        <configuration>
+                            <excludes>
+                                <exclude>**/*Application.class</exclude>
+                                <exclude>**/*Config.class</exclude>
+                                <exclude>**/*Configuration.class</exclude>
+                                <exclude>**/dto/**</exclude>
+                                <exclude>**/domain/*Event.class</exclude>
+                            </excludes>
+                        </configuration>
                     </execution>
                     <execution>
                         <id>check</id>
