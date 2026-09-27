@@ -215,6 +215,57 @@ groups:
             accepted an invite. See the OperatorTenantBootstrap lines in the
             auth-service log and README Step 5.
 
+      - alert: AuthEmailDeliveryFailing
+        # Backlog #0-52: auth-service's invite and password-reset emails have
+        # been failing for 30 minutes with not one succeeding: SMTP is down or
+        # misconfigured. Retries continue until each request's deadline (a
+        # reset 15 minutes, an invite 7 days after it was requested), so this is the early
+        # warning; AuthEmailPermanentlyFailed reports each email actually lost.
+        # At low volume one address the SMTP server keeps rejecting also fires
+        # it — the auth-service WARN lines name the address. Telling the two
+        # apart is backlog #0-55. Critical, so it
+        # reaches the operator by Alertmanager's own email, which does not
+        # depend on auth-service's mail settings. Counters are pre-registered
+        # at 0, and "unless" (not "== 0") keeps the rule true if the "sent"
+        # series is missing.
+        expr: |
+          sum(increase(auth_email_send_total{outcome="failed"}[30m])) > 0
+          unless
+          sum(increase(auth_email_send_total{outcome="sent"}[30m])) > 0
+        for: 30m
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "auth-service cannot send invite or password reset emails"
+          description: >
+            Every invite and password reset email auth-service tried to send in
+            the last 30 minutes failed, for more than 30 minutes. Check the SMTP
+            settings and the AuthEmailScheduler lines in the auth-service log.
+
+      - alert: AuthEmailPermanentlyFailed
+        # Backlog #0-52: an invite or password reset email was given up without
+        # being sent: its deadline (7 days for an invite, 15 minutes for a reset)
+        # passed while SMTP kept failing (reason RETRY_WINDOW_EXHAUSTED) or before
+        # it could be tried at all (DEADLINE_PASSED). The user did not get the
+        # link: an admin resends the invite, or the user requests a new reset. A
+        # counter, so the alert fires on the event, not on rows the outbox purge
+        # later removes. Resolves by itself an hour after the last one.
+        expr: |
+          sum by (type, reason) (
+            increase(auth_email_permanently_failed_total[1h])
+          ) > 0
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.type }} email given up without being sent ({{ $labels.reason }})"
+          description: >
+            auth-service gave up at least one {{ $labels.type }} email in the
+            last hour ({{ $labels.reason }}). The recipient never got the link.
+            The auth-service ERROR log names the user; resend the invite, or ask
+            the user to request a new password reset.
+
       - alert: HighHttpErrorRate
         # Fire when > 1% of requests to any service return 5xx
         expr: |

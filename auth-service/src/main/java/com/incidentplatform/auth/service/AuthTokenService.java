@@ -56,6 +56,18 @@ public class AuthTokenService {
 
     private static final int TOKEN_BYTES = 32;
 
+    /**
+     * Lifetime of an emailed token (backlog #0-52): also how long a request
+     * for such an email is worth sending ({@code AuthEmailOutbox.deadline}).
+     */
+    public static Duration emailTokenLifetime(AuthToken.Type type) {
+        return switch (type) {
+            case INVITE -> Duration.ofHours(INVITE_TTL_HOURS);
+            case PASSWORD_RESET -> Duration.ofMinutes(RESET_TTL_MINUTES);
+            default -> throw new IllegalArgumentException(type + " is not sent by email");
+        };
+    }
+
     private final AuthTokenRepository tokenRepository;
     private final JwtUtils jwtUtils;
     private final TeamMemberRepository teamMemberRepository;
@@ -225,10 +237,10 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
      * Generates an invite token and returns both the raw token and the
      * persisted {@link AuthToken} entity.
      *
-     * <p>Used by {@code UserService} to write the outbox entry — the outbox
-     * needs the {@link AuthToken} entity (for the FK) AND the raw token
-     * (to include in the email link). The raw token is stored temporarily
-     * in {@code invite_email_outbox.raw_token} and NULLed after dispatch.
+     * <p>Used by {@code AuthEmailPersistenceService.prepareAttempt} right
+     * before an invite email is sent (backlog #0-52): the raw token goes into
+     * the email link and is never stored; the entity's id lets a failed send
+     * invalidate the token it did not deliver.
      *
      * <h2>Fixed (backlog #82)</h2>
      * Previously duplicated the private {@link #generate}'s entire
@@ -269,8 +281,8 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
      * Generates a password reset token and returns both the raw token and
      * the persisted {@link AuthToken} entity.
      *
-     * <p>Analogous to {@link #generateInviteTokenWithEntity} — the outbox
-     * needs both the entity (for the FK) and the raw token (for the email link).
+     * <p>Analogous to {@link #generateInviteTokenWithEntity}, for a password
+     * reset email.
      *
      * <h2>Fixed (backlog #82)</h2>
      * Same fix as {@link #generateInviteTokenWithEntity} — see that
@@ -484,7 +496,7 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
      * {@link #generateMfaSetupRequiredToken}, {@link #generateRefreshToken},
      * {@link #rotateRefreshToken}) — {@link #generateInviteTokenWithEntity}
      * and {@link #generatePasswordResetTokenWithEntity} (which also need
-     * the saved {@link AuthToken} entity, for the outbox FK) each
+     * the saved {@link AuthToken} entity) each
      * independently duplicated the exact same byte-generation/encoding/
      * {@code AuthToken.create}/save/log sequence inline, rather than
      * calling this method. Now the one place that does the actual work,

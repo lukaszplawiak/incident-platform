@@ -12,9 +12,10 @@ import java.util.UUID;
  * {@code inviteExpiresAt} — the admin had to manually forward the token to
  * the invited user via a separate channel (Slack, email, etc.).
  *
- * <p>With the Outbox Pattern, the invite token is sent directly to the
- * user's email address by {@code InviteEmailScheduler}. The token never
- * passes through the admin's HTTP client, browser devtools, or HTTP logs.
+ * <p>With the Outbox Pattern, the invite is sent directly to the user's
+ * email address by {@code AuthEmailScheduler}, which creates the token when
+ * it sends it (backlog #0-52). The token never passes through the admin's
+ * HTTP client, browser devtools, or HTTP logs.
  *
  * <p>The admin can confirm the invite was sent by checking the
  * {@code status} field — {@code "INVITED"} means the outbox entry has been

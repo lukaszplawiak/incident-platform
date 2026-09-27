@@ -202,6 +202,31 @@ class OperatorTenantBootstrapTest {
             then(resendInviteService).should().resendInvite(user.getId());
         }
 
+        /**
+         * Backlog #0-52: the scheduler marks an entry SUPERSEDED when its token
+         * was used or invalidated before sending; whether a valid invite token
+         * exists then decides, as for SENT.
+         */
+        @Test
+        @DisplayName("invite superseded and no valid token: re-invites (backlog #0-52)")
+        void supersededWithoutValidTokenIsReissued() {
+            latestInvite(user, AuthEmailStatus.SUPERSEDED);
+            validInviteTokens(user, 0);
+
+            assertThat(reconciler(EMAIL).reconcile()).isEqualTo(Outcome.REINVITED);
+            then(resendInviteService).should().resendInvite(user.getId());
+        }
+
+        @Test
+        @DisplayName("invite superseded but a valid token exists: waits (backlog #0-52)")
+        void supersededWithValidTokenIsLeftAlone() {
+            latestInvite(user, AuthEmailStatus.SUPERSEDED);
+            validInviteTokens(user, 1);
+
+            assertThat(reconciler(EMAIL).reconcile()).isEqualTo(Outcome.INVITE_IN_PROGRESS);
+            then(resendInviteService).should(never()).resendInvite(any());
+        }
+
         @Test
         @DisplayName("no outbox entry and no valid token: re-invites")
         void noInviteAtAllIsReissued() {

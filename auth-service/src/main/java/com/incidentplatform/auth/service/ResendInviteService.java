@@ -1,14 +1,10 @@
 package com.incidentplatform.auth.service;
 
-import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
-import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
-import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -21,19 +17,16 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
-import java.util.List;
 import java.util.UUID;
 
 /**
- * Handles the resend-invite flow — regenerates an invite token and
- * schedules a new invite email for a user who has not yet accepted
- * their invitation.
+ * Handles the resend-invite flow — queues a new invite email for a user who
+ * has not yet accepted their invitation.
  *
  * <h2>When resend is needed</h2>
  * <ul>
- *   <li>The original invite email was never delivered (PERMANENTLY_FAILED
- *       after 3 SMTP failures)</li>
+ *   <li>The original invite email was never delivered (PERMANENTLY_FAILED:
+ *       SMTP kept failing until its 7-day deadline, backlog #0-52)</li>
  *   <li>The original invite link expired (7-day TTL)</li>
  *   <li>The user lost the email and needs a fresh link</li>
  * </ul>
@@ -42,17 +35,23 @@ import java.util.UUID;
  * <ol>
  *   <li>Validates that the user exists in this tenant and has not yet
  *       set a password (invite still pending)</li>
- *   <li>Invalidates all existing valid INVITE tokens for this user
- *       — only one invite link should be active at a time</li>
- *   <li>Generates a fresh INVITE token (new 7-day TTL)</li>
- *   <li>Creates a new PENDING outbox entry — {@code InviteEmailScheduler}
- *       sends the email within 30 seconds</li>
+ *   <li>Queues a new invite request through {@link AuthEmailRequestService}
+ *       — nothing else. {@code AuthEmailScheduler} sends it within 30
+ *       seconds; when it does, it invalidates the user's earlier invite
+ *       tokens and creates a fresh one (7 days from sending), and marks an
+ *       older request still being retried SUPERSEDED (backlog #0-52)</li>
  * </ol>
  *
  * <h2>Idempotency guard</h2>
  * If the user already has a PENDING outbox entry (email not yet dispatched),
  * resend is rejected with 409 — there is no point creating a duplicate.
  * The admin should wait for the scheduler to process the existing entry.
+ * A FAILED entry (still being retried, backlog #0-52) does not block: the
+ * admin asked for a fresh link now, and the scheduler supersedes the older
+ * request itself. This service never changes an existing outbox row, so it
+ * cannot contend with the scheduler over one (before #0-52 it closed the
+ * FAILED row itself, and a concurrent scheduler write turned that into a 409
+ * or a unique-index 500).
  */
 @Service
 public class ResendInviteService {
@@ -61,20 +60,17 @@ public class ResendInviteService {
             LoggerFactory.getLogger(ResendInviteService.class);
 
     private final UserRepository userRepository;
-    private final AuthTokenRepository authTokenRepository;
     private final AuthEmailOutboxRepository outboxRepository;
-    private final AuthTokenService authTokenService;
+    private final AuthEmailRequestService emailRequests;
     private final AuditEventPublisher auditEventPublisher;
 
     public ResendInviteService(UserRepository userRepository,
-                               AuthTokenRepository authTokenRepository,
                                AuthEmailOutboxRepository outboxRepository,
-                               AuthTokenService authTokenService,
+                               AuthEmailRequestService emailRequests,
                                AuditEventPublisher auditEventPublisher) {
         this.userRepository = userRepository;
-        this.authTokenRepository = authTokenRepository;
         this.outboxRepository = outboxRepository;
-        this.authTokenService = authTokenService;
+        this.emailRequests = emailRequests;
         this.auditEventPublisher = auditEventPublisher;
     }
 
@@ -118,32 +114,9 @@ public class ResendInviteService {
             }
         });
 
-        // Invalidate all existing valid INVITE tokens so only one invite
-        // link is active at a time. Prevents confusion if the user
-        // receives both the old and new email.
-        final List<AuthToken> existingTokens =
-                authTokenRepository.findValidByUserIdAndType(
-                        userId, AuthToken.Type.INVITE, Instant.now());
-
-        for (final AuthToken token : existingTokens) {
-            token.markUsed();
-            authTokenRepository.save(token);
-        }
-
-        if (!existingTokens.isEmpty()) {
-            log.info("Invalidated {} existing INVITE token(s) before resend: " +
-                            "userId={}, tenant={}",
-                    existingTokens.size(), userId, tenantId);
-        }
-
-        // Generate fresh token with new 7-day TTL
-        final GeneratedToken tokenResult =
-                authTokenService.generateInviteTokenWithEntity(user, tenantId);
-
-        // Write new PENDING outbox entry — scheduler sends within 30s
-        final AuthEmailOutbox outboxEntry = AuthEmailOutbox.invitePending(
-                user, tokenResult.token(), tokenResult.rawToken());
-        outboxRepository.save(outboxEntry);
+        // Queue the new invite; see the class Javadoc for what the scheduler
+        // does with earlier tokens and requests.
+        emailRequests.requestInvite(user);
 
         auditEventPublisher.publishAuth(
                 user.getId(), TenantContext.get(),

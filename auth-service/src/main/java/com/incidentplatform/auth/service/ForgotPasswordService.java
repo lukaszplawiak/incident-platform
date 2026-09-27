@@ -1,18 +1,17 @@
 package com.incidentplatform.auth.service;
 
-import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.UserRepository;
-import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
+
 
 /**
  * Initiates the self-service password recovery flow.
@@ -21,8 +20,9 @@ import java.util.Optional;
  * <ol>
  *   <li>User submits their email to {@code POST /api/v1/auth/forgot-password}</li>
  *   <li>This service looks up the user — if not found, returns silently</li>
- *   <li>If found, generates a PASSWORD_RESET token (15-minute TTL) and
- *       writes a PENDING outbox entry</li>
+ *   <li>If found, queues a password-reset request; {@code AuthEmailScheduler}
+ *       creates the 15-minute token when it sends the email, invalidating
+ *       earlier reset tokens so only the newest link works (backlog #0-52)</li>
  *   <li>{@code AuthEmailScheduler} picks up the entry and sends the email</li>
  *   <li>User clicks the link and submits new password to
  *       {@code POST /api/v1/auth/reset-password}</li>
@@ -54,17 +54,17 @@ public class ForgotPasswordService {
             LoggerFactory.getLogger(ForgotPasswordService.class);
 
     private final UserRepository userRepository;
-    private final AuthTokenService authTokenService;
     private final AuthEmailOutboxRepository outboxRepository;
+    private final AuthEmailRequestService emailRequests;
     private final WorkSimulator workSimulator;
 
     public ForgotPasswordService(UserRepository userRepository,
-                                 AuthTokenService authTokenService,
                                  AuthEmailOutboxRepository outboxRepository,
+                                 AuthEmailRequestService emailRequests,
                                  WorkSimulator workSimulator) {
         this.userRepository   = userRepository;
-        this.authTokenService = authTokenService;
         this.outboxRepository = outboxRepository;
+        this.emailRequests    = emailRequests;
         this.workSimulator    = workSimulator;
     }
 
@@ -117,14 +117,15 @@ public class ForgotPasswordService {
             return;
         }
 
-        // Generate token — 15-minute TTL (AuthTokenService.RESET_TTL_MINUTES)
-        final GeneratedToken tokenResult =
-                authTokenService.generatePasswordResetTokenWithEntity(user, tenantId);
-
-        // Write outbox entry — AuthEmailScheduler sends the email within 30s
-        final AuthEmailOutbox outboxEntry = AuthEmailOutbox.passwordResetPending(
-                user, tokenResult.token(), tokenResult.rawToken());
-        outboxRepository.save(outboxEntry);
+        // Queue the reset email (backlog #0-52). Nothing else happens here: the
+        // scheduler creates the 15-minute token when it sends the email,
+        // invalidating the user's earlier reset tokens so only the newest link
+        // works, and supersedes an older request still being retried. This
+        // path never changes an existing outbox row, so it cannot contend with
+        // the scheduler over one (before #0-52 it closed a FAILED row itself,
+        // and a concurrent scheduler write surfaced as a 409 or a 500 instead
+        // of the 202 this endpoint always answers).
+        emailRequests.requestPasswordReset(user);
 
         // Log without the email address — prevents email enumeration via logs
         log.info("Password reset queued: userId={}, tenant={}",

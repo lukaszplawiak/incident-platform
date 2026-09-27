@@ -15,7 +15,7 @@ import java.util.concurrent.ThreadLocalRandom;
 /**
  * Enables scheduled tasks and ShedLock for auth-service.
  *
- * <p>ShedLock prevents {@code InviteEmailScheduler} from running concurrently
+ * <p>ShedLock prevents {@code AuthEmailScheduler} from running concurrently
  * across multiple auth-service instances — only one instance processes the
  * outbox at a time, preventing duplicate invite emails.
  */

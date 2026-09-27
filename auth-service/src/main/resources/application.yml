@@ -87,13 +87,22 @@ invite:
   email:
     from: ${INVITE_EMAIL_FROM:noreply@incidentplatform.com}
     app-base-url: ${APP_BASE_URL:http://localhost:3000}
-    max-retry-attempts: ${INVITE_EMAIL_MAX_RETRIES:3}
-    pending-threshold: ${INVITE_EMAIL_PENDING_THRESHOLD:PT30S}
     # Fixed (backlog #54): see InviteEmailProperties' own Javadoc for the
     # full reasoning behind this default value.
     batch-size: ${INVITE_EMAIL_BATCH_SIZE:15}
     scheduler-interval-ms: ${INVITE_EMAIL_SCHEDULER_INTERVAL_MS:30000}
-    retry-interval-ms: ${INVITE_EMAIL_RETRY_INTERVAL_MS:300000}
+    # Backlog #0-52: a failed email is retried after each of these delays in
+    # turn (the last repeats) until the request's deadline (its token lifetime:
+    # 7 days for an invite, 15 minutes for a reset) - see AuthEmailRetryPolicy.
+    # Replaces max-retry-attempts (3) / retry-interval-ms (5 min), which gave
+    # up after about 15 minutes of SMTP trouble.
+    retry-backoff: ${INVITE_EMAIL_RETRY_BACKOFF:PT1M,PT5M,PT30M,PT2H,PT6H}
+    # How long one scheduler run keeps taking entries; must leave the 4-minute
+    # ShedLock room for one more send (checked at startup).
+    processing-budget: ${INVITE_EMAIL_PROCESSING_BUDGET:PT2M}
+    # Terminal outbox entries are purged after this long.
+    retention: ${INVITE_EMAIL_RETENTION:P30D}
+    purge-interval-ms: ${INVITE_EMAIL_PURGE_INTERVAL_MS:86400000}
 
 auth:
   token-cleanup:

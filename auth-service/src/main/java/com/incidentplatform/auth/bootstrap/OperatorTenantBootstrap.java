@@ -247,9 +247,10 @@ public class OperatorTenantBootstrap {
     }
 
     /**
-     * An invite still being sent (PENDING, or FAILED with retries left) is left
-     * alone; one that permanently failed, or a sent one whose token is no longer
-     * valid, is reissued.
+     * An invite still being sent (PENDING, or FAILED and still being retried
+     * until its deadline, backlog #0-52) is left alone; one that permanently
+     * failed, or a sent or superseded one with no valid invite token left, is
+     * reissued.
      */
     private boolean inviteNeedsReissue(User user) {
         final Optional<AuthEmailOutbox> latest = outboxRepository
@@ -262,8 +263,10 @@ public class OperatorTenantBootstrap {
                 case PERMANENTLY_FAILED -> {
                     return true;
                 }
-                case SENT -> {
+                case SENT, SUPERSEDED -> {
                     // Sent: still usable only while its token is valid.
+                    // Superseded (backlog #0-52): the scheduler found its token
+                    // used or invalidated; whether a valid one exists decides.
                 }
             }
         }

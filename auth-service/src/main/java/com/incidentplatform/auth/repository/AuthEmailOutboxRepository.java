@@ -1,9 +1,11 @@
 package com.incidentplatform.auth.repository;
 
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
+import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -13,72 +15,43 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Auth email outbox (backlog #0-52: one row = the intent to send one email).
+ *
+ * <h2>Reads for the scheduler</h2>
+ * Flat rows, no joins: email and tenant are on the row, and the token is
+ * created at send time. Each lane is capped by a {@link Pageable} and ordered,
+ * so every tick takes the oldest due entries (backlog #54). Both lanes are
+ * served by {@code idx_auth_email_outbox_due}.
+ *
+ * <h2>Writes after the INSERT</h2>
+ * Only {@code AuthEmailScheduler}, through the conditional UPDATEs below: each
+ * changes a row only while it is still PENDING or FAILED and returns the number
+ * of rows changed, so a caller learns that someone else already closed the
+ * entry instead of overwriting it. No {@code clearAutomatically}: the scheduler
+ * never reads the changed rows back in the same persistence context, and
+ * clearing would detach entities an enclosing transaction still uses (the
+ * backlog #0-50 bug).
+ */
 @Repository
 public interface AuthEmailOutboxRepository
         extends JpaRepository<AuthEmailOutbox, UUID> {
 
-    /**
-     * Finds PENDING entries older than {@code pendingThreshold}.
-     * Optionally filtered by {@code emailType} — pass {@code null} for all types.
-     *
-     * <p>{@code JOIN FETCH e.user} — needed because {@code AuthEmailScheduler}
-     * processes each returned entry across a gap that includes a real SMTP
-     * send (see {@code AuthEmailPersistenceService}'s Javadoc for why that
-     * gap can no longer be inside one shared transaction). Without eagerly
-     * fetching {@code user} here, entries become detached the moment this
-     * query's own short transaction closes, and {@code entry.getUser()}
-     * — a {@code FetchType.LAZY} association — would throw
-     * {@code LazyInitializationException} when {@code processOne} logs
-     * {@code entry.getUser().getId()} afterward. Same pattern already used
-     * elsewhere in this module (e.g. {@code ApiKeyRepository.findActiveByHash}'s
-     * {@code LEFT JOIN FETCH k.ownerUser}) — also avoids an N+1 lazy-load
-     * per entry in the batch as a side benefit.
-     *
-     * <h2>Fixed (backlog #54): {@code Pageable} added — previously
-     * unbounded</h2>
-     * Each row costs a real, blocking SMTP send in the scheduler that
-     * consumes this — an unbounded result set could genuinely exceed
-     * {@code AuthEmailScheduler}'s {@code lockAtMostFor = "4m"}. Same
-     * {@code Pageable}-batching pattern as
-     * {@code EscalationTaskRepository.findDueForEscalation} (backlog
-     * #39) and {@code PostmortemRepository.findStuckGenerating} (backlog
-     * #48). Explicit {@code ORDER BY e.createdAt ASC} added alongside
-     * the {@code Pageable} — without a stable order, {@code LIMIT}-based
-     * paging has no guaranteed row selection across repeated calls
-     * (every scheduler tick), risking the same arbitrary subset being
-     * picked every time while older pending entries are starved.
-     */
+    /** New requests that are due — the lane of {@code AuthEmailScheduler.processPending()}. */
     @Query("SELECT e FROM AuthEmailOutbox e " +
-            "JOIN FETCH e.user " +
-            "WHERE e.status = 'PENDING' " +
-            "AND e.createdAt < :pendingThreshold " +
-            "AND (:emailType IS NULL OR e.emailType = :emailType) " +
-            "ORDER BY e.createdAt ASC")
-    List<AuthEmailOutbox> findPendingOlderThan(
-            @Param("pendingThreshold") Instant pendingThreshold,
-            @Param("emailType") AuthEmailType emailType,
-            Pageable pageable);
+            "WHERE e.status = 'PENDING' AND e.nextAttemptAt <= :now " +
+            "ORDER BY e.nextAttemptAt ASC, e.createdAt ASC")
+    List<AuthEmailOutbox> findDuePending(@Param("now") Instant now, Pageable pageable);
 
     /**
-     * Finds FAILED entries that still have remaining retry budget.
-     * Optionally filtered by {@code emailType}.
-     *
-     * <p>{@code JOIN FETCH e.user} — same reasoning as
-     * {@link #findPendingOlderThan}.
-     *
-     * <h2>Fixed (backlog #54): {@code Pageable} added — same reasoning
-     * as {@link #findPendingOlderThan}</h2>
+     * Failed entries whose next attempt has come — the lane of
+     * {@code AuthEmailScheduler.retryFailed()}. A separate lane, so a backlog
+     * of retries after an SMTP outage never delays new emails.
      */
     @Query("SELECT e FROM AuthEmailOutbox e " +
-            "JOIN FETCH e.user " +
-            "WHERE e.status = 'FAILED' " +
-            "AND e.retryCount < :maxRetries " +
-            "AND (:emailType IS NULL OR e.emailType = :emailType) " +
-            "ORDER BY e.createdAt ASC")
-    List<AuthEmailOutbox> findFailedWithRemainingRetries(
-            @Param("maxRetries") int maxRetries,
-            @Param("emailType") AuthEmailType emailType,
-            Pageable pageable);
+            "WHERE e.status = 'FAILED' AND e.nextAttemptAt <= :now " +
+            "ORDER BY e.nextAttemptAt ASC, e.createdAt ASC")
+    List<AuthEmailOutbox> findDueFailed(@Param("now") Instant now, Pageable pageable);
 
     /**
      * Finds the most recent outbox entry for a user and email type.
@@ -96,4 +69,48 @@ public interface AuthEmailOutboxRepository
      */
     Optional<AuthEmailOutbox> findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
             UUID userId, AuthEmailType emailType);
+
+    /** Whether a newer request of this type exists for the user — then the older one is superseded. */
+    boolean existsByUserIdAndEmailTypeAndCreatedAtAfter(
+            UUID userId, AuthEmailType emailType, Instant createdAt);
+
+    /** SENT after the SMTP server accepted the email. */
+    @Modifying
+    @Query("UPDATE AuthEmailOutbox e SET e.status = 'SENT', e.attempts = e.attempts + 1, " +
+            "e.sentAt = :now, e.nextAttemptAt = NULL, e.errorMessage = NULL " +
+            "WHERE e.id = :id AND e.status IN ('PENDING', 'FAILED')")
+    int markSent(@Param("id") UUID id, @Param("now") Instant now);
+
+    /** FAILED after a failed send, to be tried again at {@code nextAttemptAt}. */
+    @Modifying
+    @Query("UPDATE AuthEmailOutbox e SET e.status = 'FAILED', e.attempts = e.attempts + 1, " +
+            "e.errorMessage = :error, e.nextAttemptAt = :nextAttemptAt " +
+            "WHERE e.id = :id AND e.status IN ('PENDING', 'FAILED')")
+    int markFailed(@Param("id") UUID id, @Param("error") String error,
+                   @Param("nextAttemptAt") Instant nextAttemptAt);
+
+    /** PERMANENTLY_FAILED after a failed send that leaves no time for another. */
+    @Modifying
+    @Query("UPDATE AuthEmailOutbox e SET e.status = 'PERMANENTLY_FAILED', " +
+            "e.attempts = e.attempts + 1, e.errorMessage = :error, e.nextAttemptAt = NULL " +
+            "WHERE e.id = :id AND e.status IN ('PENDING', 'FAILED')")
+    int markGivenUpAfterAttempt(@Param("id") UUID id, @Param("error") String error);
+
+    /**
+     * Closes an entry without an attempt: SUPERSEDED, or PERMANENTLY_FAILED
+     * when its deadline passed before it could be tried.
+     */
+    @Modifying
+    @Query("UPDATE AuthEmailOutbox e SET e.status = :status, e.errorMessage = :reason, " +
+            "e.nextAttemptAt = NULL " +
+            "WHERE e.id = :id AND e.status IN ('PENDING', 'FAILED')")
+    int close(@Param("id") UUID id, @Param("status") AuthEmailStatus status,
+              @Param("reason") String reason);
+
+    /** Retention: deletes terminal entries created before {@code cutoff}. */
+    @Modifying
+    @Query("DELETE FROM AuthEmailOutbox e " +
+            "WHERE e.status IN ('SENT', 'PERMANENTLY_FAILED', 'SUPERSEDED') " +
+            "AND e.createdAt < :cutoff")
+    int deleteTerminalCreatedBefore(@Param("cutoff") Instant cutoff);
 }
