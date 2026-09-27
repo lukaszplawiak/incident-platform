@@ -354,7 +354,10 @@ tenant either — idempotency, like every other query, is tenant-scoped.
 Until #0-57 no coverage rule had ever run: surefire's explicit `<argLine>` replaced the property
 `jacoco:prepare-agent` sets, so no `jacoco.exec` was written and `jacoco:check` skipped itself with
 a green build. The PR comment (`madrapps/jacoco-report`) never failed a job either — its thresholds
-only pick the comment's emoji. Now:
+only pick an emoji — and was never even posted: the workflow's read-only `GITHUB_TOKEN` got "Resource
+not accessible by integration", hidden by the action's default `continue-on-error`. It now writes to
+the job summary; granting `pull-requests: write` was rejected because this job runs the PR's own
+test code. Now:
 
 - `jacoco:check` (in `verify`): LINE ≥ 60% per module, over the classes it does not exclude.
 - CI's "Enforce coverage of changed lines" step: `diff-cover` (pinned) over the JaCoCo XML,

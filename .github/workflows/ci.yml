@@ -29,8 +29,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           # Full history on a PR: the patch coverage gate below diffs against
-          # the base branch, which a shallow clone does not have.
-          fetch-depth: ${{ github.event_name == 'pull_request' && 0 || 1 }}
+          # the base branch, which a shallow clone does not have. The values are
+          # strings on purpose: in an expression the number 0 is falsy, so
+          # `cond && 0 || 1` always yields 1; the string '0' is truthy.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
@@ -83,8 +85,13 @@ jobs:
           if-no-files-found: warn
 
       # Informational only: this action's min-coverage-* inputs choose the
-      # comment's emoji, they never fail the job. The gate is the next step.
-      - name: Add coverage comment to PR
+      # report's emoji, they never fail the job. The gate is the next step.
+      # Written to the job summary, not as a PR comment (backlog #0-57): a
+      # comment needs a token with pull-requests: write, and this job runs
+      # the PR's own tests, so it keeps the read-only default. The comment
+      # had never been posted: the read-only token got "Resource not
+      # accessible by integration", hidden by the action's continue-on-error.
+      - name: Coverage report to job summary
         uses: madrapps/jacoco-report@v1.8.0
         if: github.event_name == 'pull_request'
         with:
@@ -99,6 +106,7 @@ jobs:
             ${{ github.workspace }}/oncall-service/target/site/jacoco/jacoco.xml
           token: ${{ secrets.GITHUB_TOKEN }}
           title: Code Coverage Report
+          comment-type: summary
           min-coverage-overall: 60
           min-coverage-changed-files: 60
 

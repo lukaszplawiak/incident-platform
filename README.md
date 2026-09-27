@@ -315,14 +315,14 @@ GitHub Actions pipeline runs on every push and pull request to `main`.
 Runs on every push and every PR:
 
 ```
-Checkout → Java 21 setup (Temurin) → Compile → Run tests with JaCoCo → Upload coverage reports → (PR) coverage comment → (PR) changed-lines coverage gate
+Checkout → Java 21 setup (Temurin) → Compile → Run tests with JaCoCo → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
 ```
 
 - Compiles all 7 modules and runs the full test suite
 - JaCoCo coverage reports uploaded as artifacts (retained 14 days)
 - Coverage gate in the build: **60%** line coverage per module (`jacoco:check`)
 - On pull requests: at least **60%** of the changed Java lines must be covered (`diff-cover`); the uncovered lines are listed in the job summary
-- On pull requests: JaCoCo report posted as a PR comment with per-file coverage breakdown (informational)
+- On pull requests: JaCoCo per-file coverage breakdown in the job summary (informational)
 
 ### Job 2 — Detect Changes
 
