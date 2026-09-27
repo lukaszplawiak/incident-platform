@@ -678,7 +678,9 @@ class AuthRepositoryIntegrationTest {
             final AuthEmailOutbox entry = request(user, AuthEmailType.INVITE);
             final AuthEmailPersistenceService.Attempt.Send send = (AuthEmailPersistenceService.Attempt.Send)
                     authEmailPersistenceService.prepareAttempt(entry, Instant.now(), NO_TOLERANCE);
-            final Instant next = Instant.now().plusSeconds(60);
+            // timestamptz keeps microseconds and rounds the rest, so a nanosecond
+            // Instant can come back 1 µs later; built at µs, it must come back equal.
+            final Instant next = Instant.now().plusSeconds(60).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
 
             assertThat(authEmailPersistenceService.recordFailed(
                     entry.getId(), send.tokenId(), "smtp down", next, Instant.now())).isTrue();
@@ -687,7 +689,7 @@ class AuthRepositoryIntegrationTest {
                     user.getId(), AuthToken.Type.INVITE, Instant.now())).isEmpty();
             final AuthEmailOutbox failed = reload(entry);
             assertThat(failed.getStatus()).isEqualTo(AuthEmailStatus.FAILED);
-            assertThat(failed.getNextAttemptAt()).isEqualTo(next.truncatedTo(java.time.temporal.ChronoUnit.MICROS));
+            assertThat(failed.getNextAttemptAt()).isEqualTo(next);
         }
 
         @Test
