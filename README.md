@@ -406,6 +406,50 @@ Key configuration (`renovate.json`):
 Setup: install the Renovate GitHub App at https://github.com/apps/renovate and authorize
 it for this repository. Renovate will open a "Configure Renovate" PR to confirm the setup.
 
+### GitHub Hardening
+
+What protects the pipeline itself: the `GITHUB_TOKEN`, the secrets and `main`. Part of it lives in
+the workflow files, part in repository settings, which no diff shows, so the settings are listed here
+too (state as of 2026-09-27; check them with `gh api repos/{owner}/{repo}/...` after changing anything
+in Settings).
+
+**In the workflow files**
+
+- **Token scope declared per workflow** (backlog #0-59): every workflow starts from
+  `permissions: contents: read`, and only the job that needs more widens its own token —
+  `detect-changes` adds `pull-requests: read` (`dorny/paths-filter` lists a PR's files through the
+  API), the two Snyk jobs add `security-events: write` (SARIF upload). Every scope not listed is `none`.
+- **No write scope for PR code**: jobs that run a PR's own code (build, tests, Docker builds, smoke
+  test) keep the read-only token. That is why the coverage report goes to the job summary rather than
+  a PR comment, which would need `pull-requests: write` (backlog #0-57).
+- **`pull_request`, never `pull_request_target`**: a PR from a fork runs with a read-only token and
+  without the repository's secrets.
+- **Secrets only through `secrets.*`** (`SNYK_TOKEN`, `NVD_API_KEY`), in the scan workflows, which
+  run only on `main`, on a schedule or by hand — never on a PR.
+
+**In repository settings**
+
+- Workflow permissions default: **read** — a fallback only, since every workflow declares its own.
+  GitHub Actions may not approve pull requests.
+- Workflows from first-time contributors' fork PRs wait for approval before they run.
+- Secret scanning with **push protection**: a push containing a recognised secret is rejected.
+- Ruleset "Protect main": `main` cannot be deleted or force-pushed.
+- Security scanning and dependency updates: see [Security Scanning](#security-scanning) and
+  [Dependency Updates — Renovate](#dependency-updates--renovate) above.
+
+**Not done yet**
+
+- Actions are pinned by tag, not by commit SHA, and `actions/checkout` still leaves the token in
+  `.git/config` for later steps (`persist-credentials`) — backlog #0-60. The Renovate rule described
+  as "pin to SHA" does not pin anything yet; that is part of #0-60 too.
+- The Snyk CLI is installed without a pinned version, right before it receives `SNYK_TOKEN` —
+  backlog #0-61.
+- Any Marketplace action is allowed to run (`allowed_actions: all`), instead of GitHub's own plus
+  an explicit list — backlog #0-62. Requiring SHA-pinned actions (`sha_pinning_required`, off) is
+  the last step of #0-60.
+- No status check is required before merging to `main`: the ruleset has no required checks, so a
+  red CI run does not block a merge. Making the smoke test a required check is backlog #0-2.
+
 ### Pipeline Status
 
 The CI badge at the top of this README reflects the current status of the `main` branch pipeline.

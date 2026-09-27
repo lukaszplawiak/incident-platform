@@ -35,8 +35,11 @@ on:
     - cron: '0 7 * * 1'
   workflow_dispatch:
 
+# Read-only by default (backlog #0-59); every scope not listed is `none`.
+# Each job that uploads SARIF widens its own token to security-events: write,
+# so a job added later does not inherit the write scope. A job's block
+# replaces this one, hence the repeated `contents: read`.
 permissions:
-  security-events: write
   contents: read
 
 jobs:
@@ -49,6 +52,10 @@ jobs:
   snyk-dependencies:
     name: Snyk — Dependency Scan
     runs-on: ubuntu-latest
+    # upload-sarif writes to the Security tab.
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Checkout code
@@ -95,6 +102,10 @@ jobs:
   snyk-code:
     name: Snyk — Code Scan (SAST)
     runs-on: ubuntu-latest
+    # upload-sarif writes to the Security tab.
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Checkout code

@@ -63,7 +63,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-55](#0-55-auth-email-failures-do-not-tell-an-smtp-outage-from-a-rejected-address) | Auth email failures do not tell an SMTP outage from a rejected address | design | Low | Open |
 | [0-56](#0-56-forgot-password-leaks-whether-an-account-exists-through-response-time) | forgot-password leaks whether an account exists through response time | design | Medium | Open |
 | [0-58](#0-58-shareds-kafka-tenant-classes-have-no-tests-of-their-own) | `shared`'s Kafka tenant classes have no tests of their own | tech-debt | Medium | Open |
-| [0-59](#0-59-ci-workflows-rely-on-the-repository-default-for-their-token-permissions) | CI workflows rely on the repository default for their token permissions | ci | Medium | Open |
+| [0-60](#0-60-github-actions-are-pinned-by-a-movable-tag-not-a-commit-sha) | GitHub Actions are pinned by a movable tag, not a commit SHA | ci | Medium | Open |
+| [0-61](#0-61-the-snyk-workflow-installs-an-unpinned-snyk-cli-right-before-handing-it-the-token) | The Snyk workflow installs an unpinned Snyk CLI right before handing it the token | ci | Medium | Open |
+| [0-62](#0-62-any-github-action-from-the-marketplace-is-allowed-to-run) | Any GitHub Action from the Marketplace is allowed to run | ci | Low | Open |
 
 ---
 
@@ -860,24 +862,68 @@ postmortem-service `GeminiClientImpl`. Pick them up when they are next changed; 
 
 ---
 
-### 0-59. CI workflows rely on the repository default for their token permissions
+### 0-60. GitHub Actions are pinned by a movable tag, not a commit SHA
 
-**Type:** ci · **Priority:** Medium · **Status:** Open (found with #0-57)
+**Type:** ci · **Priority:** Medium · **Status:** Open (found with #0-59)
 
-**Problem.** `ci.yml` has no `permissions:` block, so its `GITHUB_TOKEN` gets whatever the repository
-setting grants. Today that is read-only (`default_workflow_permissions: read`), which is why the
-madrapps PR comment was never posted (#0-57). But the least privilege lives in a UI setting, not in
-code: switching it to "read and write" would hand a write token to every job that runs a PR's own
-code (tests, Docker builds, the compose smoke test), and no diff or review would show it. Only
-`snyk.yml` declares its own `permissions:`.
+**Problem.** Every `uses:` in `.github/workflows/` names a tag (`dorny/paths-filter@v3`,
+`madrapps/jacoco-report@v1.8.0`, `actions/checkout@v4.3.1`, ...). A tag is a movable git ref: whoever
+controls the action's repository (its maintainer, or someone who took over their account or token) can
+point it at new code, and the next run executes that code with the job's `GITHUB_TOKEN` and secrets,
+with no diff here. That is how `tj-actions/changed-files` was compromised in March 2025
+(CVE-2025-30066): every tag was repointed to a commit that dumped the runner's secrets into the job log,
+readable by anyone on a public repository. #0-59 limits what such code can do with `GITHUB_TOKEN`, but
+not with `SNYK_TOKEN` or `NVD_API_KEY`; only pinning keeps it from running. `renovate.json` has a
+`github-actions` rule described as "pin to SHA and auto-update", but nothing in it pins: that needs the
+`helpers:pinGitHubActionDigests` preset.
 
-**Approach.** Declare the token scope in every workflow, at workflow level, and widen per job only
-where a job needs it. Declaring `permissions:` sets every scope not listed to `none`, so list what the
-jobs actually use: for `ci.yml` at least `contents: read` (checkout, madrapps) and `pull-requests: read`
-(`dorny/paths-filter` lists a PR's files through the API; without it "Detect Changes" fails and takes the
-Docker builds and smoke test with it). Check the other workflows (OWASP Dependency-Check, Snyk,
-anything else under `.github/workflows/`) the same way. Ship it in its own PR, so its CI run shows
-whether any job needed a scope that was missed.
+**Approach.** Add the preset, pin every `uses:` to the full commit SHA with the version in a comment
+(`@<sha> # v3.0.2`), and let Renovate keep both current (its `minimumReleaseAge` still applies).
+Third-party actions first (`dorny`, `madrapps`, `azure`, `docker`, `github/codeql-action`). Once
+everything is pinned, turn on the repository setting that requires it (Settings → Actions → "Require
+actions to be pinned to a full-length commit SHA"; `sha_pinning_required` in
+`GET /repos/{owner}/{repo}/actions/permissions`, `false` today), so a new tag-pinned `uses:` fails
+instead of relying on review. Update README "GitHub Hardening" when done.
+
+**Also in scope: `persist-credentials: false` on every `actions/checkout`** (found by the #0-59 security
+review). Checkout writes the job's `GITHUB_TOKEN` into `.git/config` for the rest of the job by default,
+so any later step, such as a compromised action or the unpinned Snyk CLI (#0-61), can read it and call
+the API with it directly. #0-59 limits what that token can do; no job in any workflow pushes, so not
+persisting it at all costs nothing.
+
+---
+
+### 0-61. The Snyk workflow installs an unpinned Snyk CLI right before handing it the token
+
+**Type:** ci · **Priority:** Medium · **Status:** Open (found with #0-59)
+
+**Problem.** Both jobs in `snyk.yml` run `npm install -g snyk`, which takes whatever version npm serves
+at that moment, and the next step is `snyk auth ${{ secrets.SNYK_TOKEN }}`. A hijacked npm release
+(npm package takeovers are routine, e.g. the `chalk`/`debug` takeover and the "Shai-Hulud" worm, both
+September 2025) would receive the token directly. A new CLI release can also change flags or results
+with no change in this repository, so two scans of the same commit are not comparable.
+
+**Approach.** Install a pinned version (`snyk@<x.y.z>`, bumped by Renovate) or replace the install
+with `snyk/actions` pinned by SHA (#0-60). Keep the version in one place for both jobs.
+
+---
+
+### 0-62. Any GitHub Action from the Marketplace is allowed to run
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found with #0-59)
+
+**Problem.** The repository's Actions policy is `allowed_actions: all` (Settings → Actions → General;
+`GET /repos/{owner}/{repo}/actions/permissions`), so any workflow change can pull in any third-party
+action, and only review stands between a typo-squatted or abandoned action and the job's token and
+secrets. #0-60 fixes *which version* of an action runs; this is about *which actions* may run at all.
+
+**Approach.** Switch to "Allow {owner}, and select non-{owner}, actions and reusable workflows": allow
+actions created by GitHub, and list the others by owner or repository (today `dorny/paths-filter`,
+`madrapps/jacoco-report`, `azure/setup-kubectl`, `docker/*`; `github/codeql-action` is GitHub's own).
+Adding a new third-party action then needs a deliberate settings change as well as a PR. Prefer an
+explicit list over "verified creators", which admits every verified publisher. Record the list in
+README "GitHub Hardening", since the setting is invisible in diffs, and do it after #0-60 so both
+changes are verified by one CI run each.
 
 ---
 
@@ -905,6 +951,7 @@ whether any job needed a scope that was missed.
 | 0-54 | Closed by #0-52's redesign rather than by encryption: the outbox no longer stores the raw token at all — the scheduler creates the token when it sends the email and only its SHA-256 is kept, in `auth_tokens` | PR #432 |
 | 0-53 | `AuthEmailOutboxRepository.findLatestByUserIdAndType` returned `Optional` from an unlimited `ORDER BY` query, so the second resend of an invite or a repeated password reset threw `IncorrectResultSizeDataAccessException` (500). Replaced by the derived `findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc`; Testcontainers test with two entries | PR #431 |
 | 0-57 | No coverage rule had ever run: surefire's explicit `<argLine>` replaced the `argLine` property set by `jacoco:prepare-agent`, so the agent never attached, no `jacoco.exec` was written and `jacoco:report`/`jacoco:check` skipped themselves in every module, locally and in CI. `<argLine>` now starts with `@{argLine}`. The PR comment (`madrapps/jacoco-report`) never failed a job either (its thresholds only pick an emoji), and was never posted (read-only `GITHUB_TOKEN`, error hidden by `continue-on-error`); it now writes to the job summary, keeping the job's token read-only. A new CI step runs `diff-cover` (pinned) over the JaCoCo XML and fails a PR when under 60% of its changed Java lines are covered, and a missing report fails it too. `report` now has the same excludes as `check`. Measured at the fix: every module above 60% LINE (`shared` lowest, 67.8%); `shared`'s tenant classes: #0-58 | PR #433 |
+| 0-59 | Every workflow declares its `GITHUB_TOKEN` scope instead of inheriting the repository setting: `contents: read` at workflow level, and only the jobs that need more widen their own token (`detect-changes` adds `pull-requests: read` for `dorny/paths-filter`; both Snyk jobs add `security-events: write` for the SARIF upload, which used to be granted to the whole workflow). Follow-ups: #0-60, #0-61, #0-62 | PR #434 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |
