@@ -366,7 +366,9 @@ test code. Now:
   could hide behind a big tested one.
 - The patch score is still one number over all changed lines, like Codecov's "patch": a PR that is
   mostly well tested can carry one untested class (its missing lines are listed in the job summary).
-  Judging tests per class is the reviewer's job, not the gate's.
+  Judging tests per class is the reviewer's job, not the gate's: following the "Test adequacy"
+  section of its instructions, the `code-reviewer` agent maps each changed behaviour to the test
+  that would fail if it broke.
 - `report` and `check` carry the same `excludes`; keep them equal, or the two gates judge different
   code. They are not set at plugin level because `prepare-agent` would take them as "do not
   instrument".
