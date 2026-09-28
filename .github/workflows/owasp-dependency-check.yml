@@ -49,6 +49,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   OWASP_FAIL_THRESHOLD: 7
 
+# Every `uses:` names a full commit SHA, with its tag in a comment (backlog
+# #0-60): a tag can be repointed by whoever controls the action's repository,
+# a SHA cannot. Renovate (helpers:pinGitHubActionDigests) bumps both together.
+# The repository setting "Require actions to be pinned to a full-length commit
+# SHA" rejects a tag-pinned `uses:` only once it is on; README "GitHub
+# Hardening" records its current state.
 jobs:
 
   # ============================================================
@@ -60,10 +66,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Do not leave GITHUB_TOKEN in .git/config for the rest of the job:
+          # no step pushes, and any later step (a compromised action, a CLI
+          # installed at run time) could read it from there (backlog #0-60).
+          persist-credentials: false
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -86,10 +97,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -99,7 +112,7 @@ jobs:
       # Stable OWASP DB cache (no pom.xml dependency coupling)
       # ------------------------------------------------------------
       - name: Cache OWASP DB
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.m2/repository/org/owasp/dependency-check-data
           key: owasp-db-${{ runner.os }}
@@ -123,7 +136,7 @@ jobs:
       # ------------------------------------------------------------
       - name: Upload HTML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: owasp-dependency-check-report
           path: target/dependency-check-report.html

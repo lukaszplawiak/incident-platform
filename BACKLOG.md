@@ -63,7 +63,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-55](#0-55-auth-email-failures-do-not-tell-an-smtp-outage-from-a-rejected-address) | Auth email failures do not tell an SMTP outage from a rejected address | design | Low | Open |
 | [0-56](#0-56-forgot-password-leaks-whether-an-account-exists-through-response-time) | forgot-password leaks whether an account exists through response time | design | Medium | Open |
 | [0-58](#0-58-shareds-kafka-tenant-classes-have-no-tests-of-their-own) | `shared`'s Kafka tenant classes have no tests of their own | tech-debt | Medium | Open |
-| [0-60](#0-60-github-actions-are-pinned-by-a-movable-tag-not-a-commit-sha) | GitHub Actions are pinned by a movable tag, not a commit SHA | ci | Medium | Open |
 | [0-61](#0-61-the-snyk-workflow-installs-an-unpinned-snyk-cli-right-before-handing-it-the-token) | The Snyk workflow installs an unpinned Snyk CLI right before handing it the token | ci | Medium | Open |
 | [0-62](#0-62-any-github-action-from-the-marketplace-is-allowed-to-run) | Any GitHub Action from the Marketplace is allowed to run | ci | Low | Open |
 
@@ -862,37 +861,6 @@ postmortem-service `GeminiClientImpl`. Pick them up when they are next changed; 
 
 ---
 
-### 0-60. GitHub Actions are pinned by a movable tag, not a commit SHA
-
-**Type:** ci · **Priority:** Medium · **Status:** Open (found with #0-59)
-
-**Problem.** Every `uses:` in `.github/workflows/` names a tag (`dorny/paths-filter@v3`,
-`madrapps/jacoco-report@v1.8.0`, `actions/checkout@v4.3.1`, ...). A tag is a movable git ref: whoever
-controls the action's repository (its maintainer, or someone who took over their account or token) can
-point it at new code, and the next run executes that code with the job's `GITHUB_TOKEN` and secrets,
-with no diff here. That is how `tj-actions/changed-files` was compromised in March 2025
-(CVE-2025-30066): every tag was repointed to a commit that dumped the runner's secrets into the job log,
-readable by anyone on a public repository. #0-59 limits what such code can do with `GITHUB_TOKEN`, but
-not with `SNYK_TOKEN` or `NVD_API_KEY`; only pinning keeps it from running. `renovate.json` has a
-`github-actions` rule described as "pin to SHA and auto-update", but nothing in it pins: that needs the
-`helpers:pinGitHubActionDigests` preset.
-
-**Approach.** Add the preset, pin every `uses:` to the full commit SHA with the version in a comment
-(`@<sha> # v3.0.2`), and let Renovate keep both current (its `minimumReleaseAge` still applies).
-Third-party actions first (`dorny`, `madrapps`, `azure`, `docker`, `github/codeql-action`). Once
-everything is pinned, turn on the repository setting that requires it (Settings → Actions → "Require
-actions to be pinned to a full-length commit SHA"; `sha_pinning_required` in
-`GET /repos/{owner}/{repo}/actions/permissions`, `false` today), so a new tag-pinned `uses:` fails
-instead of relying on review. Update README "GitHub Hardening" when done.
-
-**Also in scope: `persist-credentials: false` on every `actions/checkout`** (found by the #0-59 security
-review). Checkout writes the job's `GITHUB_TOKEN` into `.git/config` for the rest of the job by default,
-so any later step, such as a compromised action or the unpinned Snyk CLI (#0-61), can read it and call
-the API with it directly. #0-59 limits what that token can do; no job in any workflow pushes, so not
-persisting it at all costs nothing.
-
----
-
 ### 0-61. The Snyk workflow installs an unpinned Snyk CLI right before handing it the token
 
 **Type:** ci · **Priority:** Medium · **Status:** Open (found with #0-59)
@@ -952,6 +920,7 @@ changes are verified by one CI run each.
 | 0-53 | `AuthEmailOutboxRepository.findLatestByUserIdAndType` returned `Optional` from an unlimited `ORDER BY` query, so the second resend of an invite or a repeated password reset threw `IncorrectResultSizeDataAccessException` (500). Replaced by the derived `findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc`; Testcontainers test with two entries | PR #431 |
 | 0-57 | No coverage rule had ever run: surefire's explicit `<argLine>` replaced the `argLine` property set by `jacoco:prepare-agent`, so the agent never attached, no `jacoco.exec` was written and `jacoco:report`/`jacoco:check` skipped themselves in every module, locally and in CI. `<argLine>` now starts with `@{argLine}`. The PR comment (`madrapps/jacoco-report`) never failed a job either (its thresholds only pick an emoji), and was never posted (read-only `GITHUB_TOKEN`, error hidden by `continue-on-error`); it now writes to the job summary, keeping the job's token read-only. A new CI step runs `diff-cover` (pinned) over the JaCoCo XML and fails a PR when under 60% of its changed Java lines are covered, and a missing report fails it too. `report` now has the same excludes as `check`. Measured at the fix: every module above 60% LINE (`shared` lowest, 67.8%); `shared`'s tenant classes: #0-58 | PR #433 |
 | 0-59 | Every workflow declares its `GITHUB_TOKEN` scope instead of inheriting the repository setting: `contents: read` at workflow level, and only the jobs that need more widen their own token (`detect-changes` adds `pull-requests: read` for `dorny/paths-filter`; both Snyk jobs add `security-events: write` for the SARIF upload, which used to be granted to the whole workflow). Follow-ups: #0-60, #0-61, #0-62 | PR #434 |
+| 0-60 | Every `uses:` in `.github/workflows/` names a full commit SHA with its tag in a comment, pinned to the commit each tag pointed at (no version change); Renovate keeps both current through `helpers:pinGitHubActionDigests` (the old "pin to SHA" rule pinned nothing); every `actions/checkout` sets `persist-credentials: false`, so no later step can read `GITHUB_TOKEN` from `.git/config`; the repository setting "Require actions to be pinned to a full-length commit SHA" is not part of the PR: it is turned on manually once the PR is merged and the run on `main` is green | PR (number filled after opening) |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

@@ -389,9 +389,31 @@ For a new job or workflow:
 - Never give a write scope to a job that runs a PR's own code (build, tests, Docker, smoke test).
   That is why the coverage report goes to the job summary rather than a PR comment (#0-57).
 - `permissions:` does not protect secrets (`SNYK_TOKEN`, `NVD_API_KEY`). Keeping a compromised
-  action or tool from running is #0-60 (actions pinned by SHA) and #0-61 (pinned Snyk CLI); keeping
-  the token out of `.git/config`, where any later step can read it, is also #0-60
-  (`persist-credentials: false` on checkout).
+  action or tool from running is #0-60 (actions pinned by SHA, below) and #0-61 (pinned Snyk CLI).
+
+### Actions are pinned by commit SHA (backlog #0-60)
+
+Every `uses:` names a full 40-character commit SHA with its tag in a comment
+(`actions/checkout@<sha> # v4.4.0`). A tag is a movable ref (the `tj-actions/changed-files`
+compromise, CVE-2025-30066, repointed every tag); a SHA is not. Not inferable from the files:
+
+- The repository setting `sha_pinning_required` (Settings → Actions → General) makes a workflow
+  with a tag-pinned `uses:` fail to start. It can be turned on only once `main` has no tag-pinned
+  `uses:` left, so it is switched on after the #0-60 PR merges, not with it. Nothing in a diff shows
+  its state: read it with `gh api repos/{owner}/{repo}/actions/permissions` (README "GitHub
+  Hardening" records it) instead of assuming it; while it is off, only review catches a tag.
+- Resolve a SHA with `git ls-remote --tags https://github.com/<owner>/<repo>`: for an annotated tag
+  take the dereferenced `refs/tags/vX^{}` line (the commit), never the tag object's SHA. The comment
+  names the most specific tag on that commit.
+- Renovate's `helpers:pinGitHubActionDigests` preset updates the SHA and the comment together; the
+  `github-actions` package rule only groups those updates.
+- Every `actions/checkout` sets `persist-credentials: false`: no job pushes, and otherwise
+  `GITHUB_TOKEN` stays in `.git/config` for every later step to read. A future job that must push
+  should pass its token to that one step instead of re-enabling persistence.
+- Without persisted credentials, any later `git fetch` in a job is anonymous. That works only
+  because the repository is public: `dorny/paths-filter` on a `push` event may fetch history
+  itself (on a `pull_request` it lists files through the API). If the repository ever becomes
+  private, that step needs its own credentials.
 
 ---
 

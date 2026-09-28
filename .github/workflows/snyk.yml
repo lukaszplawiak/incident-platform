@@ -42,6 +42,12 @@ on:
 permissions:
   contents: read
 
+# Every `uses:` names a full commit SHA, with its tag in a comment (backlog
+# #0-60): a tag can be repointed by whoever controls the action's repository,
+# a SHA cannot. Renovate (helpers:pinGitHubActionDigests) bumps both together.
+# The repository setting "Require actions to be pinned to a full-length commit
+# SHA" rejects a tag-pinned `uses:` only once it is on; README "GitHub
+# Hardening" records its current state.
 jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Snyk dependency scan
@@ -59,10 +65,15 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Do not leave GITHUB_TOKEN in .git/config for the rest of the job:
+          # no step pushes, and any later step (a compromised action, a CLI
+          # installed at run time) could read it from there (backlog #0-60).
+          persist-credentials: false
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4.8.0
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -88,7 +99,7 @@ jobs:
         # causing .snyk suppressions to be applied inconsistently across scans
 
       - name: Upload dependency SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         if: always() && hashFiles('snyk-deps.sarif') != ''
         with:
           sarif_file: snyk-deps.sarif
@@ -109,7 +120,9 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4.3.1
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Install Snyk CLI
         run: npm install -g snyk
@@ -128,7 +141,7 @@ jobs:
         # Security issues in application code require manual review.
 
       - name: Upload code SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         if: always() && hashFiles('snyk-code.sarif') != ''
         with:
           sarif_file: snyk-code.sarif
