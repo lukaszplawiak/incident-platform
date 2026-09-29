@@ -93,6 +93,8 @@ Transactional outbox for `incidents.lifecycle` (`IncidentEventOutbox` + schedule
 
 Every workflow under `.github/workflows/` declares its own `permissions:` at workflow level (`contents: read`; backlog #0-59) instead of relying on the repository's "Workflow permissions" setting. A job that needs more declares its own block, which replaces the workflow's, so it repeats `contents: read`. A job that runs a PR's own code never gets a write scope. No check enforces this — review does.
 
+Every `uses:` is pinned to a full commit SHA with its tag in a comment (`owner/action@<sha> # vX.Y.Z`; backlog #0-60), and every `actions/checkout` sets `persist-credentials: false`. Don't assume the repository setting `sha_pinning_required` rejects a tag: it is turned on only after the #0-60 PR merges, and until then only review does — current state in README "GitHub Hardening", how to resolve a SHA in `.ai/context/project.md`.
+
 Security scans (OWASP Dependency-Check, Snyk) run in separate workflows. Unfixable CVEs are suppressed with a justification and expiry in `owasp-suppressions.xml` / `.snyk`; dependency version overrides for CVEs live in the root `pom.xml` properties with a comment naming the CVE.
 ## Working style (read before implementing anything)
 

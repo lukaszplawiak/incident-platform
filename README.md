@@ -389,8 +389,8 @@ Required GitHub secrets: `SNYK_TOKEN`, `NVD_API_KEY` (optional — speeds NVD do
 
 ### Dependency Updates — Renovate
 
-Renovate Bot monitors `pom.xml` and Dockerfiles and opens pull requests automatically
-when newer versions are available.
+Renovate Bot monitors `pom.xml`, Dockerfiles and GitHub Actions workflows and opens pull
+requests automatically when newer versions are available.
 
 Key configuration (`renovate.json`):
 
@@ -402,6 +402,9 @@ Key configuration (`renovate.json`):
 - **Vulnerability alerts**: when a CVE is published for any dependency, Renovate opens
   a PR immediately regardless of schedule
 - **Major updates**: always labelled `major-update`, never auto-merged
+- **GitHub Actions** (`helpers:pinGitHubActionDigests`): keeps every `uses:` pinned to a commit SHA
+  and updates the SHA and its `# vX.Y.Z` comment together; all action updates are grouped into one
+  PR (backlog #0-60)
 
 Setup: install the Renovate GitHub App at https://github.com/apps/renovate and authorize
 it for this repository. Renovate will open a "Configure Renovate" PR to confirm the setup.
@@ -410,7 +413,7 @@ it for this repository. Renovate will open a "Configure Renovate" PR to confirm 
 
 What protects the pipeline itself: the `GITHUB_TOKEN`, the secrets and `main`. Part of it lives in
 the workflow files, part in repository settings, which no diff shows, so the settings are listed here
-too (state as of 2026-09-27; check them with `gh api repos/{owner}/{repo}/...` after changing anything
+too (state as of 2026-09-28; check them with `gh api repos/{owner}/{repo}/...` after changing anything
 in Settings).
 
 **In the workflow files**
@@ -426,6 +429,14 @@ in Settings).
   without the repository's secrets.
 - **Secrets only through `secrets.*`** (`SNYK_TOKEN`, `NVD_API_KEY`), in the scan workflows, which
   run only on `main`, on a schedule or by hand — never on a PR.
+- **Actions pinned by commit SHA** (backlog #0-60): every `uses:` names the full 40-character
+  commit, with its tag in a comment (`actions/checkout@<sha> # v4.4.0`). A tag can be repointed by
+  whoever controls the action's repository, as in the `tj-actions/changed-files` compromise
+  (CVE-2025-30066), and the next run would execute that code with the job's token and secrets; a SHA
+  cannot. Renovate's `helpers:pinGitHubActionDigests` preset updates the SHA and the comment together.
+- **No token left in `.git/config`** (backlog #0-60): every `actions/checkout` sets
+  `persist-credentials: false`. No job pushes, so no later step needs the token that checkout would
+  otherwise leave behind for it to read.
 
 **In repository settings**
 
@@ -439,14 +450,14 @@ in Settings).
 
 **Not done yet**
 
-- Actions are pinned by tag, not by commit SHA, and `actions/checkout` still leaves the token in
-  `.git/config` for later steps (`persist-credentials`) — backlog #0-60. The Renovate rule described
-  as "pin to SHA" does not pin anything yet; that is part of #0-60 too.
 - The Snyk CLI is installed without a pinned version, right before it receives `SNYK_TOKEN` —
   backlog #0-61.
+- Requiring SHA-pinned actions (`sha_pinning_required`) is still off, so only review catches a new
+  tag-pinned `uses:`. It is the last step of backlog #0-60: it can be turned on only once `main` has
+  no tag-pinned `uses:` left (earlier, every run on `main` would fail to start), so it follows the
+  merge of the pinning PR and a green run on `main`.
 - Any Marketplace action is allowed to run (`allowed_actions: all`), instead of GitHub's own plus
-  an explicit list — backlog #0-62. Requiring SHA-pinned actions (`sha_pinning_required`, off) is
-  the last step of #0-60.
+  an explicit list — backlog #0-62.
 - No status check is required before merging to `main`: the ruleset has no required checks, so a
   red CI run does not block a merge. Making the smoke test a required check is backlog #0-2.
 

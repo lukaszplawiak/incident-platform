@@ -1,7 +1,8 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended"
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
   ],
 
   "timezone": "Europe/Warsaw",
@@ -55,7 +56,7 @@
       ]
     },
     {
-      "description": "GitHub Actions — pin to SHA and auto-update",
+      "description": "GitHub Actions — group updates; the SHA pins and their version comments come from helpers:pinGitHubActionDigests (backlog #0-60)",
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions",
       "minimumReleaseAge": "3 days"
