@@ -63,7 +63,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-55](#0-55-auth-email-failures-do-not-tell-an-smtp-outage-from-a-rejected-address) | Auth email failures do not tell an SMTP outage from a rejected address | design | Low | Open |
 | [0-56](#0-56-forgot-password-leaks-whether-an-account-exists-through-response-time) | forgot-password leaks whether an account exists through response time | design | Medium | Open |
 | [0-58](#0-58-shareds-kafka-tenant-classes-have-no-tests-of-their-own) | `shared`'s Kafka tenant classes have no tests of their own | tech-debt | Medium | Open |
-| [0-61](#0-61-the-snyk-workflow-installs-an-unpinned-snyk-cli-right-before-handing-it-the-token) | The Snyk workflow installs an unpinned Snyk CLI right before handing it the token | ci | Medium | Open |
 | [0-62](#0-62-any-github-action-from-the-marketplace-is-allowed-to-run) | Any GitHub Action from the Marketplace is allowed to run | ci | Low | Open |
 
 ---
@@ -861,21 +860,6 @@ postmortem-service `GeminiClientImpl`. Pick them up when they are next changed; 
 
 ---
 
-### 0-61. The Snyk workflow installs an unpinned Snyk CLI right before handing it the token
-
-**Type:** ci · **Priority:** Medium · **Status:** Open (found with #0-59)
-
-**Problem.** Both jobs in `snyk.yml` run `npm install -g snyk`, which takes whatever version npm serves
-at that moment, and the next step is `snyk auth ${{ secrets.SNYK_TOKEN }}`. A hijacked npm release
-(npm package takeovers are routine, e.g. the `chalk`/`debug` takeover and the "Shai-Hulud" worm, both
-September 2025) would receive the token directly. A new CLI release can also change flags or results
-with no change in this repository, so two scans of the same commit are not comparable.
-
-**Approach.** Install a pinned version (`snyk@<x.y.z>`, bumped by Renovate) or replace the install
-with `snyk/actions` pinned by SHA (#0-60). Keep the version in one place for both jobs.
-
----
-
 ### 0-62. Any GitHub Action from the Marketplace is allowed to run
 
 **Type:** ci · **Priority:** Low · **Status:** Open (found with #0-59)
@@ -890,7 +874,7 @@ actions created by GitHub, and list the others by owner or repository (today `do
 `madrapps/jacoco-report`, `azure/setup-kubectl`, `docker/*`; `github/codeql-action` is GitHub's own).
 Adding a new third-party action then needs a deliberate settings change as well as a PR. Prefer an
 explicit list over "verified creators", which admits every verified publisher. Record the list in
-README "GitHub Hardening", since the setting is invisible in diffs. It takes two calls:
+README "Infrastructure Hardening", since the setting is invisible in diffs. It takes two calls:
 `PUT /repos/{owner}/{repo}/actions/permissions` sets `allowed_actions=selected`, and
 `PUT .../actions/permissions/selected-actions` sets the list. The first call also carries
 `sha_pinning_required` (on since #0-60), and GitHub's docs do not say what omitting it does: send
@@ -925,6 +909,7 @@ actions does not switch SHA pinning off.
 | 0-57 | No coverage rule had ever run: surefire's explicit `<argLine>` replaced the `argLine` property set by `jacoco:prepare-agent`, so the agent never attached, no `jacoco.exec` was written and `jacoco:report`/`jacoco:check` skipped themselves in every module, locally and in CI. `<argLine>` now starts with `@{argLine}`. The PR comment (`madrapps/jacoco-report`) never failed a job either (its thresholds only pick an emoji), and was never posted (read-only `GITHUB_TOKEN`, error hidden by `continue-on-error`); it now writes to the job summary, keeping the job's token read-only. A new CI step runs `diff-cover` (pinned) over the JaCoCo XML and fails a PR when under 60% of its changed Java lines are covered, and a missing report fails it too. `report` now has the same excludes as `check`. Measured at the fix: every module above 60% LINE (`shared` lowest, 67.8%); `shared`'s tenant classes: #0-58 | PR #433 |
 | 0-59 | Every workflow declares its `GITHUB_TOKEN` scope instead of inheriting the repository setting: `contents: read` at workflow level, and only the jobs that need more widen their own token (`detect-changes` adds `pull-requests: read` for `dorny/paths-filter`; both Snyk jobs add `security-events: write` for the SARIF upload, which used to be granted to the whole workflow). Follow-ups: #0-60, #0-61, #0-62 | PR #434 |
 | 0-60 | Every `uses:` in `.github/workflows/` names a full commit SHA with its tag in a comment, pinned to the commit each tag pointed at (no version change); Renovate keeps both current through `helpers:pinGitHubActionDigests` (the old "pin to SHA" rule pinned nothing); every `actions/checkout` sets `persist-credentials: false`, so no later step can read `GITHUB_TOKEN` from `.git/config`; the repository setting "Require actions to be pinned to a full-length commit SHA" is not part of the PR: it was turned on manually on 2026-09-29, after the PR merged and the run on `main` was green | PR #437 |
+| 0-61 | The Snyk CLI in both `snyk.yml` jobs is the standalone binary at a version pinned in the workflow's `env`, checked against a SHA-256 kept next to it (`sha256sum --check --strict`) before it runs, instead of `npm install -g snyk` (unpinned, a Node wrapper with an unbundled `@sentry/node ^7` range); `SNYK_TOKEN` reaches only the scan step as an environment variable, with no `snyk auth` writing it to argv and a config file; version and checksum are bumped by hand, since Renovate cannot compute the checksum. README's hardening section became `## Infrastructure Hardening` | PR #TBD |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

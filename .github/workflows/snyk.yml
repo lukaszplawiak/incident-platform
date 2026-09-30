@@ -9,6 +9,15 @@
 # JAVA_HOME issues with the Docker-based action in multi-module
 # Maven projects.
 #
+# The CLI is the standalone binary at a pinned version, checked
+# against a SHA-256 kept in this file before it runs (backlog #0-61).
+# It used to be `npm install -g snyk` (whatever npm served that
+# minute, a Node wrapper whose unbundled `@sentry/node ^7` range was
+# resolved at install time) followed by `snyk auth <token>`, which
+# put the token in argv and in ~/.config/configstore/snyk.json for
+# every later step. The token now reaches only the scan step, as
+# the SNYK_TOKEN environment variable the CLI reads directly.
+#
 # Runs on:
 #   - Push to main
 #   - Every Monday at 09:00 Warsaw time (scheduled)
@@ -42,12 +51,24 @@ on:
 permissions:
   contents: read
 
+# Snyk CLI, pinned for both jobs (backlog #0-61). Renovate cannot bump
+# these: it would change the version but not the checksum, so bump both
+# by hand. Take the checksum from two independent channels and commit it
+# only if they are equal; the .sha256 file alone comes from the same host
+# as the binary, so it cannot tell a replaced binary from a real one:
+#   1. curl -fsSL https://downloads.snyk.io/cli/v<version>/snyk-linux.sha256
+#   2. npm pack snyk@<version>, then the `snyk-linux` line of
+#      package/wrapper_dist/generated/sha256sums.txt (npm registry)
+env:
+  SNYK_CLI_VERSION: 1.1307.4
+  SNYK_CLI_SHA256: b0baee4fa4d7d11b7df927a1046cf8137a8a89fafac8101a45c3c0e0777ddc35
+
 # Every `uses:` names a full commit SHA, with its tag in a comment (backlog
 # #0-60): a tag can be repointed by whoever controls the action's repository,
 # a SHA cannot. Renovate (helpers:pinGitHubActionDigests) bumps both together.
 # The repository setting "Require actions to be pinned to a full-length commit
 # SHA" is on (since 2026-09-29): a workflow with a tag-pinned `uses:` fails to
-# start. README "GitHub Hardening" records the setting.
+# start. README "Infrastructure Hardening" records the setting.
 jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Snyk dependency scan
@@ -82,13 +103,23 @@ jobs:
       - name: Build project
         run: ./mvnw clean compile -DskipTests --no-transfer-progress
 
-      - name: Install Snyk CLI
-        run: npm install -g snyk
-
-      - name: Authenticate Snyk
-        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+      # Stops the job before the token exists in any process if the binary
+      # is not the one pinned above (backlog #0-61). Installed into
+      # RUNNER_TEMP and put on PATH for later steps: no sudo needed.
+      - name: Install Snyk CLI (pinned, checksum verified)
+        run: |
+          curl --fail --silent --show-error --location --retry 2 \
+            --output snyk "https://downloads.snyk.io/cli/v${SNYK_CLI_VERSION}/snyk-linux"
+          echo "${SNYK_CLI_SHA256}  snyk" | sha256sum --check --strict
+          install -D -m 0755 snyk "${RUNNER_TEMP}/snyk-cli/snyk"
+          rm snyk
+          echo "${RUNNER_TEMP}/snyk-cli" >> "$GITHUB_PATH"
+          "${RUNNER_TEMP}/snyk-cli/snyk" --version
 
       - name: Run Snyk dependency scan
+        # The only step that sees the token (read by the CLI, no `snyk auth`).
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           snyk test \
             --maven-aggregate-project \
@@ -124,14 +155,20 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Snyk CLI
-        run: npm install -g snyk
-
-      - name: Authenticate Snyk
-        run: snyk auth ${{ secrets.SNYK_TOKEN }}
+      - name: Install Snyk CLI (pinned, checksum verified)
+        run: |
+          curl --fail --silent --show-error --location --retry 2 \
+            --output snyk "https://downloads.snyk.io/cli/v${SNYK_CLI_VERSION}/snyk-linux"
+          echo "${SNYK_CLI_SHA256}  snyk" | sha256sum --check --strict
+          install -D -m 0755 snyk "${RUNNER_TEMP}/snyk-cli/snyk"
+          rm snyk
+          echo "${RUNNER_TEMP}/snyk-cli" >> "$GITHUB_PATH"
+          "${RUNNER_TEMP}/snyk-cli/snyk" --version
 
       - name: Run Snyk code scan
         continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
           snyk code test \
             --severity-threshold=high \
