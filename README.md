@@ -248,7 +248,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 - **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set explicitly
 - **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts only `aud=auth-service`, on its one internal endpoint for a tenant's Slack workspace — backlog #0-30) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
 - **Alert source authentication** (backlog #0-16): external alert sources — a tenant's Alertmanager, Wazuh, and the platform's own Alertmanager (as the reserved `platform-operator` tenant) — send an Integration API key (`Authorization: ApiKey ipl_…` or `Bearer ipl_…`). ingestion-service sends only its SHA-256 to auth-service's introspection endpoint, with a tenant-less *purpose token* that auth-service accepts on that one route and nowhere else, and caches active keys for at most 60 s (the revocation window). A definite "no" is `401`; "can't check right now" is `503` + `Retry-After`, because Alertmanager retries 5xx but drops every 4xx. ingestion-service accepts no service tokens. Tenant ids `platform-operator` and `system` are reserved
-- **Dev endpoints**: `DevTokenController` gated with `@Profile({"local", "dev"})` plus a fail-fast startup guard as a second line of defence — never available in production
+- **Dev endpoints**: `DevTokenController` (`GET /dev/token`, an unauthenticated token for any tenant and role) is gated with `@Profile({"local", "dev"})`, plus a startup guard that refuses to run outside those profiles. The guard cannot help if a deployment sets the dev profile itself, which the k8s base ConfigMap did for every overlay, prod included (backlog #0-63). Now only `k8s/overlays/dev` sets `SPRING_PROFILES_ACTIVE`, docker-compose sets none, and CI fails if the rendered staging or prod overlay sets any Spring profile
 - **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8097) — never co-located with the business API
 - **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in access logs
 - **Sensitive field redaction**: `GlobalExceptionHandler` redacts `password`, `secret`, `token`, `apiKey` from validation error responses
@@ -958,7 +958,7 @@ TOKEN=$(curl -s "http://localhost:8082/dev/token?tenantId=test-tenant" | jq -r .
 echo "Token: ${TOKEN:0:50}..."
 ```
 
-**Kubernetes** — `/dev/token` is intentionally not exposed via Ingress. Use port-forward to incident-service:
+**Kubernetes** (dev overlay only: `/dev/token` exists only where the dev profile is set, backlog #0-63, and is intentionally not exposed via Ingress). Use port-forward to incident-service:
 ```bash
 kubectl port-forward svc/incident-service 8082:8082 -n incident-platform-dev &
 sleep 2

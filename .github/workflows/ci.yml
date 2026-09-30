@@ -369,6 +369,33 @@ jobs:
           done
           echo "Every service with a Dockerfile has a matching k8s Deployment."
 
+      # Backlog #0-63: the base ConfigMap once set SPRING_PROFILES_ACTIVE=dev,
+      # so prod and staging started incident-service with the dev profile and
+      # its unauthenticated /dev/token (an ADMIN JWT for any tenant). No
+      # application-<profile>.yml exists for staging or prod, so neither sets
+      # a profile at all: any profile setting in their rendered output fails,
+      # in every form Spring reads (env var, property, command-line flag).
+      # A future prod profile must be added to this check deliberately.
+      - name: Staging and prod set no Spring profile
+        run: |
+          set -e
+          pattern='spring[._-]profiles[._-](active|include|default)'
+          failed=0
+          for env in staging prod; do
+            # A missing render must fail the step, not read as "no match":
+            # inside `if`, grep's exit 2 (no such file) would pass silently.
+            if [ ! -s "/tmp/${env}-rendered.yml" ]; then
+              echo "::error::/tmp/${env}-rendered.yml is missing or empty; the render step above must run first"
+              exit 1
+            fi
+            if grep -niE "$pattern" "/tmp/${env}-rendered.yml"; then
+              echo "::error::k8s/overlays/${env} sets a Spring profile (backlog #0-63)"
+              failed=1
+            fi
+          done
+          [ "$failed" -eq 0 ] && echo "Neither staging nor prod sets a Spring profile."
+          exit "$failed"
+
   # ──────────────────────────────────────────────────────────
   # Validate the monitoring config (backlog #0-16)
   #

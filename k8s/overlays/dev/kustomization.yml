@@ -49,6 +49,16 @@ patches:
       - op: replace
         path: /data/NOTIFICATION_OPERATOR_ALERT_EMAIL
         value: "operator@incident-platform.local"
+  # backlog #0-63: the dev Spring profile (incident-service's /dev/token) is
+  # opted into here, and only here. Base sets no profile, so staging and prod
+  # cannot inherit it; CI checks their rendered output.
+  - target:
+      kind: ConfigMap
+      name: app-config
+    patch: |-
+      - op: add
+        path: /data/SPRING_PROFILES_ACTIVE
+        value: "dev"
 
 images:
   - name: auth-service
