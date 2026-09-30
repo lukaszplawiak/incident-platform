@@ -48,4 +48,13 @@ data:
   # WebSocket
   WEBSOCKET_ALLOWED_ORIGINS: "http://localhost:4200,http://incident-platform-frontend"
 
-  SPRING_PROFILES_ACTIVE: "dev"
+  # No SPRING_PROFILES_ACTIVE here (backlog #0-63). It used to be "dev" in
+  # this base, so every overlay, prod and staging included, started with the
+  # dev profile: incident-service then enabled DevSecurityConfig and
+  # DevTokenController, whose unauthenticated GET /dev/token mints an ADMIN
+  # JWT for any tenant that all seven services accept (one HS512 secret).
+  # Not reachable through the Ingress, but from any pod (no NetworkPolicy).
+  # DevTokenController's own startup guard cannot catch it: it only refuses
+  # to start when the dev profile is NOT active. The dev overlay adds the
+  # profile; CI fails if the rendered staging or prod overlay sets any
+  # profile at all.
