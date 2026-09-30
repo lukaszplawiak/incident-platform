@@ -413,7 +413,7 @@ it for this repository. Renovate will open a "Configure Renovate" PR to confirm 
 
 What protects the pipeline itself: the `GITHUB_TOKEN`, the secrets and `main`. Part of it lives in
 the workflow files, part in repository settings, which no diff shows, so the settings are listed here
-too (state as of 2026-09-28; check them with `gh api repos/{owner}/{repo}/...` after changing anything
+too (state as of 2026-09-29; check them with `gh api repos/{owner}/{repo}/...` after changing anything
 in Settings).
 
 **In the workflow files**
@@ -445,6 +445,10 @@ in Settings).
 - Workflows from first-time contributors' fork PRs wait for approval before they run.
 - Secret scanning with **push protection**: a push containing a recognised secret is rejected.
 - Ruleset "Protect main": `main` cannot be deleted or force-pushed.
+- Actions must be pinned to a full-length commit SHA (`sha_pinning_required`, backlog #0-60): a
+  workflow with a tag-pinned `uses:` fails to start, so a tag no longer depends on review alone. It
+  was turned on once `main` had no tag-pinned `uses:` left and its run was green (2026-09-29);
+  turning it on earlier would have stopped every run on `main` from starting.
 - Security scanning and dependency updates: see [Security Scanning](#security-scanning) and
   [Dependency Updates — Renovate](#dependency-updates--renovate) above.
 
@@ -452,10 +456,6 @@ in Settings).
 
 - The Snyk CLI is installed without a pinned version, right before it receives `SNYK_TOKEN` —
   backlog #0-61.
-- Requiring SHA-pinned actions (`sha_pinning_required`) is still off, so only review catches a new
-  tag-pinned `uses:`. It is the last step of backlog #0-60: it can be turned on only once `main` has
-  no tag-pinned `uses:` left (earlier, every run on `main` would fail to start), so it follows the
-  merge of the pinning PR and a green run on `main`.
 - Any Marketplace action is allowed to run (`allowed_actions: all`), instead of GitHub's own plus
   an explicit list — backlog #0-62.
 - No status check is required before merging to `main`: the ruleset has no required checks, so a

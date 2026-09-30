@@ -398,10 +398,11 @@ Every `uses:` names a full 40-character commit SHA with its tag in a comment
 compromise, CVE-2025-30066, repointed every tag); a SHA is not. Not inferable from the files:
 
 - The repository setting `sha_pinning_required` (Settings → Actions → General) makes a workflow
-  with a tag-pinned `uses:` fail to start. It can be turned on only once `main` has no tag-pinned
-  `uses:` left, so it is switched on after the #0-60 PR merges, not with it. Nothing in a diff shows
-  its state: read it with `gh api repos/{owner}/{repo}/actions/permissions` (README "GitHub
-  Hardening" records it) instead of assuming it; while it is off, only review catches a tag.
+  with a tag-pinned `uses:` fail to start. It is on since 2026-09-29, turned on after the #0-60 PR
+  (#437) merged and its run on `main` was green, not with it: it could be enabled only once `main` had
+  no tag-pinned `uses:` left. Nothing in a diff shows its state: read it with
+  `gh api repos/{owner}/{repo}/actions/permissions` (README "GitHub Hardening" records it) instead of
+  assuming it. If it is ever off, only review catches a tag.
 - Resolve a SHA with `git ls-remote --tags https://github.com/<owner>/<repo>`: for an annotated tag
   take the dereferenced `refs/tags/vX^{}` line (the commit), never the tag object's SHA. The comment
   names the most specific tag on that commit.

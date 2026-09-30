@@ -890,8 +890,12 @@ actions created by GitHub, and list the others by owner or repository (today `do
 `madrapps/jacoco-report`, `azure/setup-kubectl`, `docker/*`; `github/codeql-action` is GitHub's own).
 Adding a new third-party action then needs a deliberate settings change as well as a PR. Prefer an
 explicit list over "verified creators", which admits every verified publisher. Record the list in
-README "GitHub Hardening", since the setting is invisible in diffs, and do it after #0-60 so both
-changes are verified by one CI run each.
+README "GitHub Hardening", since the setting is invisible in diffs. It takes two calls:
+`PUT /repos/{owner}/{repo}/actions/permissions` sets `allowed_actions=selected`, and
+`PUT .../actions/permissions/selected-actions` sets the list. The first call also carries
+`sha_pinning_required` (on since #0-60), and GitHub's docs do not say what omitting it does: send
+`sha_pinning_required=true` with it and re-read the settings afterwards, so narrowing the allowed
+actions does not switch SHA pinning off.
 
 ---
 
@@ -920,7 +924,7 @@ changes are verified by one CI run each.
 | 0-53 | `AuthEmailOutboxRepository.findLatestByUserIdAndType` returned `Optional` from an unlimited `ORDER BY` query, so the second resend of an invite or a repeated password reset threw `IncorrectResultSizeDataAccessException` (500). Replaced by the derived `findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc`; Testcontainers test with two entries | PR #431 |
 | 0-57 | No coverage rule had ever run: surefire's explicit `<argLine>` replaced the `argLine` property set by `jacoco:prepare-agent`, so the agent never attached, no `jacoco.exec` was written and `jacoco:report`/`jacoco:check` skipped themselves in every module, locally and in CI. `<argLine>` now starts with `@{argLine}`. The PR comment (`madrapps/jacoco-report`) never failed a job either (its thresholds only pick an emoji), and was never posted (read-only `GITHUB_TOKEN`, error hidden by `continue-on-error`); it now writes to the job summary, keeping the job's token read-only. A new CI step runs `diff-cover` (pinned) over the JaCoCo XML and fails a PR when under 60% of its changed Java lines are covered, and a missing report fails it too. `report` now has the same excludes as `check`. Measured at the fix: every module above 60% LINE (`shared` lowest, 67.8%); `shared`'s tenant classes: #0-58 | PR #433 |
 | 0-59 | Every workflow declares its `GITHUB_TOKEN` scope instead of inheriting the repository setting: `contents: read` at workflow level, and only the jobs that need more widen their own token (`detect-changes` adds `pull-requests: read` for `dorny/paths-filter`; both Snyk jobs add `security-events: write` for the SARIF upload, which used to be granted to the whole workflow). Follow-ups: #0-60, #0-61, #0-62 | PR #434 |
-| 0-60 | Every `uses:` in `.github/workflows/` names a full commit SHA with its tag in a comment, pinned to the commit each tag pointed at (no version change); Renovate keeps both current through `helpers:pinGitHubActionDigests` (the old "pin to SHA" rule pinned nothing); every `actions/checkout` sets `persist-credentials: false`, so no later step can read `GITHUB_TOKEN` from `.git/config`; the repository setting "Require actions to be pinned to a full-length commit SHA" is not part of the PR: it is turned on manually once the PR is merged and the run on `main` is green | PR #437 |
+| 0-60 | Every `uses:` in `.github/workflows/` names a full commit SHA with its tag in a comment, pinned to the commit each tag pointed at (no version change); Renovate keeps both current through `helpers:pinGitHubActionDigests` (the old "pin to SHA" rule pinned nothing); every `actions/checkout` sets `persist-credentials: false`, so no later step can read `GITHUB_TOKEN` from `.git/config`; the repository setting "Require actions to be pinned to a full-length commit SHA" is not part of the PR: it was turned on manually on 2026-09-29, after the PR merged and the run on `main` was green | PR #437 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

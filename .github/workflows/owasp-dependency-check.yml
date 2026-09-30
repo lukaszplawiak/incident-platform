@@ -53,8 +53,8 @@ env:
 # #0-60): a tag can be repointed by whoever controls the action's repository,
 # a SHA cannot. Renovate (helpers:pinGitHubActionDigests) bumps both together.
 # The repository setting "Require actions to be pinned to a full-length commit
-# SHA" rejects a tag-pinned `uses:` only once it is on; README "GitHub
-# Hardening" records its current state.
+# SHA" is on (since 2026-09-29): a workflow with a tag-pinned `uses:` fails to
+# start. README "GitHub Hardening" records the setting.
 jobs:
 
   # ============================================================
