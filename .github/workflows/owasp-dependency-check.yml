@@ -54,7 +54,7 @@ env:
 # a SHA cannot. Renovate (helpers:pinGitHubActionDigests) bumps both together.
 # The repository setting "Require actions to be pinned to a full-length commit
 # SHA" is on (since 2026-09-29): a workflow with a tag-pinned `uses:` fails to
-# start. README "GitHub Hardening" records the setting.
+# start. README "Infrastructure Hardening" records the setting.
 jobs:
 
   # ============================================================

@@ -401,7 +401,7 @@ compromise, CVE-2025-30066, repointed every tag); a SHA is not. Not inferable fr
   with a tag-pinned `uses:` fail to start. It is on since 2026-09-29, turned on after the #0-60 PR
   (#437) merged and its run on `main` was green, not with it: it could be enabled only once `main` had
   no tag-pinned `uses:` left. Nothing in a diff shows its state: read it with
-  `gh api repos/{owner}/{repo}/actions/permissions` (README "GitHub Hardening" records it) instead of
+  `gh api repos/{owner}/{repo}/actions/permissions` (README "Infrastructure Hardening" records it) instead of
   assuming it. If it is ever off, only review catches a tag.
 - Resolve a SHA with `git ls-remote --tags https://github.com/<owner>/<repo>`: for an annotated tag
   take the dereferenced `refs/tags/vX^{}` line (the commit), never the tag object's SHA. The comment
@@ -415,6 +415,29 @@ compromise, CVE-2025-30066, repointed every tag); a SHA is not. Not inferable fr
   because the repository is public: `dorny/paths-filter` on a `push` event may fetch history
   itself (on a `pull_request` it lists files through the API). If the repository ever becomes
   private, that step needs its own credentials.
+
+### The Snyk CLI is pinned by version and checksum (backlog #0-61)
+
+`snyk.yml` downloads the standalone `snyk-linux` binary at `SNYK_CLI_VERSION` and checks it
+against `SNYK_CLI_SHA256` (workflow-level `env`, one place for both jobs) before it runs.
+`SNYK_TOKEN` is set only on the scan step; the CLI reads it from the environment, so there is no
+`snyk auth` step (it put the token in argv and in `~/.config/configstore/snyk.json`). Not
+inferable from the file:
+
+- Why not the alternatives: `npm install -g snyk@<x.y.z>` still resolves the wrapper's unbundled
+  `@sentry/node ^7` range at install time and loads it on every `snyk` call; `snyk/actions/setup`
+  checks the binary against a `.sha256` fetched from the same server, which catches a broken
+  download but not a replaced binary, and would be one more third-party action for #0-62.
+- Bump by hand, version and checksum together. The checksum must come from two independent
+  channels and be committed only if they are equal:
+  `https://downloads.snyk.io/cli/v<version>/snyk-linux.sha256` (same host as the binary, so on its
+  own it cannot tell a replaced binary from a real one) and the
+  `snyk-linux` line of `wrapper_dist/generated/sha256sums.txt` in `npm pack snyk@<version>` (npm
+  registry). Renovate has no manager for this: a custom one could raise the version but not the
+  checksum, so each of its PRs would fail the check.
+- Installed into `$RUNNER_TEMP/snyk-cli` and added to `$GITHUB_PATH`, without `sudo`.
+- A checksum mismatch is the check working. Do not "fix" it by copying the new hash without
+  comparing both sources.
 
 ---
 

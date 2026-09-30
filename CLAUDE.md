@@ -93,9 +93,9 @@ Transactional outbox for `incidents.lifecycle` (`IncidentEventOutbox` + schedule
 
 Every workflow under `.github/workflows/` declares its own `permissions:` at workflow level (`contents: read`; backlog #0-59) instead of relying on the repository's "Workflow permissions" setting. A job that needs more declares its own block, which replaces the workflow's, so it repeats `contents: read`. A job that runs a PR's own code never gets a write scope. No check enforces this — review does.
 
-Every `uses:` is pinned to a full commit SHA with its tag in a comment (`owner/action@<sha> # vX.Y.Z`; backlog #0-60), and every `actions/checkout` sets `persist-credentials: false`. The repository setting `sha_pinning_required` is on (since 2026-09-29, after the #0-60 PR merged and `main`'s run was green), so a workflow with a tag-pinned `uses:` fails to start — current state in README "GitHub Hardening", how to resolve a SHA in `.ai/context/project.md`.
+Every `uses:` is pinned to a full commit SHA with its tag in a comment (`owner/action@<sha> # vX.Y.Z`; backlog #0-60), and every `actions/checkout` sets `persist-credentials: false`. The repository setting `sha_pinning_required` is on (since 2026-09-29, after the #0-60 PR merged and `main`'s run was green), so a workflow with a tag-pinned `uses:` fails to start — current state in README "Infrastructure Hardening", how to resolve a SHA in `.ai/context/project.md`.
 
-Security scans (OWASP Dependency-Check, Snyk) run in separate workflows. Unfixable CVEs are suppressed with a justification and expiry in `owasp-suppressions.xml` / `.snyk`; dependency version overrides for CVEs live in the root `pom.xml` properties with a comment naming the CVE.
+Security scans (OWASP Dependency-Check, Snyk) run in separate workflows. The Snyk CLI is pinned by version and SHA-256 in `snyk.yml`'s `env` and the token is set only on the scan step (backlog #0-61); bump version and checksum together by hand, Renovate cannot. Unfixable CVEs are suppressed with a justification and expiry in `owasp-suppressions.xml` / `.snyk`; dependency version overrides for CVEs live in the root `pom.xml` properties with a comment naming the CVE.
 ## Working style (read before implementing anything)
 
 - **Analysis before code.** For anything beyond a trivial one-line fix:

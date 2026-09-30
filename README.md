@@ -13,7 +13,7 @@ A production-oriented microservices backend that automates the full lifecycle of
 
 (BONUS) Frontend companion: [incident-platform-frontend](https://github.com/lukaszplawiak/incident-platform-frontend) — Angular 21 SPA with real-time WebSocket dashboard.
 
-[Overview](#overview) | [Architecture](#architecture) | [Design Decisions](#design-decisions) | [Tech Stack](#tech-stack) | [Resilience & Security](#resilience--security) | [Observability](#observability) | [CI/CD](#cicd) | [Running Locally](#running-locally) | [Running on Kubernetes](#running-on-kubernetes) | [End-to-End Test](#end-to-end-test) | [Running Tests](#running-tests) | [Project Structure](#project-structure)
+[Overview](#overview) | [Architecture](#architecture) | [Design Decisions](#design-decisions) | [Tech Stack](#tech-stack) | [Resilience & Security](#resilience--security) | [Infrastructure Hardening](#infrastructure-hardening) | [Observability](#observability) | [CI/CD](#cicd) | [Running Locally](#running-locally) | [Running on Kubernetes](#running-on-kubernetes) | [End-to-End Test](#end-to-end-test) | [Running Tests](#running-tests) | [Project Structure](#project-structure)
 
 ---
 
@@ -267,6 +267,74 @@ All Kafka topics are multi-tenant. `TenantKafkaProducerInterceptor` adds `X-Tena
 
 ---
 
+## Infrastructure Hardening
+
+What protects the platform around its application code. Application-level controls
+(authentication, tenant isolation, rate limiting) are in [Resilience & Security](#resilience--security).
+
+### GitHub and CI
+
+What protects the pipeline itself: the `GITHUB_TOKEN`, the secrets and `main`. Part of it lives in
+the workflow files, part in repository settings, which no diff shows, so the settings are listed here
+too (state as of 2026-09-29; check them with `gh api repos/{owner}/{repo}/...` after changing anything
+in Settings).
+
+**In the workflow files**
+
+- **Token scope declared per workflow** (backlog #0-59): every workflow starts from
+  `permissions: contents: read`, and only the job that needs more widens its own token —
+  `detect-changes` adds `pull-requests: read` (`dorny/paths-filter` lists a PR's files through the
+  API), the two Snyk jobs add `security-events: write` (SARIF upload). Every scope not listed is `none`.
+- **No write scope for PR code**: jobs that run a PR's own code (build, tests, Docker builds, smoke
+  test) keep the read-only token. That is why the coverage report goes to the job summary rather than
+  a PR comment, which would need `pull-requests: write` (backlog #0-57).
+- **`pull_request`, never `pull_request_target`**: a PR from a fork runs with a read-only token and
+  without the repository's secrets.
+- **Secrets only through `secrets.*`** (`SNYK_TOKEN`, `NVD_API_KEY`), in the scan workflows, which
+  run only on `main`, on a schedule or by hand — never on a PR.
+- **Actions pinned by commit SHA** (backlog #0-60): every `uses:` names the full 40-character
+  commit, with its tag in a comment (`actions/checkout@<sha> # v4.4.0`). A tag can be repointed by
+  whoever controls the action's repository, as in the `tj-actions/changed-files` compromise
+  (CVE-2025-30066), and the next run would execute that code with the job's token and secrets; a SHA
+  cannot. Renovate's `helpers:pinGitHubActionDigests` preset updates the SHA and the comment together.
+- **No token left in `.git/config`** (backlog #0-60): every `actions/checkout` sets
+  `persist-credentials: false`. No job pushes, so no later step needs the token that checkout would
+  otherwise leave behind for it to read.
+- **Scan tools pinned and verified before they receive a secret** (backlog #0-61): the Snyk CLI is
+  the standalone binary at the version pinned in `snyk.yml`, checked against the SHA-256 kept next to
+  it. A different binary stops the job before `SNYK_TOKEN` exists in any process. The token reaches
+  only the scan step, as the `SNYK_TOKEN` environment variable the CLI reads itself; there is no
+  `snyk auth`, which put the token in the process arguments and in a config file every later step
+  could read. This replaced `npm install -g snyk`: whatever version npm served at that moment, a Node
+  wrapper whose unbundled `@sentry/node ^7` dependency was resolved at install time. Version and
+  checksum are bumped together by hand (Renovate cannot compute the checksum), as `diff-cover` is
+  pinned in `ci.yml`; the checksum is committed only when Snyk's download server and the npm package
+  of the same version agree on it, since the server alone also serves the binary. The CLI is
+  installed without `sudo`, into the runner's temp directory.
+
+**In repository settings**
+
+- Workflow permissions default: **read** — a fallback only, since every workflow declares its own.
+  GitHub Actions may not approve pull requests.
+- Workflows from first-time contributors' fork PRs wait for approval before they run.
+- Secret scanning with **push protection**: a push containing a recognised secret is rejected.
+- Ruleset "Protect main": `main` cannot be deleted or force-pushed.
+- Actions must be pinned to a full-length commit SHA (`sha_pinning_required`, backlog #0-60): a
+  workflow with a tag-pinned `uses:` fails to start, so a tag no longer depends on review alone. It
+  was turned on once `main` had no tag-pinned `uses:` left and its run was green (2026-09-29);
+  turning it on earlier would have stopped every run on `main` from starting.
+- Security scanning and dependency updates: see [Security Scanning](#security-scanning) and
+  [Dependency Updates — Renovate](#dependency-updates--renovate) in CI/CD.
+
+**Not done yet**
+
+- Any Marketplace action is allowed to run (`allowed_actions: all`), instead of GitHub's own plus
+  an explicit list — backlog #0-62.
+- No status check is required before merging to `main`: the ruleset has no required checks, so a
+  red CI run does not block a merge. Making the smoke test a required check is backlog #0-2.
+
+---
+
 ## Observability
 
 ### Metrics — Micrometer + Prometheus + Grafana
@@ -384,6 +452,8 @@ Job B: Code scan (SAST) → SARIF upload to GitHub Security tab
 - Dependency scan failures block the build; SAST findings are reported as alerts only
   (manual review required before enforcing)
 - Unfixable CVEs documented in `.snyk` with reason and expiry date
+- The CLI is a pinned standalone binary, checksum-verified before it runs, and the token reaches
+  only the scan step (backlog #0-61, see [Infrastructure Hardening](#infrastructure-hardening))
 
 Required GitHub secrets: `SNYK_TOKEN`, `NVD_API_KEY` (optional — speeds NVD download from ~15 min to ~2 min).
 
@@ -409,57 +479,10 @@ Key configuration (`renovate.json`):
 Setup: install the Renovate GitHub App at https://github.com/apps/renovate and authorize
 it for this repository. Renovate will open a "Configure Renovate" PR to confirm the setup.
 
-### GitHub Hardening
+### Pipeline Hardening
 
-What protects the pipeline itself: the `GITHUB_TOKEN`, the secrets and `main`. Part of it lives in
-the workflow files, part in repository settings, which no diff shows, so the settings are listed here
-too (state as of 2026-09-29; check them with `gh api repos/{owner}/{repo}/...` after changing anything
-in Settings).
-
-**In the workflow files**
-
-- **Token scope declared per workflow** (backlog #0-59): every workflow starts from
-  `permissions: contents: read`, and only the job that needs more widens its own token —
-  `detect-changes` adds `pull-requests: read` (`dorny/paths-filter` lists a PR's files through the
-  API), the two Snyk jobs add `security-events: write` (SARIF upload). Every scope not listed is `none`.
-- **No write scope for PR code**: jobs that run a PR's own code (build, tests, Docker builds, smoke
-  test) keep the read-only token. That is why the coverage report goes to the job summary rather than
-  a PR comment, which would need `pull-requests: write` (backlog #0-57).
-- **`pull_request`, never `pull_request_target`**: a PR from a fork runs with a read-only token and
-  without the repository's secrets.
-- **Secrets only through `secrets.*`** (`SNYK_TOKEN`, `NVD_API_KEY`), in the scan workflows, which
-  run only on `main`, on a schedule or by hand — never on a PR.
-- **Actions pinned by commit SHA** (backlog #0-60): every `uses:` names the full 40-character
-  commit, with its tag in a comment (`actions/checkout@<sha> # v4.4.0`). A tag can be repointed by
-  whoever controls the action's repository, as in the `tj-actions/changed-files` compromise
-  (CVE-2025-30066), and the next run would execute that code with the job's token and secrets; a SHA
-  cannot. Renovate's `helpers:pinGitHubActionDigests` preset updates the SHA and the comment together.
-- **No token left in `.git/config`** (backlog #0-60): every `actions/checkout` sets
-  `persist-credentials: false`. No job pushes, so no later step needs the token that checkout would
-  otherwise leave behind for it to read.
-
-**In repository settings**
-
-- Workflow permissions default: **read** — a fallback only, since every workflow declares its own.
-  GitHub Actions may not approve pull requests.
-- Workflows from first-time contributors' fork PRs wait for approval before they run.
-- Secret scanning with **push protection**: a push containing a recognised secret is rejected.
-- Ruleset "Protect main": `main` cannot be deleted or force-pushed.
-- Actions must be pinned to a full-length commit SHA (`sha_pinning_required`, backlog #0-60): a
-  workflow with a tag-pinned `uses:` fails to start, so a tag no longer depends on review alone. It
-  was turned on once `main` had no tag-pinned `uses:` left and its run was green (2026-09-29);
-  turning it on earlier would have stopped every run on `main` from starting.
-- Security scanning and dependency updates: see [Security Scanning](#security-scanning) and
-  [Dependency Updates — Renovate](#dependency-updates--renovate) above.
-
-**Not done yet**
-
-- The Snyk CLI is installed without a pinned version, right before it receives `SNYK_TOKEN` —
-  backlog #0-61.
-- Any Marketplace action is allowed to run (`allowed_actions: all`), instead of GitHub's own plus
-  an explicit list — backlog #0-62.
-- No status check is required before merging to `main`: the ruleset has no required checks, so a
-  red CI run does not block a merge. Making the smoke test a required check is backlog #0-2.
+Token scopes, pinned actions and tools, repository settings: see
+[Infrastructure Hardening](#infrastructure-hardening).
 
 ### Pipeline Status
 
