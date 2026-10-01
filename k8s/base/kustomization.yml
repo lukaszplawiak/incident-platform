@@ -8,7 +8,6 @@ resources:
   - namespace/namespace.yml
 
   # Infrastructure
-  - infrastructure/postgresql-secret.yml
   - infrastructure/app-config.yml
   - infrastructure/postgresql.yml
   - infrastructure/kafka.yml
@@ -30,6 +29,13 @@ resources:
   - postmortem-service/service-hpa.yml
   - oncall-service/deployment.yml
   - oncall-service/service-hpa.yml
+
+# Backlog #0-78: first-start script that creates the services' DB role
+# without superuser rights. docker-compose mounts the same file.
+configMapGenerator:
+  - name: postgresql-init
+    files:
+      - 10-app-role.sh=infrastructure/postgresql-init.sh
 
 # Common labels applied to all resources
 labels:
