@@ -26,19 +26,40 @@ spec:
           env:
             - name: POSTGRES_DB
               value: incidentdb
+            # Backlog #0-78: the image's superuser, for administration only.
+            # Its Secret is per overlay (no committed default in the base).
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:
-                  name: postgresql-secret
+                  name: postgresql-admin
                   key: username
             - name: POSTGRES_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: postgresql-secret
+                  name: postgresql-admin
                   key: password
+            # The role every service connects as, created without superuser
+            # rights by postgresql-init.sh. Same sources as the services'
+            # DB_USER and DB_PASSWORD, so the role and its users cannot
+            # disagree on the password.
+            - name: APP_DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: DB_USER
+            - name: APP_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_PASSWORD
           volumeMounts:
             - name: postgresql-data
               mountPath: /var/lib/postgresql/data
+            # Runs only when the volume is empty; an existing volume keeps
+            # its roles (see docs/database-roles.md to migrate one).
+            - name: postgresql-init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -46,26 +67,47 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+          # The probes read the admin's name from POSTGRES_USER (the
+          # postgresql-admin Secret), so no name is hard-coded here.
+          # pg_isready does not log in; the name only labels the check.
+          #
+          # startupProbe, over TCP: passes only once the final server is up,
+          # i.e. after initdb and postgresql-init.sh on a fresh volume, and
+          # holds the liveness probe back until then. A liveness restart
+          # mid-init would leave a half-initialised volume that never runs the
+          # script again (docs/database-roles.md). Up to 10 min (120 x 5 s):
+          # generous on purpose, as running out kills the first start.
+          # timeoutSeconds 5 on every probe: the 1 s default can be missed by
+          # an exec (sh + pg_isready) under the 500m CPU limit.
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 120
+          # Readiness over TCP (-h 127.0.0.1), not the default socket: while
+          # postgresql-init.sh runs, the image's temporary server listens on
+          # the socket only, so a socket check reports ready before
+          # incident_app exists (backlog #0-78, reproduced).
           readinessProbe:
             exec:
-              command:
-                - pg_isready
-                - -U
-                - incident_app
-                - -d
-                - incidentdb
-            initialDelaySeconds: 10
+              command: ["sh", "-c", "pg_isready -h 127.0.0.1 -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             periodSeconds: 5
+            timeoutSeconds: 5
+          # Liveness on the socket: it only asks whether the server process
+          # answers, and it starts only after the startupProbe has passed.
           livenessProbe:
             exec:
-              command:
-                - pg_isready
-                - -U
-                - incident_app
-                - -d
-                - incidentdb
-            initialDelaySeconds: 30
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        - name: postgresql-init
+          configMap:
+            name: postgresql-init
+            # Executable, so the image runs the script in its own process
+            # instead of sourcing it into the entrypoint's shell.
+            defaultMode: 0755
   volumeClaimTemplates:
     - metadata:
         name: postgresql-data

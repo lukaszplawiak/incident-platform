@@ -397,6 +397,33 @@ jobs:
           exit "$failed"
 
   # ──────────────────────────────────────────────────────────
+  # PostgreSQL roles (backlog #0-78)
+  #
+  # Runs .github/scripts/test-postgres-roles.sh against the postgres image
+  # docker-compose uses: the init script on an empty volume (restricted
+  # services' role, a password with quotes, a non-default admin name),
+  # its guard against APP_DB_USER == POSTGRES_USER, and
+  # docs/database-roles-migrate.sql on a pre-#0-78 database, including
+  # the completeness check that rolls everything back. The smoke test
+  # only ever sees a fresh volume, so this is the only check of the
+  # migration, the guard and the backup/restore commands. Always runs:
+  # about 25 s plus pulling the image (22 s measured locally, image cached).
+  # ──────────────────────────────────────────────────────────
+  postgres-roles:
+    name: PostgreSQL Roles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Init script, guard and migration
+        run: .github/scripts/test-postgres-roles.sh
+
+  # ──────────────────────────────────────────────────────────
   # Validate the monitoring config (backlog #0-16)
   #
   # Alertmanager and Prometheus only read their config at startup, and
@@ -514,6 +541,12 @@ jobs:
     # along with it.
     if: github.event_name == 'push' || needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.services != '[]'
     timeout-minutes: 20
+    # docker-compose.yml requires both database passwords (backlog #0-78) and
+    # interpolates them for every compose command, the log dump and teardown
+    # included, so they are set for the whole job. Dummy CI-only values.
+    env:
+      DB_PASSWORD: ci-smoke-test-db-password
+      POSTGRES_ADMIN_PASSWORD: ci-smoke-test-admin-password
 
     steps:
       - name: Checkout code
@@ -523,8 +556,9 @@ jobs:
 
       - name: Start the stack
         env:
-          # Only JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY
-          # have no default in docker-compose.yml — everything else falls
+          # JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY have no
+          # default in docker-compose.yml (nor do the two database
+          # passwords, set in the job's env above); everything else falls
           # back safely for a smoke test. Dummy CI-only values, never used
           # anywhere real. SLACK_ENCRYPTION_KEY (backlog #0-21) is a
           # different key from MFA_ENCRYPTION_KEY on purpose — auth-service
@@ -564,6 +598,59 @@ jobs:
           if [ "$failed" -eq 1 ]; then
             exit 1
           fi
+
+      # Backlog #0-78: the services' DB role must not be a superuser (it was,
+      # through the image's POSTGRES_USER, which made SQL injection in any
+      # service command execution in the database container). The services
+      # above already ran every Flyway migration as this role on an empty
+      # database, so this run also shows that no migration needs superuser
+      # rights; the Testcontainers tests cannot, as they connect as the
+      # container's superuser.
+      #
+      # Three checks, because the attributes alone are not the property:
+      # a later GRANT of pg_execute_server_program (or any other role) would
+      # bring COPY ... TO PROGRAM back without making the role a superuser.
+      # The last check tries exactly that, with a harmless program.
+      # The role names come from the container's own POSTGRES_USER and
+      # APP_DB_USER; psql runs over its local socket, where the image uses
+      # 'trust', so no password is needed (passwords are tested by the
+      # postgres-roles job).
+      - name: Services' DB role is not a superuser
+        run: |
+          set -euo pipefail
+          # as_admin / as_app run psql in the container as POSTGRES_USER / APP_DB_USER.
+          as_admin() { docker compose -f docker/docker-compose.yml exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"' psql "$@"; }
+          as_app()   { docker compose -f docker/docker-compose.yml exec -T postgres sh -c 'psql -U "$APP_DB_USER" -d "$POSTGRES_DB" "$@"' psql "$@"; }
+          app=$(docker compose -f docker/docker-compose.yml exec -T postgres sh -c 'printf %s "$APP_DB_USER"')
+
+          attrs=$(as_admin -tA -v app="$app" <<'SQL'
+          SELECT concat_ws(',', rolsuper, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls) FROM pg_roles WHERE rolname = :'app';
+          SQL
+          )
+          if [ "$attrs" != "f,f,f,f,f" ]; then
+            echo "::error::${app} must exist without SUPERUSER, CREATEROLE, CREATEDB, REPLICATION or BYPASSRLS; got '${attrs}' (in that order)"
+            exit 1
+          fi
+
+          memberships=$(as_admin -tA -v app="$app" <<'SQL'
+          SELECT coalesce(string_agg(m.roleid::regrole::text, ','), '')
+          FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member WHERE r.rolname = :'app';
+          SQL
+          )
+          if [ -n "$memberships" ]; then
+            echo "::error::${app} must not be a member of any role; it is a member of: ${memberships}"
+            exit 1
+          fi
+
+          if out=$(as_app -v ON_ERROR_STOP=1 -c "COPY (SELECT 1) TO PROGRAM 'true'" 2>&1); then
+            echo "::error::${app} was allowed to run COPY ... TO PROGRAM"
+            exit 1
+          fi
+          if ! grep -q "permission denied to COPY to or from an external program" <<<"$out"; then
+            echo "::error::COPY ... TO PROGRAM as ${app} failed, but not with the expected permission error: ${out}"
+            exit 1
+          fi
+          echo "${app}: no superuser-like attributes, no role memberships, COPY ... TO PROGRAM refused."
 
       - name: Dump logs on failure
         if: failure()

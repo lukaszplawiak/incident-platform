@@ -341,10 +341,11 @@ in Settings).
 ### Kubernetes
 
 - **Secrets outside the ConfigMap**: `JWT_SECRET`, `MFA_ENCRYPTION_KEY`, `SLACK_ENCRYPTION_KEY`,
-  `SLACK_SIGNING_SECRET` and `GEMINI_API_KEY` come from the `app-secrets` Secret, one `secretKeyRef` per key, and
-  each Deployment receives only the keys it uses (the MFA and Slack encryption keys reach only auth-service). The
-  overlays' `secrets.yml` hold placeholders for staging and prod, with External Secrets or Sealed Secrets as the
-  intended source. The database password is the exception: see backlog #0-66.
+  `SLACK_SIGNING_SECRET`, `GEMINI_API_KEY` and `DB_PASSWORD` come from the `app-secrets` Secret, one `secretKeyRef`
+  per key, and each Deployment receives only the keys it uses (the MFA and Slack encryption keys reach only
+  auth-service; `DB_PASSWORD` the six services that use the database). The Postgres superuser's credentials are a
+  separate `postgresql-admin` Secret that only the database reads. The overlays' `secrets.yml` hold placeholders
+  for staging and prod, with External Secrets or Sealed Secrets as the intended source.
 - **Narrow Ingress**: routes only `/api/v1/*` and `/ws`. Actuator endpoints, the management ports, Swagger and
   `/dev/**` are not routed.
 - **Rate limiting at the edge**: per-client-IP limits on the Ingress (`limit-rps`, `limit-rpm`,
@@ -364,6 +365,15 @@ in Settings).
 - **Schema changes only through migrations**: each service has its own Flyway history table and
   `ddl-auto: validate`, so an unmigrated change fails startup instead of altering the schema.
 - **Redis persistence**: append-only file on, so revoked tokens and dedup keys survive a Redis restart.
+- **No superuser for the services**: they connect as `incident_app`, which owns the database but is not a superuser,
+  cannot create roles or databases and is a member of no other role, so a SQL injection no longer reaches the
+  container (`COPY ... TO PROGRAM`), the server's files or other roles directly. The image's superuser is for
+  administration only and never touches anything outside `pg_catalog` in the database: service data, backups and restores go through an
+  `incident_app` login, and the admin's `search_path` is `pg_catalog` (backlog #0-78,
+  [docs/database-roles.md](docs/database-roles.md), "Working as the admin"). CI checks it twice: the "PostgreSQL Roles"
+  job tests the init script and the migration of an older database against the real image, and after every
+  migration has run as `incident_app` the smoke test checks the role's attributes and memberships and that
+  `COPY ... TO PROGRAM` is refused.
 
 ### Application
 
@@ -381,8 +391,8 @@ Summary; details in [Resilience & Security](#security).
 
 ### Local stack (docker-compose)
 
-Built for a developer machine, not for a shared host: default credentials (`incident_secret`, `admin`/`admin`) are
-expected there. What it does protect: the monitoring stack's secrets (the operator tenant's Integration API key, the
+Built for a developer machine, not for a shared host: well-known credentials are expected there (the
+`docker/.env.example` values `incident_secret` and `postgres_admin_dev`, and `admin`/`admin`). What it does protect: the monitoring stack's secrets (the operator tenant's Integration API key, the
 dead man's switch URL) live in `docker/secrets/`, which is gitignored as a whole and mounted read-only; every email
 goes to Mailpit, never to a real address.
 
@@ -397,12 +407,13 @@ Open items from the audit and earlier, most important first within each area. Ea
   - The staging and prod overlays are swapped, so "prod" deploys to the staging namespace: backlog #0-29.
   - The Ingress has no TLS: backlog #0-75.
 - **Data stores**
-  - Redis has no password, Kafka no SASL/ACLs, nothing uses TLS, and the services connect to Postgres with a
-    default password baked into their config: backlog #0-66.
-  - All seven services share one database role with rights on every table: backlog #0-67.
-  - That role is created through `POSTGRES_USER`, which the official image makes a superuser (from the image's
-    documentation, not yet checked on a running database), so a SQL injection in any service would be command
-    execution in the database container: backlog #0-78.
+  - Redis has no password, Kafka no SASL/ACLs, nothing uses TLS, and the services' `application.yml` still falls
+    back to a default database password when `DB_PASSWORD` is missing: backlog #0-66.
+  - All seven services share one database role that owns every table, so neither grants nor Row-Level Security
+    separate one service's tables from another's, and a SQL injection can plant a trigger, view or function that
+    runs as a superuser if a superuser touches a service table, even under `SET ROLE`: backlog #0-67.
+  - At the HPAs' maximum replicas during a rolling update, the services' connection pools exceed what Postgres
+    allows them: backlog #0-79.
 - **GitHub and CI**
   - No static analysis has ever run: Snyk Code is not enabled and CodeQL is not set up: backlog #0-68.
   - The Snyk dependency scan is red on every run, so a new finding changes nothing, and the Tomcat ignores in `.snyk`
@@ -419,7 +430,8 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Project**
   - No `SECURITY.md`, no private vulnerability reporting, no Dependabot alerts: backlog #0-74.
 - **Local stack**
-  - Every docker-compose port is published on all interfaces: backlog #0-72.
+  - Every docker-compose port is published on all interfaces, Postgres included, where the admin is a superuser with
+    the password from `docker/.env` (the template's is a known dev value): backlog #0-72.
 
 ---
 
@@ -591,7 +603,11 @@ The CI badge at the top of this README reflects the current status of the `main`
 
 ### Step 1 — Start infrastructure
 
+docker-compose needs `docker/.env`: `DB_PASSWORD` and `POSTGRES_ADMIN_PASSWORD` are required, and compose refuses to
+start without them. The template's values are for development only.
+
 ```bash
+cp docker/.env.example docker/.env      # once; Option B in Step 4 fills in the rest
 docker compose -f docker/docker-compose.yml up -d postgres redis kafka kafka-ui pgadmin
 ```
 
@@ -607,6 +623,15 @@ incident-kafka      Up (healthy)
 incident-postgres   Up (healthy)
 incident-redis      Up (healthy)
 ```
+
+On its first start (empty `postgres_data` volume), Postgres creates two roles: `postgres`, the superuser, for
+administration only, and `incident_app`, the role every service connects as, which is not a superuser. Their
+passwords come from `POSTGRES_ADMIN_PASSWORD` and `DB_PASSWORD` in `docker/.env`. A volume created before backlog
+#0-78 still has a superuser `incident_app`, and its `docker/.env` has `POSTGRES_PASSWORD`, which `DB_PASSWORD`
+replaced. To migrate it while keeping its data, or to start over, see
+[docs/database-roles.md](docs/database-roles.md). Services run with `./mvnw spring-boot:run` (Option A) don't read
+`docker/.env`; they use `incident_secret` unless `DB_PASSWORD` is exported or `spring.datasource.password` is set in
+`application-local.yml`.
 
 ### Step 2 — Create application-local.yml for each service
 
@@ -718,8 +743,9 @@ auth-service:
 
 ```bash
 cd docker
-cp .env.example .env
-# Edit .env — fill in JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY:
+cp -n .env.example .env   # if Step 1 has not created it yet
+# Edit .env — fill in JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY
+# (DB_PASSWORD and POSTGRES_ADMIN_PASSWORD already have dev values):
 #   JWT_SECRET=$(openssl rand -base64 64)
 #   MFA_ENCRYPTION_KEY=$(openssl rand -base64 32)
 #   SLACK_ENCRYPTION_KEY=$(openssl rand -base64 32)   # a different value
@@ -959,7 +985,21 @@ data:
   GEMINI_API_KEY: <base64-encoded-value>        # optional — postmortems disabled if missing
   SLACK_ENCRYPTION_KEY: <base64-encoded-value>  # auth-service — 32-byte AES-256-GCM key for tenants' Slack bot tokens, different from MFA_ENCRYPTION_KEY
   SLACK_SIGNING_SECRET: <base64-encoded-value>  # optional — Slack notifications disabled if missing
+  DB_PASSWORD: <base64-encoded-value>           # password of incident_app, the services' DB role (backlog #0-78)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgresql-admin                        # the postgres superuser, for administration only
+  namespace: incident-platform-dev
+type: Opaque
+data:
+  username: <base64-encoded-value>              # postgres
+  password: <base64-encoded-value>
 ```
+
+Both database passwords are applied only when the PostgreSQL volume is first created. See
+[docs/database-roles.md](docs/database-roles.md), including how to migrate a volume created before backlog #0-78.
 
 > **Minimum setup**: only `JWT_SECRET` needs replacing to run the full incident lifecycle
 > (ingestion → incident → escalation → audit log). Slack and Gemini are optional — the

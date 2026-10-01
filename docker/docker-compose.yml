@@ -8,18 +8,35 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: incidentdb
-      POSTGRES_USER: incident_app
-      POSTGRES_PASSWORD: incident_secret
+      # Backlog #0-78: the image's superuser is for administration only.
+      # The services connect as APP_DB_USER, created without superuser
+      # rights by the init script below; see docs/database-roles.md.
+      # Both passwords are required, with no default: a missing one (e.g. a
+      # docker/.env from before #0-78, which had POSTGRES_PASSWORD) stops
+      # compose with this message instead of failing logins later.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?set POSTGRES_ADMIN_PASSWORD in docker/.env (see docker/.env.example and docs/database-roles.md)}
+      APP_DB_USER: incident_app
+      APP_DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in docker/.env (it replaced POSTGRES_PASSWORD; see docs/database-roles.md)}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      # Same script as Kubernetes (Kustomize cannot read files outside
+      # k8s/base). Runs only when postgres_data is empty.
+      - ../k8s/base/infrastructure/postgresql-init.sh:/docker-entrypoint-initdb.d/10-app-role.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U incident_app -d incidentdb"]
+      # -h 127.0.0.1, not the default socket: while the init script runs, the
+      # image's temporary server listens on the socket only, so a socket check
+      # reports ready before incident_app exists (backlog #0-78, reproduced).
+      # pg_isready does not log in, so the user name only labels the check.
+      # start_period: a first start (initdb + init script) is not counted
+      # against the retries.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 30s
 
   # ----------------------------------------------------------
   # Redis 7
@@ -123,7 +140,7 @@ services:
 
   # ----------------------------------------------------------
   # pgAdmin: http://localhost:5050
-  # Login: admin@incident.local / admin
+  # Login: admin@incident.com / admin
   # ----------------------------------------------------------
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -292,7 +309,8 @@ services:
   #   JWT_SECRET          — min 64 chars, same across all services
   #   MFA_ENCRYPTION_KEY  — 32-byte base64 (openssl rand -base64 32)
   #   SLACK_ENCRYPTION_KEY — 32-byte base64 (openssl rand -base64 32), separate from MFA_ENCRYPTION_KEY
-  #   POSTGRES_PASSWORD   — PostgreSQL password
+  #   DB_PASSWORD             — password of the services' DB role (incident_app)
+  #   POSTGRES_ADMIN_PASSWORD — password of the postgres superuser (administration only, backlog #0-78)
   # ==========================================================
 
   # ----------------------------------------------------------
@@ -314,7 +332,7 @@ services:
       DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in docker/.env (it replaced POSTGRES_PASSWORD; see docs/database-roles.md)}
       # JWT — shared secret across all services
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
@@ -441,7 +459,7 @@ services:
       DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in docker/.env (it replaced POSTGRES_PASSWORD; see docs/database-roles.md)}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
       JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
@@ -480,7 +498,7 @@ services:
       DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in docker/.env (it replaced POSTGRES_PASSWORD; see docs/database-roles.md)}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
       JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
@@ -535,7 +553,7 @@ services:
       DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in docker/.env (it replaced POSTGRES_PASSWORD; see docs/database-roles.md)}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
       JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
@@ -574,7 +592,7 @@ services:
       DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in docker/.env (it replaced POSTGRES_PASSWORD; see docs/database-roles.md)}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
       JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
@@ -615,7 +633,7 @@ services:
       DB_PORT: 5432
       DB_NAME: incidentdb
       DB_USER: incident_app
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-incident_secret}
+      DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in docker/.env (it replaced POSTGRES_PASSWORD; see docs/database-roles.md)}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
       JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}

@@ -66,7 +66,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-62](#0-62-any-github-action-from-the-marketplace-is-allowed-to-run) | Any GitHub Action from the Marketplace is allowed to run | ci | Low | Open |
 | [0-64](#0-64-kubernetes-pods-run-without-a-securitycontext) | Kubernetes pods run without a `securityContext` | design | Medium | Open |
 | [0-65](#0-65-no-networkpolicy-every-pod-can-reach-every-other-pod) | No NetworkPolicy: every pod can reach every other pod | design | Medium | Open |
-| [0-66](#0-66-data-stores-in-kubernetes-have-no-authentication-or-tls-and-the-db-password-is-baked-into-every-service) | Data stores in Kubernetes have no authentication or TLS, and the DB password is baked into every service | design | Medium | Open |
+| [0-66](#0-66-data-stores-in-kubernetes-have-no-authentication-or-tls-and-the-services-fall-back-to-a-default-db-password) | Data stores in Kubernetes have no authentication or TLS, and the services fall back to a default DB password | design | Medium | Open |
 | [0-67](#0-67-all-seven-services-share-one-database-role) | All seven services share one database role | design | Medium | Open |
 | [0-68](#0-68-sast-has-never-run-snyk-code-is-not-enabled-and-codeql-is-not-set-up) | SAST has never run: Snyk Code is not enabled, and CodeQL is not set up | ci | Medium | Open |
 | [0-69](#0-69-the-snyk-dependency-scan-fails-on-every-run-so-a-new-finding-changes-nothing) | The Snyk dependency scan fails on every run, so a new finding changes nothing | ci | Medium | Open |
@@ -78,7 +78,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-75](#0-75-the-ingress-has-no-tls) | The Ingress has no TLS | design | Low | Open |
 | [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
 | [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
-| [0-78](#0-78-the-application-database-role-is-a-postgres-superuser) | The application database role is a Postgres superuser | bug | High | Open |
+| [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
 
 ---
 
@@ -940,23 +940,25 @@ provider, auth-service to the SMTP server. Needs a CNI that enforces NetworkPoli
 
 ---
 
-### 0-66. Data stores in Kubernetes have no authentication or TLS, and the DB password is baked into every service
+### 0-66. Data stores in Kubernetes have no authentication or TLS, and the services fall back to a default DB password
 
-**Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit;
+the Postgres Secret part was done with #0-78)
 
 **Problem.**
 - **Redis** (`k8s/base/infrastructure/redis.yml`) runs `redis-server --appendonly yes` with no password. It holds
   the token revocation list and the rate-limit buckets, so any pod can un-revoke a token or reset a limit.
 - **Kafka** (`kafka.yml`) listens `PLAINTEXT` with no SASL and no ACLs. Any pod can produce to `alerts.raw` or
   `incidents.lifecycle` with any `X-Tenant-Id`, and consumers trust that header (#0-39).
-- **Postgres**: `postgresql-secret.yml` in the base ships the password `incident_secret` for every overlay, and no
-  Deployment passes `DB_PASSWORD` to the services. Each one connects with the default in its own `application.yml`
-  (`${DB_PASSWORD:incident_secret}`, six services), so changing the database password breaks every service until
-  the code changes. Compare `JWT_SECRET`, which has no default and stops startup when missing.
+- **Postgres**: since #0-78 the password comes from each overlay's `app-secrets` (`DB_PASSWORD`, passed to the six
+  services that use the database and to the init script that creates the role), and the base no longer ships a
+  Secret. What is left: each service's `application.yml` still falls back to `${DB_PASSWORD:incident_secret}`, so
+  a Deployment that loses the variable connects with the dev password instead of failing. Compare `JWT_SECRET`,
+  which has no default and stops startup when missing.
 - No connection to any of the three uses TLS.
 
-**Approach.** Remove the `DB_PASSWORD` default (fail fast, as for `JWT_SECRET`) and pass it from a Secret in every
-Deployment. Move `postgresql-secret` out of the base into the overlays (dev keeps a dev value). Redis `requirepass`
+**Approach.** Remove the `DB_PASSWORD` default (fail fast, as for `JWT_SECRET`); `application-local.yml` templates
+in the README then need the password too. Redis `requirepass`
 (or ACL users) from a Secret, wired to `REDIS_PASSWORD`, which the services already read. Kafka SASL/SCRAM with a
 user per service and ACLs per topic, which also closes the forged-header path. TLS on all three once a certificate
 source exists (#0-75). Pairs with #0-67.
@@ -967,13 +969,16 @@ source exists (#0-75). Pairs with #0-67.
 
 **Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
 
-**Problem.** Every service connects as `incident_app`, which `docker/init.sql` grants `ALL` on the `public` schema and
-on all future tables (the role is also a superuser, which makes every grant moot: #0-78). That each service owns its
-own tables (CLAUDE.md "Persistence") is a convention; the database does not enforce it. A SQL injection or code execution bug in any service, including the least trusted ones
+**Problem.** Every service connects as `incident_app`, which owns the database, the `public` schema and every table
+in it (since #0-78 it is no longer a superuser, but as the one owner it still has every right on every table, and an
+owner bypasses Row-Level Security unless a table sets `FORCE ROW LEVEL SECURITY`; and as an owner it can create
+triggers and functions that run with the rights of whoever fires them, including the admin). That
+each service owns its own tables (CLAUDE.md "Persistence") is a convention; the database does not enforce it. A SQL injection or code execution bug in any service, including the least trusted ones
 (postmortem-service handles LLM output), can read and write auth-service's tables: Argon2 password hashes, encrypted
 MFA and Slack secrets, API key hashes, auth tokens.
 
-**Approach.** Builds on #0-78 (a non-superuser `incident_app`). One role per service that owns its tables and its
+**Approach.** Builds on #0-78 (done: `incident_app` is no longer a superuser, `postgres` is the admin; see
+`docs/database-roles.md`). One role per service that owns its tables and its
 Flyway history table, with no rights on other services' tables; a separate migration role if Flyway should not run as the runtime role. Existing tables need an
 ownership transfer migration per service. Decide whether each service gets its own schema (cleaner grants,
 `search_path` per role) or stays in `public` with per-table grants.
@@ -1058,7 +1063,8 @@ digest once a registry exists.
 **Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
 
 **Problem.** Every `ports:` entry in `docker/docker-compose.yml` has the form `"5432:5432"`, which binds `0.0.0.0`,
-so on any shared network (office, café) other machines reach Postgres (`incident_secret`), Redis (no password), Kafka
+so on any shared network (office, café) other machines reach Postgres (the services' role with `incident_secret`, and
+since #0-78 the `postgres` superuser with `postgres_admin_dev`, both the `docker/.env.example` values), Redis (no password), Kafka
 (plaintext), pgAdmin and Grafana (both `admin`/`admin`), Prometheus (with `--web.enable-lifecycle`, which lets anyone
 reload or shut it down), Alertmanager and every service's management port. Docker's port publishing also bypasses
 host firewalls such as `ufw`.
@@ -1145,26 +1151,26 @@ enough. Decide before implementing.
 
 ---
 
-### 0-78. The application database role is a Postgres superuser
+### 0-79. At HPA maxima during a rolling update, the connection pools exceed what Postgres allows
 
-**Type:** bug · **Priority:** High · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the review of #0-78)
 
-**Problem.** Both docker-compose and `k8s/base/infrastructure/postgresql.yml` create `incident_app`, the role every
-service connects as, through the official image's `POSTGRES_USER`, which the image documents as creating a user
-"with superuser power". `docker/init.sql` said "incident_app is NOT a superuser", so the setup does not do what it
-was meant to (not checked on a running database during the audit, since Docker was down;
-`SELECT rolsuper FROM pg_roles WHERE rolname = 'incident_app'` confirms it). A superuser ignores every grant (so
-#0-67's per-service roles would change nothing while this stands) and Row-Level Security, and can run
-`COPY ... PROGRAM`: a SQL injection in any of the seven services, including the least trusted ones
-(postmortem-service handles LLM output), is command execution in the database container, with its network access
-and its volume. No SQL injection is known; the queries are JPA or parameterised. The priority is about the blast
-radius of the first one.
+**Problem.** In Kubernetes every service that uses the database keeps a Hikari pool of 5 connections
+(`DB_POOL_SIZE` in `app-config`; auth-service hard-codes 5). The base HPAs allow up to 3 replicas of auth-service and
+incident-service and 2 of each of the other four, which is 70 connections; the staging overlay raises incident-service
+to 5 (80), dev caps every HPA at 1 (30). If every Deployment rolls at the same time, each adds one surge pod
+(`maxSurge: 1`): 100 in prod, 110 in staging. Postgres runs with the default `max_connections` of 100. Since #0-78 the services' role is not a
+superuser, so it cannot use the 3 connections reserved for superusers (`superuser_reserved_connections`), and gets 97.
+A deploy at peak load can then fail new pods with "too many connections". Before #0-78 the margin was zero. The
+Postgres pod's 512Mi memory limit also caps how far `max_connections` can simply be raised. The admin can still log in
+when the services have taken every other connection, which is the reserve's purpose.
 
-**Approach.** Give the image's superuser its own name and password (from a Secret, not committed), used only for
-administration. `docker/init.sql` creates `incident_app` with `NOSUPERUSER NOCREATEDB NOCREATEROLE` and its own
-password (k8s runs no init script at all today: mount it from a ConfigMap into `/docker-entrypoint-initdb.d`), and grants it what Flyway and the services need today. The services keep
-connecting as `incident_app`, so no service config changes. Existing local volumes need `make dev-reset` (no
-production data yet). Smaller than and independent of #0-67; do this first. Pairs with #0-66 (the password itself).
+**Approach.** Decide with a measurement, not by guessing a number. The options are:
+- size `max_connections` together with the pod's memory (`-c max_connections=...` on the StatefulSet);
+- lower `DB_POOL_SIZE` per pod, which needs a throughput check;
+- put a pooler (PgBouncer) in front once the replica counts grow.
+
+`docs/database-roles.md` explains the arithmetic.
 
 ---
 
@@ -1196,6 +1202,7 @@ production data yet). Smaller than and independent of #0-67; do this first. Pair
 | 0-60 | Every `uses:` in `.github/workflows/` names a full commit SHA with its tag in a comment, pinned to the commit each tag pointed at (no version change); Renovate keeps both current through `helpers:pinGitHubActionDigests` (the old "pin to SHA" rule pinned nothing); every `actions/checkout` sets `persist-credentials: false`, so no later step can read `GITHUB_TOKEN` from `.git/config`; the repository setting "Require actions to be pinned to a full-length commit SHA" is not part of the PR: it was turned on manually on 2026-09-29, after the PR merged and the run on `main` was green | PR #437 |
 | 0-61 | The Snyk CLI in both `snyk.yml` jobs is the standalone binary at a version pinned in the workflow's `env`, checked against a SHA-256 kept next to it (`sha256sum --check --strict`) before it runs, instead of `npm install -g snyk` (unpinned, a Node wrapper with an unbundled `@sentry/node ^7` range); `SNYK_TOKEN` reaches only the scan step as an environment variable, with no `snyk auth` writing it to argv and a config file; version and checksum are bumped by hand, since Renovate cannot compute the checksum. README's hardening section became `## Infrastructure Hardening` | PR #440 |
 | 0-63 | The k8s base ConfigMap set `SPRING_PROFILES_ACTIVE: "dev"`, inherited by every overlay: the rendered prod and staging manifests started incident-service with the dev profile, enabling `DevSecurityConfig` and the unauthenticated `GET /dev/token` (an ADMIN JWT for any tenant, accepted by all seven services through the shared HS512 secret) — not routed by the Ingress, but reachable from any pod since there is no NetworkPolicy; `DevTokenController`'s startup guard could not catch it, as it only rejects a missing dev profile. The base now sets no profile, `k8s/overlays/dev` adds it, and the `validate-k8s-manifests` CI job fails if the rendered staging or prod overlay sets any Spring profile (env var, property or flag form). Found in the 2026-09-30 infrastructure security audit | PR #441 |
+| 0-78 | The services' database role `incident_app` was a Postgres superuser (checked on a running database: `rolsuper = t`): the image's `POSTGRES_USER` created it, so SQL injection in any service was command execution in the database container (`COPY ... TO PROGRAM`). Now `POSTGRES_USER` is the admin, used by no service, and `k8s/base/infrastructure/postgresql-init.sh` (one file, mounted by docker-compose, generated into a ConfigMap by Kustomize) creates `incident_app` with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` as owner of the database and the `public` schema; it reads its values with psql `\getenv`, so no password is on a command line, and refuses `APP_DB_USER` = `POSTGRES_USER`. No migration needed superuser rights (the extensions are trusted). The role's password and the services' `DB_PASSWORD` have one source: `docker/.env` (both database passwords now required, no default) or each overlay's `app-secrets`, now wired to the six Deployments; the admin comes from a per-overlay `postgresql-admin` Secret, and the base `postgresql-secret` with its committed password is gone (part of #0-66). No name is hard-coded: probes, CI and the migration read `POSTGRES_USER`. Probes: the init-phase server listens on its socket only, so a socket check reported ready before the role existed (reproduced); compose's healthcheck and the k8s readiness and startup probes now use TCP, liveness the socket after the startup probe. CI: the smoke test checks the role's attributes, that it is a member of no role and that `COPY ... TO PROGRAM` is refused; a new job runs `.github/scripts/test-postgres-roles.sh` against the real image (init with a hostile password and a non-default admin, the guard, the migration). An existing database cannot be demoted in place (`incident_app` is the bootstrap role, which must stay superuser), so `docs/database-roles.md` and `docs/database-roles-migrate.sql` give the procedure: rename it to the admin, create a new `incident_app`, move ownership, in one transaction with a completeness check, passwords from the database container's environment. Because the services' role owns `public` and could plant a trigger, rule, default, view or function that runs as whoever fires it, the superuser never touches anything outside `pg_catalog` in the database: the guide's "Working as the admin" routes service data, backups and restores through an `incident_app` login (`SET ROLE` is no boundary, planted code can `RESET ROLE`; the CI job shows both cases), and the admin's `search_path` is `pg_catalog` as a second line of defence; the migration itself runs with `search_path = pg_catalog` and only `ALTER ... OWNER`, after a preflight that refuses to run while an event trigger or an extra superuser exists (it is for databases not suspected of compromise; those are restored); CI also runs the guide's backup/restore commands as `incident_app`. Not covered: the role still owns every table, so grants and RLS do not separate services (#0-67) | PR #443 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

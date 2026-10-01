@@ -68,6 +68,13 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: JWT_SECRET
+            # Backlog #0-78: password of the services' DB role (incident_app),
+            # from the same Secret key the postgres StatefulSet creates it with.
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_PASSWORD
             - name: SERVER_PORT
               value: "8082"
             - name: MANAGEMENT_PORT
