@@ -1,33 +1,22 @@
 package com.incidentplatform.auth.bootstrap;
 
-import com.incidentplatform.auth.domain.AuthEmailOutbox;
-import com.incidentplatform.auth.domain.AuthEmailType;
-import com.incidentplatform.auth.domain.AuthToken;
-import com.incidentplatform.auth.domain.Role;
-import com.incidentplatform.auth.domain.User;
-import com.incidentplatform.auth.dto.CreateUserRequest;
+import com.incidentplatform.auth.bootstrap.TenantAdminReconciler.Outcome;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
+import com.incidentplatform.auth.repository.TenantRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.auth.service.UserService;
-import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.ReservedTenants;
-import com.incidentplatform.shared.security.SecurityRoles;
-import com.incidentplatform.shared.security.TenantContext;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.time.Instant;
-import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -37,8 +26,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <h2>Why an invite</h2>
  * The operator tenant is where the platform's own Alertmanager files its alerts
- * as incidents. Nobody can create it through the API (tenant ids are reserved,
- * and there is deliberately no cross-tenant "create tenant" endpoint), so the
+ * as incidents. Nobody can create it through the API (its id is reserved, and
+ * the platform API that provisions customer tenants, backlog #0-80, is itself
+ * open only to this tenant's admins), so the
  * platform creates its first user itself, the same way an admin creates any
  * user: {@link UserService#createUser}, which writes the user, the invite token
  * and the invite email in one transaction and audits it. No password ever sits
@@ -46,7 +36,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Alternatives rejected: a Flyway seed with a password from env (a skipped
  * conditional migration is recorded as applied, it cannot use the outbox or
  * audit, and it repeats {@code V1_1}'s plaintext-password weakness), and a
- * platform super-admin endpoint (a cross-tenant capability).
+ * platform super-admin endpoint (a cross-tenant capability). Backlog #0-80
+ * reversed the second one narrowly for customer tenants: a multi-tenant platform
+ * must onboard them at runtime, so this tenant's admins provision them
+ * ({@code TenantProvisioningService}); the operator tenant itself still
+ * bootstraps here, since nobody could call that API before it has an admin.
  *
  * <h2>Fixed (backlog #0-49): a reconciler, not a one-shot startup runner</h2>
  * This used to be an {@code ApplicationRunner} that did nothing once the tenant
@@ -56,20 +50,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * and a restart skipped the bootstrap because a user existed. It now checks the
  * goal, not the step, shortly after startup and then every
  * {@code reconcile-interval-ms} (default 1 h), under ShedLock so one replica
- * acts at a time:
- * <ul>
- *   <li>an active admin with a password exists: done;</li>
- *   <li>the tenant has no user: invite the configured address;</li>
- *   <li>the configured admin has not accepted, and their latest invite
- *       permanently failed or they hold no valid invite token: re-invite through
- *       {@link ResendInviteService} (invalidates old tokens, audited);</li>
- *   <li>their invite is still being sent, or was sent and is still valid: wait,
- *       so the admin is not sent a new email every hour;</li>
- *   <li>the tenant's only users are not the configured address, or the
- *       configured user cannot log in as an active admin: log an ERROR and do
- *       nothing. A second admin is never created and no user is removed; a
- *       human fixes the data (README Step 5).</li>
- * </ul>
+ * acts at a time. The goal-checking logic is {@link TenantAdminReconciler},
+ * shared since backlog #0-80 with {@code TenantProvisioningService}, which uses
+ * it to reissue a provisioned tenant's first admin invite; its Javadoc lists
+ * the cases. A conflict here is fixed by hand as README Step 5 describes.
  * Until an admin can log in, the {@code platform.operator.admin.pending} gauge
  * is 1 and {@code OperatorAdminNotActivated} (docker/prometheus.rules.yml)
  * fires after an hour. The gauge is refreshed by {@link #refreshPendingGauge()}
@@ -93,23 +77,11 @@ public class OperatorTenantBootstrap {
 
     static final String PENDING_GAUGE = "platform.operator.admin.pending";
 
-    /** What one reconciliation found or did. */
-    enum Outcome {
-        DISABLED,
-        ADMIN_ACTIVE,
-        INVITED,
-        REINVITED,
-        INVITE_IN_PROGRESS,
-        CONFLICT,
-        FAILED
-    }
+    static final String DISPLAY_NAME = "Platform operator";
 
+    private final TenantAdminReconciler reconciler;
+    private final TenantRepository tenantRepository;
     private final String adminEmail;
-    private final UserRepository userRepository;
-    private final AuthTokenRepository authTokenRepository;
-    private final AuthEmailOutboxRepository outboxRepository;
-    private final UserService userService;
-    private final ResendInviteService resendInviteService;
     private final AtomicInteger pending = new AtomicInteger(0);
 
     public OperatorTenantBootstrap(
@@ -119,14 +91,15 @@ public class OperatorTenantBootstrap {
             AuthEmailOutboxRepository outboxRepository,
             UserService userService,
             ResendInviteService resendInviteService,
+            TenantRepository tenantRepository,
             MeterRegistry meterRegistry) {
+        this.tenantRepository = tenantRepository;
         this.adminEmail = adminEmail == null ? "" : adminEmail.trim();
-        this.userRepository = userRepository;
-        this.authTokenRepository = authTokenRepository;
-        this.outboxRepository = outboxRepository;
-        this.userService = userService;
-        this.resendInviteService = resendInviteService;
-        if (!this.adminEmail.isEmpty()) {
+        this.reconciler = new TenantAdminReconciler(
+                ReservedTenants.PLATFORM_OPERATOR, adminEmail, "Operator tenant", "README Step 5",
+                userRepository, authTokenRepository, outboxRepository, userService,
+                resendInviteService);
+        if (reconciler.enabled()) {
             // Registered only when the bootstrap is enabled, so a deployment
             // without an operator tenant never reports it as pending.
             Gauge.builder(PENDING_GAUGE, pending, AtomicInteger::get)
@@ -153,12 +126,11 @@ public class OperatorTenantBootstrap {
             initialDelayString = "${platform.operator.bootstrap.initial-delay-ms:30000}",
             fixedDelayString = "${platform.operator.bootstrap.gauge-refresh-interval-ms:300000}")
     public void refreshPendingGauge() {
-        if (adminEmail.isEmpty()) {
+        if (!reconciler.enabled()) {
             return;
         }
         try {
-            pending.set(userRepository.existsActiveAcceptedUserWithRole(
-                    ReservedTenants.PLATFORM_OPERATOR, Role.ROLE_ADMIN) ? 0 : 1);
+            pending.set(reconciler.adminCanLogIn() ? 0 : 1);
         } catch (RuntimeException e) {
             // Keep the last known value: a database outage has alerts of its
             // own, and flipping to "pending" would page for the wrong cause.
@@ -166,111 +138,32 @@ public class OperatorTenantBootstrap {
         }
     }
 
-    /**
-     * One reconciliation. Never throws: this runs from a scheduler, so a failure
-     * is logged at ERROR, reported through the gauge, and retried next run.
-     */
     Outcome reconcile() {
-        if (adminEmail.isEmpty()) {
-            log.debug("Operator tenant bootstrap disabled (platform.operator.bootstrap.admin-email unset)");
-            return Outcome.DISABLED;
+        if (reconciler.enabled()) {
+            recordTenant();
         }
-        TenantContext.set(ReservedTenants.PLATFORM_OPERATOR);
-        try {
-            final Outcome outcome = reconcileEnabled();
+        final Outcome outcome = reconciler.reconcile();
+        if (outcome != Outcome.DISABLED) {
             pending.set(outcome == Outcome.ADMIN_ACTIVE ? 0 : 1);
-            return outcome;
-        } catch (RuntimeException e) {
-            pending.set(1);
-            log.error("Operator admin reconciliation failed; retrying next run, tenant={}",
-                    ReservedTenants.PLATFORM_OPERATOR, e);
-            return Outcome.FAILED;
-        } finally {
-            TenantContext.clear();
         }
-    }
-
-    private Outcome reconcileEnabled() {
-        final String tenant = ReservedTenants.PLATFORM_OPERATOR;
-        if (userRepository.existsActiveAcceptedUserWithRole(tenant, Role.ROLE_ADMIN)) {
-            log.debug("Operator tenant has an active admin — nothing to do");
-            return Outcome.ADMIN_ACTIVE;
-        }
-
-        final Optional<User> configured = userRepository.findByEmailAndTenantId(adminEmail, tenant);
-        if (configured.isEmpty()) {
-            if (userRepository.existsByTenantId(tenant)) {
-                log.error("Operator tenant has no admin who can log in, and its users do not "
-                                + "include the configured admin email — not creating a second "
-                                + "admin. Fix the users of tenant={} (README Step 5)", tenant);
-                return Outcome.CONFLICT;
-            }
-            userService.createUser(new CreateUserRequest(
-                    adminEmail, List.of(SecurityRoles.ROLE_ADMIN)));
-            log.info("Operator tenant bootstrapped: invite queued for the first admin, tenant={}",
-                    tenant);
-            return Outcome.INVITED;
-        }
-
-        final User user = configured.get();
-        if (user.getPasswordHash() != null || !user.isActive()
-                || !user.getRoleNames().contains(SecurityRoles.ROLE_ADMIN)) {
-            log.error("The configured operator admin exists but cannot log in as an active "
-                            + "admin (accepted={}, active={}, admin={}) — not changing it. Fix the "
-                            + "user, tenant={}, userId={}",
-                    user.getPasswordHash() != null, user.isActive(),
-                    user.getRoleNames().contains(SecurityRoles.ROLE_ADMIN), tenant, user.getId());
-            return Outcome.CONFLICT;
-        }
-
-        if (inviteNeedsReissue(user)) {
-            try {
-                resendInviteService.resendInvite(user.getId());
-            } catch (BusinessException e) {
-                if (e.getHttpStatus() != HttpStatus.CONFLICT) {
-                    throw e;
-                }
-                // ResendInviteService's own guards: an invite got queued, or the
-                // admin accepted, between our check and its. Benign; the next
-                // run sees the new state.
-                log.info("Operator admin re-invite skipped, state changed meanwhile ({}), "
-                        + "tenant={}, userId={}", e.getMessage(), tenant, user.getId());
-                return Outcome.INVITE_IN_PROGRESS;
-            }
-            log.warn("Operator admin had no usable invite (email permanently failed or token "
-                    + "expired) — re-invited, tenant={}, userId={}", tenant, user.getId());
-            return Outcome.REINVITED;
-        }
-        log.warn("Operator admin has not accepted the invite yet — waiting, tenant={}, userId={}",
-                tenant, user.getId());
-        return Outcome.INVITE_IN_PROGRESS;
+        return outcome;
     }
 
     /**
-     * An invite still being sent (PENDING, or FAILED and still being retried
-     * until its deadline, backlog #0-52) is left alone; one that permanently
-     * failed, or a sent or superseded one with no valid invite token left, is
-     * reissued.
+     * Records the operator tenant in {@code tenants} (backlog #0-80), like every
+     * provisioned tenant: on a new database V21 ran before any user existed, so
+     * its backfill could not. Idempotent; a failure is logged and does not stop
+     * the admin reconciliation, which matters more, and the next run retries.
      */
-    private boolean inviteNeedsReissue(User user) {
-        final Optional<AuthEmailOutbox> latest = outboxRepository
-                .findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(user.getId(), AuthEmailType.INVITE);
-        if (latest.isPresent()) {
-            switch (latest.get().getStatus()) {
-                case PENDING, FAILED -> {
-                    return false;
-                }
-                case PERMANENTLY_FAILED -> {
-                    return true;
-                }
-                case SENT, SUPERSEDED -> {
-                    // Sent: still usable only while its token is valid.
-                    // Superseded (backlog #0-52): the scheduler found its token
-                    // used or invalidated; whether a valid one exists decides.
-                }
+    private void recordTenant() {
+        try {
+            if (tenantRepository.insertIfAbsent(ReservedTenants.PLATFORM_OPERATOR, DISPLAY_NAME,
+                    adminEmail, null) == 1) {
+                log.info("Operator tenant recorded in tenants, tenant={}",
+                        ReservedTenants.PLATFORM_OPERATOR);
             }
+        } catch (RuntimeException e) {
+            log.error("Could not record the operator tenant in tenants; retried next run", e);
         }
-        return authTokenRepository.findValidByUserIdAndType(
-                user.getId(), AuthToken.Type.INVITE, Instant.now()).isEmpty();
     }
 }

@@ -105,7 +105,7 @@ Prometheus / Wazuh / Generic
 
 | Service | Port | Responsibility |
 |---|---|---|
-| auth-service | 8087 | Authentication, users, teams, API keys, MFA, integrations |
+| auth-service | 8087 | Authentication, users, teams, API keys, MFA, integrations, tenant provisioning |
 | ingestion-service | 8081 | Alert normalization, deduplication, rate limiting |
 | incident-service | 8082 | Incident lifecycle FSM, WebSocket, audit log |
 | notification-service | 8083 | Multi-channel notifications, on-call routing |
@@ -175,6 +175,9 @@ Label-based routing (RoutingRules matching on alert labels) requires DevOps team
 
 **Why a separate oncall-service instead of extending notification-service?**
 On-call schedule management is a distinct bounded context. A separate service allows independent scaling, independent deployment, and future extension (PagerDuty integration, calendar sync) without touching the notification pipeline.
+
+**Why tenants are created by a platform operator through an API, not by a seed or configuration?**
+A multi-tenant platform onboards customers while it runs. A Flyway seed gave every database the same admin with a known password (backlog #0-80), and a configuration entry per tenant would need a deployment change and a restart for each customer. Instead an admin of the reserved `platform-operator` tenant calls `POST /api/v1/platform/tenants`: the tenant row, its first admin (no password) and the invite email are written in one transaction, and the admin sets their own password by accepting the invite. It is the platform's one cross-tenant capability, kept narrow on purpose: create, reissue the first invite while the tenant has no admin, show and list metadata; JWT only, no API keys; audited in both tenants. It reverses backlog #0-16's "no cross-tenant create tenant endpoint" for customer tenants only; the operator tenant still bootstraps itself. Guide: [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
 
 ---
 
@@ -385,6 +388,16 @@ Summary; details in [Resilience & Security](#security).
 
 - **Authentication**: JWT HS512 with a secret of at least 64 bytes and no default; login brute-force protection
   (per tenant and email, 10-minute window, 15-minute lockout); TOTP MFA; revocation of refresh tokens.
+- **No default accounts**: no migration seeds a user. A tenant's first admin is invited by email and sets their own
+  password; the old seeded `admin@incidentplatform.com` / `changeme` is archived wherever its password was never
+  changed (backlog #0-80).
+- **Tenant provisioning**: the one cross-tenant capability. Only an admin of the `platform-operator` tenant with a
+  JWT (no API key, service or purpose token) reaches `/api/v1/platform/**`, checked in auth-service's filter chain
+  and on every method; it creates a tenant with an invited first admin, reissues that invite while the tenant has
+  no admin, and shows and lists tenants' metadata, audited in the operator tenant. The Ingress routes it like
+  every auth-service path, so that rule is its only protection (backlog #0-80,
+  [docs/tenant-provisioning.md](docs/tenant-provisioning.md)). Turn on MFA for the operator tenant (not enforced yet:
+  backlog #0-83).
 - **Service identity**: service tokens carry the tenant as a signed claim and an `aud` naming the one service that
   accepts them; the only tenant-less token is the API-key introspection purpose token, accepted on one route.
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
@@ -428,11 +441,18 @@ Open items from the audit and earlier, most important first within each area. Ea
   - Built images are not scanned and no SBOM is produced: backlog #0-70.
   - Mutable image tags in k8s and compose, and k8s third-party images not tracked by Renovate: backlog #0-71.
 - **Application**
-  - Every new database gets an admin account `admin@incidentplatform.com` / `changeme` in tenant `default` (the
-    seed migration's default; no deployment sets `ADMIN_PASSWORD`): backlog #0-80.
   - Swagger UI and the OpenAPI documents are public in every profile: backlog #0-73.
   - The `test` profiles, with hard-coded keys, ship inside the jars of three services: backlog #0-81.
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
+  - A tenant cannot be suspended or offboarded: its users, API keys and data stay until someone edits the database:
+    backlog #0-82.
+  - The platform API does not require MFA (the operator tenant's `mfaRequired` is advised, not enforced) and has
+    no per-operator rate limit: backlog #0-83.
+  - Audit events are sent to Kafka inside the database transaction, not through an outbox: an event can record
+    a rolled-back action, a committed action can lose its event silently, and a Kafka outage stalls requests:
+    backlog #0-84.
+  - A tenant id with data in other services but no user in auth-service can be provisioned, and its admin would
+    see that data; the operator guide says to check first: backlog #0-85.
 - **Project**
   - No `SECURITY.md`, no private vulnerability reporting, no Dependabot alerts: backlog #0-74.
 - **Local stack**
@@ -775,6 +795,12 @@ docker compose up -d
 
 > **auth-service** requires `MFA_ENCRYPTION_KEY` and `SLACK_ENCRYPTION_KEY` — two different
 > 32-byte base64 AES-256-GCM keys, for TOTP secrets and tenants' Slack bot tokens at rest. See `docker/.env.example` for all required variables.
+
+> **Customer tenants**: no account and no customer tenant is seeded. A platform operator creates each one: accept
+> the operator admin's invite and log in (Step 5, steps 2-3), then `POST /api/v1/platform/tenants` with
+> `{"tenantId": "acme", "displayName": "Acme Corp", "adminEmail": "..."}`. The tenant's first admin gets an
+> invite in Mailpit (http://localhost:8025) and accepts it with `POST /api/v1/auth/accept-invite`. Details:
+> [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
 
 ### Step 5 — (Optional) Start monitoring stack
 
@@ -1357,12 +1383,16 @@ incident-platform/
 ├── auth-service/                  # port 8087 — identity and access management
 │   └── src/main/java/
 │       ├── api/                   # AuthController, UserController, TeamController,
-│       │                          # ApiKeyController, IntegrationController, TenantSettingsController
+│       │                          # ApiKeyController, IntegrationController, TenantSettingsController,
+│       │                          # PlatformTenantController (operator tenant provisioning)
+│       ├── bootstrap/             # OperatorTenantBootstrap, TenantAdminReconciler
+│       ├── config/                # SecurityConfig, PlatformAccess
 │       ├── service/               # AuthService, UserService, TeamService, MfaService,
 │       │                          # ApiKeyService, IntegrationService, TenantSettingsService
-│       │                          # AuthTokenService, InviteService, ForgotPasswordService
+│       │                          # AuthTokenService, InviteService, ForgotPasswordService,
+│       │                          # TenantProvisioningService
 │       ├── domain/                # User, Team, TeamMember, ApiKey, Integration,
-│       │                          # AuthToken, MfaBackupCode, TenantSettings
+│       │                          # AuthToken, MfaBackupCode, TenantSettings, Tenant
 │       └── repository/            # JPA repositories for all domain entities
 │
 ├── ingestion-service/             # port 8081 — alert ingestion

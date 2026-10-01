@@ -160,6 +160,10 @@ public class SecurityConfig {
                         // reach; the controller repeats the rule with @PreAuthorize.
                         .requestMatchers(HttpMethod.POST, "/api/v1/internal/api-keys/introspect")
                         .hasRole(SecurityRoles.API_KEY_INTROSPECTION)
+                        // Backlog #0-80: the platform API (tenant provisioning) is for
+                        // an admin of the platform-operator tenant with a JWT only;
+                        // the controller repeats the rule with @PreAuthorize.
+                        .requestMatchers("/api/v1/platform/**").access(PlatformAccess.forRequests())
                         // Deny by default for purpose tokens (backlog #0-16, #0-14):
                         // authenticated() would let one reach every route below.
                         .anyRequest().access(

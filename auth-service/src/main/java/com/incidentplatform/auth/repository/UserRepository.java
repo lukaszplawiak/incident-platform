@@ -10,6 +10,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -54,6 +56,16 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      * admin, from one whose users need a human.
      */
     boolean existsByTenantId(String tenantId);
+
+    /**
+     * Whether a tenant has, or ever had, any user, archived and anonymized ones
+     * included. Native, to bypass {@code @SQLRestriction} on purpose: tenant
+     * provisioning (backlog #0-80) must not hand a new admin a tenant id whose
+     * users and data already exist, even if nobody in it is active any more.
+     */
+    @Query(value = "SELECT EXISTS (SELECT 1 FROM users WHERE tenant_id = :tenantId)",
+            nativeQuery = true)
+    boolean existsAnyByTenantId(@Param("tenantId") String tenantId);
 
     /**
      * Lists all non-deleted users in a tenant — paginated.
@@ -135,5 +147,23 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             """)
     boolean existsActiveAcceptedUserWithRole(
             @Param("tenantId") String tenantId,
+            @Param("role") Role role);
+
+    /**
+     * Of the given tenants, those that have an active user with this role who
+     * has set a password (backlog #0-80: the operator's tenant list shows
+     * whether each tenant's first admin has accepted). One query for a page of
+     * tenants instead of one per tenant.
+     */
+    @Query("""
+            SELECT DISTINCT u.tenantId FROM User u
+            JOIN u.roles r
+            WHERE u.tenantId IN :tenantIds
+            AND r.role = :role
+            AND u.active = true
+            AND u.passwordHash IS NOT NULL
+            """)
+    List<String> findTenantIdsWithActiveAcceptedUserWithRole(
+            @Param("tenantIds") Collection<String> tenantIds,
             @Param("role") Role role);
 }

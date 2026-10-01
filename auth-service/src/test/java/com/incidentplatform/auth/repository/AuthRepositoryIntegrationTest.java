@@ -27,6 +27,12 @@ import com.incidentplatform.auth.service.ForgotPasswordService;
 import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.auth.service.UserService;
+import com.incidentplatform.auth.service.TenantProvisioningService;
+import com.incidentplatform.auth.dto.ProvisionTenantRequest;
+import com.incidentplatform.auth.dto.ProvisionTenantResponse;
+import com.incidentplatform.auth.dto.TenantDto;
+import com.incidentplatform.shared.security.UserPrincipal;
+import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.ReservedTenants;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.incidentplatform.auth.service.TotpService;
@@ -55,11 +61,13 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * Real-Postgres integration tests for {@code auth-service}'s repository
@@ -150,6 +158,8 @@ class AuthRepositoryIntegrationTest {
     @Autowired private AuthTokenRepository authTokenRepository;
     @Autowired private ApiKeyRepository apiKeyRepository;
     @Autowired private SlackWorkspaceRepository slackWorkspaceRepository;
+    @Autowired private TenantRepository tenantRepository;
+    @Autowired private TenantProvisioningService tenantProvisioningService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private AuthEmailOutboxRepository authEmailOutboxRepository;
     @Autowired private EntityManager entityManager;
@@ -809,7 +819,7 @@ class AuthRepositoryIntegrationTest {
         private OperatorTenantBootstrap reconciler() {
             return new OperatorTenantBootstrap(OP_EMAIL, userRepository, authTokenRepository,
                     authEmailOutboxRepository, userService, resendInviteService,
-                    new SimpleMeterRegistry());
+                    tenantRepository, new SimpleMeterRegistry());
         }
 
         private void run() {
@@ -923,6 +933,216 @@ class AuthRepositoryIntegrationTest {
             entityManager.clear();
 
             assertThat(userRepository.existsByTenantId(OP_TENANT)).isFalse();
+        }
+    }
+
+    /**
+     * Backlog #0-80: provisioning against the real schema (V21), the real
+     * {@code UserService} and the real transaction boundary. Each test uses its
+     * own tenant id, since the rollback test runs outside the test transaction.
+     */
+    @Nested
+    @DisplayName("Tenant provisioning (backlog #0-80)")
+    class TenantProvisioning {
+
+        private final UserPrincipal operator = new UserPrincipal(UUID.randomUUID(),
+                ReservedTenants.PLATFORM_OPERATOR, "ops@example.com",
+                List.of(SecurityRoles.ROLE_ADMIN), List.of());
+
+        private String newTenantId() {
+            return "t-" + UUID.randomUUID().toString().substring(0, 13);
+        }
+
+        @Test
+        @DisplayName("creates the tenant row and an invited admin in the new tenant")
+        void provisions() {
+            final String tenantId = newTenantId();
+
+            final ProvisionTenantResponse response = tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(tenantId, "Acme", "admin@acme.example"), operator);
+            entityManager.flush();
+            entityManager.clear();
+
+            final var tenant = tenantRepository.findById(tenantId).orElseThrow();
+            assertThat(tenant.getFirstAdminEmail()).isEqualTo("admin@acme.example");
+            assertThat(tenant.getCreatedBy()).isEqualTo(operator.userId());
+            // Set by the database (now(), the transaction's start), so compared
+            // loosely against the JVM clock rather than to the instant.
+            assertThat(tenant.getCreatedAt()).isCloseTo(Instant.now(),
+                    within(1, ChronoUnit.MINUTES));
+            final User admin = userRepository.findByEmailAndTenantId("admin@acme.example", tenantId)
+                    .orElseThrow();
+            assertThat(admin.getId()).isEqualTo(response.adminUserId());
+            assertThat(admin.getRoleNames()).containsExactly(SecurityRoles.ROLE_ADMIN);
+            assertThat(admin.getPasswordHash()).as("set only by accepting the invite").isNull();
+            assertThat(authEmailOutboxRepository.findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(
+                    admin.getId(), AuthEmailType.INVITE)).map(AuthEmailOutbox::getStatus)
+                    .contains(AuthEmailStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("a second provisioning of the same id is refused and overwrites nothing")
+        void duplicateRefused() {
+            final String tenantId = newTenantId();
+            tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(tenantId, "First", "first@acme.example"), operator);
+
+            assertThatThrownBy(() -> tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(tenantId, "Second", "second@acme.example"), operator))
+                    .isInstanceOf(BusinessException.class);
+            entityManager.clear();
+            assertThat(tenantRepository.findById(tenantId).orElseThrow().getDisplayName())
+                    .isEqualTo("First");
+            assertThat(userRepository.findByEmailAndTenantId("second@acme.example", tenantId)).isEmpty();
+        }
+
+        private List<String> inviteStatuses(String tenantId, String email) {
+            return jdbcTemplate.queryForList("""
+                    SELECT o.status FROM auth_email_outbox o JOIN users u ON u.id = o.user_id
+                    WHERE u.tenant_id = ? AND u.email = ? AND o.email_type = 'INVITE'
+                    ORDER BY o.created_at
+                    """, String.class, tenantId, email);
+        }
+
+        @Test
+        @DisplayName("reissue: a permanently failed first invite is queued again in the new tenant")
+        void reissueAfterPermanentFailure() {
+            final String tenantId = newTenantId();
+            tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(tenantId, "Acme", "admin@reissue.example"), operator);
+            entityManager.flush();
+            entityManager.clear();
+            // The scheduler's steps for an invite it gave up on (as in
+            // OperatorAdminReconciliation): token created, then given up.
+            final User admin = userRepository.findByEmailAndTenantId("admin@reissue.example", tenantId)
+                    .orElseThrow();
+            final AuthEmailOutbox invite = authEmailOutboxRepository
+                    .findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(admin.getId(), AuthEmailType.INVITE)
+                    .orElseThrow();
+            final AuthEmailPersistenceService.Attempt.Send send =
+                    (AuthEmailPersistenceService.Attempt.Send) authEmailPersistenceService.prepareAttempt(
+                            invite, Instant.now(), java.time.Duration.ZERO);
+            authEmailPersistenceService.recordGivenUp(invite.getId(), send.tokenId(), "smtp down",
+                    Instant.now());
+            entityManager.flush();
+            entityManager.clear();
+
+            tenantProvisioningService.reissueFirstAdminInvite(tenantId, operator);
+            entityManager.flush();
+
+            assertThat(inviteStatuses(tenantId, "admin@reissue.example"))
+                    .containsExactly("PERMANENTLY_FAILED", "PENDING");
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM users WHERE tenant_id = ?", Integer.class, tenantId))
+                    .as("no second user").isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("reissue: an archived first admin is not revived, and no user is created")
+        void reissueRefusedForArchivedFirstAdmin() {
+            final String tenantId = newTenantId();
+            tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(tenantId, "Acme", "admin@gone.example"), operator);
+            entityManager.flush();
+            jdbcTemplate.update("UPDATE users SET archived_at = now(), active = FALSE WHERE tenant_id = ?",
+                    tenantId);
+            entityManager.clear();
+
+            assertThatThrownBy(() -> tenantProvisioningService.reissueFirstAdminInvite(tenantId, operator))
+                    .isInstanceOf(BusinessException.class);
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM users WHERE tenant_id = ?", Integer.class, tenantId)).isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("provision: an id whose only users are archived is refused, and its row rolled back")
+        void provisionRefusedForIdWithArchivedUsers() {
+            final String tenantId = newTenantId();
+            jdbcTemplate.update("""
+                    INSERT INTO users (id, tenant_id, email, active, archived_at)
+                    VALUES (gen_random_uuid(), ?, 'old@acme.example', FALSE, now())
+                    """, tenantId);
+
+            assertThatThrownBy(() -> tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(tenantId, "Acme", "new@acme.example"), operator))
+                    .isInstanceOf(BusinessException.class);
+            assertThat(userRepository.findByEmailAndTenantId("new@acme.example", tenantId)).isEmpty();
+        }
+
+        @Test
+        @DisplayName("list reports whether each tenant's admin has accepted")
+        void listReportsAdminActive() {
+            final String pendingTenant = newTenantId();
+            final String activeTenant = newTenantId();
+            tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(pendingTenant, "Pending", "a@pending.example"), operator);
+            tenantProvisioningService.provision(
+                    new ProvisionTenantRequest(activeTenant, "Active", "a@active.example"), operator);
+            entityManager.flush();
+            entityManager.clear();
+            final User accepting = userRepository.findByEmailAndTenantId("a@active.example", activeTenant)
+                    .orElseThrow();
+            accepting.setPasswordHash("accepted");
+            userRepository.saveAndFlush(accepting);
+
+            final List<TenantDto> tenants = tenantProvisioningService.list(
+                    org.springframework.data.domain.PageRequest.of(0, 100)).getContent();
+
+            assertThat(tenants).filteredOn(t -> t.tenantId().equals(pendingTenant))
+                    .singleElement().extracting(TenantDto::adminActive).isEqualTo(false);
+            assertThat(tenants).filteredOn(t -> t.tenantId().equals(activeTenant))
+                    .singleElement().extracting(TenantDto::adminActive).isEqualTo(true);
+        }
+
+        @Test
+        @DisplayName("the operator tenant's bootstrap records its tenant row once")
+        void operatorBootstrapRecordsTenant() {
+            jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", ReservedTenants.PLATFORM_OPERATOR);
+            final OperatorTenantBootstrap bootstrap = new OperatorTenantBootstrap("ops-row@example.com",
+                    userRepository, authTokenRepository, authEmailOutboxRepository, userService,
+                    resendInviteService, tenantRepository, new SimpleMeterRegistry());
+
+            bootstrap.scheduledReconcile();
+            bootstrap.scheduledReconcile();
+
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM tenants WHERE tenant_id = ?", Integer.class,
+                    ReservedTenants.PLATFORM_OPERATOR)).isEqualTo(1);
+        }
+
+        /**
+         * Outside the test transaction, so provisioning commits or rolls back on
+         * its own. The tenants row is inserted first; a failure after it must take
+         * the row with it, or the id would be taken by a tenant nobody can log in
+         * to. The failure used here is the guard that follows the insert (an id
+         * whose only user is archived, committed beforehand), so the row is
+         * certainly written before the exception. Fails if provision() loses its
+         * transaction: insertIfAbsent would then commit on its own (found in
+         * review: an earlier version failed on the tenants insert itself and
+         * proved nothing).
+         */
+        @Test
+        @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+        @DisplayName("a failure after the tenant insert rolls the tenant row back")
+        void failureRollsBackTenant() {
+            final String tenantId = newTenantId();
+            jdbcTemplate.update("""
+                    INSERT INTO users (id, tenant_id, email, active, archived_at)
+                    VALUES (gen_random_uuid(), ?, 'old@acme.example', FALSE, now())
+                    """, tenantId);
+            try {
+                assertThatThrownBy(() -> tenantProvisioningService.provision(
+                        new ProvisionTenantRequest(tenantId, "Acme", "new@acme.example"), operator))
+                        .isInstanceOf(BusinessException.class);
+
+                assertThat(tenantRepository.existsById(tenantId)).isFalse();
+                assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM users WHERE tenant_id = ?", Integer.class, tenantId))
+                        .as("only the pre-existing archived user").isEqualTo(1);
+            } finally {
+                jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", tenantId);
+                jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", tenantId);
+            }
         }
     }
 

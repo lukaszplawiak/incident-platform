@@ -1,6 +1,6 @@
 package com.incidentplatform.auth.bootstrap;
 
-import com.incidentplatform.auth.bootstrap.OperatorTenantBootstrap.Outcome;
+import com.incidentplatform.auth.bootstrap.TenantAdminReconciler.Outcome;
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
@@ -10,6 +10,7 @@ import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
+import com.incidentplatform.auth.repository.TenantRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.auth.service.UserService;
@@ -58,6 +59,7 @@ class OperatorTenantBootstrapTest {
     @Mock private AuthEmailOutboxRepository outboxRepository;
     @Mock private UserService userService;
     @Mock private ResendInviteService resendInviteService;
+    @Mock private TenantRepository tenantRepository;
 
     private SimpleMeterRegistry meterRegistry;
 
@@ -73,7 +75,7 @@ class OperatorTenantBootstrapTest {
 
     private OperatorTenantBootstrap reconciler(String email) {
         return new OperatorTenantBootstrap(email, userRepository, authTokenRepository,
-                outboxRepository, userService, resendInviteService, meterRegistry);
+                outboxRepository, userService, resendInviteService, tenantRepository, meterRegistry);
     }
 
     private double pendingGauge() {
@@ -109,8 +111,31 @@ class OperatorTenantBootstrapTest {
         final Outcome outcome = reconciler("  ").reconcile();
 
         assertThat(outcome).isEqualTo(Outcome.DISABLED);
-        verifyNoInteractions(userRepository, userService, resendInviteService);
+        verifyNoInteractions(userRepository, userService, resendInviteService, tenantRepository);
         assertThat(meterRegistry.find(OperatorTenantBootstrap.PENDING_GAUGE).gauge()).isNull();
+    }
+
+    @Test
+    @DisplayName("records the operator tenant in tenants on every enabled run (backlog #0-80)")
+    void recordsTenant() {
+        given(userRepository.existsActiveAcceptedUserWithRole(TENANT, Role.ROLE_ADMIN))
+                .willReturn(true);
+
+        reconciler(" " + EMAIL + " ").reconcile();
+
+        then(tenantRepository).should().insertIfAbsent(
+                TENANT, OperatorTenantBootstrap.DISPLAY_NAME, EMAIL, null);
+    }
+
+    @Test
+    @DisplayName("a failure recording the tenant does not stop the admin reconciliation")
+    void tenantRecordFailureDoesNotStopReconciliation() {
+        given(tenantRepository.insertIfAbsent(any(), any(), any(), any()))
+                .willThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+        given(userRepository.existsActiveAcceptedUserWithRole(TENANT, Role.ROLE_ADMIN))
+                .willReturn(true);
+
+        assertThat(reconciler(EMAIL).reconcile()).isEqualTo(Outcome.ADMIN_ACTIVE);
     }
 
     @Test

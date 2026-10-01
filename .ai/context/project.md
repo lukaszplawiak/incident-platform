@@ -242,10 +242,28 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   `platform-operator` tenant (history, postmortems). Rejected: dogfooding only (fails exactly when the
   pipeline it would report on fails).
 - **Reserved tenants** (`ReservedTenants`): `platform-operator` and the legacy `system` are refused
-  wherever a tenant id is chosen (seed, dev token). The operator tenant's first admin is created by
-  invite (`OperatorTenantBootstrap`, `OPERATOR_ADMIN_EMAIL`); the admin creates the integration, and
-  the key lives only in Alertmanager's `credentials_file`. Since #0-49 that class is a reconciler
-  (`@Scheduled` + ShedLock, ~30 s after start, then hourly), not a one-shot startup runner: it checks
+  wherever a tenant id is chosen (tenant provisioning, dev token). The operator tenant's first admin is
+  created by invite (`OperatorTenantBootstrap`, `OPERATOR_ADMIN_EMAIL`). No migration seeds a user any
+  more: `V1_1__seed_admin_user` created `admin@incidentplatform.com` / `changeme` on every new database,
+  so its body is now a no-op (the class stays, or Flyway cannot resolve version 1.1 in existing
+  histories; a Java migration has no checksum), and `V20` archives that account where the password is
+  still `changeme`.
+- **Tenant provisioning (#0-80)**: customer tenants are rows in auth-service's `tenants` table (V21,
+  backfilled from existing users; the other services still treat `tenant_id` as a plain string).
+  An admin of `platform-operator`, with a JWT (never an API key, service or purpose token: `PlatformAccess`,
+  checked in the filter chain and by `@PreAuthorize` on every method), calls `/api/v1/platform/tenants`:
+  create (tenant row via `insertIfAbsent`, a native `ON CONFLICT DO NOTHING`, since `save()` would merge
+  over an assigned id, #0-47; plus the first admin through `UserService.createUser` in the new tenant's
+  `TenantContext`, one transaction; refused if the id has users, archived ones included), reissue the
+  first invite (`TenantAdminReconciler`, shared with `OperatorTenantBootstrap`; never creates a user, so an
+  archived first admin is not revived, #0-82), show and list metadata. This is the one cross-tenant capability, a narrow reversal
+  of #0-16; audit types `TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` in the operator tenant.
+  Suspension and offboarding: #0-82. Guide: docs/tenant-provisioning.md.
+- **Operator tenant bootstrap**: the operator admin creates the integration, and
+  the key lives only in Alertmanager's `credentials_file`. Since #0-80 `OperatorTenantBootstrap` also
+  records the operator tenant's `tenants` row (on a new database V21 runs before any user exists).
+  Since #0-49 it is a reconciler (`@Scheduled` + ShedLock, ~30 s after start, then hourly), not a
+  one-shot startup runner: it checks
   for an admin who can log in, re-invites through `ResendInviteService` when the invite permanently
   failed or expired, never creates a second admin or deletes a user (an unexpected state is an ERROR
   for a human), and exports `platform.operator.admin.pending`, alerted by `OperatorAdminNotActivated`.
