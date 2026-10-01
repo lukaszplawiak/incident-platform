@@ -112,4 +112,52 @@ class AuditEventPublisherTest {
             then(sender).should(times(1)).send(any(AuditEventMessage.class));
         }
     }
+
+    @Nested
+    @DisplayName("publishAuthConfirmed (backlog #0-88)")
+    class PublishAuthConfirmed {
+
+        @Test
+        @DisplayName("waits on the sender's confirmed send with the given timeout")
+        void delegatesToConfirmedSend() {
+            publisher.publishAuthConfirmed(UUID.randomUUID(), TENANT_ID,
+                    AuditEventTypes.MFA_RESET_BREAK_GLASS, "auth-service", "break-glass:Jane",
+                    "MFA reset", Map.of(), java.time.Duration.ofSeconds(10));
+
+            then(sender).should().sendConfirmed(any(AuditEventMessage.class),
+                    org.mockito.ArgumentMatchers.eq(java.time.Duration.ofSeconds(10)));
+        }
+
+        @Test
+        @DisplayName("refused on a request thread, so no request ever blocks on Kafka (review of #0-88)")
+        void refusedOnRequestPath() {
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                    new org.springframework.web.context.request.ServletRequestAttributes(
+                            new org.springframework.mock.web.MockHttpServletRequest()));
+            try {
+                org.assertj.core.api.Assertions.assertThatThrownBy(() -> publisher.publishAuthConfirmed(
+                                UUID.randomUUID(), TENANT_ID, AuditEventTypes.MFA_RESET_BREAK_GLASS,
+                                "auth-service", "break-glass:Jane", "MFA reset", Map.of(),
+                                java.time.Duration.ofSeconds(10)))
+                        .isInstanceOf(IllegalStateException.class)
+                        .hasMessageContaining("not for request paths");
+                then(sender).shouldHaveNoInteractions();
+            } finally {
+                org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+            }
+        }
+
+        @Test
+        @DisplayName("a missing confirmation reaches the caller, unlike the ordinary publish")
+        void propagatesFailure() {
+            willThrow(new AuditNotConfirmedException("not confirmed", null))
+                    .given(sender).sendConfirmed(any(AuditEventMessage.class), any());
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> publisher.publishAuthConfirmed(
+                            UUID.randomUUID(), TENANT_ID, AuditEventTypes.MFA_RESET_BREAK_GLASS,
+                            "auth-service", "break-glass:Jane", "MFA reset", Map.of(),
+                            java.time.Duration.ofSeconds(10)))
+                    .isInstanceOf(AuditNotConfirmedException.class);
+        }
+    }
 }
