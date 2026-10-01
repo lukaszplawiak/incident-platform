@@ -243,3 +243,60 @@ tests:
             exp_annotations:
               summary: "Platform API write operations refused: rate limit unavailable"
               description: "auth-service could not reach Redis to check the platform API's limit in the last 15 minutes and refused tenant provisioning. Check Redis and the PlatformRateLimiter ERROR lines in the auth-service log.\n"
+
+  # Backlog #0-88: an admin reaching the MFA reset limit fires the critical
+  # alert, by either limit, and clears an hour after the refusals stop.
+  - interval: 1m
+    input_series:
+      - series: 'auth_mfa_reset_ratelimit_rejected_total{job="auth-service",instance="auth-1",limit="admin"}'
+        values: '0x10 1x100'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AdminMfaResetRateLimited
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AdminMfaResetRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "An admin reached the MFA reset rate limit"
+              description: "Admin MFA resets were refused for exceeding the per-admin or per-tenant limit in the last hour. The auth-service WARN log names the admin and the tenant; check that tenant's MFA_RESET_BY_ADMIN audit events and contact its other admins.\n"
+      - eval_time: 85m
+        alertname: AdminMfaResetRateLimited
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'auth_mfa_reset_ratelimit_rejected_total{job="auth-service",instance="auth-1",limit="tenant"}'
+        values: '0x10 2x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AdminMfaResetRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "An admin reached the MFA reset rate limit"
+              description: "Admin MFA resets were refused for exceeding the per-admin or per-tenant limit in the last hour. The auth-service WARN log names the admin and the tenant; check that tenant's MFA_RESET_BY_ADMIN audit events and contact its other admins.\n"
+
+  # A refusal because Redis could not be checked fires the high alert.
+  - interval: 1m
+    input_series:
+      - series: 'auth_mfa_reset_ratelimit_unavailable_total{job="auth-service",instance="auth-1"}'
+        values: '0x10 3x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AdminMfaResetRateLimitUnavailable
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AdminMfaResetRateLimitUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+            exp_annotations:
+              summary: "Admin MFA resets refused: rate limit unavailable"
+              description: "auth-service could not reach Redis to check the MFA reset limit in the last 15 minutes and refused admin MFA resets. Check Redis and the MfaResetRateLimiter ERROR lines in the auth-service log.\n"

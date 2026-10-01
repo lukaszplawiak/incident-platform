@@ -268,9 +268,10 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     `amr` only if another service needs step-up.
   - Why the grace period: enabling MFA needs only a password, so a password thief could enrol their own
     factor. Every MFA enable/disable emails the account (token-less auth email outbox types), the period
-    counts from when that email was sent (kept on the user, as the outbox purges sent rows), and a password
-    reset within it removes the new factor and ends unfinished logins. That removal is interim: it lets a
-    mailbox alone undo a fresh factor, and is replaced by an admin MFA reset (#0-88). The grace period is only
+    counts from when that email was sent (kept on the user, as the outbox purges sent rows). The remedy for a
+    stranger's factor is a password reset (ends sessions and unfinished logins, never touches MFA) and then
+    an admin MFA reset (#0-88; #0-83's interim removal of a fresh factor by a password reset is gone, since it
+    let a mailbox alone undo MFA). The grace period is only
     as strong as the owner's mailbox; binding operator enrolment to the invite, or a second operator's
     approval, is #0-87. Factors older than 24 h at deploy were taken over as established, except an operator
     admin's: operators re-enrol once.
@@ -280,6 +281,53 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     acting as operator could resolve incidents in the operator tenant.
   - The 403 names the failed condition, except that a factor too new and an undelivered notice share one
     message, so a password thief cannot tell whether the owner was warned.
+- **Admin MFA reset (#0-88)**: `POST /api/v1/users/{id}/mfa-reset` (`MfaService.resetMfaByAdmin`), any
+  ROLE_ADMIN of the tenant on any other user that is not archived, admins included (so a second admin, or
+  operator admin, can help another), never on oneself. Deactivated users too, on purpose (review): resetting a
+  stranger's factor before reactivation leaves no window in which it works. Clears factor, pending secret, backup codes and the sessions' MFA
+  marks, and ends every session and unfinished login; emails its own outbox type `MFA_RESET` (V24; review:
+  a shared MFA_DISABLED text hid a reset the owner did not ask for) and audits `MFA_RESET_BY_ADMIN` (`shared`,
+  distinct from self-service `MFA_DISABLED`; still fire-and-forget until #0-84's outbox).
+  - Step-up: the admin's session must pass the platform API's rule (`MfaSessionStatusService.check` ==
+    ACCEPTED: MFA within 12 h, factor announced >= 24 h ago). First built without the 12 h / 24 h parts; review
+    showed a password thief could enrol a factor and reset the whole tenant at once, and a 30-day refresh chain
+    (rotation keeps the original `mfa_verified_at`) could act weeks later. An API key (no session) never passes.
+  - Rate limit (review): `MfaResetRateLimiter`, per admin and per tenant (`mfa-reset.rate-limit.*`, 10/30 per h),
+    fail-closed like the platform API's, own breaker `mfa-reset-ratelimit`, same lazy Redis connection; consumed
+    as the last check before the change (after step-up, user lookup and factor check) so refused attempts
+    cannot drain a tenant's budget. The service throws
+    `RateLimitRefusedException`, `UserController` maps it to 429/503 + Retry-After. Types used by both limiters
+    (in auth-service's `ratelimit` package, not `shared`): `RateLimitDecision`, `RedisTokenBuckets`. Alerts
+    `AdminMfaResetRateLimited` (critical, content-free) and `AdminMfaResetRateLimitUnavailable` (high).
+  - A password reset never touches MFA (NIST SP 800-63B; Okta/Entra pattern). Order for a stranger's
+    factor: password reset first, then the MFA reset, or the old password's holder could enrol again.
+  - A single operator admin has no one to reset them: break-glass is a one-off run of auth-service
+    (`BreakGlassMfaResetRunner`), chosen only by the subcommand `break-glass-mfa-reset` as the first
+    argument (as `manage.py <command>` / `kc.sh <subcommand>`): `BreakGlassCommand.prepare` in `main` turns
+    the web server off, drops the subcommand and adds a named property source as a marker; the runner's
+    condition and `NotBreakGlassCommand` (scheduling off, so the exit leaves no ShedLock lock held) check only
+    that marker, which no environment variable or `--property` can create. Earlier versions started on the
+    property `break-glass.mfa-reset.user-email` (args or env); review found a stray variable in a deployment
+    would turn the service into the command. The options stay `--break-glass.mfa-reset.*`.
+    The runner only reports its code as an `ExitCodeGenerator`, and `AuthServiceApplication.main` exits via
+    `SpringApplication.exit`. Admins of `platform-operator` only; actor/reason without control,
+    line-separator or formatting characters (U+2028/9, bidi overrides); email trimmed and matched exactly as
+    stored (like login). The audit event also records `executedOn` (OS user and host of the process), since
+    the actor is whatever name the operator types. The runner sets `TenantContext` to the operator tenant
+    (log MDC). A customer tenant's only admin: #0-90.
+    Same code path as the admin reset, so the email goes out; audited as `MFA_RESET_BREAK_GLASS` through
+    `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waits for Kafka's ack inside the transaction:
+    no ack, no reset. Chosen over SQL (no email, no audit) and pgAudit/triggers (detection, not the audit
+    trail). The confirmed send is the only audit path that is not fire-and-forget until #0-84; it refuses to
+    run on a request thread (`RequestContextHolder`), since it holds a DB connection while Kafka is down.
+  - Audit records' `X-Tenant-Id` (found in this review): `AuditEventKafkaSender` (`shared`) sets the header from
+    the event's tenant, as `AlertKafkaProducer` / `IncidentEventKafkaSender` do, and
+    `TenantKafkaProducerInterceptor` no longer appends a second one from `TenantContext` to a record that has it
+    (consumers read the last header, so the context used to win). Before, 151 of 155 local audit records had
+    none: auth-, notification-, postmortem- and oncall-service don't register the producer interceptor, and
+    logins/jobs/commands have no `TenantContext`. Their dead-letter records still lack it: #0-91.
+  - V23's comment that a password reset removes a factor within the grace period predates #0-88; V23 stays
+    unchanged (checksum), V24's header says so.
 - **Bulk UPDATEs flush before they clear** (found in #0-83): `@Modifying(clearAutomatically = true)` must
   come with `flushAutomatically = true`. Hibernate flushes before a JPQL bulk statement only pending changes
   of the tables it touches, so an earlier change to another table in the same transaction (an outbox INSERT)
@@ -298,7 +346,7 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   of the type, an accepted invite, a missing user; PERMANENTLY_FAILED: deadline passed), otherwise, for the
   token-carrying types (invite, reset), invalidates the user's earlier tokens of the type and creates the token
   it sends — no raw token is stored anywhere, and the link is valid for its full lifetime from sending. The MFA
-  notices (MFA_ENABLED / MFA_DISABLED, #0-83) carry no token (`AuthEmailType.carriesToken()`). Failed sends are
+  notices (MFA_ENABLED / MFA_DISABLED, #0-83; MFA_RESET, #0-88, V24) carry no token (`AuthEmailType.carriesToken()`). Failed sends are
   retried on `AuthEmailRetryPolicy`'s backoff until the entry's deadline (invite 7 days, reset 15 minutes, MFA
   notice max(24 h, grace period)), in two lanes (`processPending`, `retryFailed`) with their own
   batches and a processing budget validated against the ShedLock. State changes are conditional UPDATEs, not

@@ -4,6 +4,7 @@ import com.incidentplatform.auth.dto.ProvisionTenantRequest;
 import com.incidentplatform.auth.dto.ProvisionTenantResponse;
 import com.incidentplatform.auth.dto.TenantDto;
 import com.incidentplatform.auth.ratelimit.PlatformRateLimiter;
+import com.incidentplatform.auth.ratelimit.RateLimitDecision;
 import com.incidentplatform.auth.service.TenantProvisioningService;
 import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.security.UserPrincipal;
@@ -91,7 +92,7 @@ public class PlatformTenantController {
     public ResponseEntity<ProvisionTenantResponse> provision(
             @Valid @RequestBody ProvisionTenantRequest request,
             @AuthenticationPrincipal UserPrincipal operator) {
-        final PlatformRateLimiter.Decision limit = rateLimiter.tryConsume(operator.userId());
+        final RateLimitDecision limit = rateLimiter.tryConsume(operator.userId());
         if (!limit.allowed()) {
             return refused(limit);
         }
@@ -138,7 +139,7 @@ public class PlatformTenantController {
     public ResponseEntity<Void> reissueFirstAdminInvite(
             @PathVariable String tenantId,
             @AuthenticationPrincipal UserPrincipal operator) {
-        final PlatformRateLimiter.Decision limit = rateLimiter.tryConsume(operator.userId());
+        final RateLimitDecision limit = rateLimiter.tryConsume(operator.userId());
         if (!limit.allowed()) {
             return refused(limit);
         }
@@ -161,8 +162,8 @@ public class PlatformTenantController {
     }
 
     /** 429 or 503 with Retry-After and no body, as ingestion-service's limiter answers. */
-    private static <T> ResponseEntity<T> refused(PlatformRateLimiter.Decision limit) {
-        final HttpStatus status = limit.outcome() == PlatformRateLimiter.Outcome.LIMITED
+    private static <T> ResponseEntity<T> refused(RateLimitDecision limit) {
+        final HttpStatus status = limit.outcome() == RateLimitDecision.Outcome.LIMITED
                 ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.SERVICE_UNAVAILABLE;
         return ResponseEntity.status(status)
                 .header(HttpHeaders.RETRY_AFTER, Long.toString(limit.retryAfterSeconds()))

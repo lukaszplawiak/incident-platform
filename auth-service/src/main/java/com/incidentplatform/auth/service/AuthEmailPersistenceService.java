@@ -129,7 +129,7 @@ public class AuthEmailPersistenceService {
             case INVITE -> tokenService.generateInviteTokenWithEntity(user.get(), entry.getTenantId());
             case PASSWORD_RESET ->
                     tokenService.generatePasswordResetTokenWithEntity(user.get(), entry.getTenantId());
-            case MFA_ENABLED, MFA_DISABLED -> throw new IllegalStateException("unreachable: no token");
+            case MFA_ENABLED, MFA_DISABLED, MFA_RESET -> throw new IllegalStateException("unreachable: no token");
         };
         return new Attempt.Send(token.rawToken(), token.token().getId());
     }

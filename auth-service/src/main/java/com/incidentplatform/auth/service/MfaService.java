@@ -2,6 +2,7 @@ package com.incidentplatform.auth.service;
 
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.MfaBackupCode;
+import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.dto.MfaBackupCodesStatusResponse;
@@ -9,6 +10,9 @@ import com.incidentplatform.auth.dto.MfaEnableResponse;
 import com.incidentplatform.auth.dto.MfaEnableWithLoginResponse;
 import com.incidentplatform.auth.dto.MfaSetupResponse;
 import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
+import com.incidentplatform.auth.ratelimit.MfaResetRateLimiter;
+import com.incidentplatform.auth.ratelimit.RateLimitDecision;
+import com.incidentplatform.auth.ratelimit.RateLimitRefusedException;
 import com.incidentplatform.auth.repository.MfaBackupCodeRepository;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
@@ -18,6 +22,7 @@ import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.ReservedTenants;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
@@ -26,7 +31,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -41,6 +45,12 @@ public class MfaService {
 
     private static final Logger log = LoggerFactory.getLogger(MfaService.class);
 
+    /** Break-glass inputs, bounded so they fit the audit trail's columns (backlog #0-88). */
+    static final int BREAK_GLASS_ACTOR_MAX = 100;
+    static final int BREAK_GLASS_REASON_MAX = 500;
+    /** {@code user@host} of the break-glass process; the runner cuts it to fit. */
+    public static final int BREAK_GLASS_EXECUTED_ON_MAX = 200;
+
     private final UserRepository userRepository;
     private final MfaBackupCodeRepository backupCodeRepository;
     private final AuthTokenService authTokenService;
@@ -53,6 +63,7 @@ public class MfaService {
     private final BruteForceProtectionService bruteForceProtectionService;
     private final AuthEmailRequestService authEmailRequestService;
     private final MfaSessionStatusService mfaSessionStatusService;
+    private final MfaResetRateLimiter mfaResetRateLimiter;
 
     public MfaService(UserRepository userRepository,
                       MfaBackupCodeRepository backupCodeRepository,
@@ -65,7 +76,8 @@ public class MfaService {
                       AuditEventPublisher auditEventPublisher,
                       BruteForceProtectionService bruteForceProtectionService,
                       AuthEmailRequestService authEmailRequestService,
-                      MfaSessionStatusService mfaSessionStatusService) {
+                      MfaSessionStatusService mfaSessionStatusService,
+                      MfaResetRateLimiter mfaResetRateLimiter) {
         this.userRepository       = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.authTokenService     = authTokenService;
@@ -78,6 +90,7 @@ public class MfaService {
         this.bruteForceProtectionService = bruteForceProtectionService;
         this.authEmailRequestService = authEmailRequestService;
         this.mfaSessionStatusService = mfaSessionStatusService;
+        this.mfaResetRateLimiter = mfaResetRateLimiter;
     }
 
     // ── Setup (step 1) ────────────────────────────────────────────────────
@@ -158,13 +171,7 @@ public class MfaService {
                     HttpStatus.UNAUTHORIZED);
         }
 
-        user.disableMfa();
-        userRepository.save(user);
-        backupCodeRepository.deleteAllByUserId(principal.userId());
-        // The user's sessions no longer count as MFA-verified, so the platform
-        // API stops accepting them now, not at their next login, and the
-        // account's address is told (backlog #0-83).
-        authTokenService.forgetMfaOfAllSessions(principal.userId(), tenantId);
+        clearFactor(user, tenantId);
         authEmailRequestService.requestMfaChangeNotification(user, false);
 
         auditEventPublisher.publishAuth(
@@ -178,55 +185,217 @@ public class MfaService {
         log.info("MFA disabled: userId={}, tenant={}", principal.userId(), tenantId);
     }
 
+    // ── Reset by an admin ────────────────────────────────────────────────
+
     /**
-     * Removes a second factor enabled within the grace period, as part of a
-     * password reset by email (backlog #0-83, called by
-     * {@code PasswordService.resetPassword}).
+     * An admin of the user's tenant removes the user's second factor
+     * (backlog #0-88): the factor, a pending setup, the backup codes, the
+     * sessions' MFA marks and every session and unfinished login of the
+     * user. The user is emailed (MFA_RESET through the auth email outbox, its
+     * own text so a reset they did not ask for stands out) and logs in with
+     * their password alone, to enrol a factor again.
      *
-     * <h2>Why</h2>
-     * Enabling MFA needs only a password. If someone else enrolled a factor
-     * with the owner's password, the owner gets the MFA_ENABLED email, and
-     * the remedy it names is a password reset. A reset alone would leave the
-     * stranger's factor in place: the owner locked out of their own login,
-     * and the factor opening the platform API once the grace period ends.
-     * The reset link proves control of the mailbox, a channel the password
-     * thief does not have, so it may undo what the password alone did. "Within
-     * the grace period" means the same as for the platform API: until the
-     * grace period has passed since the factor's notice was sent (or while it
-     * was never sent). An established factor is kept: it has stood
-     * unchallenged for that long, and an ordinary forgotten password must not
-     * cost the user their MFA.
+     * <h2>Why an admin, not a password reset</h2>
+     * The help a user needs when their phone is lost, or when someone else
+     * enrolled a factor with their password. Until #0-88 a password reset by
+     * email removed a factor younger than the grace period (#0-83), so a
+     * mailbox alone could undo a fresh factor; mature systems never allow
+     * that (NIST SP 800-63B: recovery must not lower the assurance level),
+     * and the B2B pattern is an admin reset (Okta "Reset Multifactor", Entra
+     * ID "Require re-register MFA"). A password reset now never touches MFA.
      *
-     * <h2>Interim (backlog #0-88)</h2>
-     * It also lets a mailbox alone undo a fresh factor, which mature systems
-     * never allow (found in review). It stays only because nothing else can
-     * remove another user's factor yet; #0-88 replaces it with an admin MFA
-     * reset and deletes this method.
+     * <h2>Rules</h2>
+     * <ul>
+     *   <li>Not on one's own account: {@code /mfa/disable} is for that, and
+     *       needs the factor.</li>
+     *   <li>The admin's own session must pass the platform API's MFA rule
+     *       ({@link MfaSessionStatusService#check}): MFA completed within the
+     *       maximum session age (12 h), with a factor whose MFA_ENABLED notice
+     *       went out at least the grace period (24 h) ago. Found in review:
+     *       with only "completed MFA", a password thief could enrol a factor
+     *       and reset every user of the tenant at once, and a refresh chain
+     *       (30 days, carrying its original MFA time) could do it weeks after
+     *       the MFA login. An API key has no session and never passes.</li>
+     *   <li>Any other user of the tenant that is not archived, admins
+     *       included, so a second admin can help an admin, and an operator
+     *       admin another operator admin. A deactivated user too (found in
+     *       review, kept on purpose): resetting a stranger's factor before
+     *       reactivating the account leaves no moment in which the stranger
+     *       could log in with it; the reset opens nothing, as a deactivated
+     *       user cannot log in.</li>
+     *   <li>Rate-limited per admin and per tenant, fail-closed
+     *       ({@link MfaResetRateLimiter}), counted only for a reset that is
+     *       about to happen (step-up passed, user found, factor present), so
+     *       refused attempts cannot use up a tenant's budget.</li>
+     *   <li>Every session ends, because the usual reason is a compromised
+     *       account: if the password is known to someone else, the user
+     *       resets it first, otherwise its holder could log in and enrol a
+     *       factor of their own again. Access tokens already issued live out
+     *       their 15 minutes, as after a password reset; the platform API
+     *       stops accepting them at once (no live session).</li>
+     * </ul>
      *
-     * @return whether a factor was removed
+     * @throws BusinessException 403 on one's own account or when the admin's session
+     *                           fails the MFA rule (the message names the condition),
+     *                           409 if the user has no factor
+     * @throws RateLimitRefusedException when a limit refuses (429) or cannot be checked (503)
+     * @throws ResourceNotFoundException if the user is not in the tenant, or is archived
      */
-    @Transactional(propagation = Propagation.MANDATORY)
-    public boolean removeFactorEnrolledWithinGrace(User user, String tenantId) {
-        if (!user.isMfaEnabled()
-                || mfaSessionStatusService.isEstablished(user.getMfaEnabledNoticeSentAt(), Instant.now())) {
-            return false;
+    @Transactional
+    public void resetMfaByAdmin(UUID targetUserId, UserPrincipal admin) {
+        final String tenantId = TenantContext.get();
+
+        if (targetUserId.equals(admin.userId())) {
+            throw new BusinessException(
+                    ErrorCodes.FORBIDDEN,
+                    "You cannot reset your own MFA. Use POST /api/v1/auth/mfa/disable.",
+                    HttpStatus.FORBIDDEN);
         }
-        final UUID userId = user.getId();
-        user.disableMfa();
-        userRepository.save(user);
-        backupCodeRepository.deleteAllByUserId(userId);
-        authTokenService.forgetMfaOfAllSessions(userId, tenantId);
-        authEmailRequestService.requestMfaChangeNotification(user, false);
+        final MfaSessionStatusService.Status stepUp =
+                mfaSessionStatusService.check(admin.userId(), tenantId, admin.sessionId());
+        if (stepUp != MfaSessionStatusService.Status.ACCEPTED) {
+            log.warn("MFA reset refused, admin session fails the MFA rule: adminId={}, tenant={}, status={}",
+                    admin.userId(), tenantId, stepUp);
+            throw new BusinessException(ErrorCodes.FORBIDDEN, stepUpRefusal(stepUp), HttpStatus.FORBIDDEN);
+        }
+        final User user = requireUser(targetUserId, tenantId);
+        if (!user.isMfaEnabled()) {
+            throw new BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "MFA is not enabled",
+                    HttpStatus.CONFLICT);
+        }
+        // Last check before the change, so only a reset that would happen
+        // counts (review: a 404 or 409 used to spend the admin's budget).
+        final RateLimitDecision limit = mfaResetRateLimiter.tryConsume(admin.userId(), tenantId);
+        if (!limit.allowed()) {
+            throw new RateLimitRefusedException(limit);
+        }
+
+        resetFactorAndSessions(user, tenantId);
+
         auditEventPublisher.publishAuth(
-                userId, tenantId,
-                AuditEventTypes.MFA_DISABLED,
+                targetUserId, tenantId,
+                AuditEventTypes.MFA_RESET_BY_ADMIN,
                 "auth-service",
-                userId.toString(),
-                "MFA enabled within the grace period removed by a password reset (backlog #0-83)",
-                Map.of());
-        log.warn("MFA enabled within the grace period removed by a password reset: userId={}, tenant={}",
-                userId, tenantId);
-        return true;
+                admin.userId().toString(),
+                "MFA reset by an administrator",
+                Map.of("resetBy", admin.userId().toString()));
+
+        log.warn("MFA reset by an administrator: userId={}, tenant={}, by={}",
+                targetUserId, tenantId, admin.userId());
+    }
+
+    /**
+     * The break-glass form of {@link #resetMfaByAdmin} (backlog #0-88), for a
+     * platform operator admin with no other operator admin to reset them. Run
+     * from the command line by whoever operates the deployment
+     * ({@code BreakGlassMfaResetRunner}), not over HTTP: there is no session
+     * to step up from, so the trust is the same as for database access.
+     *
+     * <p>Does exactly what the admin reset does, with the same email to the
+     * account (MFA_RESET), and is audited as {@code MFA_RESET_BREAK_GLASS} with the
+     * operator's name and reason. The audit event must be acknowledged by
+     * Kafka inside this transaction; if it is not, the reset rolls back, so a
+     * break-glass reset never happens unaudited (unlike the ordinary audit
+     * path, which logs and drops a failed send, backlog #0-84).
+     *
+     * <p>Limited to admins of the {@code platform-operator} tenant: a customer
+     * tenant's admins reset each other, and the platform never acts inside a
+     * tenant with an admin (#0-80; a customer tenant's only admin is #0-90).
+     * The actor and reason go into the log and the audit trail, so control
+     * characters (a forged log line) are refused.
+     *
+     * <p>The actor is the name the operator types, so the audit event also
+     * records where the command ran ({@code executedOn}: the OS user and host
+     * of the process, found in review), which the operator does not type.
+     *
+     * @param executedOn the OS user and host of the process, e.g. {@code appuser@3f2a9c}
+     * @return the id of the user whose MFA was reset
+     * @throws IllegalArgumentException if the actor, reason or executedOn is blank, too long or
+     *                                  contains control characters
+     * @throws ResourceNotFoundException if no operator user that is not archived has exactly
+     *                                   this email (as stored: case-sensitive, like login)
+     * @throws BusinessException 409 if the user is not an operator admin or has no factor
+     * @throws com.incidentplatform.shared.audit.AuditNotConfirmedException if Kafka did not
+     *         acknowledge the audit event (the reset is rolled back)
+     */
+    @Transactional
+    public UUID resetMfaBreakGlass(String email, String actor, String reason, String executedOn,
+                                   Duration auditTimeout) {
+        requireText("actor", actor, BREAK_GLASS_ACTOR_MAX);
+        requireText("reason", reason, BREAK_GLASS_REASON_MAX);
+        requireText("executedOn", executedOn, BREAK_GLASS_EXECUTED_ON_MAX);
+        final String tenantId = ReservedTenants.PLATFORM_OPERATOR;
+
+        final User user = userRepository.findByEmailAndTenantId(email == null ? null : email.strip(), tenantId)
+                .orElseThrow(() -> new ResourceNotFoundException("No user in " + tenantId
+                        + " with exactly this email (case-sensitive, as stored and as used to log in)"));
+        if (!user.getRoleNames().contains(Role.ROLE_ADMIN.name())) {
+            throw new BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "Break-glass resets only an operator admin; another operator admin resets other users",
+                    HttpStatus.CONFLICT);
+        }
+        if (!user.isMfaEnabled()) {
+            throw new BusinessException(
+                    ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "MFA is not enabled",
+                    HttpStatus.CONFLICT);
+        }
+
+        resetFactorAndSessions(user, tenantId);
+
+        final String auditActor = "break-glass:" + actor.strip();
+        auditEventPublisher.publishAuthConfirmed(
+                user.getId(), tenantId,
+                AuditEventTypes.MFA_RESET_BREAK_GLASS,
+                "auth-service",
+                auditActor,
+                "MFA reset by break-glass (no other operator admin)",
+                Map.of("resetBy", auditActor, "reason", reason.strip(), "executedOn", executedOn.strip()),
+                auditTimeout);
+
+        log.warn("MFA reset by break-glass: userId={}, tenant={}, by={}, executedOn={}",
+                user.getId(), tenantId, auditActor, executedOn.strip());
+        return user.getId();
+    }
+
+    private static void requireText(String name, String value, int max) {
+        if (value == null || value.isBlank() || value.strip().length() > max
+                || value.codePoints().anyMatch(MfaService::isUnsafeInLog)) {
+            throw new IllegalArgumentException("break-glass " + name + " is required, at most " + max
+                    + " characters, without control, line-separator or formatting characters");
+        }
+    }
+
+    /**
+     * Characters that could forge or disguise a log line or an audit entry:
+     * control characters, the Unicode line and paragraph separators (U+2028,
+     * U+2029) and formatting characters such as bidi overrides (U+202E);
+     * found in review, as {@code isISOControl} alone misses the last two.
+     */
+    static boolean isUnsafeInLog(int codePoint) {
+        final int type = Character.getType(codePoint);
+        return Character.isISOControl(codePoint)
+                || type == Character.LINE_SEPARATOR
+                || type == Character.PARAGRAPH_SEPARATOR
+                || type == Character.FORMAT;
+    }
+
+    /** The 403 of an admin MFA reset, naming the failed condition like the platform API's. */
+    static String stepUpRefusal(MfaSessionStatusService.Status status) {
+        return switch (status) {
+            case NO_MFA -> "Resetting another user's MFA requires a login that completed MFA: "
+                    + "log in with your authenticator code.";
+            case MFA_TOO_OLD -> "Resetting another user's MFA requires a recent MFA login: "
+                    + "log in again with your authenticator code.";
+            // One answer for both, as the platform API gives (backlog #0-83).
+            case MFA_ENROLLED_TOO_RECENTLY, MFA_NOTICE_NOT_DELIVERED -> "Resetting another user's MFA "
+                    + "requires a second factor you have had for some time (counted from the email "
+                    + "announcing it). Ask another administrator, or try again later.";
+            case ACCEPTED -> throw new IllegalStateException("an accepted session is not refused");
+        };
     }
 
     // ── Verify TOTP ───────────────────────────────────────────────────────
@@ -696,6 +865,32 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
                 user.getId(), tenantId,
                 user.getEmail(), user.getRoleNames(),
                 accessExpiresAt, refreshExpiresAt);
+    }
+
+    /**
+     * Removes the user's factor, shared by {@link #disableMfa} and the
+     * resets. The user's sessions no longer count as MFA-verified, so the
+     * platform API stops accepting them now, not at their next login
+     * (backlog #0-83). The caller queues the email that fits its case.
+     */
+    private void clearFactor(User user, String tenantId) {
+        user.disableMfa();
+        userRepository.save(user);
+        backupCodeRepository.deleteAllByUserId(user.getId());
+        authTokenService.forgetMfaOfAllSessions(user.getId(), tenantId);
+    }
+
+    /**
+     * Shared by {@link #resetMfaByAdmin} and {@link #resetMfaBreakGlass}:
+     * the factor goes, and so does every session and unfinished login of the
+     * user (the usual reason is a compromised account), and the user gets
+     * the "an administrator reset your MFA" email.
+     */
+    private void resetFactorAndSessions(User user, String tenantId) {
+        clearFactor(user, tenantId);
+        authEmailRequestService.requestMfaResetNotification(user);
+        authTokenService.invalidateLoginContinuationTokens(user.getId());
+        authTokenService.invalidateAllRefreshTokens(user.getId());
     }
 
     private void saveBackupCodes(User user, List<String> plainCodes) {

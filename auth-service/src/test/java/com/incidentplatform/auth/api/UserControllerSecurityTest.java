@@ -3,6 +3,7 @@ package com.incidentplatform.auth.api;
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.dto.UserSummaryDto;
+import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.PasswordService;
 import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.auth.service.UserManagementService;
@@ -105,6 +106,9 @@ class UserControllerSecurityTest {
 
     @MockitoBean
     private ResendInviteService resendInviteService;
+
+    @MockitoBean
+    private MfaService mfaService;
 
     @MockitoBean
     private JwtUtils jwtUtils;
@@ -749,6 +753,95 @@ class UserControllerSecurityTest {
                     .given(resendInviteService).resendInvite(USER_ID);
 
             mockMvc.perform(post("/api/v1/users/{id}/resend-invite", USER_ID)
+                            .with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isConflict());
+        }
+    }
+
+    // ── POST /users/{id}/mfa-reset (backlog #0-88) ─────────────────────────
+
+    @Nested
+    @DisplayName("POST /users/{id}/mfa-reset")
+    class ResetMfa {
+
+        @Test
+        @DisplayName("401 unauthenticated")
+        void unauthenticated_returns401() throws Exception {
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID))
+                    .andExpect(status().isUnauthorized());
+            then(mfaService).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("403 for ROLE_RESPONDER, service never called")
+        void responder_returns403() throws Exception {
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
+                            .with(principal("ROLE_RESPONDER")))
+                    .andExpect(status().isForbidden());
+            then(mfaService).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("204 for ROLE_ADMIN, the admin's principal reaches the service")
+        void admin_returns204() throws Exception {
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
+                            .with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isNoContent());
+            then(mfaService).should().resetMfaByAdmin(USER_ID, buildPrincipal("ROLE_ADMIN"));
+        }
+
+        @Test
+        @DisplayName("403 from the service (own account, or no MFA session) reaches the client")
+        void serviceForbidden_returns403() throws Exception {
+            org.mockito.BDDMockito.willThrow(new BusinessException(
+                            ErrorCodes.FORBIDDEN, "requires a login session that completed MFA",
+                            HttpStatus.FORBIDDEN))
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
+                            .with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isForbidden());
+        }
+
+        @Test
+        @DisplayName("404 when the user is not in the tenant")
+        void userNotFound_returns404() throws Exception {
+            org.mockito.BDDMockito.willThrow(new ResourceNotFoundException("User", USER_ID))
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
+                            .with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isNotFound());
+        }
+
+        @Test
+        @DisplayName("429 with Retry-After when a limit refuses, 503 when it cannot be checked (backlog #0-88)")
+        void rateLimited_returns429or503() throws Exception {
+            org.mockito.BDDMockito.willThrow(new com.incidentplatform.auth.ratelimit.RateLimitRefusedException(
+                            new com.incidentplatform.auth.ratelimit.RateLimitDecision(
+                                    com.incidentplatform.auth.ratelimit.RateLimitDecision.Outcome.LIMITED, 120)))
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID).with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isTooManyRequests())
+                    .andExpect(header().string("Retry-After", "120"));
+
+            org.mockito.BDDMockito.willThrow(new com.incidentplatform.auth.ratelimit.RateLimitRefusedException(
+                            new com.incidentplatform.auth.ratelimit.RateLimitDecision(
+                                    com.incidentplatform.auth.ratelimit.RateLimitDecision.Outcome.UNAVAILABLE, 30)))
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID).with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(header().string("Retry-After", "30"));
+        }
+
+        @Test
+        @DisplayName("409 when the user has no MFA")
+        void noMfa_returns409() throws Exception {
+            org.mockito.BDDMockito.willThrow(new BusinessException(
+                            ErrorCodes.BUSINESS_RULE_VIOLATION, "MFA is not enabled", HttpStatus.CONFLICT))
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
                             .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isConflict());
         }

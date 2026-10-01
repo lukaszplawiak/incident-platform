@@ -43,18 +43,15 @@ public class PasswordService {
     private final AuthTokenService authTokenService;
     private final PasswordEncoder passwordEncoder;
     private final AuditEventPublisher auditEventPublisher;
-    private final MfaService mfaService;
 
     public PasswordService(UserRepository userRepository,
                            AuthTokenService authTokenService,
                            PasswordEncoder passwordEncoder,
-                           AuditEventPublisher auditEventPublisher,
-                           MfaService mfaService) {
+                           AuditEventPublisher auditEventPublisher) {
         this.userRepository  = userRepository;
         this.authTokenService = authTokenService;
         this.passwordEncoder = passwordEncoder;
         this.auditEventPublisher = auditEventPublisher;
-        this.mfaService = mfaService;
     }
 
 
@@ -67,12 +64,17 @@ public class PasswordService {
      *   <li>Invalidates all refresh tokens — forces re-login on all devices.
      *       This ensures that if an attacker had active sessions via a
      *       compromised account, they are terminated immediately.</li>
-     *   <li>Backlog #0-83: removes a second factor enabled within the grace
-     *       period ({@link MfaService#removeFactorEnrolledWithinGrace}), the
-     *       remedy the MFA_ENABLED email names when the enrolment was not the
-     *       owner's, and invalidates unfinished logins (MFA session and MFA
-     *       setup tokens).</li>
+     *   <li>Backlog #0-83: invalidates unfinished logins (MFA session and MFA
+     *       setup tokens) and discards an MFA setup begun but not enabled.</li>
      * </ol>
+     *
+     * <h2>Never touches the second factor (backlog #0-88)</h2>
+     * #0-83 made a reset remove a factor still within the grace period, the
+     * only remedy then for a factor someone else enrolled with the owner's
+     * password. That let a mailbox alone undo a fresh factor, which mature
+     * systems never allow (NIST SP 800-63B: recovery must not lower the
+     * assurance level). A reset now keeps MFA; an admin of the tenant resets
+     * it instead ({@link MfaService#resetMfaByAdmin}).
      *
      * @param request token + new password
      * @throws com.incidentplatform.shared.exception.BusinessException
@@ -93,7 +95,6 @@ public class PasswordService {
         user.discardPendingMfaSecret();
         userRepository.save(user);
 
-        mfaService.removeFactorEnrolledWithinGrace(user, token.getTenantId());
         // Backlog #0-83: a half-finished login of whoever had the old password
         // (an MFA session or MFA setup token) must not survive the reset either.
         authTokenService.invalidateLoginContinuationTokens(user.getId());

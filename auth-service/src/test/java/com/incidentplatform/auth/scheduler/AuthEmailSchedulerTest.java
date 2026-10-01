@@ -188,6 +188,21 @@ class AuthEmailSchedulerTest {
         }
 
         @Test
+        @DisplayName("routes an admin's MFA reset notice to its own template (backlog #0-88)")
+        void sendsMfaResetNotice() {
+            final AuthEmailOutbox reset = entry("user@firma.pl", AuthEmailType.MFA_RESET, Duration.ofHours(24));
+            duePending(reset);
+            given(persistenceService.prepareAttempt(any(), any(), any())).willReturn(new Attempt.Send(null, null));
+            given(persistenceService.recordSent(any(), any())).willReturn(true);
+
+            scheduler.processPending();
+
+            then(emailService).should().sendMfaResetNotification("user@firma.pl", reset.getCreatedAt());
+            assertThat(count(AuthEmailScheduler.SEND_COUNTER, "type", "MFA_RESET", "outcome", "sent"))
+                    .isEqualTo(1.0);
+        }
+
+        @Test
         @DisplayName("an entry closed by someone else after the send still counts the email as sent")
         void sentButAlreadyClosed() {
             final AuthEmailOutbox entry = invite();

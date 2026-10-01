@@ -13,7 +13,9 @@ import java.util.UUID;
 
 /**
  * Whether a login session has a second factor the platform API accepts
- * (backlog #0-83), for {@code PlatformAccess}.
+ * (backlog #0-83), for {@code PlatformAccess}, and the same rule for an
+ * admin resetting another user's MFA ({@code MfaService#resetMfaByAdmin},
+ * backlog #0-88).
  *
  * <h2>Three conditions</h2>
  * <ol>
@@ -29,8 +31,9 @@ import java.util.UUID;
  *       could enrol a factor of their own (found in the review of #0-83).
  *       Every enable and disable emails the account ({@code MfaService},
  *       outbox types MFA_ENABLED / MFA_DISABLED); the grace period gives the
- *       real owner that long to react, and a password reset by email within
- *       it removes the new factor ({@code MfaService#removeFactorEnrolledWithinGrace}).
+ *       real owner that long to react: reset the password, then have an admin
+ *       reset the factor ({@code MfaService#resetMfaByAdmin}, backlog #0-88;
+ *       a password reset never touches MFA).
  *       Counting from the notice, not from the enrolment, gives the owner the
  *       whole period also when SMTP delayed it, and an undeliverable notice
  *       keeps the factor out (all found in review). The fact is kept on the
@@ -116,8 +119,8 @@ public class MfaSessionStatusService {
     /**
      * Whether a factor whose notice was sent at {@code noticeSentAt} has passed
      * the grace period. A factor that has not (or whose notice was never
-     * sent) is still "fresh": the platform API refuses it, and a password
-     * reset removes it ({@code MfaService#removeFactorEnrolledWithinGrace}).
+     * sent) is still "fresh": the platform API refuses it. (A password reset
+     * no longer removes it; an admin MFA reset does, backlog #0-88.)
      */
     public boolean isEstablished(Instant noticeSentAt, Instant now) {
         return noticeSentAt != null && !noticeSentAt.isAfter(now.minus(enrolmentGrace));

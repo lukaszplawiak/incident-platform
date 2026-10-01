@@ -83,11 +83,11 @@ class PlatformRateLimiterTest {
             final PlatformRateLimiter limiter = new PlatformRateLimiter(proxyManager, 2, 1000, meters);
             final UUID operator = UUID.randomUUID();
 
-            assertThat(limiter.tryConsume(operator).outcome()).isEqualTo(PlatformRateLimiter.Outcome.ALLOWED);
-            assertThat(limiter.tryConsume(operator).outcome()).isEqualTo(PlatformRateLimiter.Outcome.ALLOWED);
-            final PlatformRateLimiter.Decision third = limiter.tryConsume(operator);
+            assertThat(limiter.tryConsume(operator).outcome()).isEqualTo(RateLimitDecision.Outcome.ALLOWED);
+            assertThat(limiter.tryConsume(operator).outcome()).isEqualTo(RateLimitDecision.Outcome.ALLOWED);
+            final RateLimitDecision third = limiter.tryConsume(operator);
 
-            assertThat(third.outcome()).isEqualTo(PlatformRateLimiter.Outcome.LIMITED);
+            assertThat(third.outcome()).isEqualTo(RateLimitDecision.Outcome.LIMITED);
             // 2 per hour, refilled gradually: the next one is about 30 minutes away.
             assertThat(third.retryAfterSeconds()).isBetween(1L, 1800L);
             assertThat(rejected(meters, "operator")).isEqualTo(1);
@@ -107,10 +107,10 @@ class PlatformRateLimiterTest {
             assertThat(limiter.tryConsume(first).allowed()).isTrue();
             assertThat(limiter.tryConsume(first).allowed()).isTrue();
             assertThat(limiter.tryConsume(second).allowed()).isTrue();
-            final PlatformRateLimiter.Decision fourth = limiter.tryConsume(second);
+            final RateLimitDecision fourth = limiter.tryConsume(second);
 
             assertThat(fourth.outcome()).as("second operator is within their own limit, the platform is not")
-                    .isEqualTo(PlatformRateLimiter.Outcome.LIMITED);
+                    .isEqualTo(RateLimitDecision.Outcome.LIMITED);
             // 3 per hour, refilled gradually: the next one is about 20 minutes away.
             assertThat(fourth.retryAfterSeconds()).isBetween(1L, 1200L);
             assertThat(rejected(meters, "global")).isEqualTo(1);
@@ -225,8 +225,8 @@ class PlatformRateLimiterTest {
 
         private void refusesFiveTimesThenOpens() {
             for (int i = 0; i < 5; i++) {
-                final PlatformRateLimiter.Decision decision = limiter.tryConsume(UUID.randomUUID());
-                assertThat(decision.outcome()).as("call %d", i).isEqualTo(PlatformRateLimiter.Outcome.UNAVAILABLE);
+                final RateLimitDecision decision = limiter.tryConsume(UUID.randomUUID());
+                assertThat(decision.outcome()).as("call %d", i).isEqualTo(RateLimitDecision.Outcome.UNAVAILABLE);
                 assertThat(decision.retryAfterSeconds()).isEqualTo(PlatformRateLimiter.UNAVAILABLE_RETRY_AFTER_SECONDS);
             }
             assertThat(breaker().getState()).as("after 5 failures (application.yml thresholds)")
@@ -234,7 +234,7 @@ class PlatformRateLimiterTest {
 
             org.mockito.Mockito.clearInvocations(proxyManager);
             assertThat(limiter.tryConsume(UUID.randomUUID()).outcome())
-                    .isEqualTo(PlatformRateLimiter.Outcome.UNAVAILABLE);
+                    .isEqualTo(RateLimitDecision.Outcome.UNAVAILABLE);
             org.mockito.Mockito.verifyNoInteractions(proxyManager);
         }
 
