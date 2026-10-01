@@ -11,8 +11,9 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm";  -- full text search helper
 
 -- ============================================================
 -- Notes on permissions (important for Row-Level Security in E#1):
--- incident_app is the application user — it is NOT a superuser
--- this ensures RLS will work correctly once we add it
+-- incident_app is the application user. docker-compose creates it through
+-- POSTGRES_USER, which the official image documents as a superuser, so grants
+-- and RLS would not bind it (backlog #0-78).
 -- ============================================================
 
 -- Ensure that the incident_app user has the appropriate privileges

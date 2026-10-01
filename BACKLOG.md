@@ -42,7 +42,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
-| [0-29](#0-29-staging-and-prod-k8s-overlays-are-wholesale-swapped-not-just-their-namespace) | staging and prod k8s overlays are wholesale swapped, not just their `namespace:` | bug | Low | Open |
+| [0-29](#0-29-staging-and-prod-k8s-overlays-are-wholesale-swapped-not-just-their-namespace) | staging and prod k8s overlays are wholesale swapped, not just their `namespace:` | bug | Medium | Open |
 | [0-31](#0-31-auth-service-identityconfig-split-evaluated-and-deferred) | auth-service identity/config split — evaluated and deferred | design | Low | Open |
 | [0-32](#0-32-no-notification-channel-is-retried-after-a-failed-send) | No notification channel is retried after a failed send | design | Medium | Open |
 | [0-33](#0-33-unify-caching-on-caffeine-once-a-third-cache-appears) | Unify caching on Caffeine once a third cache appears | tech-debt | Low | Open |
@@ -64,6 +64,21 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-56](#0-56-forgot-password-leaks-whether-an-account-exists-through-response-time) | forgot-password leaks whether an account exists through response time | design | Medium | Open |
 | [0-58](#0-58-shareds-kafka-tenant-classes-have-no-tests-of-their-own) | `shared`'s Kafka tenant classes have no tests of their own | tech-debt | Medium | Open |
 | [0-62](#0-62-any-github-action-from-the-marketplace-is-allowed-to-run) | Any GitHub Action from the Marketplace is allowed to run | ci | Low | Open |
+| [0-64](#0-64-kubernetes-pods-run-without-a-securitycontext) | Kubernetes pods run without a `securityContext` | design | Medium | Open |
+| [0-65](#0-65-no-networkpolicy-every-pod-can-reach-every-other-pod) | No NetworkPolicy: every pod can reach every other pod | design | Medium | Open |
+| [0-66](#0-66-data-stores-in-kubernetes-have-no-authentication-or-tls-and-the-db-password-is-baked-into-every-service) | Data stores in Kubernetes have no authentication or TLS, and the DB password is baked into every service | design | Medium | Open |
+| [0-67](#0-67-all-seven-services-share-one-database-role) | All seven services share one database role | design | Medium | Open |
+| [0-68](#0-68-sast-has-never-run-snyk-code-is-not-enabled-and-codeql-is-not-set-up) | SAST has never run: Snyk Code is not enabled, and CodeQL is not set up | ci | Medium | Open |
+| [0-69](#0-69-the-snyk-dependency-scan-fails-on-every-run-so-a-new-finding-changes-nothing) | The Snyk dependency scan fails on every run, so a new finding changes nothing | ci | Medium | Open |
+| [0-70](#0-70-built-images-are-not-scanned-and-no-sbom-is-produced) | Built images are not scanned, and no SBOM is produced | ci | Low | Open |
+| [0-71](#0-71-kubernetes-and-compose-images-use-mutable-tags-and-some-are-not-tracked-by-renovate) | Kubernetes and compose images use mutable tags, and some are not tracked by Renovate | tech-debt | Low | Open |
+| [0-72](#0-72-docker-compose-publishes-every-port-on-all-interfaces-with-default-credentials) | docker-compose publishes every port on all interfaces, with default credentials | tech-debt | Low | Open |
+| [0-73](#0-73-swagger-ui-and-the-openapi-document-are-public-in-every-profile) | Swagger UI and the OpenAPI document are public in every profile | tech-debt | Low | Open |
+| [0-74](#0-74-no-way-to-report-a-vulnerability-privately) | No way to report a vulnerability privately | docs | Low | Open |
+| [0-75](#0-75-the-ingress-has-no-tls) | The Ingress has no TLS | design | Low | Open |
+| [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
+| [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
+| [0-78](#0-78-the-application-database-role-is-a-postgres-superuser) | The application database role is a Postgres superuser | bug | High | Open |
 
 ---
 
@@ -373,7 +388,10 @@ mind: the audit events are the compliance record, the queue is a work queue.
 
 ### 0-29. staging and prod k8s overlays are wholesale swapped, not just their `namespace:`
 
-**Type:** bug · **Priority:** Low · **Status:** Open
+**Type:** bug · **Priority:** Medium · **Status:** Open
+
+**Priority raised from Low (2026-09-30 audit):** together with #0-63 it decided what a prod deployment would
+really run; #0-63 is fixed, this one still sends "prod" to the staging namespace with staging images.
 
 **Problem.** `k8s/overlays/staging/kustomization.yml` and `k8s/overlays/prod/kustomization.yml` each contain the
 *other* environment's whole configuration, not just a swapped `namespace:` field. The file in `staging/` sets
@@ -880,6 +898,273 @@ README "Infrastructure Hardening", since the setting is invisible in diffs. It t
 `sha_pinning_required` (on since #0-60), and GitHub's docs do not say what omitting it does: send
 `sha_pinning_required=true` with it and re-read the settings afterwards, so narrowing the allowed
 actions does not switch SHA pinning off.
+
+---
+
+### 0-64. Kubernetes pods run without a `securityContext`
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** No Deployment or StatefulSet in `k8s/base` sets a pod or container `securityContext`, and the namespace
+(`k8s/base/namespace/namespace.yml`) carries no Pod Security Admission label. The service images already run as a
+non-root user (`USER appuser` in every Dockerfile), but nothing in the manifests enforces it, so an image that drops
+that line would run as root unnoticed. Containers also keep the default capabilities, may escalate privileges, have a
+writable root filesystem and no seccomp profile, and every pod gets the namespace's service account token mounted
+although no service calls the Kubernetes API.
+
+**Approach.** Label the namespace `pod-security.kubernetes.io/enforce: restricted` (and `warn`/`audit`), then give every
+workload `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`,
+`seccompProfile.type: RuntimeDefault`, `readOnlyRootFilesystem: true` with an `emptyDir` for `/tmp` (the JVM and
+Tomcat write there), and `automountServiceAccountToken: false`. Postgres, Redis and Kafka need their own check: their
+images expect to write to their data directories and some start as root.
+
+---
+
+### 0-65. No NetworkPolicy: every pod can reach every other pod
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** `k8s/` has no NetworkPolicy, so the namespace is flat: any pod reaches Postgres, Redis, Kafka, every
+service's management port (8091–8097) and incident-service's `/dev/**` wherever the dev profile is on. One compromised
+or misbehaving pod can use all of them. This is what made #0-63 exploitable from inside the cluster even though the
+Ingress does not route `/dev`.
+
+**Approach.** A default-deny policy for ingress (and later egress) in the namespace, then explicit allows: the Ingress
+controller to the API ports, each service to the data stores it uses (auth-service and ingestion-service to Redis,
+everything but oncall-service to Kafka, all services to Postgres), service-to-service calls that exist
+(notification → incident, oncall, auth; escalation → oncall; ingestion → auth; postmortem-service has an
+`incident-service.base-url` setting but no code calls it), and the
+monitoring namespace to the management ports. Egress default-deny also needs DNS (kube-dns) for every pod and the
+external calls: postmortem-service to the Gemini API, notification-service to Slack, the SMTP server and the SMS
+provider, auth-service to the SMTP server. Needs a CNI that enforces NetworkPolicy; Minikube's default does not.
+
+---
+
+### 0-66. Data stores in Kubernetes have no authentication or TLS, and the DB password is baked into every service
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.**
+- **Redis** (`k8s/base/infrastructure/redis.yml`) runs `redis-server --appendonly yes` with no password. It holds
+  the token revocation list and the rate-limit buckets, so any pod can un-revoke a token or reset a limit.
+- **Kafka** (`kafka.yml`) listens `PLAINTEXT` with no SASL and no ACLs. Any pod can produce to `alerts.raw` or
+  `incidents.lifecycle` with any `X-Tenant-Id`, and consumers trust that header (#0-39).
+- **Postgres**: `postgresql-secret.yml` in the base ships the password `incident_secret` for every overlay, and no
+  Deployment passes `DB_PASSWORD` to the services. Each one connects with the default in its own `application.yml`
+  (`${DB_PASSWORD:incident_secret}`, six services), so changing the database password breaks every service until
+  the code changes. Compare `JWT_SECRET`, which has no default and stops startup when missing.
+- No connection to any of the three uses TLS.
+
+**Approach.** Remove the `DB_PASSWORD` default (fail fast, as for `JWT_SECRET`) and pass it from a Secret in every
+Deployment. Move `postgresql-secret` out of the base into the overlays (dev keeps a dev value). Redis `requirepass`
+(or ACL users) from a Secret, wired to `REDIS_PASSWORD`, which the services already read. Kafka SASL/SCRAM with a
+user per service and ACLs per topic, which also closes the forged-header path. TLS on all three once a certificate
+source exists (#0-75). Pairs with #0-67.
+
+---
+
+### 0-67. All seven services share one database role
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** Every service connects as `incident_app`, which `docker/init.sql` grants `ALL` on the `public` schema and
+on all future tables (the role is also a superuser, which makes every grant moot: #0-78). That each service owns its
+own tables (CLAUDE.md "Persistence") is a convention; the database does not enforce it. A SQL injection or code execution bug in any service, including the least trusted ones
+(postmortem-service handles LLM output), can read and write auth-service's tables: Argon2 password hashes, encrypted
+MFA and Slack secrets, API key hashes, auth tokens.
+
+**Approach.** Builds on #0-78 (a non-superuser `incident_app`). One role per service that owns its tables and its
+Flyway history table, with no rights on other services' tables; a separate migration role if Flyway should not run as the runtime role. Existing tables need an
+ownership transfer migration per service. Decide whether each service gets its own schema (cleaner grants,
+`search_path` per role) or stays in `public` with per-table grants.
+
+---
+
+### 0-68. SAST has never run: Snyk Code is not enabled, and CodeQL is not set up
+
+**Type:** ci · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** The `snyk-code` job in `snyk.yml` fails on every run with `403 Snyk Code is not enabled (SNYK-CODE-0005)`
+(verified on the #0-61 dispatch run), and `continue-on-error: true` shows it as a success. No SARIF is produced, so
+the Security tab has never had a code-scanning result, while README describes the job as "static analysis of Java
+source code". GitHub's CodeQL, free for public repositories, is not configured (`code-scanning/default-setup`:
+`not-configured`, languages `actions`, `java-kotlin`).
+
+**Approach.** Enable CodeQL default setup (Java and Actions; the Actions queries also check workflows for injection
+and permission problems), then remove the `snyk-code` job, or enable Snyk Code on the account if a second SAST engine
+is wanted. Correct README "Security Scanning" either way.
+
+---
+
+### 0-69. The Snyk dependency scan fails on every run, so a new finding changes nothing
+
+**Type:** ci · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** `snyk test --severity-threshold=high` reports 42 issues (run of 2026-09-30; 37–45 on earlier runs), so the
+dependency job is red on every push to `main` and every weekly run. A red job that is always red carries no signal: a
+new critical CVE would not change its status. OWASP Dependency-Check, by contrast, is green.
+
+The existing `.snyk` ignores are not a sound baseline either. The Tomcat entries (comment at `.snyk:22`, reasons at
+lines 30, 38 and 125) justify the risk with "All endpoints require JWT authentication. No unauthenticated access",
+which is false: login, health, Swagger (#0-73) and the Slack webhook are public, and ingestion-service takes API keys,
+not JWTs. It would not be a mitigation even if it were true, since a Tomcat CVE is reached at the HTTP layer, before
+any Spring Security filter runs. The same false claim was in `owasp-suppressions.xml`'s DOMPurify note, corrected
+on 2026-10-01.
+
+**Approach.** Triage each finding: upgrade where a fixed version exists (overrides go in the root `pom.xml` properties
+with the CVE named, per CLAUDE.md), suppress in `.snyk` with a reason and an expiry where the vulnerable code is not
+reachable, until the job is green; then keep it green. Re-check every existing `.snyk` ignore the same way and rewrite
+the Tomcat reasons on what actually limits exposure (which Tomcat feature the CVE needs and whether the services use
+it), or drop the ignore where nothing does.
+
+---
+
+### 0-70. Built images are not scanned, and no SBOM is produced
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** OWASP Dependency-Check and Snyk scan the Maven dependency tree only. The operating system packages of the
+`eclipse-temurin:*-jre-alpine` runtime images, and the JRE itself, are scanned by nothing. CI builds all seven images
+(`push: false`) but does not scan them, and no SBOM records what an image contains.
+
+**Approach.** Scan each built image in the Docker job (Trivy or Grype, pinned by version and checksum like the Snyk CLI,
+#0-61), failing on fixable high and critical findings, and emit an SBOM (Syft or `docker buildx` attestations) as a
+build artifact.
+
+---
+
+### 0-71. Kubernetes and compose images use mutable tags, and some are not tracked by Renovate
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.**
+- The service Deployments in `k8s/base` use `image: <service>:latest` with `imagePullPolicy: IfNotPresent`; the
+  overlays replace the tag with `dev`, `staging` or `1.0.0`, all mutable, so a node can keep running an old image
+  under the same tag.
+- Third-party images in `k8s/` are not tracked by Renovate, whose `kubernetes` manager needs file patterns that
+  `renovate.json` does not set: `apache/kafka:3.7.0` (compose runs 3.9.2), `redis:7-alpine`, `postgres:16-alpine`,
+  `busybox:1.36`.
+- `docker/docker-compose.yml` uses `:latest` for `provectuslabs/kafka-ui`, `danielqsj/kafka-exporter`,
+  `dpage/pgadmin4` and `grafana/grafana`.
+
+**Approach.** Pin every third-party image to a version tag (and a digest where Renovate can keep it current), enable
+Renovate's `kubernetes` manager for `k8s/**/*.yml`, and deploy service images by immutable tag (the commit SHA) or
+digest once a registry exists.
+
+---
+
+### 0-72. docker-compose publishes every port on all interfaces, with default credentials
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** Every `ports:` entry in `docker/docker-compose.yml` has the form `"5432:5432"`, which binds `0.0.0.0`,
+so on any shared network (office, café) other machines reach Postgres (`incident_secret`), Redis (no password), Kafka
+(plaintext), pgAdmin and Grafana (both `admin`/`admin`), Prometheus (with `--web.enable-lifecycle`, which lets anyone
+reload or shut it down), Alertmanager and every service's management port. Docker's port publishing also bypasses
+host firewalls such as `ufw`.
+
+**Approach.** Prefix every published port with `127.0.0.1:`. Services talk to each other on the compose network and
+need no published ports for that; only the ports a developer opens in a browser or a client need publishing.
+
+---
+
+### 0-73. Swagger UI and the OpenAPI document are public in every profile
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** `SharedSecurityAutoConfiguration.PUBLIC_PATHS` permits `/v3/api-docs/**`, `/swagger-ui/**` and
+`/swagger-ui.html` in every service and profile, and springdoc runs with its defaults (enabled) in every service that
+has it: auth, ingestion, incident, notification, oncall and postmortem. escalation-service has no HTTP API and no springdoc. An unauthenticated caller gets the full API description of each of those services, including internal
+endpoints. The Ingress routes only `/api/v1/*` and
+`/ws` today, which hides it from outside the cluster, but that is a routing detail, not a control.
+
+**Approach.** Disable springdoc outside `local`/`dev` (`springdoc.api-docs.enabled=false`,
+`springdoc.swagger-ui.enabled=false` by default, enabled in those profiles). Those properties go in each of the six
+services' `application.yml` (and a dev-profile file where the k8s dev overlay should show the docs). The public paths
+are in `shared`'s `PUBLIC_PATHS`, so dropping them, or permitting them only when springdoc is enabled, changes all
+seven services at once.
+
+---
+
+### 0-74. No way to report a vulnerability privately
+
+**Type:** docs · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** The repository is public but has no `SECURITY.md`, private vulnerability reporting is off
+(`private-vulnerability-reporting`: `enabled: false`), and Dependabot alerts are off (`vulnerability-alerts`: 404).
+Someone who finds a vulnerability has only public issues to report it in, and GitHub's own advisory matching does not
+alert on the dependency graph. Renovate updates dependencies but is not an alerting channel.
+
+**Approach.** Add `SECURITY.md` (supported versions, how to report, expected response), turn on private vulnerability
+reporting and Dependabot alerts (alerts only; Renovate keeps doing the updates).
+
+---
+
+### 0-75. The Ingress has no TLS
+
+**Type:** design · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** `k8s/base/infrastructure/ingress.yml` has no `tls:` section, so login requests, JWTs and Integration API
+keys cross the network in plain text, and the HSTS header every service sends is ignored by browsers over HTTP.
+
+**Approach.** A `tls:` block per overlay with a certificate from cert-manager (or the cloud provider's), and
+`nginx.ingress.kubernetes.io/ssl-redirect: "true"`. The dev overlay can keep plain HTTP on Minikube.
+
+---
+
+### 0-76. kubeconform is installed from `releases/latest`, unpinned and unchecked
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found while fixing #0-63)
+
+**Problem.** The `validate-k8s-manifests` job in `ci.yml` downloads
+`https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz` and pipes it into
+`tar`: whatever release is latest at that moment, with no checksum. The same class of problem as #0-61, with less at
+stake (that job has no secrets and a read-only token), but a new release can still change results with no change in
+this repository.
+
+**Approach.** Pin the version and verify the archive's SHA-256 (published in the release's `CHECKSUMS` file), as
+`snyk.yml` does for the Snyk CLI.
+
+---
+
+### 0-77. Should `/dev/token` require an explicit switch as well as the dev profile?
+
+**Type:** design · **Priority:** Low · **Status:** Open (from the review of #0-63)
+
+Not a committed fix: decide first whether it is worth doing.
+
+**Problem.** `DevTokenController` exists whenever the `local` or `dev` profile is active, and its startup guard only
+rejects a missing profile. #0-63 showed that one wrong line in a shared ConfigMap is enough to give a production
+deployment the dev profile. Since #0-63 the CI check on the rendered overlays catches that, but it is a tripwire for
+accidents in `k8s/`, not a property of the application.
+
+**Approach, if taken.** Require an explicit property on top of the profile (for example
+`dev.token-endpoint.enabled=true`, `@ConditionalOnProperty`), set only by `application-local.yml` and the dev overlay.
+Against: a second setting to keep in sync for a dev-only convenience, and the profile check plus the CI check may be
+enough. Decide before implementing.
+
+---
+
+### 0-78. The application database role is a Postgres superuser
+
+**Type:** bug · **Priority:** High · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+
+**Problem.** Both docker-compose and `k8s/base/infrastructure/postgresql.yml` create `incident_app`, the role every
+service connects as, through the official image's `POSTGRES_USER`, which the image documents as creating a user
+"with superuser power". `docker/init.sql` said "incident_app is NOT a superuser", so the setup does not do what it
+was meant to (not checked on a running database during the audit, since Docker was down;
+`SELECT rolsuper FROM pg_roles WHERE rolname = 'incident_app'` confirms it). A superuser ignores every grant (so
+#0-67's per-service roles would change nothing while this stands) and Row-Level Security, and can run
+`COPY ... PROGRAM`: a SQL injection in any of the seven services, including the least trusted ones
+(postmortem-service handles LLM output), is command execution in the database container, with its network access
+and its volume. No SQL injection is known; the queries are JPA or parameterised. The priority is about the blast
+radius of the first one.
+
+**Approach.** Give the image's superuser its own name and password (from a Secret, not committed), used only for
+administration. `docker/init.sql` creates `incident_app` with `NOSUPERUSER NOCREATEDB NOCREATEROLE` and its own
+password (k8s runs no init script at all today: mount it from a ConfigMap into `/docker-entrypoint-initdb.d`), and grants it what Flyway and the services need today. The services keep
+connecting as `incident_app`, so no service config changes. Existing local volumes need `make dev-reset` (no
+production data yet). Smaller than and independent of #0-67; do this first. Pairs with #0-66 (the password itself).
 
 ---
 

@@ -269,8 +269,10 @@ All Kafka topics are multi-tenant. `TenantKafkaProducerInterceptor` adds `X-Tena
 
 ## Infrastructure Hardening
 
-What protects the platform around its application code. Application-level controls
-(authentication, tenant isolation, rate limiting) are in [Resilience & Security](#resilience--security).
+What protects the platform around its application code, area by area, with what is still missing at the end.
+It is an inventory from the security audit of 2026-09-30: every item says where it lives, so it can be checked
+against the code. Application-level controls are described in detail in [Resilience & Security](#resilience--security);
+the summary below only places them.
 
 ### GitHub and CI
 
@@ -326,12 +328,98 @@ in Settings).
 - Security scanning and dependency updates: see [Security Scanning](#security-scanning) and
   [Dependency Updates — Renovate](#dependency-updates--renovate) in CI/CD.
 
-**Not done yet**
+### Container images
 
-- Any Marketplace action is allowed to run (`allowed_actions: all`), instead of GitHub's own plus
-  an explicit list — backlog #0-62.
-- No status check is required before merging to `main`: the ruleset has no required checks, so a
-  red CI run does not block a merge. Making the smoke test a required check is backlog #0-2.
+- **Multi-stage builds**: each service's Dockerfile builds with the JDK image and ships only the JRE image
+  (`eclipse-temurin:<version>-jre-alpine`) and the service jar, without Maven, sources or the build cache.
+- **Non-root**: every image creates `appuser` and runs as `USER appuser`; the jar is owned by that user.
+- **Pinned base images**: builder and runtime images carry an exact version tag, which Renovate updates (all
+  Dockerfile updates grouped into one PR).
+- **Container-aware JVM**: `-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0`, so the heap follows the
+  container's memory limit instead of the node's.
+
+### Kubernetes
+
+- **Secrets outside the ConfigMap**: `JWT_SECRET`, `MFA_ENCRYPTION_KEY`, `SLACK_ENCRYPTION_KEY`,
+  `SLACK_SIGNING_SECRET` and `GEMINI_API_KEY` come from the `app-secrets` Secret, one `secretKeyRef` per key, and
+  each Deployment receives only the keys it uses (the MFA and Slack encryption keys reach only auth-service). The
+  overlays' `secrets.yml` hold placeholders for staging and prod, with External Secrets or Sealed Secrets as the
+  intended source. The database password is the exception: see backlog #0-66.
+- **Narrow Ingress**: routes only `/api/v1/*` and `/ws`. Actuator endpoints, the management ports, Swagger and
+  `/dev/**` are not routed.
+- **Rate limiting at the edge**: per-client-IP limits on the Ingress (`limit-rps`, `limit-rpm`,
+  `limit-connections`), in front of the application's own bucket4j limits.
+- **Resource limits and probes**: every Deployment sets CPU and memory requests and limits, and readiness and
+  liveness probes on the management port.
+- **No dev profile outside dev** (backlog #0-63): only `k8s/overlays/dev` sets `SPRING_PROFILES_ACTIVE`, and CI
+  fails if the rendered staging or prod overlay sets any Spring profile. The base used to set `dev` for every
+  overlay, which would have exposed incident-service's unauthenticated `/dev/token` in prod.
+- **Schema validation**: CI renders base and all three overlays and validates them with `kubeconform -strict`.
+
+### Data stores
+
+- **Passwords and secrets at rest**: user passwords are Argon2 hashes; TOTP secrets and tenants' Slack bot tokens
+  are encrypted with AES-GCM under two separate keys; Integration API keys are stored as SHA-256 hashes only;
+  emailed credentials are never stored raw.
+- **Schema changes only through migrations**: each service has its own Flyway history table and
+  `ddl-auto: validate`, so an unmigrated change fails startup instead of altering the schema.
+- **Redis persistence**: append-only file on, so revoked tokens and dedup keys survive a Redis restart.
+
+### Application
+
+Summary; details in [Resilience & Security](#security).
+
+- **Authentication**: JWT HS512 with a secret of at least 64 bytes and no default; login brute-force protection
+  (per tenant and email, 10-minute window, 15-minute lockout); TOTP MFA; revocation of refresh tokens.
+- **Service identity**: service tokens carry the tenant as a signed claim and an `aud` naming the one service that
+  accepts them; the only tenant-less token is the API-key introspection purpose token, accepted on one route.
+- **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
+- **HTTP**: stateless sessions, CORS allow-list, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy;
+  ingestion payloads capped at 1 MB; Slack requests verified by signature; WebSocket authenticated at `CONNECT`.
+- **Actuator**: only `health`, `info` and `prometheus`, on a separate management port, health details only when
+  authorized.
+
+### Local stack (docker-compose)
+
+Built for a developer machine, not for a shared host: default credentials (`incident_secret`, `admin`/`admin`) are
+expected there. What it does protect: the monitoring stack's secrets (the operator tenant's Integration API key, the
+dead man's switch URL) live in `docker/secrets/`, which is gitignored as a whole and mounted read-only; every email
+goes to Mailpit, never to a real address.
+
+### Not done yet
+
+Open items from the audit and earlier, most important first within each area. Each one is described in
+[BACKLOG.md](BACKLOG.md).
+
+- **Kubernetes**
+  - Pods run without a `securityContext` and the namespace has no Pod Security Admission label: backlog #0-64.
+  - No NetworkPolicy, so every pod reaches every data store and management port: backlog #0-65.
+  - The staging and prod overlays are swapped, so "prod" deploys to the staging namespace: backlog #0-29.
+  - The Ingress has no TLS: backlog #0-75.
+- **Data stores**
+  - Redis has no password, Kafka no SASL/ACLs, nothing uses TLS, and the services connect to Postgres with a
+    default password baked into their config: backlog #0-66.
+  - All seven services share one database role with rights on every table: backlog #0-67.
+  - That role is created through `POSTGRES_USER`, which the official image makes a superuser (from the image's
+    documentation, not yet checked on a running database), so a SQL injection in any service would be command
+    execution in the database container: backlog #0-78.
+- **GitHub and CI**
+  - No static analysis has ever run: Snyk Code is not enabled and CodeQL is not set up: backlog #0-68.
+  - The Snyk dependency scan is red on every run, so a new finding changes nothing, and the Tomcat ignores in `.snyk`
+    rest on a false "all endpoints require JWT" claim: backlog #0-69.
+  - No status check is required before merging to `main`: backlog #0-2.
+  - Any Marketplace action is allowed to run (`allowed_actions: all`): backlog #0-62.
+  - kubeconform is installed unpinned from `releases/latest`: backlog #0-76.
+- **Container images**
+  - Built images are not scanned and no SBOM is produced: backlog #0-70.
+  - Mutable image tags in k8s and compose, and k8s third-party images not tracked by Renovate: backlog #0-71.
+- **Application**
+  - Swagger UI and the OpenAPI documents are public in every profile: backlog #0-73.
+  - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
+- **Project**
+  - No `SECURITY.md`, no private vulnerability reporting, no Dependabot alerts: backlog #0-74.
+- **Local stack**
+  - Every docker-compose port is published on all interfaces: backlog #0-72.
 
 ---
 
@@ -441,16 +529,19 @@ Checkout → Java 21 setup → Run dependency-check:aggregate → Upload HTML re
 
 ```
 Job A: Dependency scan → SARIF upload to GitHub Security tab
-Job B: Code scan (SAST) → SARIF upload to GitHub Security tab
+Job B: Code scan (SAST) → SARIF upload to GitHub Security tab (not running, backlog #0-68)
 ```
 
 - **Dependency scan**: scans `pom.xml` against Snyk vulnerability database — adds fix
   suggestions and exploit maturity data on top of OWASP
 - **Code scan (SAST)**: static analysis of Java source code for security issues —
   SQL injection, XXE, path traversal, insecure deserialization, hardcoded secrets
+  — **not running yet**: every run ends in `403 Snyk Code is not enabled`, hidden by
+  `continue-on-error`, so no SAST result has ever been produced (backlog #0-68)
 - Results visible in **Security → Code scanning alerts** in GitHub without opening CI logs
-- Dependency scan failures block the build; SAST findings are reported as alerts only
-  (manual review required before enforcing)
+- Dependency scan failures fail the workflow, but it is red on every run today, so a new finding changes
+  nothing (backlog #0-69), and no check is required to merge (backlog #0-2); SAST findings are reported as
+  alerts only (manual review required before enforcing)
 - Unfixable CVEs documented in `.snyk` with reason and expiry date
 - The CLI is a pinned standalone binary, checksum-verified before it runs, and the token reaches
   only the scan step (backlog #0-61, see [Infrastructure Hardening](#infrastructure-hardening))
