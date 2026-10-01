@@ -37,6 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 
@@ -53,12 +55,15 @@ class MfaServiceTest {
     @Mock private AuditEventPublisher auditEventPublisher;
     @Mock private JwtUtils jwtUtils;
     @Mock private BruteForceProtectionService bruteForceProtectionService;
+    @Mock private AuthEmailRequestService authEmailRequestService;
+    @Mock private MfaSessionStatusService mfaSessionStatusService;
 
     private final PasswordEncoder passwordEncoder =
             Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
 
     private MfaService service;
 
+    private static final UUID SESSION_ID = UUID.randomUUID();
     private static final String TENANT_ID = "test-tenant";
     private static final UUID   USER_ID   = UUID.randomUUID();
     private static final UUID   ADMIN_ID  = UUID.randomUUID();
@@ -69,8 +74,9 @@ class MfaServiceTest {
                 userRepository, backupCodeRepository, authTokenService,
                 teamMemberRepository, totpService, aesEncryptionService,
                 passwordEncoder, jwtUtils, auditEventPublisher,
-                bruteForceProtectionService);
+                bruteForceProtectionService, authEmailRequestService, mfaSessionStatusService);
         TenantContext.set(TENANT_ID);
+        org.mockito.Mockito.lenient().when(authTokenService.isSessionLive(USER_ID, TENANT_ID, SESSION_ID)).thenReturn(true);
     }
 
     @AfterEach
@@ -146,6 +152,8 @@ class MfaServiceTest {
             assertThat(user.isMfaEnabled()).isTrue();
             assertThat(user.getMfaSecret()).isEqualTo("encrypted-secret");
             assertThat(user.getMfaPendingSecret()).isNull();
+            // Backlog #0-83: the account's address is told a factor was enrolled.
+            then(authEmailRequestService).should().requestMfaChangeNotification(user, true);
         }
 
         @Test
@@ -163,6 +171,7 @@ class MfaServiceTest {
                     .isInstanceOf(BusinessException.class)
                     .extracting(e -> ((BusinessException) e).getHttpStatus())
                     .isEqualTo(HttpStatus.UNAUTHORIZED);
+            then(authEmailRequestService).shouldHaveNoInteractions();
         }
 
         @Test
@@ -214,7 +223,7 @@ class MfaServiceTest {
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any(), notNull()))
                     .willReturn("refresh-token");
 
             final LoginResponse response =
@@ -365,7 +374,7 @@ class MfaServiceTest {
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any(), notNull()))
                     .willReturn("refresh-token");
 
             final LoginResponse response =
@@ -414,7 +423,7 @@ class MfaServiceTest {
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any(), notNull()))
                     .willReturn("refresh-token");
 
             final LoginResponse response =
@@ -514,6 +523,10 @@ class MfaServiceTest {
             assertThat(user.isMfaEnabled()).isFalse();
             assertThat(user.getMfaSecret()).isNull();
             then(backupCodeRepository).should().deleteAllByUserId(USER_ID);
+            // Backlog #0-83: the user's sessions stop counting as MFA-verified,
+            // and the account's address is told.
+            then(authTokenService).should().forgetMfaOfAllSessions(USER_ID, TENANT_ID);
+            then(authEmailRequestService).should().requestMfaChangeNotification(user, false);
         }
 
         @Test
@@ -628,7 +641,7 @@ class MfaServiceTest {
                     .willReturn("access-token");
             given(jwtUtils.getAccessTokenTtl()).willReturn(java.time.Duration.ofMinutes(15));
             given(jwtUtils.getRefreshTokenTtl()).willReturn(java.time.Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any(), notNull()))
                     .willReturn("refresh-token");
             given(totpService.generateBackupCodes())
                     .willReturn(List.of("aaaa1111", "bbbb2222"));
@@ -765,6 +778,69 @@ class MfaServiceTest {
 
     // ── helpers ───────────────────────────────────────────────────────────
 
+    // ── live session required to enrol (backlog #0-83) ────────────────────
+
+    @Test
+    @DisplayName("setup and enable refuse an access token whose session has ended, before touching the user")
+    void enrolmentNeedsLiveSession() {
+        given(authTokenService.isSessionLive(USER_ID, TENANT_ID, SESSION_ID)).willReturn(false);
+
+        for (final org.assertj.core.api.ThrowableAssert.ThrowingCallable call
+                : List.<org.assertj.core.api.ThrowableAssert.ThrowingCallable>of(
+                        () -> service.setupMfa(buildPrincipal()),
+                        () -> service.enableMfa("123456", buildPrincipal()))) {
+            assertThatThrownBy(call).isInstanceOfSatisfying(BusinessException.class,
+                    e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        }
+        then(userRepository).shouldHaveNoInteractions();
+    }
+
+    // ── removeFactorEnrolledWithinGrace (backlog #0-83) ──────────────────
+
+    @Nested
+    @DisplayName("removeFactorEnrolledWithinGrace")
+    class RemoveFactorEnrolledWithinGrace {
+
+        @Test
+        @DisplayName("a factor still within the grace period is removed, its sessions cleared, the owner told")
+        void removesRecentFactor() {
+            final User user = buildUser(true);
+            given(mfaSessionStatusService.isEstablished(any(), any())).willReturn(false);
+
+            assertThat(service.removeFactorEnrolledWithinGrace(user, TENANT_ID)).isTrue();
+
+            assertThat(user.isMfaEnabled()).isFalse();
+            assertThat(user.getMfaSecret()).isNull();
+            then(userRepository).should().save(user);
+            then(backupCodeRepository).should().deleteAllByUserId(USER_ID);
+            then(authTokenService).should().forgetMfaOfAllSessions(USER_ID, TENANT_ID);
+            then(authEmailRequestService).should().requestMfaChangeNotification(user, false);
+            then(auditEventPublisher).should().publishAuth(eq(USER_ID), eq(TENANT_ID),
+                    eq(com.incidentplatform.shared.audit.AuditEventTypes.MFA_DISABLED),
+                    anyString(), anyString(), anyString(), any());
+        }
+
+        @Test
+        @DisplayName("an established factor is kept")
+        void keepsEstablishedFactor() {
+            final User user = buildUser(true);
+            given(mfaSessionStatusService.isEstablished(any(), any())).willReturn(true);
+
+            assertThat(service.removeFactorEnrolledWithinGrace(user, TENANT_ID)).isFalse();
+
+            assertThat(user.isMfaEnabled()).isTrue();
+            then(authEmailRequestService).shouldHaveNoInteractions();
+            then(backupCodeRepository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("nothing to do without MFA")
+        void noFactor() {
+            assertThat(service.removeFactorEnrolledWithinGrace(buildUser(false), TENANT_ID)).isFalse();
+            then(authEmailRequestService).shouldHaveNoInteractions();
+        }
+    }
+
     private User buildUser(boolean mfaEnabled) {
         final User user = User.forTesting(USER_ID, TENANT_ID, "u@example.com",
                 null, true, List.of("ROLE_RESPONDER"));
@@ -783,8 +859,9 @@ class MfaServiceTest {
         return user;
     }
 
+    /** A principal of a live login session (backlog #0-83: enrolling MFA requires one). */
     private UserPrincipal buildPrincipal() {
         return new UserPrincipal(USER_ID, TENANT_ID, "u@example.com",
-                List.of("ROLE_RESPONDER"), List.of());
+                List.of("ROLE_RESPONDER"), List.of(), List.of(), SESSION_ID);
     }
 }

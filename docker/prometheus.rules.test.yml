@@ -157,3 +157,89 @@ tests:
       - eval_time: 85m
         alertname: AuthEmailPermanentlyFailed
         exp_alerts: []
+
+  # Platform API (backlog #0-83): more than 10 tenants in an hour fires the
+  # spike alert; 10 does not.
+  - interval: 1m
+    input_series:
+      - series: 'platform_tenants_provisioned_total{job="auth-service",instance="auth-1"}'
+        values: '0x10 12x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PlatformTenantProvisioningSpike
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PlatformTenantProvisioningSpike
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "Unusually many tenants created through the platform API"
+              description: "12 tenants were created in the last hour. Check the TENANT_PROVISIONED audit events in the platform-operator tenant: which operator, which tenants, which admin addresses.\n"
+
+  - interval: 1m
+    input_series:
+      - series: 'platform_tenants_provisioned_total{job="auth-service",instance="auth-1"}'
+        values: '0x10 10x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PlatformTenantProvisioningSpike
+        exp_alerts: []
+
+  # A single refusal by either limit fires; it resolves an hour later. The
+  # global limit's series carries its own tag; the rule sums both.
+  - interval: 1m
+    input_series:
+      - series: 'platform_ratelimit_rejected_total{job="auth-service",instance="auth-1",limit="operator"}'
+        values: '0x10 1x80'
+      - series: 'platform_ratelimit_rejected_total{job="auth-service",instance="auth-1",limit="global"}'
+        values: '0x100'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PlatformApiRateLimited
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PlatformApiRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "The platform API's rate limit was reached"
+              description: "The platform API refused write operations for exceeding its per-operator or platform-wide limit in the last hour. The auth-service WARN log names the operator and the limit; check the recent TENANT_* audit events.\n"
+      - eval_time: 85m
+        alertname: PlatformApiRateLimited
+        exp_alerts: []
+
+  # A refusal by the platform-wide limit alone fires too.
+  - interval: 1m
+    input_series:
+      - series: 'platform_ratelimit_rejected_total{job="auth-service",instance="auth-1",limit="global"}'
+        values: '0x10 2x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PlatformApiRateLimited
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "The platform API's rate limit was reached"
+              description: "The platform API refused write operations for exceeding its per-operator or platform-wide limit in the last hour. The auth-service WARN log names the operator and the limit; check the recent TENANT_* audit events.\n"
+
+  # A refusal because Redis could not be checked fires the high alert.
+  - interval: 1m
+    input_series:
+      - series: 'platform_ratelimit_unavailable_total{job="auth-service",instance="auth-1"}'
+        values: '0x10 3x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PlatformApiRateLimitUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+            exp_annotations:
+              summary: "Platform API write operations refused: rate limit unavailable"
+              description: "auth-service could not reach Redis to check the platform API's limit in the last 15 minutes and refused tenant provisioning. Check Redis and the PlatformRateLimiter ERROR lines in the auth-service log.\n"

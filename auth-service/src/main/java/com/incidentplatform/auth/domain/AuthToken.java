@@ -92,6 +92,16 @@ public class AuthToken {
     @Column(name = "session_id")
     private UUID sessionId;
 
+    /**
+     * When the login session this REFRESH token belongs to completed MFA
+     * (backlog #0-83, migration V22): set at a login finished with a TOTP or
+     * backup code, carried forward unchanged by rotation, cleared when the
+     * user disables MFA. Null for a password-only session and for every
+     * other token type. The platform API requires a recent one.
+     */
+    @Column(name = "mfa_verified_at")
+    private Instant mfaVerifiedAt;
+
     protected AuthToken() {}
 
     public static AuthToken create(User user, String tenantId,
@@ -108,6 +118,18 @@ public class AuthToken {
     public static AuthToken create(User user, String tenantId,
                                    String tokenHash, Type type,
                                    Instant expiresAt, UUID sessionId) {
+        return create(user, tenantId, tokenHash, type, expiresAt, sessionId, null);
+    }
+
+    /**
+     * @param mfaVerifiedAt see {@link #mfaVerifiedAt}; non-null only for a
+     *                      {@link Type#REFRESH} token of a session that
+     *                      completed MFA
+     */
+    public static AuthToken create(User user, String tenantId,
+                                   String tokenHash, Type type,
+                                   Instant expiresAt, UUID sessionId,
+                                   Instant mfaVerifiedAt) {
         final AuthToken token = new AuthToken();
         token.user = user;
         token.tenantId = tenantId;
@@ -115,6 +137,7 @@ public class AuthToken {
         token.type = type;
         token.expiresAt = expiresAt;
         token.sessionId = sessionId;
+        token.mfaVerifiedAt = mfaVerifiedAt;
         return token;
     }
 
@@ -170,4 +193,6 @@ public class AuthToken {
     public Instant getExpiresAt() { return expiresAt; }
     public Instant getUsedAt() { return usedAt; }
     public UUID getSessionId() { return sessionId; }
+
+    public Instant getMfaVerifiedAt() { return mfaVerifiedAt; }
 }

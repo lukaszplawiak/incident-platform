@@ -8,6 +8,10 @@ import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,24 +50,35 @@ import java.util.UUID;
 @Service
 public class AuthEmailPersistenceService {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthEmailPersistenceService.class);
+
     private final AuthEmailOutboxRepository outboxRepository;
     private final AuthTokenRepository tokenRepository;
     private final AuthTokenService tokenService;
     private final UserRepository userRepository;
+    private final Counter mfaNoticeNotRecorded;
 
     public AuthEmailPersistenceService(AuthEmailOutboxRepository outboxRepository,
                                        AuthTokenRepository tokenRepository,
                                        AuthTokenService tokenService,
-                                       UserRepository userRepository) {
+                                       UserRepository userRepository,
+                                       MeterRegistry meterRegistry) {
         this.outboxRepository = outboxRepository;
         this.tokenRepository  = tokenRepository;
         this.tokenService     = tokenService;
         this.userRepository   = userRepository;
+        this.mfaNoticeNotRecorded = Counter.builder("auth.mfa.notice.unrecorded")
+                .description("MFA_ENABLED notices sent that did not mark the user's current factor "
+                        + "(backlog #0-83)")
+                .register(meterRegistry);
     }
 
     /** What {@link #prepareAttempt} decided. */
     public sealed interface Attempt {
-        /** Send the email with this token. */
+        /**
+         * Send the email with this token; both null for a notification
+         * ({@link AuthEmailType#carriesToken()} false, backlog #0-83).
+         */
         record Send(String rawToken, UUID tokenId) implements Attempt {}
         /** The entry was closed without an attempt. */
         record Closed(AuthEmailStatus status, String reason) implements Attempt {}
@@ -105,12 +120,16 @@ public class AuthEmailPersistenceService {
                     "deadline " + entry.getDeadline() + " passed before the email could be sent");
         }
 
+        if (!entry.getEmailType().carriesToken()) {
+            return new Attempt.Send(null, null);
+        }
         tokenRepository.invalidateValidTokens(
                 entry.getUserId(), entry.getEmailType().tokenType(), now);
         final GeneratedToken token = switch (entry.getEmailType()) {
             case INVITE -> tokenService.generateInviteTokenWithEntity(user.get(), entry.getTenantId());
             case PASSWORD_RESET ->
                     tokenService.generatePasswordResetTokenWithEntity(user.get(), entry.getTenantId());
+            case MFA_ENABLED, MFA_DISABLED -> throw new IllegalStateException("unreachable: no token");
         };
         return new Attempt.Send(token.rawToken(), token.token().getId());
     }
@@ -121,10 +140,40 @@ public class AuthEmailPersistenceService {
                 : new Attempt.AlreadyClosed();
     }
 
-    /** @return whether the entry was still open and is now SENT */
+    /**
+     * Marks the entry SENT. For an MFA_ENABLED notice it also records, on the
+     * user, that the current factor's notice went out (backlog #0-83): the
+     * platform API's grace period counts from there, and the fact must outlive
+     * the outbox purge. Same transaction, so the two never disagree.
+     *
+     * <p>A notice that marks no factor is logged and counted (found in
+     * review): usually the user disabled or re-enrolled MFA before it went
+     * out, which is harmless, but otherwise the factor would stay "notice not
+     * delivered" and the platform API would refuse its owner with no trace
+     * outside the 403. Either way the owner disables and enables MFA again to
+     * get a new notice.
+     *
+     * <p>Such a notice is still sent, not closed unsent, on purpose (found in
+     * review): it states when MFA was enabled, which stays true, and holding
+     * it back would let someone with the password hide an enrolment from the
+     * owner by enabling and quickly disabling MFA.
+     *
+     * @return whether the entry was still open and is now SENT
+     */
     @Transactional
-    public boolean recordSent(UUID entryId, Instant now) {
-        return outboxRepository.markSent(entryId, now) == 1;
+    public boolean recordSent(AuthEmailOutbox entry, Instant now) {
+        if (outboxRepository.markSent(entry.getId(), now) != 1) {
+            return false;
+        }
+        if (entry.getEmailType() == AuthEmailType.MFA_ENABLED
+                && userRepository.recordMfaEnabledNoticeSent(
+                        entry.getUserId(), entry.getTenantId(), entry.getCreatedAt(), now) != 1) {
+            mfaNoticeNotRecorded.increment();
+            log.warn("MFA_ENABLED notice sent but it marks no current factor (MFA disabled or re-enrolled "
+                            + "since, or already recorded): entry={}, user={}, tenant={}, requestedAt={}",
+                    entry.getId(), entry.getUserId(), entry.getTenantId(), entry.getCreatedAt());
+        }
+        return true;
     }
 
     /**
@@ -136,7 +185,7 @@ public class AuthEmailPersistenceService {
     @Transactional
     public boolean recordFailed(UUID entryId, UUID tokenId, String error,
                                 Instant nextAttemptAt, Instant now) {
-        tokenRepository.markUsedIfUnused(tokenId, now);
+        invalidateUndelivered(tokenId, now);
         return outboxRepository.markFailed(entryId, error, nextAttemptAt) == 1;
     }
 
@@ -148,7 +197,14 @@ public class AuthEmailPersistenceService {
      */
     @Transactional
     public boolean recordGivenUp(UUID entryId, UUID tokenId, String error, Instant now) {
-        tokenRepository.markUsedIfUnused(tokenId, now);
+        invalidateUndelivered(tokenId, now);
         return outboxRepository.markGivenUpAfterAttempt(entryId, error) == 1;
+    }
+
+    /** A notification has no token ({@code tokenId} null), so nothing to invalidate. */
+    private void invalidateUndelivered(UUID tokenId, Instant now) {
+        if (tokenId != null) {
+            tokenRepository.markUsedIfUnused(tokenId, now);
+        }
     }
 }

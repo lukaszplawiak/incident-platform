@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -55,11 +56,13 @@ class AuthEmailPersistenceServiceTest {
     private static final Duration TOLERANCE = Duration.ofMinutes(3);
 
     private User user;
+    private SimpleMeterRegistry meters;
 
     @BeforeEach
     void setUp() {
+        meters = new SimpleMeterRegistry();
         service = new AuthEmailPersistenceService(
-                outboxRepository, tokenRepository, tokenService, userRepository);
+                outboxRepository, tokenRepository, tokenService, userRepository, meters);
         user = User.forTesting(UUID.randomUUID(), TENANT_ID, "user@firma.pl", null, true,
                 List.of("ROLE_RESPONDER"));
     }
@@ -112,6 +115,19 @@ class AuthEmailPersistenceServiceTest {
 
             assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE)).isInstanceOf(Attempt.Send.class);
             then(tokenRepository).should().invalidateValidTokens(eq(user.getId()), eq(AuthToken.Type.INVITE), any());
+        }
+
+        @Test
+        @DisplayName("an MFA notification is sent without a token, and no token is touched (backlog #0-83)")
+        void notificationWithoutToken() {
+            final AuthEmailOutbox entry = request(AuthEmailType.MFA_ENABLED, Duration.ofHours(24));
+            userExists();
+            noNewerRequest();
+
+            assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE))
+                    .isEqualTo(new Attempt.Send(null, null));
+            then(tokenRepository).shouldHaveNoInteractions();
+            then(tokenService).shouldHaveNoInteractions();
         }
 
         @Test
@@ -226,12 +242,45 @@ class AuthEmailPersistenceServiceTest {
         @Test
         @DisplayName("recordSent reports whether the row changed")
         void recordSent() {
+            final AuthEmailOutbox entry = request(AuthEmailType.INVITE, Duration.ofDays(7));
             final Instant now = Instant.now();
-            given(outboxRepository.markSent(entryId, now)).willReturn(1, 0);
+            given(outboxRepository.markSent(entry.getId(), now)).willReturn(1, 0);
 
-            assertThat(service.recordSent(entryId, now)).isTrue();
-            assertThat(service.recordSent(entryId, now)).isFalse();
+            assertThat(service.recordSent(entry, now)).isTrue();
+            assertThat(service.recordSent(entry, now)).isFalse();
             then(tokenRepository).should(never()).markUsedIfUnused(any(), any());
+            then(userRepository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("a sent MFA_ENABLED notice is recorded on the user, for the current enrolment only (backlog #0-83)")
+        void recordSentMfaNotice() {
+            final AuthEmailOutbox entry = request(AuthEmailType.MFA_ENABLED, Duration.ofHours(24));
+            final Instant now = Instant.now();
+            given(outboxRepository.markSent(entry.getId(), now)).willReturn(1, 0);
+            given(userRepository.recordMfaEnabledNoticeSent(user.getId(), TENANT_ID, entry.getCreatedAt(), now))
+                    .willReturn(1);
+
+            assertThat(service.recordSent(entry, now)).isTrue();
+            then(userRepository).should().recordMfaEnabledNoticeSent(user.getId(), TENANT_ID, entry.getCreatedAt(), now);
+            assertThat(meters.counter("auth.mfa.notice.unrecorded").count()).isZero();
+
+            assertThat(service.recordSent(entry, now)).as("already closed: nothing recorded").isFalse();
+            then(userRepository).should(org.mockito.Mockito.times(1))
+                    .recordMfaEnabledNoticeSent(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("an MFA_ENABLED notice that marks no current factor is still SENT, and counted (backlog #0-83)")
+        void recordSentMfaNoticeNotRecorded() {
+            final AuthEmailOutbox entry = request(AuthEmailType.MFA_ENABLED, Duration.ofHours(24));
+            final Instant now = Instant.now();
+            given(outboxRepository.markSent(entry.getId(), now)).willReturn(1);
+            given(userRepository.recordMfaEnabledNoticeSent(user.getId(), TENANT_ID, entry.getCreatedAt(), now))
+                    .willReturn(0);
+
+            assertThat(service.recordSent(entry, now)).as("the email went out either way").isTrue();
+            assertThat(meters.counter("auth.mfa.notice.unrecorded").count()).isEqualTo(1);
         }
 
         @Test
@@ -243,6 +292,18 @@ class AuthEmailPersistenceServiceTest {
 
             assertThat(service.recordFailed(entryId, tokenId, "SMTP down", next, now)).isTrue();
             then(tokenRepository).should().markUsedIfUnused(tokenId, now);
+        }
+
+        @Test
+        @DisplayName("a failed notification has no token to invalidate (backlog #0-83)")
+        void notificationFailure() {
+            final Instant now = Instant.now();
+            given(outboxRepository.markFailed(entryId, "SMTP down", now.plusSeconds(60))).willReturn(1);
+            given(outboxRepository.markGivenUpAfterAttempt(entryId, "SMTP down")).willReturn(1);
+
+            assertThat(service.recordFailed(entryId, null, "SMTP down", now.plusSeconds(60), now)).isTrue();
+            assertThat(service.recordGivenUp(entryId, null, "SMTP down", now)).isTrue();
+            then(tokenRepository).shouldHaveNoInteractions();
         }
 
         @Test

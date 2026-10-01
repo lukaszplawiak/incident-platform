@@ -259,6 +259,31 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   archived first admin is not revived, #0-82), show and list metadata. This is the one cross-tenant capability, a narrow reversal
   of #0-16; audit types `TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` in the operator tenant.
   Suspension and offboarding: #0-82. Guide: docs/tenant-provisioning.md.
+- **Platform API step-up and limit (#0-83)**: `PlatformAccess` also requires that the access token's
+  session completed MFA within `platform.mfa.max-session-age` (12 h) and that the MFA_ENABLED notice of the
+  account's current factor was sent at least `platform.mfa.enrolment-grace` (24 h) ago.
+  - Why server-side, not an `amr` JWT claim: only auth-service needs it and it owns the sessions, so the fact
+    lives on the session (`auth_tokens.mfa_verified_at`) and is checked per request against a live session,
+    which also makes logout and disabling MFA effective at once, with no `shared` or token-format change. Add
+    `amr` only if another service needs step-up.
+  - Why the grace period: enabling MFA needs only a password, so a password thief could enrol their own
+    factor. Every MFA enable/disable emails the account (token-less auth email outbox types), the period
+    counts from when that email was sent (kept on the user, as the outbox purges sent rows), and a password
+    reset within it removes the new factor and ends unfinished logins. That removal is interim: it lets a
+    mailbox alone undo a fresh factor, and is replaced by an admin MFA reset (#0-88). The grace period is only
+    as strong as the owner's mailbox; binding operator enrolment to the invite, or a second operator's
+    approval, is #0-87. Factors older than 24 h at deploy were taken over as established, except an operator
+    admin's: operators re-enrol once.
+  - Why the limit fails closed, unlike ingestion's #67: it is a security control on a rare operation, where
+    waiting costs nothing. Per operator and platform-wide, so several taken-over accounts do not multiply it;
+    any failure opens its circuit breaker. Its alerts go by email, outside the platform, since an attacker
+    acting as operator could resolve incidents in the operator tenant.
+  - The 403 names the failed condition, except that a factor too new and an undelivered notice share one
+    message, so a password thief cannot tell whether the owner was warned.
+- **Bulk UPDATEs flush before they clear** (found in #0-83): `@Modifying(clearAutomatically = true)` must
+  come with `flushAutomatically = true`. Hibernate flushes before a JPQL bulk statement only pending changes
+  of the tables it touches, so an earlier change to another table in the same transaction (an outbox INSERT)
+  is silently discarded by the clear.
 - **Operator tenant bootstrap**: the operator admin creates the integration, and
   the key lives only in Alertmanager's `credentials_file`. Since #0-80 `OperatorTenantBootstrap` also
   records the operator tenant's `tenants` row (on a new database V21 runs before any user exists).
@@ -268,12 +293,14 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   failed or expired, never creates a second admin or deletes a user (an unexpected state is an ERROR
   for a human), and exports `platform.operator.admin.pending`, alerted by `OperatorAdminNotActivated`.
 - **Auth email outbox = intent to send** (#0-52): a request (`UserService`, `ResendInviteService`,
-  `ForgotPasswordService`) only INSERTs through `AuthEmailRequestService`; `AuthEmailScheduler` is the only
-  writer afterwards. Per attempt it closes entries no longer worth sending (SUPERSEDED: a newer request of the
-  type, an accepted invite, a missing user; PERMANENTLY_FAILED: deadline passed), otherwise invalidates the
-  user's earlier tokens of the type and creates the token it sends — no raw token is stored anywhere, and the
-  link is valid for its full lifetime from sending. Failed sends are retried on `AuthEmailRetryPolicy`'s backoff
-  until the entry's deadline (7 days / 15 minutes), in two lanes (`processPending`, `retryFailed`) with their own
+  `ForgotPasswordService`, `MfaService`) only INSERTs through `AuthEmailRequestService`; `AuthEmailScheduler` is
+  the only writer afterwards. Per attempt it closes entries no longer worth sending (SUPERSEDED: a newer request
+  of the type, an accepted invite, a missing user; PERMANENTLY_FAILED: deadline passed), otherwise, for the
+  token-carrying types (invite, reset), invalidates the user's earlier tokens of the type and creates the token
+  it sends — no raw token is stored anywhere, and the link is valid for its full lifetime from sending. The MFA
+  notices (MFA_ENABLED / MFA_DISABLED, #0-83) carry no token (`AuthEmailType.carriesToken()`). Failed sends are
+  retried on `AuthEmailRetryPolicy`'s backoff until the entry's deadline (invite 7 days, reset 15 minutes, MFA
+  notice max(24 h, grace period)), in two lanes (`processPending`, `retryFailed`) with their own
   batches and a processing budget validated against the ShedLock. State changes are conditional UPDATEs, not
   `@Version`. Counters `auth.email.send`, `auth.email.permanently_failed`; alerts `AuthEmailDeliveryFailing`,
   `AuthEmailPermanentlyFailed`; terminal rows are purged after `invite.email.retention`. V19 dropped and

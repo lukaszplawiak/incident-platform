@@ -142,7 +142,7 @@ class AuthTokenServiceTest {
             final ArgumentCaptor<AuthToken> captor =
                     ArgumentCaptor.forClass(AuthToken.class);
 
-            service.generateRefreshToken(user, TENANT_ID, UUID.randomUUID());
+            service.generateRefreshToken(user, TENANT_ID, UUID.randomUUID(), null);
 
             then(tokenRepository).should().save(captor.capture());
             assertThat(captor.getValue().getType())
@@ -155,7 +155,7 @@ class AuthTokenServiceTest {
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
 
             final String token = service.generateRefreshToken(
-                    user, TENANT_ID, UUID.randomUUID());
+                    user, TENANT_ID, UUID.randomUUID(), null);
             assertThat(token).isNotBlank();
         }
 
@@ -168,10 +168,25 @@ class AuthTokenServiceTest {
             final ArgumentCaptor<AuthToken> captor =
                     ArgumentCaptor.forClass(AuthToken.class);
 
-            service.generateRefreshToken(user, TENANT_ID, sessionId);
+            service.generateRefreshToken(user, TENANT_ID, sessionId, null);
 
             then(tokenRepository).should().save(captor.capture());
             assertThat(captor.getValue().getSessionId()).isEqualTo(sessionId);
+        }
+
+        @Test
+        @DisplayName("records whether the login completed MFA (backlog #0-83)")
+        void recordsMfaVerified() {
+            given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
+            final ArgumentCaptor<AuthToken> captor = ArgumentCaptor.forClass(AuthToken.class);
+
+            final Instant verifiedAt = Instant.parse("2026-10-01T10:00:00Z");
+            service.generateRefreshToken(user, TENANT_ID, UUID.randomUUID(), verifiedAt);
+            service.generateRefreshToken(user, TENANT_ID, UUID.randomUUID(), null);
+
+            then(tokenRepository).should(org.mockito.Mockito.times(2)).save(captor.capture());
+            assertThat(captor.getAllValues()).extracting(AuthToken::getMfaVerifiedAt)
+                    .containsExactly(verifiedAt, null);
         }
     }
 

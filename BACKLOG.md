@@ -81,9 +81,11 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
 | [0-81](#0-81-test-profiles-with-hard-coded-keys-ship-inside-the-service-jars) | Test profiles with hard-coded keys ship inside the service jars | tech-debt | Low | Open |
 | [0-82](#0-82-suspend-and-offboard-a-tenant) | Suspend and offboard a tenant | design | Medium | Open |
-| [0-83](#0-83-the-platform-api-does-not-require-mfa) | The platform API does not require MFA | design | Medium | Open |
 | [0-84](#0-84-audit-events-are-sent-to-kafka-inside-the-database-transaction-not-through-an-outbox) | Audit events are sent to Kafka inside the database transaction, not through an outbox | bug | Medium | Open |
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
+| [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
+| [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
+| [0-88](#0-88-a-password-reset-removes-a-recent-second-factor-instead-of-an-admin-resetting-it) | A password reset removes a recent second factor instead of an admin resetting it | design | High | Open |
 
 ---
 
@@ -1243,39 +1245,6 @@ tenant, and the enforcement points above. Suspension first; offboarding is large
 
 ---
 
-### 0-83. The platform API does not require MFA
-
-**Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-80)
-
-**Problem.** `/api/v1/platform/**` (#0-80) is the platform's one cross-tenant capability: it creates
-tenants and invites their first admins. `PlatformAccess` requires an admin of `platform-operator` with
-a JWT, but not a second factor. A phished or reused password of any operator admin is enough to
-create tenants. `docs/tenant-provisioning.md` and the README tell the operator to turn on
-`mfaRequired` for the operator tenant; nothing enforces it, and nothing would notice if it were
-turned off again.
-
-**Options.**
-- **Refuse while the operator tenant has no `mfaRequired`.** `PlatformAccess` (or the service) reads
-  the tenant setting. Simple, but it checks a policy, not this login: an admin who logged in before
-  the setting was turned on, or through a path that skips MFA, still gets in, and a misconfigured
-  setting locks operators out of onboarding.
-- **The token says how the user authenticated.** Login adds an `amr` claim (RFC 8176, e.g.
-  `["pwd","otp"]`) to the access token when MFA was completed, refresh carries it over from the
-  session, and `PlatformAccess` requires `otp`. This is the usual step-up model: it proves the
-  second factor for this session. Needs a claim in `JwtUtils` / `UserPrincipal` (`shared`, all
-  services), the refresh token to remember it (V16's session), and tests that a password-only token,
-  a refreshed MFA token and a backup-code login behave as intended.
-
-**Approach.** Recommended: the `amr` claim, with the `mfaRequired` setting kept as the operator
-tenant's policy. Decide before the platform API gains more actions (#0-82).
-
-**Related: no rate limit on the platform API.** A stolen operator token can create tenants and send
-invite emails to any address without limit (found in the review of #0-80). The Ingress-wide nginx
-limits apply, nothing per operator. A per-operator limit on `/api/v1/platform/**` (bucket4j, as in
-ingestion-service) belongs with this item: both answer "what if an operator account is taken over".
-
----
-
 ### 0-84. Audit events are sent to Kafka inside the database transaction, not through an outbox
 
 **Type:** bug · **Priority:** Medium · **Status:** Open (found in the review of #0-80)
@@ -1341,6 +1310,84 @@ has no record of, on every deployed database. Then either:
 
 ---
 
+### 0-86. Integration tests load the web-slice test configuration
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found while implementing #0-83)
+
+**Problem.** `AuthServiceApplication` declares its own `@ComponentScan("com.incidentplatform.auth",
+"com.incidentplatform.shared")`. That replaces the scan `@SpringBootApplication` would do, including
+its `TypeExcludeFilter`, so a `@SpringBootTest` (e.g. `AuthRepositoryIntegrationTest`) scans the test
+sources too: `AuthApiTestApplication` (itself a `@SpringBootApplication`) and, through it,
+`AuthWebMvcTestConfig`. The integration context therefore gets the web slice's no-op
+`TokenRevocationChecker` (`@Primary`), and a test bean named like a production bean silently replaces
+it. #0-83 hit this: a mock `MfaSessionStatusService` replaced the real one in the integration tests.
+Worked around by giving the slice's beans their own names and `@Fallback`.
+
+**Approach.** Drop the explicit `@ComponentScan` (`shared` is already scanned through
+`scanBasePackages` or its auto-configuration, to be checked), or add Boot's exclude filters
+(`TypeExcludeFilter`, `AutoConfigurationExcludeFilter`) and move `AuthApiTestApplication` out of the
+scanned package. Then check that no integration test relied on the leaked beans. Other services
+with an explicit `@ComponentScan` may have the same issue.
+
+---
+
+### 0-87. Operator MFA enrolment is not bound to the invite
+
+**Type:** design · **Priority:** Low · **Status:** Open (option deferred in #0-83)
+
+**Problem.** Enabling MFA needs only a password-authenticated session. #0-83 answered the risk that a
+password thief enrols their own factor with an email on every MFA change and a 24 h grace period
+before the platform API accepts a new factor. That leaves a window: an owner who does not read the
+email within the grace period, or whose mailbox is also compromised, does not stop it.
+
+**Option.** For the `platform-operator` tenant, make enrolling the TOTP part of accepting the invite
+(the invite link is itself proof from outside the password channel), and refuse `/mfa/setup` from a
+password-only session of an operator. Existing operator accounts without MFA would then be
+re-invited. Stronger, with no window, but it changes the invite flow and the operator bootstrap.
+
+**Also possible, smaller.** A content-free alert to the platform channel whenever a
+platform-operator account enables MFA (the pattern of the operator's undeliverable-notification
+alert), so a second person sees it even if the owner's mailbox does not (suggested in the review of
+#0-83).
+
+**Or, with several operators.** A new operator factor counts only once a second operator admin
+approves it (four eyes), so a thief who holds both the password and the mailbox still cannot pass
+the platform API alone. Needs at least two operator admins, and a recovery path for a deployment
+with one (suggested in the review of #0-83).
+
+**When.** If the platform API gains more powerful actions (#0-82), or a deployment has several
+operators.
+
+---
+
+### 0-88. A password reset removes a recent second factor instead of an admin resetting it
+
+**Type:** design · **Priority:** High · **Status:** Open (interim behaviour shipped in #0-83)
+
+**Problem.** Since #0-83 a password reset by email removes a second factor whose "MFA enabled"
+email went out less than 24 h ago (`MfaService.removeFactorEnrolledWithinGrace`). It is the only
+remedy today for an owner whose password was used to enrol someone else's factor: auth-service has
+no way for anyone else to remove a user's factor (`/mfa/disable` needs the factor itself). But it
+lets a mailbox alone undo MFA: someone who can read the owner's email, without the password, resets
+the password within 24 h of a genuine enrolment and logs in with the password only. Mature systems
+never do this (GitHub, Google, Entra ID, Okta, Auth0: a reset by email keeps MFA; NIST SP 800-63B,
+recovery must not lower the assurance level). Found in the review of #0-83, in every tenant.
+
+**Approach.** The B2B pattern (Okta "Reset Multifactor", Entra ID "Require re-register MFA"):
+- An admin of the user's tenant resets the user's MFA: factor, backup codes and the sessions' MFA
+  marks cleared, the user emailed (MFA_DISABLED through the auth email outbox), audited. Not on
+  one's own account. In `platform-operator` that is another operator admin; with a single operator,
+  a documented break-glass step as `incident_app`, audited.
+- In the same change a password reset stops touching MFA: `removeFactorEnrolledWithinGrace` and its
+  call in `PasswordService` go, and the MFA_ENABLED email, README, the operator guide and `.ai/` name
+  "ask your administrator" as the remedy instead.
+- The platform API's grace period (#0-83) stays: it still keeps a fresh factor out of the platform
+  API until the owner had a chance to react.
+
+**When.** Right after #0-83, before any real deployment.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -1371,6 +1418,7 @@ has no record of, on every deployed database. Then either:
 | 0-63 | The k8s base ConfigMap set `SPRING_PROFILES_ACTIVE: "dev"`, inherited by every overlay: the rendered prod and staging manifests started incident-service with the dev profile, enabling `DevSecurityConfig` and the unauthenticated `GET /dev/token` (an ADMIN JWT for any tenant, accepted by all seven services through the shared HS512 secret) — not routed by the Ingress, but reachable from any pod since there is no NetworkPolicy; `DevTokenController`'s startup guard could not catch it, as it only rejects a missing dev profile. The base now sets no profile, `k8s/overlays/dev` adds it, and the `validate-k8s-manifests` CI job fails if the rendered staging or prod overlay sets any Spring profile (env var, property or flag form). Found in the 2026-09-30 infrastructure security audit | PR #441 |
 | 0-78 | The services' database role `incident_app` was a Postgres superuser (checked on a running database: `rolsuper = t`): the image's `POSTGRES_USER` created it, so SQL injection in any service was command execution in the database container (`COPY ... TO PROGRAM`). Now `POSTGRES_USER` is the admin, used by no service, and `k8s/base/infrastructure/postgresql-init.sh` (one file, mounted by docker-compose, generated into a ConfigMap by Kustomize) creates `incident_app` with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` as owner of the database and the `public` schema; it reads its values with psql `\getenv`, so no password is on a command line, and refuses `APP_DB_USER` = `POSTGRES_USER`. No migration needed superuser rights (the extensions are trusted). The role's password and the services' `DB_PASSWORD` have one source: `docker/.env` (both database passwords now required, no default) or each overlay's `app-secrets`, now wired to the six Deployments; the admin comes from a per-overlay `postgresql-admin` Secret, and the base `postgresql-secret` with its committed password is gone (part of #0-66). No name is hard-coded: probes, CI and the migration read `POSTGRES_USER`. Probes: the init-phase server listens on its socket only, so a socket check reported ready before the role existed (reproduced); compose's healthcheck and the k8s readiness and startup probes now use TCP, liveness the socket after the startup probe. CI: the smoke test checks the role's attributes, that it is a member of no role and that `COPY ... TO PROGRAM` is refused; a new job runs `.github/scripts/test-postgres-roles.sh` against the real image (init with a hostile password and a non-default admin, the guard, the migration). An existing database cannot be demoted in place (`incident_app` is the bootstrap role, which must stay superuser), so `docs/database-roles.md` and `docs/database-roles-migrate.sql` give the procedure: rename it to the admin, create a new `incident_app`, move ownership, in one transaction with a completeness check, passwords from the database container's environment. Because the services' role owns `public` and could plant a trigger, rule, default, view or function that runs as whoever fires it, the superuser never touches anything outside `pg_catalog` in the database: the guide's "Working as the admin" routes service data, backups and restores through an `incident_app` login (`SET ROLE` is no boundary, planted code can `RESET ROLE`; the CI job shows both cases), and the admin's `search_path` is `pg_catalog` as a second line of defence; the migration itself runs with `search_path = pg_catalog` and only `ALTER ... OWNER`, after a preflight that refuses to run while an event trigger or an extra superuser exists (it is for databases not suspected of compromise; those are restored); CI also runs the guide's backup/restore commands as `incident_app`. Not covered: the role still owns every table, so grants and RLS do not separate services (#0-67) | PR #443 |
 | 0-80 | Every new database got a `ROLE_ADMIN` account `admin@incidentplatform.com` / `changeme` in tenant `default` from the Flyway Java migration `V1_1__seed_admin_user` (no deployment set `ADMIN_PASSWORD`; login returned 200, and the Ingress routes `/api/v1/auth`). `V1_1` now creates nothing (the class stays for Flyway's history); `V20__archive_default_seed_admin` archives that account and invalidates its tokens where its password still verifies as `changeme`, and leaves a changed one with a WARN. Customer tenants are now provisioned by a platform operator: `tenants` table (V21, backfilled from existing users), `POST /api/v1/platform/tenants` creates the tenant and invites its first admin in one transaction, `POST .../{tenantId}/admin-invite` reissues a lost or expired first invite (sharing `TenantAdminReconciler` with `OperatorTenantBootstrap`, #0-49, which now also records the operator tenant's row), `GET` shows one tenant's or lists tenants' metadata. Only an admin of `platform-operator` with a JWT gets in (`PlatformAccess`, in the filter chain and on every method; API keys, service and purpose tokens refused); audited as `TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` (`shared`). This narrowly reverses #0-16's "no cross-tenant create tenant endpoint". The reissue never creates a user (an archived first admin is not revived; reopening is #0-82), provisioning refuses an id that has users, archived ones included, and V20 also revokes the account's API keys. Testcontainers tests of V20, V21 and provisioning (incl. rollback when the admin insert fails), security tests with real tokens. Guide: `docs/tenant-provisioning.md`; suspension and offboarding: #0-82 | PR #445 |
+| 0-83 | The platform API (#0-80) accepted an operator admin's password alone and had no rate limit. `PlatformAccess` now also requires that the access token's session completed MFA within 12 h (`platform.mfa.max-session-age`) with a factor whose MFA_ENABLED notice was sent at least 24 h ago (`platform.mfa.enrolment-grace`): recorded on the session (`auth_tokens.mfa_verified_at`, V22) when a login finishes with a TOTP or backup code, carried unchanged by refresh rotation, cleared when the user disables MFA, and checked server-side per request (a live session only, so logout ends access at once). The grace period, plus an email to the account on every MFA enable/disable (outbox types `MFA_ENABLED` / `MFA_DISABLED`, V23) with the grace period counted from when that notice was sent (`users.mfa_enabled_notice_sent_at`, kept on the user because the outbox purges sent rows after 30 days), a password reset by email that removes a factor still within the grace period (interim, replaced by an admin reset in #0-88) and kills unfinished logins (MFA session / setup tokens), enrolment only from a live session, and existing factors enabled at least 24 h before the deploy backfilled as established by V23 (a newer one gets the grace period like any other, and an operator admin's factor never: operators re-enrol once), answers a review finding: enabling MFA needs only a password, so a password thief could enrol their own factor. Also fixed on the way: bulk UPDATEs in `AuthTokenRepository`, `ApiKeyRepository` and `MfaBackupCodeRepository` (and the new one in `UserRepository`) cleared the persistence context without flushing it, silently dropping earlier changes to other tables in the transaction. Decided against an `amr` JWT claim: only auth-service needs it, so `shared` and the token format stay unchanged; `amr` remains the path if another service needs step-up. A refusal names the failed MFA condition (`PlatformAccessDeniedHandler`). Writes are limited per operator and in total (`PlatformRateLimiter`, bucket4j + Redis, default 20/h per operator and 50/h for the platform, `@CircuitBreaker` opened by any failure), fail-closed (503) unlike ingestion's fail-open #67, with a lazy Redis connection so auth-service starts without Redis. Critical alerts `PlatformTenantProvisioningSpike` and `PlatformApiRateLimited`, high `PlatformApiRateLimitUnavailable`, with promtool tests | PR #446 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

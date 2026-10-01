@@ -39,7 +39,10 @@ public interface MfaBackupCodeRepository extends JpaRepository<MfaBackupCode, UU
      * transaction — but this is the standard, defensive default for this
      * class of query regardless.
      */
-    @Modifying(clearAutomatically = true)
+    // flushAutomatically (found in the review of #0-83): MfaService.disableMfa
+    // changes the user just before this, and the clear that follows must not
+    // discard the change before it is written.
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("DELETE FROM MfaBackupCode c WHERE c.user.id = :userId")
     void deleteAllByUserId(@Param("userId") UUID userId);
 }

@@ -1,6 +1,5 @@
 package com.incidentplatform.auth.api;
 
-import com.incidentplatform.auth.config.PlatformAccess;
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.ApiKeyIntrospectionResponse;
 import com.incidentplatform.auth.service.ApiKeyIntrospectionService;
@@ -69,7 +68,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * route added later is covered without anyone remembering to add it here.
  */
 @WebMvcTest
-@Import({SecurityConfig.class, PlatformAccess.class, UnauthorizedEntryPoint.class, JwtUtils.class,
+@Import({SecurityConfig.class, UnauthorizedEntryPoint.class, JwtUtils.class,
         IntrospectionTokenDenyByDefaultTest.JwtPropertiesConfig.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
@@ -122,6 +121,7 @@ class IntrospectionTokenDenyByDefaultTest {
     @MockitoBean private ResendInviteService resendInviteService;
     @MockitoBean private TenantSettingsService tenantSettingsService;
     @MockitoBean private TenantProvisioningService tenantProvisioningService;
+    @MockitoBean private com.incidentplatform.auth.ratelimit.PlatformRateLimiter platformRateLimiter;
     @MockitoBean private SlackWorkspaceService slackWorkspaceService;
     @MockitoBean private IntegrationService integrationService;
 

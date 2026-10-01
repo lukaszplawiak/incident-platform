@@ -1,8 +1,13 @@
 package com.incidentplatform.auth.api;
 
+import com.incidentplatform.auth.service.MfaSessionStatusService;
 import com.incidentplatform.shared.security.TokenRevocationChecker;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.mockito.Mockito;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Fallback;
 import org.springframework.context.annotation.Primary;
 
 /**
@@ -44,5 +49,37 @@ public class AuthWebMvcTestConfig {
     @Primary
     public TokenRevocationChecker tokenRevocationChecker() {
         return jti -> false;
+    }
+
+    /**
+     * Backlog #0-83: {@code PlatformAccess} (in the scanned config package)
+     * needs the session MFA lookup, a service the web slice does not load. A
+     * mock that answers "no MFA" by default: a test of the platform API
+     * replaces it with {@code @MockitoBean} and says which session passed.
+     *
+     * <p>{@code @Fallback} and a name of its own: {@code AuthServiceApplication}'s
+     * explicit {@code @ComponentScan} has no {@code TypeExcludeFilter}, so the
+     * {@code @SpringBootTest} integration tests scan this test configuration too
+     * (backlog #0-86). There the real service must win; a same-named bean
+     * would silently replace it.
+     */
+    @Bean
+    @Fallback
+    public MfaSessionStatusService webSliceMfaSessionStatusService() {
+        final MfaSessionStatusService mock = Mockito.mock(MfaSessionStatusService.class);
+        Mockito.when(mock.check(Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(MfaSessionStatusService.Status.NO_MFA);
+        return mock;
+    }
+
+    /**
+     * Backlog #0-83: {@code PlatformTenantController} counts provisioned
+     * tenants; the web slice has no metrics auto-configuration.
+     * {@code @Fallback} for the same reason as above.
+     */
+    @Bean
+    @Fallback
+    public MeterRegistry webSliceMeterRegistry() {
+        return new SimpleMeterRegistry();
     }
 }

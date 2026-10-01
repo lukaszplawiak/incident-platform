@@ -321,6 +321,10 @@ public class AuthEmailScheduler {
             switch (type) {
                 case INVITE -> emailService.sendInviteEmail(entry.getEmail(), send.rawToken());
                 case PASSWORD_RESET -> emailService.sendPasswordResetEmail(entry.getEmail(), send.rawToken());
+                case MFA_ENABLED -> emailService.sendMfaChangeNotification(
+                        entry.getEmail(), true, entry.getCreatedAt());
+                case MFA_DISABLED -> emailService.sendMfaChangeNotification(
+                        entry.getEmail(), false, entry.getCreatedAt());
             }
         } catch (Exception e) {
             failedCounters.get(type).increment();
@@ -329,7 +333,7 @@ public class AuthEmailScheduler {
         }
 
         sentCounters.get(type).increment();
-        if (persistenceService.recordSent(entry.getId(), Instant.now())) {
+        if (persistenceService.recordSent(entry, Instant.now())) {
             log.info("Auth email sent: type={}, email={}, userId={}, attempt={}",
                     type, entry.getEmail(), entry.getUserId(), attemptNumber);
         } else {

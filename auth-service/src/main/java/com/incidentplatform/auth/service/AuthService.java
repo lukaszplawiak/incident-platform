@@ -179,7 +179,7 @@ public class AuthService {
                 .plus(jwtUtils.getAccessTokenTtl());
 
         final String rawRefreshToken =
-                authTokenService.generateRefreshToken(user, tenantId, sessionId);
+                authTokenService.generateRefreshToken(user, tenantId, sessionId, null);
 
         final Instant refreshExpiresAt = Instant.now()
                 .plus(jwtUtils.getRefreshTokenTtl());

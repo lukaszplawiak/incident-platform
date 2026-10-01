@@ -6,10 +6,12 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -166,4 +168,30 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     List<String> findTenantIdsWithActiveAcceptedUserWithRole(
             @Param("tenantIds") Collection<String> tenantIds,
             @Param("role") Role role);
+
+    /**
+     * Records that the MFA_ENABLED notice of the user's current factor was
+     * sent (backlog #0-83). Applies only if the notice belongs to the current
+     * enrolment: MFA still enabled, enabled no later than the notice was
+     * requested, and no notice recorded yet. A notice of an earlier factor
+     * therefore never marks a new one. Bumps {@code version}, as
+     * {@code @Version} would. Tenant-scoped like every query, though a user
+     * id alone is unique.
+     *
+     * @return 1 if recorded, 0 if the notice is not the current factor's
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            UPDATE User u
+            SET u.mfaEnabledNoticeSentAt = :sentAt, u.version = u.version + 1
+            WHERE u.id = :userId
+              AND u.tenantId = :tenantId
+              AND u.mfaEnabled = true
+              AND u.mfaEnabledAt <= :requestedAt
+              AND u.mfaEnabledNoticeSentAt IS NULL
+            """)
+    int recordMfaEnabledNoticeSent(@Param("userId") UUID userId,
+                                   @Param("tenantId") String tenantId,
+                                   @Param("requestedAt") Instant requestedAt,
+                                   @Param("sentAt") Instant sentAt);
 }

@@ -9,8 +9,13 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+
 /**
- * Sends auth-domain transactional emails: invite and password reset.
+ * Sends auth-domain transactional emails: invite, password reset, and the
+ * MFA change notifications (backlog #0-83).
  *
  * <h2>Why auth-service has its own email service</h2>
  * Auth emails (invite, password reset) are semantically different from
@@ -79,6 +84,23 @@ public class AuthEmailService {
                 "Reset your Incident Platform password",
                 buildPasswordResetBody(recipientEmail, link));
         log.info("Password reset email sent: to={}", recipientEmail);
+    }
+
+    /**
+     * Tells the account's owner that MFA was enabled or disabled (backlog
+     * #0-83). No link and no token: if the change was not theirs, the owner
+     * acts through the normal paths (password reset, their administrator).
+     * The subject names no account, like the other auth emails.
+     *
+     * @param changedAt when the change was made (the outbox entry's creation)
+     * @throws InviteEmailException if SMTP send fails
+     */
+    public void sendMfaChangeNotification(String recipientEmail, boolean enabled, Instant changedAt) {
+        final String what = enabled ? "enabled" : "disabled";
+        send(recipientEmail,
+                "Two-factor authentication was " + what + " on your Incident Platform account",
+                buildMfaChangeBody(recipientEmail, what, changedAt));
+        log.info("MFA {} notification sent: to={}", what, recipientEmail);
     }
 
     // ── private ───────────────────────────────────────────────────────────
@@ -180,5 +202,32 @@ public class AuthEmailService {
                 </html>
                 """,
                 resetLink, resetLink, resetLink, recipientEmail);
+    }
+
+    private String buildMfaChangeBody(String recipientEmail, String what, Instant changedAt) {
+        return String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #2c3e50;">Two-factor authentication %s</h2>
+                    <p>Two-factor authentication (MFA) was %s on your Incident Platform
+                       account at %s (UTC).</p>
+                    <p style="color: #c0392b; font-weight: bold;">
+                        If this was not you, someone else may know your password.
+                        Reset it now with "Forgot password": a reset made soon after the
+                        change (within 24 hours, unless your platform set another period)
+                        also removes the new second factor. Then tell your administrator.
+                    </p>
+                    <p style="color: #7f8c8d; font-size: 12px;">
+                        If you made this change, no action is needed.
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #ecf0f1; margin: 30px 0;"/>
+                    <p style="color: #bdc3c7; font-size: 11px;">
+                        Incident Platform — sent to %s
+                    </p>
+                </body>
+                </html>
+                """,
+                what, what, DateTimeFormatter.ISO_INSTANT.format(changedAt.truncatedTo(ChronoUnit.SECONDS)),
+                recipientEmail);
     }
 }

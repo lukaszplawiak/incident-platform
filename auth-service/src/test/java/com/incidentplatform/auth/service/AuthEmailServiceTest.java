@@ -150,4 +150,46 @@ class AuthEmailServiceTest {
                     .isInstanceOf(InviteEmailException.class);
         }
     }
+
+    // ── sendMfaChangeNotification (backlog #0-83) ────────────────────────
+
+    @Nested
+    @DisplayName("sendMfaChangeNotification")
+    class SendMfaChangeNotification {
+
+        private jakarta.mail.internet.MimeMessage sent(boolean enabled) throws Exception {
+            final jakarta.mail.internet.MimeMessage message =
+                    new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+            given(mailSender.createMimeMessage()).willReturn(message);
+
+            emailService.sendMfaChangeNotification(RECIPIENT, enabled,
+                    java.time.Instant.parse("2026-10-01T12:34:56.789Z"));
+
+            then(mailSender).should().send(message);
+            return message;
+        }
+
+        @Test
+        @DisplayName("tells the owner MFA was enabled, when, and what to do if it was not them; no link")
+        void enabled() throws Exception {
+            final jakarta.mail.internet.MimeMessage message = sent(true);
+            final String body = (String) message.getContent();
+
+            assertThat(message.getSubject())
+                    .isEqualTo("Two-factor authentication was enabled on your Incident Platform account");
+            assertThat(message.getAllRecipients()[0].toString()).isEqualTo(RECIPIENT);
+            assertThat(body).contains("was enabled", "2026-10-01T12:34:56Z", "If this was not you",
+                    "Forgot password");
+            assertThat(body).doesNotContain("href").doesNotContain("token");
+        }
+
+        @Test
+        @DisplayName("tells the owner MFA was disabled")
+        void disabled() throws Exception {
+            final jakarta.mail.internet.MimeMessage message = sent(false);
+
+            assertThat(message.getSubject()).contains("disabled");
+            assertThat((String) message.getContent()).contains("was disabled");
+        }
+    }
 }

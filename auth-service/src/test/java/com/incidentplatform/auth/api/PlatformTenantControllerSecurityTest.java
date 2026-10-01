@@ -1,11 +1,12 @@
 package com.incidentplatform.auth.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.incidentplatform.auth.config.PlatformAccess;
 import com.incidentplatform.auth.config.SecurityConfig;
 import com.incidentplatform.auth.dto.ProvisionTenantRequest;
 import com.incidentplatform.auth.dto.ProvisionTenantResponse;
 import com.incidentplatform.auth.dto.TenantDto;
+import com.incidentplatform.auth.ratelimit.PlatformRateLimiter;
+import com.incidentplatform.auth.service.MfaSessionStatusService;
 import com.incidentplatform.auth.service.TenantProvisioningService;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
@@ -19,6 +20,8 @@ import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.ServiceNames;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
 import com.incidentplatform.shared.security.UserPrincipal;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -48,11 +51,13 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -65,7 +70,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * run on what a token actually carries, not on a hand-built principal.
  */
 @WebMvcTest(PlatformTenantController.class)
-@Import({SecurityConfig.class, PlatformAccess.class, UnauthorizedEntryPoint.class, JwtUtils.class,
+@Import({SecurityConfig.class, UnauthorizedEntryPoint.class, JwtUtils.class,
         PlatformTenantControllerSecurityTest.JwtPropertiesConfig.class,
         PlatformTenantControllerSecurityTest.UnannotatedPlatformController.class})
 @TestPropertySource(properties = {
@@ -103,6 +108,8 @@ class PlatformTenantControllerSecurityTest {
     private static final String REINVITE = TENANTS + "/acme/admin-invite";
     private static final String ONE = TENANTS + "/acme";
     private static final UUID OPERATOR_ID = UUID.randomUUID();
+    /** The operator's session that completed MFA (backlog #0-83). */
+    private static final UUID MFA_SESSION = UUID.randomUUID();
 
     @Autowired private MockMvc mockMvc;
     @Autowired private JwtUtils jwtUtils;
@@ -110,10 +117,29 @@ class PlatformTenantControllerSecurityTest {
 
     @MockitoBean private TenantProvisioningService provisioningService;
     @MockitoBean private ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService;
+    @MockitoBean private MfaSessionStatusService mfaSessionStatus;
+    @MockitoBean private PlatformRateLimiter rateLimiter;
+    @Autowired private MeterRegistry meterRegistry;
 
+    @BeforeEach
+    void mfaSessionAndLimit() {
+        given(mfaSessionStatus.check(any(), any(), any())).willReturn(MfaSessionStatusService.Status.NO_MFA);
+        given(mfaSessionStatus.check(OPERATOR_ID, ReservedTenants.PLATFORM_OPERATOR, MFA_SESSION)).willReturn(MfaSessionStatusService.Status.ACCEPTED);
+        given(rateLimiter.tryConsume(any())).willReturn(
+                new PlatformRateLimiter.Decision(PlatformRateLimiter.Outcome.ALLOWED, 0));
+    }
+
+    /** A real JWT of a login whose session completed MFA. */
     private String token(String tenantId, String... roles) {
         return jwtUtils.generateToken(OPERATOR_ID, tenantId, "ops@platform.test",
-                List.of(roles), List.of(), List.of());
+                List.of(roles), List.of(), List.of(), MFA_SESSION);
+    }
+
+    /** A real JWT of an operator admin who logged in with a password only. */
+    private String operatorAdminWithoutMfa() {
+        return jwtUtils.generateToken(OPERATOR_ID, ReservedTenants.PLATFORM_OPERATOR,
+                "ops@platform.test", List.of(SecurityRoles.ROLE_ADMIN), List.of(), List.of(),
+                UUID.randomUUID());
     }
 
     private String operatorAdmin() {
@@ -249,6 +275,47 @@ class PlatformTenantControllerSecurityTest {
         assertForbiddenEverywhere("ipl_operator_personal_key");
     }
 
+    @Test
+    @DisplayName("operator admin whose session did not complete MFA — 403 explaining what to do, everywhere")
+    void operatorAdminWithoutMfaForbidden() throws Exception {
+        final String bearer = operatorAdminWithoutMfa();
+        for (final MockHttpServletRequestBuilder request : List.of(
+                provisionAs(bearer),
+                post(REINVITE).header("Authorization", "Bearer " + bearer),
+                get(TENANTS).header("Authorization", "Bearer " + bearer),
+                get(ONE).header("Authorization", "Bearer " + bearer),
+                get("/api/v1/platform/probe").header("Authorization", "Bearer " + bearer))) {
+            mockMvc.perform(request)
+                    .andExpect(status().isForbidden())
+                    .andExpect(jsonPath("$.errorCode").value(ErrorCodes.FORBIDDEN))
+                    .andExpect(jsonPath("$.message").value(
+                            org.hamcrest.Matchers.containsString("requires a login that completed MFA")));
+        }
+        verifyNoInteractions(provisioningService, rateLimiter);
+    }
+
+    @Test
+    @DisplayName("operator admin whose factor is too new — 403 naming that condition")
+    void operatorAdminWithNewFactorForbidden() throws Exception {
+        given(mfaSessionStatus.check(OPERATOR_ID, ReservedTenants.PLATFORM_OPERATOR, MFA_SESSION))
+                .willReturn(MfaSessionStatusService.Status.MFA_ENROLLED_TOO_RECENTLY);
+
+        mockMvc.perform(get(TENANTS).header("Authorization", "Bearer " + operatorAdmin()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("some time after the email announcing it was sent")));
+        verifyNoInteractions(provisioningService);
+    }
+
+    @Test
+    @DisplayName("a customer admin's 403 does not mention MFA")
+    void customerAdminDenialSaysNothingAboutMfa() throws Exception {
+        mockMvc.perform(get(TENANTS).header("Authorization", "Bearer " + token("acme", SecurityRoles.ROLE_ADMIN)))
+                .andExpect(status().isForbidden())
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("MFA"))));
+    }
+
     private void assertForbiddenEverywhere(String bearer) throws Exception {
         mockMvc.perform(provisionAs(bearer)).andExpect(status().isForbidden());
         mockMvc.perform(post(REINVITE).header("Authorization", "Bearer " + bearer))
@@ -269,6 +336,50 @@ class PlatformTenantControllerSecurityTest {
         mockMvc.perform(get("/api/v1/platform/probe")
                         .header("Authorization", "Bearer " + operatorAdmin()))
                 .andExpect(status().isOk());
+    }
+
+    // ── Per-operator limit on write operations (backlog #0-83) ──────────────
+
+    @Test
+    @DisplayName("limit reached — 429 with Retry-After on both write operations, nothing done")
+    void rateLimited() throws Exception {
+        given(rateLimiter.tryConsume(OPERATOR_ID)).willReturn(
+                new PlatformRateLimiter.Decision(PlatformRateLimiter.Outcome.LIMITED, 180));
+
+        mockMvc.perform(provisionAs(operatorAdmin()))
+                .andExpect(status().isTooManyRequests())
+                .andExpect(header().string("Retry-After", "180"));
+        mockMvc.perform(post(REINVITE).header("Authorization", "Bearer " + operatorAdmin()))
+                .andExpect(status().isTooManyRequests());
+        verifyNoInteractions(provisioningService);
+    }
+
+    @Test
+    @DisplayName("limit cannot be checked — 503 with Retry-After (fail-closed), nothing done")
+    void rateLimitUnavailable() throws Exception {
+        given(rateLimiter.tryConsume(OPERATOR_ID)).willReturn(
+                new PlatformRateLimiter.Decision(PlatformRateLimiter.Outcome.UNAVAILABLE, 30));
+
+        mockMvc.perform(provisionAs(operatorAdmin()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "30"));
+        verifyNoInteractions(provisioningService);
+    }
+
+    @Test
+    @DisplayName("reads are not limited; a created tenant is counted")
+    void readsUnlimitedAndProvisionCounted() throws Exception {
+        given(provisioningService.list(any())).willReturn(new PageImpl<>(List.of()));
+        given(provisioningService.provision(any(), any())).willReturn(
+                new ProvisionTenantResponse("acme", "Acme Corp", UUID.randomUUID(), "admin@acme.test"));
+        final double before = meterRegistry.counter("platform.tenants.provisioned").count();
+
+        mockMvc.perform(get(TENANTS).header("Authorization", "Bearer " + operatorAdmin()))
+                .andExpect(status().isOk());
+        verifyNoInteractions(rateLimiter);
+
+        mockMvc.perform(provisionAs(operatorAdmin())).andExpect(status().isCreated());
+        assertThat(meterRegistry.counter("platform.tenants.provisioned").count()).isEqualTo(before + 1);
     }
 
     // ── Input and service errors reach the client as their status ───────────
@@ -294,16 +405,24 @@ class PlatformTenantControllerSecurityTest {
                                 new ProvisionTenantRequest("Acme_Corp", "Acme", "admin@acme.test"))))
                 .andExpect(status().isBadRequest());
         verifyNoInteractions(provisioningService);
+        // Bean validation refuses before the method body: the limit is not taken.
+        verifyNoInteractions(rateLimiter);
     }
 
     @Test
-    @DisplayName("tenant already exists — 409")
+    @DisplayName("tenant already exists — 409; the attempt used a limit token and created no tenant")
     void duplicateTenant() throws Exception {
         willThrow(new BusinessException(ErrorCodes.ALREADY_EXISTS, "Tenant 'acme' already exists",
                 HttpStatus.CONFLICT)).given(provisioningService).provision(any(), any());
+        final double before = meterRegistry.counter("platform.tenants.provisioned").count();
 
         mockMvc.perform(provisionAs(operatorAdmin()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.errorCode").value(ErrorCodes.ALREADY_EXISTS));
+
+        // Backlog #0-83: a refused attempt counts against the limit (it bounds
+        // probing too), but is no provisioned tenant.
+        then(rateLimiter).should().tryConsume(OPERATOR_ID);
+        assertThat(meterRegistry.counter("platform.tenants.provisioned").count()).isEqualTo(before);
     }
 }

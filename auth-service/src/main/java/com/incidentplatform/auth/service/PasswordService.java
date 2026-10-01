@@ -43,15 +43,18 @@ public class PasswordService {
     private final AuthTokenService authTokenService;
     private final PasswordEncoder passwordEncoder;
     private final AuditEventPublisher auditEventPublisher;
+    private final MfaService mfaService;
 
     public PasswordService(UserRepository userRepository,
                            AuthTokenService authTokenService,
                            PasswordEncoder passwordEncoder,
-                           AuditEventPublisher auditEventPublisher) {
+                           AuditEventPublisher auditEventPublisher,
+                           MfaService mfaService) {
         this.userRepository  = userRepository;
         this.authTokenService = authTokenService;
         this.passwordEncoder = passwordEncoder;
         this.auditEventPublisher = auditEventPublisher;
+        this.mfaService = mfaService;
     }
 
 
@@ -64,6 +67,11 @@ public class PasswordService {
      *   <li>Invalidates all refresh tokens — forces re-login on all devices.
      *       This ensures that if an attacker had active sessions via a
      *       compromised account, they are terminated immediately.</li>
+     *   <li>Backlog #0-83: removes a second factor enabled within the grace
+     *       period ({@link MfaService#removeFactorEnrolledWithinGrace}), the
+     *       remedy the MFA_ENABLED email names when the enrolment was not the
+     *       owner's, and invalidates unfinished logins (MFA session and MFA
+     *       setup tokens).</li>
      * </ol>
      *
      * @param request token + new password
@@ -79,7 +87,16 @@ public class PasswordService {
         final com.incidentplatform.auth.domain.User user = token.getUser();
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        // Backlog #0-83: an MFA setup begun but not enabled goes with the old
+        // password too (found in review); hygiene, since nobody can finish it
+        // without a live session after the reset.
+        user.discardPendingMfaSecret();
         userRepository.save(user);
+
+        mfaService.removeFactorEnrolledWithinGrace(user, token.getTenantId());
+        // Backlog #0-83: a half-finished login of whoever had the old password
+        // (an MFA session or MFA setup token) must not survive the reset either.
+        authTokenService.invalidateLoginContinuationTokens(user.getId());
 
         // Invalidate all refresh tokens — terminates all active sessions.
         // An attacker who had access to the account is now logged out.

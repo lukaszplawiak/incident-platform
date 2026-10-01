@@ -505,6 +505,18 @@ jobs:
           amtool config routes test --config.file=alertmanager.yml \
             --verify.receivers=platform-webhook \
             alertname=JvmMemoryHigh scope=platform severity=high
+          # Backlog #0-83: the platform API alerts. The two critical ones must
+          # reach the operator by email (outside the platform: someone acting as
+          # an operator could resolve the incident in the operator tenant).
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email,platform-webhook \
+            alertname=PlatformTenantProvisioningSpike scope=platform severity=critical
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email,platform-webhook \
+            alertname=PlatformApiRateLimited scope=platform severity=critical
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=platform-webhook \
+            alertname=PlatformApiRateLimitUnavailable scope=platform severity=high
 
   # ──────────────────────────────────────────────────────────
   # Job 5: Smoke test — boot the real stack via docker compose and
