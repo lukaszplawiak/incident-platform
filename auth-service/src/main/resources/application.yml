@@ -5,7 +5,14 @@ spring:
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
     username: ${DB_USER:incident_app}
-    password: ${DB_PASSWORD:incident_secret}
+    # No default (backlog #0-66), so a missing DB_PASSWORD never connects
+    # with the dev password. Spring Boot leaves an unresolved placeholder in
+    # place here, so the symptom is "password authentication failed for user
+    # incident_app", not a placeholder error; compose and Kubernetes stop
+    # earlier with their own message. Set in docker/.env (compose),
+    # app-secrets (k8s) or application-local.yml (spring-boot:run):
+    # docs/database-roles.md.
+    password: ${DB_PASSWORD}
     hikari:
       maximum-pool-size: 5
       minimum-idle: 2

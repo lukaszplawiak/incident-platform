@@ -176,7 +176,12 @@ variables:
 | `APP_DB_PASSWORD` | `DB_PASSWORD` in `docker/.env` (required) | Secret `app-secrets`, key `DB_PASSWORD` (per overlay) |
 
 The services read their password from the same source (`DB_PASSWORD`), so the role and the services
-cannot disagree on it. ingestion-service does not use the database. The script reads the values
+cannot disagree on it. A service started with `./mvnw spring-boot:run` does not see `docker/.env`. It
+needs `spring.datasource.password` in its `application-local.yml` (README "Running Locally", Step 2),
+set to the same value. `application.yml` has no default (backlog #0-66), so no service falls back to
+a password of its own. The dev value `incident_secret` exists only where a developer picks it on
+purpose: `docker/.env.example`, the dev overlay and the README's `application-local.yml` template.
+ingestion-service does not use the database. The script reads the values
 inside psql (`\getenv`), so no password appears on a command line. It refuses to run if
 `APP_DB_USER` equals `POSTGRES_USER`.
 
@@ -211,9 +216,9 @@ The docker-compose smoke test then checks the role after every service has run i
 
 3. Start the services. The first start of each service runs its Flyway migrations as `incident_app`.
 
-Services started with `./mvnw spring-boot:run` (README "Running Locally", Option A) do not read `docker/.env`. They
-use `application.yml`'s `${DB_PASSWORD:incident_secret}`. With a `DB_PASSWORD` other than `incident_secret`, export it
-in the shell that starts them, or set `spring.datasource.password` in each `application-local.yml`.
+Services started with `./mvnw spring-boot:run` (README "Running Locally", Option A) do not read `docker/.env`. Give
+each of them `spring.datasource.password` in its `application-local.yml` (README Step 2), or export `DB_PASSWORD` in
+the shell that starts it.
 
 ### Kubernetes
 
@@ -228,6 +233,34 @@ in the shell that starts them, or set `spring.datasource.password` in each `appl
      probe back until then.
    - Readiness goes over TCP, because the image's temporary init-phase server listens on its socket
      only.
+
+### A missing or wrong password
+
+`application.yml` reads `${DB_PASSWORD}` with no default (backlog #0-66), so a service never falls back
+to a dev password. Where the password is missing, this is what you see:
+
+| How it runs | Missing password stops it at | Message |
+|---|---|---|
+| Kubernetes | the pod, before the service starts | `CreateContainerConfigError`, `couldn't find key DB_PASSWORD in Secret ...` |
+| docker-compose | `docker compose`, before anything starts | `required variable DB_PASSWORD is missing a value: set DB_PASSWORD in docker/.env ...` |
+| `./mvnw spring-boot:run` | the service's first connection | `password authentication failed for user "incident_app"` |
+
+The last message reads like a wrong password, not a missing one. An *empty* `DB_PASSWORD` (a
+Kubernetes Secret whose key exists but is empty, or `DB_PASSWORD=` in a shell) gets past
+`secretKeyRef` and reaches Postgres too, with the same message. Compose rejects it, because
+`${VAR:?}` treats empty as missing. Spring Boot leaves an unresolved
+`${DB_PASSWORD}` in place for `spring.datasource.*` instead of failing on it, so the service sends
+that text as the password. Check `spring.datasource.password` in `application-local.yml` first. The
+same message with the password set means it differs from the role's (see
+[Changing a password later](#changing-a-password-later)). A CI step ("No service has a default
+database password", `.github/scripts/check-db-password-config.rb`) reads every committed Spring
+config of every module and fails when any of these hold:
+- `spring.datasource.password` is anything but `${DB_PASSWORD}`;
+- another datasource or Flyway password is a literal or has a default;
+- the JDBC URL carries a password;
+- a service has a datasource but no password.
+
+Its own bypass test (`test-db-password-config.sh`) runs first.
 
 ### If the first start fails
 
@@ -387,7 +420,7 @@ The order differs, because `kubectl apply` also restores the Deployments' replic
 1. Back up (`kubectl exec -n <ns> postgresql-0 -- pg_dump -U incident_app -d incidentdb -Fc > ...`).
 2. In the overlay's `secrets.yml`:
    - set `app-secrets` → `DB_PASSWORD` to the password the services use today. Before #0-78 no
-     Deployment set it, so it is the `application.yml` default, `incident_secret`;
+     Deployment set it, so it is the default `application.yml` had then, `incident_secret`;
    - add the `postgresql-admin` Secret (`username`, a new `password`).
 3. `kubectl apply -k k8s/overlays/<env>`. The StatefulSet restarts with the new environment, and the
    init script does not run on the existing PVC. The services keep working as before: they still

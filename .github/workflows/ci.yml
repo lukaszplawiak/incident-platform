@@ -397,7 +397,7 @@ jobs:
           exit "$failed"
 
   # ──────────────────────────────────────────────────────────
-  # PostgreSQL roles (backlog #0-78)
+  # PostgreSQL roles (backlog #0-78), and the database password config (#0-66)
   #
   # Runs .github/scripts/test-postgres-roles.sh against the postgres image
   # docker-compose uses: the init script on an empty volume (restricted
@@ -422,6 +422,39 @@ jobs:
 
       - name: Init script, guard and migration
         run: .github/scripts/test-postgres-roles.sh
+
+      # Backlog #0-66: the services' database password has no default, so a
+      # Deployment or run without DB_PASSWORD never connects with the dev
+      # password. .github/scripts/check-db-password-config.rb reads every
+      # committed Spring config (application*.{yml,yaml,properties} under
+      # */src/main/resources and its config/ subdirectory, parsed, not
+      # grepped) and fails on a literal or defaulted datasource/Flyway
+      # password, a password in the JDBC URL, or a service with a datasource
+      # but no password. Its bypass test runs first, so a broken checker
+      # cannot pass. A plain grep for the old default's pieces stays as a
+      # second layer.
+      - name: No service has a default database password
+        run: |
+          set -euo pipefail
+          ruby --version
+          .github/scripts/test-db-password-config.sh
+          ruby .github/scripts/check-db-password-config.rb
+
+          mapfile -t files < <(git ls-files -- '*/src/main/resources/application*' '*/src/main/resources/config/application*')
+          [ "${#files[@]}" -gt 0 ] || { echo "::error::no Spring config files found"; exit 1; }
+          # grep exits 1 on no match and 2 on an error; only 1 passes.
+          set +e
+          grep -nE '\$\{DB_PASSWORD:|incident_secret' "${files[@]}"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::the old default database password is back in the lines above (backlog #0-66)"
+            exit 1
+          elif [ "$rc" -ne 1 ]; then
+            echo "::error::grep failed (exit $rc)"
+            exit 1
+          fi
+          echo "Checked ${#files[@]} config files: the old default is nowhere."
 
   # ──────────────────────────────────────────────────────────
   # Validate the monitoring config (backlog #0-16)

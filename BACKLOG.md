@@ -66,7 +66,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-62](#0-62-any-github-action-from-the-marketplace-is-allowed-to-run) | Any GitHub Action from the Marketplace is allowed to run | ci | Low | Open |
 | [0-64](#0-64-kubernetes-pods-run-without-a-securitycontext) | Kubernetes pods run without a `securityContext` | design | Medium | Open |
 | [0-65](#0-65-no-networkpolicy-every-pod-can-reach-every-other-pod) | No NetworkPolicy: every pod can reach every other pod | design | Medium | Open |
-| [0-66](#0-66-data-stores-in-kubernetes-have-no-authentication-or-tls-and-the-services-fall-back-to-a-default-db-password) | Data stores in Kubernetes have no authentication or TLS, and the services fall back to a default DB password | design | Medium | Open |
+| [0-66](#0-66-redis-and-kafka-in-kubernetes-have-no-authentication-and-no-data-store-uses-tls) | Redis and Kafka in Kubernetes have no authentication, and no data store uses TLS | design | Medium | Open |
 | [0-67](#0-67-all-seven-services-share-one-database-role) | All seven services share one database role | design | Medium | Open |
 | [0-68](#0-68-sast-has-never-run-snyk-code-is-not-enabled-and-codeql-is-not-set-up) | SAST has never run: Snyk Code is not enabled, and CodeQL is not set up | ci | Medium | Open |
 | [0-69](#0-69-the-snyk-dependency-scan-fails-on-every-run-so-a-new-finding-changes-nothing) | The Snyk dependency scan fails on every run, so a new finding changes nothing | ci | Medium | Open |
@@ -79,6 +79,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
 | [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
+| [0-80](#0-80-every-new-database-gets-an-admin-account-with-the-password-changeme) | Every new database gets an admin account with the password `changeme` | bug | High | Open |
+| [0-81](#0-81-test-profiles-with-hard-coded-keys-ship-inside-the-service-jars) | Test profiles with hard-coded keys ship inside the service jars | tech-debt | Low | Open |
 
 ---
 
@@ -940,25 +942,28 @@ provider, auth-service to the SMTP server. Needs a CNI that enforces NetworkPoli
 
 ---
 
-### 0-66. Data stores in Kubernetes have no authentication or TLS, and the services fall back to a default DB password
+### 0-66. Redis and Kafka in Kubernetes have no authentication, and no data store uses TLS
 
 **Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit;
-the Postgres Secret part was done with #0-78)
+the Postgres part is done: the Secret with #0-78, the default password in PR #TBD)
 
 **Problem.**
 - **Redis** (`k8s/base/infrastructure/redis.yml`) runs `redis-server --appendonly yes` with no password. It holds
   the token revocation list and the rate-limit buckets, so any pod can un-revoke a token or reset a limit.
 - **Kafka** (`kafka.yml`) listens `PLAINTEXT` with no SASL and no ACLs. Any pod can produce to `alerts.raw` or
   `incidents.lifecycle` with any `X-Tenant-Id`, and consumers trust that header (#0-39).
-- **Postgres**: since #0-78 the password comes from each overlay's `app-secrets` (`DB_PASSWORD`, passed to the six
-  services that use the database and to the init script that creates the role), and the base no longer ships a
-  Secret. What is left: each service's `application.yml` still falls back to `${DB_PASSWORD:incident_secret}`, so
-  a Deployment that loses the variable connects with the dev password instead of failing. Compare `JWT_SECRET`,
-  which has no default and stops startup when missing.
+- **Postgres** (done): since #0-78 the password comes from each overlay's `app-secrets` (`DB_PASSWORD`, passed to the
+  six services that use the database and to the init script that creates the role), and the base no longer ships a
+  Secret. `application.yml` used to fall back to `${DB_PASSWORD:incident_secret}`, so a run without the variable
+  connected with the dev password; it now reads `${DB_PASSWORD}` with no default, and a CI step ("No service has a
+  default database password") keeps it that way. No in-app check was added: Kubernetes (`secretKeyRef`) and compose
+  (`${VAR:?}`) already stop a missing password with a clear message (an empty Kubernetes value gets
+  through and fails like a wrong password), and for `spring-boot:run` the symptom ("password
+  authentication failed", since Spring Boot leaves an unresolved placeholder in `spring.datasource.*`) is documented
+  in `docs/database-roles.md`.
 - No connection to any of the three uses TLS.
 
-**Approach.** Remove the `DB_PASSWORD` default (fail fast, as for `JWT_SECRET`); `application-local.yml` templates
-in the README then need the password too. Redis `requirepass`
+**Approach.** Redis `requirepass`
 (or ACL users) from a Secret, wired to `REDIS_PASSWORD`, which the services already read. Kafka SASL/SCRAM with a
 user per service and ACLs per topic, which also closes the forged-header path. TLS on all three once a certificate
 source exists (#0-75). Pairs with #0-67.
@@ -1171,6 +1176,56 @@ when the services have taken every other connection, which is the reserve's purp
 - put a pooler (PgBouncer) in front once the replica counts grow.
 
 `docs/database-roles.md` explains the arithmetic.
+
+---
+
+### 0-80. Every new database gets an admin account with the password `changeme`
+
+**Type:** bug · **Priority:** High · **Status:** Open (found in the review of #0-66)
+
+**Problem.** auth-service's Flyway Java migration `V1_1__seed_admin_user` creates an admin
+(`ROLE_ADMIN`) in tenant `default` whenever it runs, which is once, on every new database.
+Existing databases keep whatever account it created then. Its email and password come from
+`ADMIN_EMAIL` / `ADMIN_PASSWORD`, defaulting to `admin@incidentplatform.com` / `changeme`. It only
+logs a warning when the default password is used. Neither docker-compose nor any Kubernetes overlay
+sets `ADMIN_PASSWORD`, so every deployment has a known admin login. Checked on the local stack:
+`POST /api/v1/auth/login` with those credentials and `X-Tenant-Id: default` returns 200. In
+Kubernetes the Ingress routes `/api/v1/auth`, so the account is reachable from outside the cluster.
+Until this item, nothing in the README or `docs/` mentioned it.
+
+**Approach.** Decide how the first admin of a tenant comes to exist, then remove the hard-coded
+default. Options:
+- require `ADMIN_PASSWORD` and fail the migration without it;
+- seed no password at all and invite the admin by email, as the `platform-operator` tenant already
+  does (`OperatorTenantBootstrap`, #0-49);
+- drop the seed and create tenants and their first admin through an API.
+
+Existing databases need the seeded account's password rotated or the account archived. Same class as
+#0-63: a default that is safe nowhere.
+
+---
+
+### 0-81. Test profiles with hard-coded keys ship inside the service jars
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-66)
+
+**Problem.** `application-test.yml` lives in `src/main/resources` of auth-service, incident-service
+and ingestion-service, so it is packaged into the jar and the image. The auth and incident copies
+hard-code `jwt.secret`, and auth's also `mfa.encryption-key`. A deployment that activates the
+`test` profile loads them, wherever the matching environment variable is absent (an environment
+variable such as `JWT_SECRET` outranks a profile file).
+- **Staging and prod:** the #0-63 CI check already rejects any Spring profile in their rendered
+  manifests, `test` included.
+- **Dev:** the dev overlay is allowed to set a profile.
+- **Elsewhere:** a run outside the manifests is not covered by that check.
+
+Where `test` is active today, the JWT part fails closed: the hard-coded `jwt.secret` is 52 characters
+and `JwtUtils` refuses anything under 64, so the service does not start. That protection is
+accidental and JWT-only. auth-service's MFA key has a valid length and would be used as it is.
+
+**Approach.** Move the test profiles to `src/test/resources`, where tests still find them and the jar
+does not contain them, or delete them if no test activates them. That removes the cause, which the
+#0-63 check cannot.
 
 ---
 
