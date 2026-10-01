@@ -30,6 +30,7 @@ logs/
 
 # Spring Boot
 application-local.yml
+application-local.yaml
 application-secrets.yml
 
 # Env variable

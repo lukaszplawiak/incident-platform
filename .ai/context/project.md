@@ -458,6 +458,12 @@ inferable from the files:
   before the role existed (reproduced). A TCP liveness probe would fail during init and could
   restart the pod mid-init.
 - No role name is hard-coded: probes, CI and the migration read `POSTGRES_USER` / `APP_DB_USER`.
+- `spring.datasource.password` is `${DB_PASSWORD}` with no default (backlog #0-66). Spring Boot
+  leaves an unresolved placeholder in place when binding `spring.datasource.*`, so a missing
+  password reaches Postgres as the literal text and fails as "password authentication failed",
+  not as a placeholder error. No in-app check on purpose: Kubernetes and compose stop earlier with
+  a clear message. `.github/scripts/check-db-password-config.rb` (CI, with its own bypass test) requires every committed
+  `spring.datasource.password` to be exactly `${DB_PASSWORD}`.
 - The superuser never touches anything outside `pg_catalog` in `incidentdb`, not even to read it:
   the services' role owns the database and `public` and could have planted a trigger, rule, default, view or shadowing function there,
   which would run as whoever fires it. Service data, backups and restores go through an

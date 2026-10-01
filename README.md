@@ -365,6 +365,10 @@ in Settings).
 - **Schema changes only through migrations**: each service has its own Flyway history table and
   `ddl-auto: validate`, so an unmigrated change fails startup instead of altering the schema.
 - **Redis persistence**: append-only file on, so revoked tokens and dedup keys survive a Redis restart.
+- **No default database password**: `application.yml` reads `${DB_PASSWORD}` with no fallback, so a service
+  without the password never connects with the dev one; when it is missing, Kubernetes (`secretKeyRef`) and
+  compose (`${VAR:?}`) stop before the service starts. A CI step (`check-db-password-config.rb`, with a bypass
+  test) fails unless every committed config sets the password to exactly `${DB_PASSWORD}` (backlog #0-66).
 - **No superuser for the services**: they connect as `incident_app`, which owns the database but is not a superuser,
   cannot create roles or databases and is a member of no other role, so a SQL injection no longer reaches the
   container (`COPY ... TO PROGRAM`), the server's files or other roles directly. The image's superuser is for
@@ -407,8 +411,7 @@ Open items from the audit and earlier, most important first within each area. Ea
   - The staging and prod overlays are swapped, so "prod" deploys to the staging namespace: backlog #0-29.
   - The Ingress has no TLS: backlog #0-75.
 - **Data stores**
-  - Redis has no password, Kafka no SASL/ACLs, nothing uses TLS, and the services' `application.yml` still falls
-    back to a default database password when `DB_PASSWORD` is missing: backlog #0-66.
+  - Redis has no password, Kafka no SASL/ACLs, and nothing uses TLS: backlog #0-66.
   - All seven services share one database role that owns every table, so neither grants nor Row-Level Security
     separate one service's tables from another's, and a SQL injection can plant a trigger, view or function that
     runs as a superuser if a superuser touches a service table, even under `SET ROLE`: backlog #0-67.
@@ -425,7 +428,10 @@ Open items from the audit and earlier, most important first within each area. Ea
   - Built images are not scanned and no SBOM is produced: backlog #0-70.
   - Mutable image tags in k8s and compose, and k8s third-party images not tracked by Renovate: backlog #0-71.
 - **Application**
+  - Every new database gets an admin account `admin@incidentplatform.com` / `changeme` in tenant `default` (the
+    seed migration's default; no deployment sets `ADMIN_PASSWORD`): backlog #0-80.
   - Swagger UI and the OpenAPI documents are public in every profile: backlog #0-73.
+  - The `test` profiles, with hard-coded keys, ship inside the jars of three services: backlog #0-81.
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
 - **Project**
   - No `SECURITY.md`, no private vulnerability reporting, no Dependabot alerts: backlog #0-74.
@@ -630,8 +636,8 @@ passwords come from `POSTGRES_ADMIN_PASSWORD` and `DB_PASSWORD` in `docker/.env`
 #0-78 still has a superuser `incident_app`, and its `docker/.env` has `POSTGRES_PASSWORD`, which `DB_PASSWORD`
 replaced. To migrate it while keeping its data, or to start over, see
 [docs/database-roles.md](docs/database-roles.md). Services run with `./mvnw spring-boot:run` (Option A) don't read
-`docker/.env`; they use `incident_secret` unless `DB_PASSWORD` is exported or `spring.datasource.password` is set in
-`application-local.yml`.
+`docker/.env`; they need `spring.datasource.password` in `application-local.yml` (Step 2) or an exported
+`DB_PASSWORD`, as `application.yml` has no default (backlog #0-66).
 
 ### Step 2 — Create application-local.yml for each service
 
@@ -649,6 +655,21 @@ logging:
   level:
     com.incidentplatform: DEBUG
 ```
+
+**The six services that use the database** (all but ingestion-service) also need its password: there is
+no default in `application.yml` (backlog #0-66). Use the same value as `DB_PASSWORD` in `docker/.env`.
+If the file already has a `spring:` key (notification-service's mail settings), put `datasource:` under it
+instead of adding a second `spring:`:
+
+```yaml
+spring:
+  datasource:
+    password: incident_secret   # = DB_PASSWORD in docker/.env
+```
+
+If a service stops at startup with `password authentication failed for user "incident_app"`, the password
+is missing or wrong. Spring Boot does not report a missing value as such here, see
+[docs/database-roles.md](docs/database-roles.md#a-missing-or-wrong-password).
 
 **auth-service** additionally requires two encryption keys — one for MFA secrets, one for tenants' Slack bot tokens (separate on purpose, so one leaked key does not expose both; backlog #0-21). Each is 32 bytes, base64 (`openssl rand -base64 32`):
 
