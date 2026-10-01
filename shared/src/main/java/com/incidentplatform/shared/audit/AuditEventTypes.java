@@ -66,6 +66,13 @@ public final class AuditEventTypes {
     public static final String USER_RESTORED           = "USER_RESTORED";
     public static final String USER_ANONYMIZED         = "USER_ANONYMIZED";
 
+    // ── Platform (backlog #0-80) ─────────────────────────────────────────────
+    // Recorded in the platform-operator tenant: an operator's action on another
+    // tenant. The tenant's own audit trail gets the USER_CREATED / USER_INVITE_*
+    // events of the same action.
+    public static final String TENANT_PROVISIONED      = "TENANT_PROVISIONED";
+    public static final String TENANT_ADMIN_REINVITED  = "TENANT_ADMIN_REINVITED";
+
 
     // ── Teams ────────────────────────────────────────────────────────────────
     public static final String TEAM_CREATED             = "TEAM_CREATED";
