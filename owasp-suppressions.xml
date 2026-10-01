@@ -209,10 +209,18 @@
 
          DOMPurify is a client-side JavaScript XSS sanitizer used by the
          Swagger UI HTML/JS bundle. None of the CVEs affect Java server-side
-         code. Swagger UI in this project is:
-           - Accessible only in development/staging (not production)
-           - Protected by JWT authentication on all API endpoints
-           - Not exposed to untrusted HTML input from end-users
+         code. Swagger UI in this project:
+           - Is public, without a token, in every profile and in every service
+             that has springdoc (shared PUBLIC_PATHS, backlog #0-73). The k8s
+             Ingress does not route it, so it is reachable only inside the
+             cluster or on a service port directly. An earlier version of this
+             note said "development/staging only" and "JWT-protected"; neither
+             was true.
+           - Renders only the platform's own OpenAPI documents, never HTML or
+             input from end users, which is what these sanitizer bypasses need.
+         The acceptance therefore rests on the CVEs being client-side only and
+         needing attacker-controlled input to the sanitizer, not on access
+         control. Re-evaluate when #0-73 lands.
 
          CVE-2026-41238 (CVSS 6.9): prototype pollution XSS bypass — requires
            a prior prototype pollution gadget in the same browser context.
@@ -231,8 +239,8 @@
             AWAITING FIX: DOMPurify 3.4.0 fixes all four CVEs but springdoc-openapi
             2.8.17 (current latest) still bundles swagger-ui with DOMPurify 3.3.2.
             All CVEs are client-side JS only (CVSS 5.3-6.9, non-blocking). Swagger
-            UI is JWT-protected and not exposed to untrusted HTML input in this
-            project. Renovate will PR when springdoc-openapi ships DOMPurify 3.4.0+.
+            UI is public in every profile (backlog #0-73) but renders only the
+            platform's own OpenAPI documents, never untrusted HTML input. Renovate will PR when springdoc-openapi ships DOMPurify 3.4.0+.
         </notes>
         <packageUrl regex="true">^pkg:javascript/DOMPurify@.*$</packageUrl>
         <cve>CVE-2026-41238</cve>

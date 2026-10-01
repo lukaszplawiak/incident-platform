@@ -99,11 +99,13 @@
 			<groupId>net.javacrumbs.shedlock</groupId>
 			<artifactId>shedlock-provider-jdbc-template</artifactId>
 		</dependency>
+		<!-- Serves the OpenAPI document and Swagger UI built from PostmortemController's
+		     @Operation annotations, which had only the annotations jar before and were never
+		     served. Same as the other services with an HTTP API; public in every profile
+		     until backlog #0-73. Brings swagger-annotations-jakarta with it. -->
 		<dependency>
-			<groupId>io.swagger.core.v3</groupId>
-			<artifactId>swagger-annotations-jakarta</artifactId>
-			<version>2.2.47</version>
-			<scope>compile</scope>
+			<groupId>org.springdoc</groupId>
+			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
 		</dependency>
 	</dependencies>
 
