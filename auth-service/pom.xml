@@ -13,7 +13,7 @@
     <name>auth-service</name>
     <description>
         Authentication and identity service — JWT issuance, user management,
-        bootstrap admin seeding. Planned: OAuth2/OIDC provider integration.
+        tenant provisioning. Planned: OAuth2/OIDC provider integration.
     </description>
 
     <dependencies>

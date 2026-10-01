@@ -79,8 +79,11 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
 | [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
-| [0-80](#0-80-every-new-database-gets-an-admin-account-with-the-password-changeme) | Every new database gets an admin account with the password `changeme` | bug | High | Open |
 | [0-81](#0-81-test-profiles-with-hard-coded-keys-ship-inside-the-service-jars) | Test profiles with hard-coded keys ship inside the service jars | tech-debt | Low | Open |
+| [0-82](#0-82-suspend-and-offboard-a-tenant) | Suspend and offboard a tenant | design | Medium | Open |
+| [0-83](#0-83-the-platform-api-does-not-require-mfa) | The platform API does not require MFA | design | Medium | Open |
+| [0-84](#0-84-audit-events-are-sent-to-kafka-inside-the-database-transaction-not-through-an-outbox) | Audit events are sent to Kafka inside the database transaction, not through an outbox | bug | Medium | Open |
+| [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 
 ---
 
@@ -799,6 +802,10 @@ move PII to a `personal_data` table (`user_id` FK, `email`, `password_hash`, ...
 and on every email lookup (`findByEmailAndTenantId`, the unique email-per-tenant constraint moves with it),
 and it does not by itself remove copies held elsewhere.
 
+Copies known so far include the audit log: events such as `USER_CREATED` and, since #0-80,
+`TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` carry the user's email address in their payload, and
+anonymizing the user does not touch them.
+
 **Work.** Decide whether the in-place approach is enough (document what "erased" covers, including logs
 and backups) or plan the split, when a customer or audit requires stronger erasure guarantees. The
 `TODO`s in `User` and `UserManagementService` point here.
@@ -1179,32 +1186,6 @@ when the services have taken every other connection, which is the reserve's purp
 
 ---
 
-### 0-80. Every new database gets an admin account with the password `changeme`
-
-**Type:** bug · **Priority:** High · **Status:** Open (found in the review of #0-66)
-
-**Problem.** auth-service's Flyway Java migration `V1_1__seed_admin_user` creates an admin
-(`ROLE_ADMIN`) in tenant `default` whenever it runs, which is once, on every new database.
-Existing databases keep whatever account it created then. Its email and password come from
-`ADMIN_EMAIL` / `ADMIN_PASSWORD`, defaulting to `admin@incidentplatform.com` / `changeme`. It only
-logs a warning when the default password is used. Neither docker-compose nor any Kubernetes overlay
-sets `ADMIN_PASSWORD`, so every deployment has a known admin login. Checked on the local stack:
-`POST /api/v1/auth/login` with those credentials and `X-Tenant-Id: default` returns 200. In
-Kubernetes the Ingress routes `/api/v1/auth`, so the account is reachable from outside the cluster.
-Until this item, nothing in the README or `docs/` mentioned it.
-
-**Approach.** Decide how the first admin of a tenant comes to exist, then remove the hard-coded
-default. Options:
-- require `ADMIN_PASSWORD` and fail the migration without it;
-- seed no password at all and invite the admin by email, as the `platform-operator` tenant already
-  does (`OperatorTenantBootstrap`, #0-49);
-- drop the seed and create tenants and their first admin through an API.
-
-Existing databases need the seeded account's password rotated or the account archived. Same class as
-#0-63: a default that is safe nowhere.
-
----
-
 ### 0-81. Test profiles with hard-coded keys ship inside the service jars
 
 **Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-66)
@@ -1229,6 +1210,137 @@ does not contain them, or delete them if no test activates them. That removes th
 
 ---
 
+### 0-82. Suspend and offboard a tenant
+
+**Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-80)
+
+**Problem.** Since #0-80 a platform operator creates tenants (`POST /api/v1/platform/tenants`), but
+nothing ends one. A customer who stops paying, breaches terms or leaves keeps logging in, its
+Integration API keys keep filing alerts, and its data stays in all seven services. Today the only
+lever is archiving its users one by one in the database.
+
+**Two different things.**
+- **Suspend** (reversible): the tenant's users cannot log in or refresh, its API keys introspect as
+  inactive, and its incidents stop notifying, while its data stays. Enforcement points:
+  - auth-service login, refresh, accept-invite and password reset: refuse when the tenant is suspended;
+  - API key introspection (ingestion-service, 60 s cache) and auth-service's own API key lookup:
+    `active:false`;
+  - access tokens already issued live up to 15 minutes, and `JwtAuthFilter` in `shared` knows nothing
+    about tenant status. Either accept that window, or carry status to every service (a revocation
+    entry per tenant in the Redis check `TokenRevocationChecker` already does; ties into #0-3, which
+    decides which services check revocation at all);
+  - Kafka: alerts already accepted keep flowing; decide whether incident-service drops them or
+    notification-service suppresses them.
+- **Offboard** (irreversible): export the tenant's data on request, then delete or anonymize it in
+  every service's tables (incidents, audit, notifications, on-call, postmortems, users, teams, keys,
+  Slack workspace) and in Redis. Needs an orchestrated, resumable job across services, a retention
+  decision for the audit log, and the same PII considerations as #0-48.
+
+**Approach.** Design first. Add a `status` column to `tenants` (V21 deliberately has none) with
+`ACTIVE` / `SUSPENDED` / `OFFBOARDING` / `OFFBOARDED`, operator endpoints under
+`/api/v1/platform/tenants/{id}` with the same `PlatformAccess` rule, audit events in the operator
+tenant, and the enforcement points above. Suspension first; offboarding is larger and can follow.
+
+---
+
+### 0-83. The platform API does not require MFA
+
+**Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-80)
+
+**Problem.** `/api/v1/platform/**` (#0-80) is the platform's one cross-tenant capability: it creates
+tenants and invites their first admins. `PlatformAccess` requires an admin of `platform-operator` with
+a JWT, but not a second factor. A phished or reused password of any operator admin is enough to
+create tenants. `docs/tenant-provisioning.md` and the README tell the operator to turn on
+`mfaRequired` for the operator tenant; nothing enforces it, and nothing would notice if it were
+turned off again.
+
+**Options.**
+- **Refuse while the operator tenant has no `mfaRequired`.** `PlatformAccess` (or the service) reads
+  the tenant setting. Simple, but it checks a policy, not this login: an admin who logged in before
+  the setting was turned on, or through a path that skips MFA, still gets in, and a misconfigured
+  setting locks operators out of onboarding.
+- **The token says how the user authenticated.** Login adds an `amr` claim (RFC 8176, e.g.
+  `["pwd","otp"]`) to the access token when MFA was completed, refresh carries it over from the
+  session, and `PlatformAccess` requires `otp`. This is the usual step-up model: it proves the
+  second factor for this session. Needs a claim in `JwtUtils` / `UserPrincipal` (`shared`, all
+  services), the refresh token to remember it (V16's session), and tests that a password-only token,
+  a refreshed MFA token and a backup-code login behave as intended.
+
+**Approach.** Recommended: the `amr` claim, with the `mfaRequired` setting kept as the operator
+tenant's policy. Decide before the platform API gains more actions (#0-82).
+
+**Related: no rate limit on the platform API.** A stolen operator token can create tenants and send
+invite emails to any address without limit (found in the review of #0-80). The Ingress-wide nginx
+limits apply, nothing per operator. A per-operator limit on `/api/v1/platform/**` (bucket4j, as in
+ingestion-service) belongs with this item: both answer "what if an operator account is taken over".
+
+---
+
+### 0-84. Audit events are sent to Kafka inside the database transaction, not through an outbox
+
+**Type:** bug · **Priority:** Medium · **Status:** Open (found in the review of #0-80)
+
+**Problem.** `AuditEventPublisher.publishAuth` / `publish` (`shared`) call `AuditEventKafkaSender.send`,
+which calls `KafkaTemplate.send` directly. Most callers do this from inside their `@Transactional` method
+(15 classes in auth-service, and incident-, notification-, postmortem- and escalation-service; some calls,
+such as a failed login or `TenantProvisioningService.reissueFirstAdminInvite`, run outside a transaction).
+Inside one, it is a dual write to two systems with no common transaction:
+- **Event without the change.** The event is handed to the producer before the database commits. If the
+  commit then fails (a constraint checked at flush, a lost connection), `audit.events` records an action
+  that never happened, e.g. `TENANT_PROVISIONED` for a tenant that was rolled back.
+- **Change without the event.** `KafkaTemplate.send` is asynchronous and its future is never read, so a
+  delivery that fails after the call (broker down longer than `delivery.timeout.ms`) is lost without a log
+  line. `@Retryable` only retries exceptions thrown by the call itself, and the publisher then swallows
+  them by design. The audit trail can silently miss committed actions.
+- **A broker outage stalls requests.** While the producer has no metadata, `send` blocks up to
+  `max.block.ms` (60 s by Kafka's default; auth-service sets none), and `@Retryable` makes that up to three
+  times, all inside the request's database transaction, holding its connection. Login, user and key
+  management then wait on Kafka. (From the client's documented defaults; not measured on this stack.)
+
+**How production systems handle it.** The *transactional outbox*: the audit row is written to an
+`audit_outbox` table in the same transaction as the change, and a relay (a ShedLock'd poller, or CDC such as
+Debezium) publishes it afterwards, at least once, and marks it sent. Consumers deduplicate by event id,
+which `AuditEventConsumer` already does (backlog #37). The platform already uses this pattern for
+`incidents.lifecycle` (`IncidentEventOutbox`, backlog #36) and for auth emails (#0-52). Alternatives are
+weaker: publishing in `afterCommit` removes phantom events but still loses them on a crash between commit
+and send; Kafka transactions do not span the database.
+
+**Approach.** An audit outbox per service that audits inside transactions, with a shared relay component
+in `shared` (table per service, same Flyway-per-service rule), `AuditEventPublisher` writing to it when a
+transaction is active, and the existing Kafka sender used only by the relay. Decide whether events raised
+outside a transaction (e.g. a failed login, which has no change to commit) keep a direct send. Also set
+`max.block.ms` / `delivery.timeout.ms` for every producer, which is worth doing on its own.
+
+---
+
+### 0-85. A tenant id with data in other services but no user can be provisioned
+
+**Type:** design · **Priority:** Low · **Status:** Open (found in the review of #0-80; needs verification)
+
+**Problem.** `POST /api/v1/platform/tenants` (#0-80) refuses an id only if auth-service's `tenants` table
+has it, and V21 filled that table from auth-service's `users`. The other six services keep `tenant_id` as a
+plain string on their own rows. If any of them holds rows under an id that never had a user in auth-service,
+an operator can provision that id, and its new admin sees those rows. Possible sources, to be verified:
+- incident-service's `/dev/token` (dev profile only) mints a token for any tenant id, so a dev or test
+  database may have incidents, on-call schedules or postmortems under such ids. Its default is
+  `test-tenant`, which the README's end-to-end test uses;
+- a hard-deleted tenant's users (only archive/anonymize exist today, so possibly none);
+- alerts ingested under an Integration API key always belong to a tenant with a user, so probably not.
+
+Only an operator can do this, so it is an accident or a rogue-operator risk, not an outside attack. Today
+`docs/tenant-provisioning.md` tells the operator to check the id first. An id with users in auth-service,
+archived ones included, is already refused (`UserRepository.existsAnyByTenantId`).
+
+**Approach.** First verify: list the tenant ids each service's tables hold and which of them auth-service
+has no record of, on every deployed database. Then either:
+- **Document and close.** If no production database can hold such ids, keep the guide's check.
+- **Refuse at provisioning.** auth-service asks every service whether the id is in use, through an internal
+  service-token endpoint per service; many calls, and a new cross-service dependency for a rare action.
+- **Record unknown ids.** A one-off backfill of `tenants` from every service's distinct `tenant_id`,
+  which blocks those ids for good.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -1244,7 +1356,7 @@ does not contain them, or delete them if no test activates them. That removes th
 | 0-21 | Slack is per tenant: each tenant connects its own workspace (`SlackWorkspace`, V17, one active per tenant via a partial unique index, bot token AES-256-GCM under a separate `slack.encryption-key`, admin API `/api/v1/slack-workspace`, manual token paste). notification-service reads it through `CachingSlackWorkspaceClient` (60 s TTL, bounded, Micrometer `cache.*` meters) over `SlackWorkspaceClientImpl` (Resilience4j, fallback throws). The global bot token/channel/broadcast config is gone. An auth-service outage skips only Slack, except when Slack was the only channel (PENDING, then `SLACK_WORKSPACE_UNAVAILABLE`). ACK via Slack is off until the OAuth install: #0-35. Follow-ups: #0-32, #0-33, #0-34 | PR #422 |
 | 0-30 | Decided and implemented: a service that needs auth-service-owned tenant data pulls it over a narrow HTTP call with a service token `aud=auth-service`, accepted on exactly one `ROLE_SERVICE` endpoint (`GET /api/v1/internal/slack-workspace`), cached briefly by the caller. Kafka replication was rejected for a single consumer. Decision recorded in `.ai/context/project.md` and CLAUDE.md; the identity/config split it raised is #0-31 | PR #422 |
 | 0-9 | `NotificationLog`'s `@Index` list named V1's three indexes, dropped by V2 (and V5 replaced one of V2's); it now mirrors V2/V5 and says the migrations are the source of truth. A check against the real schema is #0-36 | PR #424 |
-| 0-16 | Alert sources authenticate with Integration API keys (A1): ingestion-service runs `ApiKeyAuthFilter` (`ApiKey`/`Bearer ipl_…`) and introspects the key's SHA-256 in auth-service with a tenant-less purpose token accepted on that one route only (deny by default elsewhere); 60 s cache = revocation window; 401 = definite "no", 503 + `Retry-After` = can't check; per-IP failed-auth limiter before the lookup; `hasRole('SERVICE')` removed from ingest, and ingestion accepts no service tokens. Platform alerts out of band (B3): Watchdog to a dead man's switch, critical to operator email, all to the reserved `platform-operator` tenant (invite-bootstrapped admin). Alertmanager/Prometheus pinned, rules/routes validated in CI. The 30-day `system` token, its refresher and script are gone. Only TENANT keys introspect as active (a personal key gets `active:false`). Decision in `.ai/context/project.md`. Follow-ups: #0-37..#0-46 | PR #425 |
+| 0-16 | Alert sources authenticate with Integration API keys (A1): ingestion-service runs `ApiKeyAuthFilter` (`ApiKey`/`Bearer ipl_…`) and introspects the key's SHA-256 in auth-service with a tenant-less purpose token accepted on that one route only (deny by default elsewhere); 60 s cache = revocation window; 401 = definite "no", 503 + `Retry-After` = can't check; per-IP failed-auth limiter before the lookup; `hasRole('SERVICE')` removed from ingest, and ingestion accepts no service tokens. Platform alerts out of band (B3): Watchdog to a dead man's switch, critical to operator email, all to the reserved `platform-operator` tenant (invite-bootstrapped admin). Alertmanager/Prometheus pinned, rules/routes validated in CI. The 30-day `system` token, its refresher and script are gone. Only TENANT keys introspect as active (a personal key gets `active:false`). Decision in `.ai/context/project.md`. Follow-ups: #0-37..#0-46. Rejected then: a cross-tenant "create tenant" endpoint (the operator tenant bootstraps itself, `OperatorTenantBootstrap`); reversed narrowly for customer tenants by #0-80 | PR #425 |
 | 0-47 | Creating a user by invite failed on a real database (bug since `e7290db1`, exposed by #0-16's `OperatorTenantBootstrap`, which crashed auth-service at startup): `User.version` and `SlackWorkspace.version` were initialised to `0L`, so Spring Data saw a new entity as existing, `save()` merged instead of persisting and `UserService.createUser` kept the transient instance (`TransientPropertyValueException AuthToken.user -> User`). Both fields are now left `null` until persist; a Testcontainers test saves a new `User` + `AuthToken` the way production does. Unit tests mock repositories and V1_1 seeds users by SQL, so nothing caught it | PR #426 |
 | 0-50 | Accept-invite, reset-password and refresh-token rotation failed with `LazyInitializationException` on a real database (bug since `f3d05fd`): `AuthTokenRepository.markUsedIfUnused` had `clearAutomatically = true`, so `consumeToken` detached the token and its lazy `User` proxy before every caller used `token.getUser()`. The single-row claim no longer clears the persistence context; `consumeToken` sets the same `usedAt` in memory. Testcontainers tests now drive accept-invite, reset-password and refresh rotation through the real services; MFA goes through the same `consumeToken` path (service unit tests mock the repositories, and #0-47 had kept anyone from reaching accept-invite) | PR #428 |
 | 0-51 | MFA login failed with a 500 on a real database (bug since `372ac32`/`efe96a9`): `chk_auth_token_type` (V2/V6) allowed only INVITE, PASSWORD_RESET and REFRESH, while `AuthToken.Type` also has `MFA_SESSION` and `MFA_SETUP_REQUIRED`, so neither token could be stored. V18 widens the constraint to all five types. `AuthRepositoryIntegrationTest` now stores a token of every `AuthToken.Type` (a new type without a migration fails CI) and drives MFA verification with a TOTP code through the real `MfaService` | PR #430 |
@@ -1258,6 +1370,7 @@ does not contain them, or delete them if no test activates them. That removes th
 | 0-61 | The Snyk CLI in both `snyk.yml` jobs is the standalone binary at a version pinned in the workflow's `env`, checked against a SHA-256 kept next to it (`sha256sum --check --strict`) before it runs, instead of `npm install -g snyk` (unpinned, a Node wrapper with an unbundled `@sentry/node ^7` range); `SNYK_TOKEN` reaches only the scan step as an environment variable, with no `snyk auth` writing it to argv and a config file; version and checksum are bumped by hand, since Renovate cannot compute the checksum. README's hardening section became `## Infrastructure Hardening` | PR #440 |
 | 0-63 | The k8s base ConfigMap set `SPRING_PROFILES_ACTIVE: "dev"`, inherited by every overlay: the rendered prod and staging manifests started incident-service with the dev profile, enabling `DevSecurityConfig` and the unauthenticated `GET /dev/token` (an ADMIN JWT for any tenant, accepted by all seven services through the shared HS512 secret) — not routed by the Ingress, but reachable from any pod since there is no NetworkPolicy; `DevTokenController`'s startup guard could not catch it, as it only rejects a missing dev profile. The base now sets no profile, `k8s/overlays/dev` adds it, and the `validate-k8s-manifests` CI job fails if the rendered staging or prod overlay sets any Spring profile (env var, property or flag form). Found in the 2026-09-30 infrastructure security audit | PR #441 |
 | 0-78 | The services' database role `incident_app` was a Postgres superuser (checked on a running database: `rolsuper = t`): the image's `POSTGRES_USER` created it, so SQL injection in any service was command execution in the database container (`COPY ... TO PROGRAM`). Now `POSTGRES_USER` is the admin, used by no service, and `k8s/base/infrastructure/postgresql-init.sh` (one file, mounted by docker-compose, generated into a ConfigMap by Kustomize) creates `incident_app` with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` as owner of the database and the `public` schema; it reads its values with psql `\getenv`, so no password is on a command line, and refuses `APP_DB_USER` = `POSTGRES_USER`. No migration needed superuser rights (the extensions are trusted). The role's password and the services' `DB_PASSWORD` have one source: `docker/.env` (both database passwords now required, no default) or each overlay's `app-secrets`, now wired to the six Deployments; the admin comes from a per-overlay `postgresql-admin` Secret, and the base `postgresql-secret` with its committed password is gone (part of #0-66). No name is hard-coded: probes, CI and the migration read `POSTGRES_USER`. Probes: the init-phase server listens on its socket only, so a socket check reported ready before the role existed (reproduced); compose's healthcheck and the k8s readiness and startup probes now use TCP, liveness the socket after the startup probe. CI: the smoke test checks the role's attributes, that it is a member of no role and that `COPY ... TO PROGRAM` is refused; a new job runs `.github/scripts/test-postgres-roles.sh` against the real image (init with a hostile password and a non-default admin, the guard, the migration). An existing database cannot be demoted in place (`incident_app` is the bootstrap role, which must stay superuser), so `docs/database-roles.md` and `docs/database-roles-migrate.sql` give the procedure: rename it to the admin, create a new `incident_app`, move ownership, in one transaction with a completeness check, passwords from the database container's environment. Because the services' role owns `public` and could plant a trigger, rule, default, view or function that runs as whoever fires it, the superuser never touches anything outside `pg_catalog` in the database: the guide's "Working as the admin" routes service data, backups and restores through an `incident_app` login (`SET ROLE` is no boundary, planted code can `RESET ROLE`; the CI job shows both cases), and the admin's `search_path` is `pg_catalog` as a second line of defence; the migration itself runs with `search_path = pg_catalog` and only `ALTER ... OWNER`, after a preflight that refuses to run while an event trigger or an extra superuser exists (it is for databases not suspected of compromise; those are restored); CI also runs the guide's backup/restore commands as `incident_app`. Not covered: the role still owns every table, so grants and RLS do not separate services (#0-67) | PR #443 |
+| 0-80 | Every new database got a `ROLE_ADMIN` account `admin@incidentplatform.com` / `changeme` in tenant `default` from the Flyway Java migration `V1_1__seed_admin_user` (no deployment set `ADMIN_PASSWORD`; login returned 200, and the Ingress routes `/api/v1/auth`). `V1_1` now creates nothing (the class stays for Flyway's history); `V20__archive_default_seed_admin` archives that account and invalidates its tokens where its password still verifies as `changeme`, and leaves a changed one with a WARN. Customer tenants are now provisioned by a platform operator: `tenants` table (V21, backfilled from existing users), `POST /api/v1/platform/tenants` creates the tenant and invites its first admin in one transaction, `POST .../{tenantId}/admin-invite` reissues a lost or expired first invite (sharing `TenantAdminReconciler` with `OperatorTenantBootstrap`, #0-49, which now also records the operator tenant's row), `GET` shows one tenant's or lists tenants' metadata. Only an admin of `platform-operator` with a JWT gets in (`PlatformAccess`, in the filter chain and on every method; API keys, service and purpose tokens refused); audited as `TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` (`shared`). This narrowly reverses #0-16's "no cross-tenant create tenant endpoint". The reissue never creates a user (an archived first admin is not revived; reopening is #0-82), provisioning refuses an id that has users, archived ones included, and V20 also revokes the account's API keys. Testcontainers tests of V20, V21 and provisioning (incl. rollback when the admin insert fails), security tests with real tokens. Guide: `docs/tenant-provisioning.md`; suspension and offboarding: #0-82 | PR #445 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

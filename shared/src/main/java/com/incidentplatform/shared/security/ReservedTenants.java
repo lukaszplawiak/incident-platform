@@ -6,18 +6,24 @@ import java.util.Set;
 /**
  * Tenant ids that no user or configuration may create (backlog #0-16).
  *
- * <p>Tenant ids are free-form strings (there is no tenant registry); a tenant
- * exists once the first admin is seeded or invited into it. That makes a name
- * with platform meaning collide-able: before this class, a real customer could
- * have been called {@code system}, the tenant the old Alertmanager token wrote
- * into. The names here are refused wherever an id is <em>chosen</em> (the admin
- * seed, the dev token endpoint); choosing an existing tenant at login is not
- * creation and stays allowed.
+ * <p>Tenant ids are plain strings on every service's rows. Since backlog #0-80
+ * auth-service also records each tenant in its {@code tenants} table, created by
+ * a platform operator through the platform API; the other services still know a
+ * tenant only by its id. A name with platform meaning is therefore
+ * collide-able: before this class, a real customer could have been called
+ * {@code system}, the tenant the old Alertmanager token wrote into. The names
+ * here are refused wherever an id is <em>chosen</em> (tenant provisioning, the
+ * dev token endpoint); choosing an existing tenant at login is not creation and
+ * stays allowed.
  *
  * <h2>Reserved is not privileged</h2>
- * A reserved tenant is an ordinary, isolated tenant. It has no cross-tenant
- * access, and nothing may branch on {@link #isReserved} for an authorization
- * decision: the operator tenant sees its own incidents and nothing else.
+ * Nothing may branch on {@link #isReserved} for an authorization decision. A
+ * reserved tenant is an ordinary, isolated tenant: the operator tenant sees its
+ * own incidents and nothing else. The one exception is deliberate and lives
+ * elsewhere: admins of {@link #PLATFORM_OPERATOR} may use auth-service's
+ * platform API to create tenants and see their metadata (backlog #0-80,
+ * {@code PlatformAccess}, which compares against this constant, not
+ * {@link #isReserved}).
  */
 public final class ReservedTenants {
 

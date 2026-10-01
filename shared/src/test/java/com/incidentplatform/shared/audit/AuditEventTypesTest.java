@@ -65,4 +65,15 @@ class AuditEventTypesTest {
                 .isEqualTo("NOTIFICATION_UNDELIVERABLE")
                 .isNotEqualTo(AuditEventTypes.NOTIFICATION_FAILED);
     }
+
+    @Test
+    @DisplayName("tenant provisioning has its own types, distinct from the user events it causes (backlog #0-80)")
+    void tenantProvisioningTypes() {
+        assertThat(AuditEventTypes.TENANT_PROVISIONED)
+                .isEqualTo("TENANT_PROVISIONED")
+                .isNotEqualTo(AuditEventTypes.USER_CREATED);
+        assertThat(AuditEventTypes.TENANT_ADMIN_REINVITED)
+                .isEqualTo("TENANT_ADMIN_REINVITED")
+                .isNotEqualTo(AuditEventTypes.USER_INVITE_RESENT);
+    }
 }
