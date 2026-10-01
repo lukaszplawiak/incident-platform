@@ -18,10 +18,9 @@ How a customer tenant comes into existence, and how its first admin gets in. Bac
     MFA needs only a password, so without the grace period someone who has only an operator's password
     could enrol a factor of their own. Every enable and disable emails the account's address, the grace
     period gives its owner that long to react (counted from when the email went out, so an SMTP delay
-    does not shorten it), and a password reset by email within it removes the new factor. Disabling and
-    re-enabling MFA (e.g. a new phone) starts the grace period again; so does it to send a lost notice
-    again. A password reset during the grace period also removes a factor you enrolled yourself: enrol
-    it again afterwards.
+    does not shorten it): reset the password, then have another operator admin reset the factor (below).
+    Disabling and re-enabling MFA (e.g. a new phone) starts the grace period again; so does it to send a
+    lost notice again. A password reset never touches the factor (backlog #0-88).
 
   The platform API, `/api/v1/platform/tenants`, refuses everyone else with `403`: admins of
   customer tenants, other roles of the operator tenant, an operator admin whose session does not
@@ -112,14 +111,84 @@ not beyond 12 hours after the MFA login: then log in again with a code. Logging 
 MFA, ends the session's access to the platform API at once.
 
 **An unexpected "Two-factor authentication was enabled" email** means someone used the account's
-password. Reset the password with "Forgot password" within 24 hours of that email: the reset also
-removes the new factor (any factor whose email went out less than the grace period ago, or not at
-all), ends every session and every unfinished login. Then enable MFA with your own authenticator and
-check the operator tenant's audit log (`MFA_ENABLED`, `MFA_DISABLED`, `TENANT_*`). Once the grace
-period has passed a reset keeps the factor, and there is no API to remove another user's factor: it is removed in the database, as
-the application role, after confirming with the account's owner. (Interim: backlog #0-88 replaces the
-reset's removal with an admin MFA reset.) An unexpected "disabled" email also
-means the password is known: reset it.
+password and enrolled a factor of their own. In this order:
+
+1. Reset the password with "Forgot password". It ends every session and every unfinished login, so
+   whoever had the old password is out. It does not remove the factor (backlog #0-88): a mailbox alone
+   must not undo MFA.
+2. Another admin of `platform-operator` resets the account's MFA, from a session that meets the
+   same conditions as the platform API (MFA within 12 h, a factor announced at least 24 h ago):
+
+   ```bash
+   curl -s -X POST http://localhost:8087/api/v1/users/<user-id>/mfa-reset \
+     -H "Authorization: Bearer $OP_TOKEN" -o /dev/null -w '%{http_code}\n'   # 204
+   ```
+
+   It removes the factor, the backup codes and every session of the account, emails it ("An
+   administrator reset two-factor authentication on your account"), and is audited as
+   `MFA_RESET_BY_ADMIN`. Not on your own account (`403`); a password-only session, a factor enrolled
+   less than the grace period ago or an API key also gets `403`, naming the condition. Resets are
+   limited: `mfa-reset.rate-limit.per-admin-per-hour` (default 10,
+   `MFA_RESET_RATE_LIMIT_PER_ADMIN_PER_HOUR`) and `mfa-reset.rate-limit.per-tenant-per-hour` for
+   all admins of a tenant together (default 30, `MFA_RESET_RATE_LIMIT_PER_TENANT_PER_HOUR`, at
+   least the per-admin value, checked at startup). Only a reset about to happen counts (not a
+   `403`, `404` or `409`). Over either: `429`; while the limit cannot be checked in Redis: `503`
+   (fail-closed); both with `Retry-After`. Reaching the limit alerts the operator by email
+   (`AdminMfaResetRateLimited`); Redis unavailable raises `AdminMfaResetRateLimitUnavailable`.
+3. Log in with the new password, enable MFA with your own authenticator, and check the operator
+   tenant's audit log (`MFA_ENABLED`, `MFA_DISABLED`, `MFA_RESET_BY_ADMIN`, `TENANT_*`). The new factor
+   waits out the grace period like any other before the platform API accepts it.
+
+Resetting the factor before the password lets the holder of the old password log in and enrol again.
+The same reset helps an operator who lost their phone and their backup codes. An unexpected "disabled"
+email also means the password is known: reset the password. An unexpected "An administrator reset
+two-factor authentication" email means someone used an admin account: tell the other admins, reset
+your password, then set up MFA again.
+
+**A deployment with a single operator admin** has nobody to call the reset. Then, and only after
+confirming with the account's owner by a channel other than its email, and after the password reset
+of step 1, whoever operates the deployment runs auth-service once as a break-glass command:
+
+```bash
+cd docker
+docker compose run --rm auth-service break-glass-mfa-reset \
+  --break-glass.mfa-reset.user-email=ops@incident-platform.local \
+  --break-glass.mfa-reset.actor="<your name>" \
+  --break-glass.mfa-reset.reason="<why, and how the owner was confirmed>"
+echo "exit code: $?"
+```
+
+It does what the endpoint does, through the same code: factor, backup codes and every session of
+the account removed, the account emailed (by the running auth-service, within a minute), and the
+action audited in the operator tenant as `MFA_RESET_BREAK_GLASS`, with `break-glass:<your name>` as
+the actor, the reason and where it ran (`executedOn`: the OS user and host of the process, which
+you do not type) in the metadata (so no secrets in the reason). Only admins of
+`platform-operator`; another operator admin resets other operator users. Only the subcommand
+`break-glass-mfa-reset` as the first argument starts it: the `--break-glass.mfa-reset.*` options
+alone, as arguments or environment variables, do nothing, so a variable left in a deployment by
+mistake cannot turn the service into the command.
+
+- Exit code `0`: done. `1`: refused or failed, nothing changed; the log says why: no
+  `user-email` given; no operator user
+  (archived ones excluded) with exactly this email (as stored, case-sensitive; spaces around it are
+  trimmed); the user is not an admin or has no MFA (each a `409` in the log); actor or reason
+  missing, too long, or containing control characters, Unicode line separators or formatting
+  characters; or Kafka did not confirm the audit event within
+  `--break-glass.mfa-reset.audit-timeout`, default `PT30S`: the reset is rolled back rather than
+  done unaudited. `2`: a safeguard that should never show, the command found a web server running.
+- The one-off process runs no scheduled jobs and serves no requests (the subcommand starts it
+  without a web server). It needs the database and Kafka, as the service does.
+- Never put the subcommand into the args of the auth-service Deployment: its pods would run the
+  command, exit and restart in a loop instead of serving (each later run refused with `409`, the
+  factor being gone already). It belongs only in a one-off run.
+- In Kubernetes, run the same image with the subcommand and options as the container's `args` of
+  a one-off Job with the auth-service
+  Deployment's environment and secrets (not tested here: no cluster). Do not `kubectl exec` a
+  second JVM into a running pod: it shares the pod's memory limit.
+
+Who can run it is whoever can run the service with its credentials, the same trust as database
+access; that it is audited is what it adds over editing the database. With a second operator admin,
+use the endpoint instead; backlog #0-87 records stronger options for operator enrolment.
 
 **The 403 says the factor is not accepted yet.** Either the grace period since the notice is still
 running, or the notice was never sent (SMTP failing past its deadline, 24 h or the grace period if

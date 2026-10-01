@@ -6,6 +6,7 @@ import com.incidentplatform.auth.dto.ProvisionTenantRequest;
 import com.incidentplatform.auth.dto.ProvisionTenantResponse;
 import com.incidentplatform.auth.dto.TenantDto;
 import com.incidentplatform.auth.ratelimit.PlatformRateLimiter;
+import com.incidentplatform.auth.ratelimit.RateLimitDecision;
 import com.incidentplatform.auth.service.MfaSessionStatusService;
 import com.incidentplatform.auth.service.TenantProvisioningService;
 import com.incidentplatform.shared.exception.BusinessException;
@@ -126,7 +127,7 @@ class PlatformTenantControllerSecurityTest {
         given(mfaSessionStatus.check(any(), any(), any())).willReturn(MfaSessionStatusService.Status.NO_MFA);
         given(mfaSessionStatus.check(OPERATOR_ID, ReservedTenants.PLATFORM_OPERATOR, MFA_SESSION)).willReturn(MfaSessionStatusService.Status.ACCEPTED);
         given(rateLimiter.tryConsume(any())).willReturn(
-                new PlatformRateLimiter.Decision(PlatformRateLimiter.Outcome.ALLOWED, 0));
+                new RateLimitDecision(RateLimitDecision.Outcome.ALLOWED, 0));
     }
 
     /** A real JWT of a login whose session completed MFA. */
@@ -344,7 +345,7 @@ class PlatformTenantControllerSecurityTest {
     @DisplayName("limit reached — 429 with Retry-After on both write operations, nothing done")
     void rateLimited() throws Exception {
         given(rateLimiter.tryConsume(OPERATOR_ID)).willReturn(
-                new PlatformRateLimiter.Decision(PlatformRateLimiter.Outcome.LIMITED, 180));
+                new RateLimitDecision(RateLimitDecision.Outcome.LIMITED, 180));
 
         mockMvc.perform(provisionAs(operatorAdmin()))
                 .andExpect(status().isTooManyRequests())
@@ -358,7 +359,7 @@ class PlatformTenantControllerSecurityTest {
     @DisplayName("limit cannot be checked — 503 with Retry-After (fail-closed), nothing done")
     void rateLimitUnavailable() throws Exception {
         given(rateLimiter.tryConsume(OPERATOR_ID)).willReturn(
-                new PlatformRateLimiter.Decision(PlatformRateLimiter.Outcome.UNAVAILABLE, 30));
+                new RateLimitDecision(RateLimitDecision.Outcome.UNAVAILABLE, 30));
 
         mockMvc.perform(provisionAs(operatorAdmin()))
                 .andExpect(status().isServiceUnavailable())

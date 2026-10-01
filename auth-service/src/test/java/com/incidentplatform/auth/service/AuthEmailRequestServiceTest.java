@@ -49,4 +49,18 @@ class AuthEmailRequestServiceTest {
     void atLeastADay() {
         assertThat(deadlineFor(Duration.ofHours(1), false)).isEqualTo(Duration.ofHours(24));
     }
+
+    @Test
+    @DisplayName("an admin's MFA reset queues its own type, with the security notices' deadline (backlog #0-88)")
+    void mfaResetNotice() {
+        when(repository.save(any())).thenAnswer(i -> i.getArgument(0));
+        final ArgumentCaptor<AuthEmailOutbox> saved = ArgumentCaptor.forClass(AuthEmailOutbox.class);
+
+        new AuthEmailRequestService(repository, Duration.ofHours(72)).requestMfaResetNotification(user);
+
+        verify(repository).save(saved.capture());
+        assertThat(saved.getValue().getEmailType()).isEqualTo(AuthEmailType.MFA_RESET);
+        assertThat(Duration.between(saved.getValue().getCreatedAt(), saved.getValue().getDeadline()))
+                .isEqualTo(Duration.ofHours(72));
+    }
 }

@@ -162,7 +162,7 @@ The notification consumer deserializes Kafka messages to `JsonNode` and extracts
 `ingestion-service` processes batches — one bad alert must not block the rest, so it uses a custom `DeadLetterPublisher`. `incident-service` processes single messages where Spring Kafka's built-in DLT handles retries correctly.
 
 **Why bucket4j backed by Redis instead of in-memory rate limiting?**
-This reverses an earlier in-memory design. In-memory buckets were per-pod (each replica kept independent counters, so the effective limit multiplied with the replica count) and were held in unbounded maps keyed by tenant and IP — a memory-exhaustion vector, since the client IP comes from the caller-controlled `X-Forwarded-For` header. `RateLimitingService` now keeps bucket state in Redis through bucket4j's `ProxyManager` (`bucket4j-redis`): state is shared across replicas and expires automatically. The Redis call is protected by `@CircuitBreaker` (backlog #67) and fails open, matching the dedup layer's policy for the same dependency. auth-service's platform API has the one limiter that fails closed (`PlatformRateLimiter`, backlog #0-83): it is a security control on a rare operator action, so while Redis cannot be checked, tenant provisioning answers 503 — those writes depend on Redis, logins and every other auth-service API do not.
+This reverses an earlier in-memory design. In-memory buckets were per-pod (each replica kept independent counters, so the effective limit multiplied with the replica count) and were held in unbounded maps keyed by tenant and IP — a memory-exhaustion vector, since the client IP comes from the caller-controlled `X-Forwarded-For` header. `RateLimitingService` now keeps bucket state in Redis through bucket4j's `ProxyManager` (`bucket4j-redis`): state is shared across replicas and expires automatically. The Redis call is protected by `@CircuitBreaker` (backlog #67) and fails open, matching the dedup layer's policy for the same dependency. auth-service has the two limiters that fail closed: the platform API's (`PlatformRateLimiter`, backlog #0-83) and the admin MFA reset's (`MfaResetRateLimiter`, backlog #0-88). Both guard rare, privileged security actions, so while Redis cannot be checked, tenant provisioning and admin MFA resets answer 503 — those writes depend on Redis, logins and every other auth-service API do not.
 
 **Why auth-service is a modular monolith rather than split into auth + identity?**
 All identity concerns (users, teams, API keys, integrations) are colocated with authentication to avoid distributed transaction complexity and HTTP latency on the login hot path. `AuthService.login()` reads `User` credentials in the same database transaction — after splitting this would require a Redis credential cache (Wzorzec B) and Outbox Pattern for invite flow. This is documented as a future backlog item in `AuthServiceApplication.java` with the exact migration plan.
@@ -195,8 +195,8 @@ A multi-tenant platform onboards customers while it runs. A Flyway seed gave eve
 | Email | Spring Mail + Mailtrap SMTP | Real SMTP integration, safe sandbox |
 | Slack | Bot Token + chat.postMessage | DM + channel posts, per tenant; ACK-via-Slack returns with the OAuth install (backlog #0-35) |
 | AI | Gemini API via RestClient | Vendor-neutral, no SDK lock-in |
-| Resilience | Resilience4j | Circuit breakers on Redis (ingestion-service fail-open, auth-service's platform API limit fail-closed), Gemini and inter-service HTTP clients (oncall-service, incident ACK), retry with backoff (the oncall client's own retry is unverified, backlog #0-23) |
-| Rate Limiting | bucket4j + Redis | ingestion-service per tenant + per IP; auth-service's platform API per operator and in total (backlog #0-83); state shared across replicas via `bucket4j-redis` |
+| Resilience | Resilience4j | Circuit breakers on Redis (ingestion-service fail-open, auth-service's platform API and admin MFA reset limits fail-closed), Gemini and inter-service HTTP clients (oncall-service, incident ACK), retry with backoff (the oncall client's own retry is unverified, backlog #0-23) |
+| Rate Limiting | bucket4j + Redis | ingestion-service per tenant + per IP; auth-service's platform API per operator and in total (backlog #0-83), and the admin MFA reset per admin and per tenant (backlog #0-88); state shared across replicas via `bucket4j-redis` |
 | API Docs | SpringDoc OpenAPI 3 | Auto-generated, available at `/swagger-ui.html` |
 | Build | Maven multi-module | Shared dependency management, incremental builds |
 | Observability | Micrometer + Prometheus + Grafana | HTTP metrics, JVM, Kafka lag, rate limit rejections |
@@ -266,7 +266,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 
 ### Multi-Tenant Kafka — Per-Record Isolation
 
-All Kafka topics are multi-tenant. `TenantKafkaProducerInterceptor` adds `X-Tenant-Id` to every outgoing record. Each `@KafkaListener` reads it per-record and clears `TenantContext` in a `finally` block — guaranteeing no tenant leaks between records in the same batch.
+All Kafka topics are multi-tenant. Every outgoing record is meant to carry `X-Tenant-Id`: the audit, alert and incident-event senders set it from the record's own tenant, and `TenantKafkaProducerInterceptor` adds it from `TenantContext` where none is set (it never overrides an explicit one; backlog #0-88). Four services do not register the interceptor yet, so their dead-letter records go without it (backlog #0-91). Each `@KafkaListener` reads it per-record and clears `TenantContext` in a `finally` block — guaranteeing no tenant leaks between records in the same batch.
 
 ---
 
@@ -403,8 +403,20 @@ Summary; details in [Resilience & Security](#security).
   spike (`PlatformTenantProvisioningSpike`) or a reached limit (`PlatformApiRateLimited`) alerts the operator
   by email; `PlatformApiRateLimitUnavailable` reports the Redis case.
 - **MFA change notifications**: enabling or disabling MFA on any account emails the account's address (backlog
-  #0-83), so an owner learns when someone else used their password to change the second factor; a password reset by
-  email within 24 h of that email removes the new factor and ends unfinished logins (interim, see the gap below).
+  #0-83), so an owner learns when someone else used their password to change the second factor. A password reset by
+  email ends every session and unfinished login but never touches the second factor (backlog #0-88), so a mailbox
+  alone cannot undo MFA.
+- **Admin MFA reset**: an admin of the tenant removes another user's factor, backup codes and every session
+  (`POST /api/v1/users/{id}/mfa-reset`, backlog #0-88), for a lost phone or a factor someone else enrolled. Only
+  from an admin session that passes the platform API's MFA rule (MFA within 12 h, a factor announced at least 24 h
+  ago; a password-only session, a fresh factor or an API key gets 403), never on one's own account; the user gets
+  an email of its own ("an administrator reset your MFA"), audited as `MFA_RESET_BY_ADMIN`. A deactivated user can be
+  reset too (before reactivating an account with a stranger's factor). Limited per admin (10/h) and per tenant (30/h),
+  counted only for a reset about to happen (after step-up, user lookup and factor check), fail-closed (503 while Redis cannot be checked); reaching it alerts the operator by
+  email (`AdminMfaResetRateLimited`, critical). A single platform operator has no second
+  admin: a one-off break-glass command of auth-service does the same reset, audited as `MFA_RESET_BREAK_GLASS` with
+  the operator's name and reason, and rolled back if Kafka does not confirm that event
+  ([docs/tenant-provisioning.md](docs/tenant-provisioning.md)).
 - **Service identity**: service tokens carry the tenant as a signed claim and an `aud` naming the one service that
   accepts them; the only tenant-less token is the API-key introspection purpose token, accepted on one route.
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
@@ -453,14 +465,19 @@ Open items from the audit and earlier, most important first within each area. Ea
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
   - A tenant cannot be suspended or offboarded: its users, API keys and data stay until someone edits the database:
     backlog #0-82.
-  - A password reset by email within 24 h of enabling MFA removes the factor, so a mailbox alone can undo a fresh
-    second factor; the production pattern is an admin resetting MFA, and a reset that never touches it: backlog
-    #0-88 (High).
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
+  - A personal API key created with a stolen password survives the owner's password reset and an admin MFA
+    reset: backlog #0-89 (High).
   - Audit events are sent to Kafka inside the database transaction, not through an outbox: an event can record
     a rolled-back action, a committed action can lose its event silently, and a Kafka outage stalls requests:
-    backlog #0-84.
+    backlog #0-84. The admin MFA reset's event is one of them; only the break-glass MFA reset waits for Kafka's
+    acknowledgement (#0-88).
+  - A customer tenant's only admin has no way back from a factor someone else enrolled with their password, or
+    from a lost phone and lost backup codes: break-glass covers only the operator tenant: backlog #0-90.
+  - A Kafka record's `X-Tenant-Id` has two writers (explicit senders and the thread-context interceptor, which
+    four services do not register), so the dead-letter records of notification- and postmortem-service carry
+    none; consumers fall back to the payload. One explicit writer, the interceptor only validating: backlog #0-91.
   - A tenant id with data in other services but no user in auth-service can be provisioned, and its admin would
     see that data; the operator guide says to check first: backlog #0-85.
 - **Project**

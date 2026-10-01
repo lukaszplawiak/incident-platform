@@ -39,6 +39,9 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import com.incidentplatform.auth.service.TotpService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ResourceNotFoundException;
+import com.incidentplatform.auth.domain.MfaBackupCode;
+import org.springframework.http.HttpStatus;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -61,6 +64,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -184,6 +188,16 @@ class AuthRepositoryIntegrationTest {
     // MFA lockout state lives in Redis, which this context does not have;
     // an unconfigured mock means "not locked", and lockout is not under test.
     @MockitoBean private BruteForceProtectionService bruteForceProtectionService;
+    // Backlog #0-88: Redis is not part of this test (MfaResetRateLimiterTest
+    // covers the limiter against a real one); allowed unless a test says otherwise.
+    @MockitoBean private com.incidentplatform.auth.ratelimit.MfaResetRateLimiter mfaResetRateLimiter;
+
+    @org.junit.jupiter.api.BeforeEach
+    void mfaResetAllowed() {
+        org.mockito.BDDMockito.given(mfaResetRateLimiter.tryConsume(
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .willReturn(com.incidentplatform.auth.ratelimit.RateLimitDecision.ALLOWED);
+    }
 
     private static final String TENANT_ID = "test-tenant";
 
@@ -498,40 +512,211 @@ class AuthRepositoryIntegrationTest {
         }
 
         @Test
-        @DisplayName("a password reset removes a factor still within the grace period, and keeps an established one (backlog #0-83)")
-        void passwordResetAndRecentFactor() {
+        @DisplayName("a password reset keeps even a factor enabled minutes ago, and ends unfinished logins (backlog #0-88)")
+        void passwordResetKeepsFactor() {
             final User fresh = persistUser("reset-fresh@example.com", List.of("ROLE_ADMIN"));
-            final User established = persistUser("reset-old@example.com", List.of("ROLE_ADMIN"));
-            for (final User user : List.of(fresh, established)) {
-                user.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
-                user.enableMfa();
-                userRepository.saveAndFlush(user);
-            }
-            jdbcTemplate.update("UPDATE users SET mfa_enabled_at = now() - INTERVAL '26 hours', "
-                    + "mfa_enabled_notice_sent_at = now() - INTERVAL '25 hours' WHERE id = ?", established.getId());
-            final String freshReset = authTokenService.generatePasswordResetToken(fresh, TENANT_ID);
+            fresh.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            fresh.enableMfa();
+            userRepository.saveAndFlush(fresh);
+            final String reset = authTokenService.generatePasswordResetToken(fresh, TENANT_ID);
             final String setupToken = authTokenService.generateMfaSetupRequiredToken(fresh, TENANT_ID);
             final String mfaSessionToken = authTokenService.generateMfaSessionToken(fresh, TENANT_ID);
-            final String oldReset = authTokenService.generatePasswordResetToken(established, TENANT_ID);
             startFreshRequest();
 
-            passwordService.resetPassword(new ResetPasswordRequest(freshReset, "a-new-password"), TENANT_ID);
-            passwordService.resetPassword(new ResetPasswordRequest(oldReset, "a-new-password"), TENANT_ID);
+            passwordService.resetPassword(new ResetPasswordRequest(reset, "a-new-password"), TENANT_ID);
             entityManager.flush();
 
             assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
-                    Boolean.class, fresh.getId())).as("factor enabled minutes ago").isFalse();
+                    Boolean.class, fresh.getId())).as("a mailbox alone does not undo MFA").isTrue();
             assertThat(jdbcTemplate.queryForList(
                     "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, fresh.getId()))
-                    .contains("MFA_DISABLED");
-            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
-                    Boolean.class, established.getId())).as("factor enabled 25 h ago").isTrue();
+                    .doesNotContain("MFA_DISABLED");
             assertThat(passwordEncoder.matches("a-new-password", passwordHashOf(fresh.getId()))).isTrue();
-            // A half-finished login from before the reset is dead too.
+            // A half-finished login from before the reset is dead (backlog #0-83).
             assertThatThrownBy(() -> authTokenService.consumeToken(setupToken, AuthToken.Type.MFA_SETUP_REQUIRED))
                     .isInstanceOf(BusinessException.class);
             assertThatThrownBy(() -> authTokenService.consumeToken(mfaSessionToken, AuthToken.Type.MFA_SESSION))
                     .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("an admin's MFA reset removes factor and codes, ends every session, queues the email; "
+                + "needs the admin's MFA session; another tenant's user is not found (backlog #0-88)")
+        void adminMfaReset() {
+            final User admin = persistUser("reset-admin@example.com", List.of("ROLE_ADMIN"));
+            admin.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            admin.enableMfa();
+            userRepository.saveAndFlush(admin);
+            final UUID adminMfaSession = UUID.randomUUID();
+            final UUID adminPasswordSession = UUID.randomUUID();
+            authTokenService.generateRefreshToken(admin, TENANT_ID, adminMfaSession, Instant.now());
+            authTokenService.generateRefreshToken(admin, TENANT_ID, adminPasswordSession, null);
+
+            final User target = persistUser("reset-target@example.com", List.of("ROLE_RESPONDER"));
+            target.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            target.enableMfa();
+            userRepository.saveAndFlush(target);
+            mfaBackupCodeRepository.saveAndFlush(MfaBackupCode.create(target, "backup-code-hash"));
+            final String targetRefresh = authTokenService.generateRefreshToken(
+                    target, TENANT_ID, UUID.randomUUID(), Instant.now());
+            final String targetMfaLogin = authTokenService.generateMfaSessionToken(target, TENANT_ID);
+
+            final User stranger = User.forTesting(null, "other-tenant", "reset-stranger@example.com",
+                    "hashed-password", true, List.of("ROLE_RESPONDER"));
+            stranger.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            stranger.enableMfa();
+            userRepository.saveAndFlush(stranger);
+            startFreshRequest();
+
+            final java.util.function.Function<UUID, UserPrincipal> adminIn = session -> new UserPrincipal(
+                    admin.getId(), TENANT_ID, admin.getEmail(), List.of("ROLE_ADMIN"), List.of(), List.of(), session);
+            TenantContext.set(TENANT_ID);
+            try {
+                assertThatThrownBy(() -> mfaService.resetMfaByAdmin(target.getId(), adminIn.apply(adminPasswordSession)))
+                        .as("password-only session of the admin")
+                        .isInstanceOfSatisfying(BusinessException.class,
+                                e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+                assertThatThrownBy(() -> mfaService.resetMfaByAdmin(target.getId(), adminIn.apply(adminMfaSession)))
+                        .as("MFA session, but the admin's factor was just enrolled (review of #0-88)")
+                        .isInstanceOfSatisfying(BusinessException.class,
+                                e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+                // The admin's factor established: its notice went out more than the grace period ago.
+                jdbcTemplate.update("UPDATE users SET mfa_enabled_at = now() - INTERVAL '26 hours', "
+                        + "mfa_enabled_notice_sent_at = now() - INTERVAL '25 hours' WHERE id = ?", admin.getId());
+                startFreshRequest();
+                assertThatThrownBy(() -> mfaService.resetMfaByAdmin(stranger.getId(), adminIn.apply(adminMfaSession)))
+                        .as("a user of another tenant")
+                        .isInstanceOf(ResourceNotFoundException.class);
+                startFreshRequest();
+
+                mfaService.resetMfaByAdmin(target.getId(), adminIn.apply(adminMfaSession));
+                entityManager.flush();
+            } finally {
+                TenantContext.clear();
+            }
+
+            assertThat(jdbcTemplate.queryForMap(
+                    "SELECT mfa_enabled, mfa_secret, mfa_pending_secret FROM users WHERE id = ?", target.getId()))
+                    .containsEntry("mfa_enabled", false)
+                    .containsEntry("mfa_secret", null)
+                    .containsEntry("mfa_pending_secret", null);
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM mfa_backup_codes WHERE user_id = ?", Integer.class, target.getId())).isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM auth_tokens WHERE user_id = ? AND mfa_verified_at IS NOT NULL",
+                    Integer.class, target.getId())).isZero();
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, target.getId()))
+                    .as("the outbox row survives the bulk updates after it").containsExactly("MFA_RESET");
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(targetRefresh))
+                    .isInstanceOf(BusinessException.class);
+            assertThatThrownBy(() -> authTokenService.consumeToken(targetMfaLogin, AuthToken.Type.MFA_SESSION))
+                    .isInstanceOf(BusinessException.class);
+
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, stranger.getId())).as("another tenant's user untouched").isTrue();
+            assertThat(mfaSessionStatusService.check(admin.getId(), TENANT_ID, adminMfaSession))
+                    .as("the admin's own session untouched").isEqualTo(MfaSessionStatusService.Status.ACCEPTED);
+        }
+
+        /** An operator admin with MFA, backup codes and a live MFA session, committed (backlog #0-88). */
+        private User committedOperatorWithMfa(String email) {
+            final User user = User.forTesting(null, "platform-operator", email,
+                    "hashed-password", true, List.of("ROLE_ADMIN"));
+            user.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            user.enableMfa();
+            final User saved = userRepository.saveAndFlush(user);
+            mfaBackupCodeRepository.saveAndFlush(MfaBackupCode.create(saved, "backup-code-hash"));
+            return saved;
+        }
+
+        private void deleteCommittedUser(UUID userId) {
+            for (final String table : List.of("auth_email_outbox", "auth_tokens", "mfa_backup_codes")) {
+                jdbcTemplate.update("DELETE FROM " + table + " WHERE user_id = ?", userId);
+            }
+            jdbcTemplate.update("DELETE FROM users WHERE id = ?", userId);
+        }
+
+        @Test
+        @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+        @DisplayName("break-glass reset commits like the admin reset, audited with a confirmed send (backlog #0-88)")
+        void breakGlassReset() {
+            final User operator = committedOperatorWithMfa("break-glass-ok@example.com");
+            final String refresh = authTokenService.generateRefreshToken(
+                    operator, "platform-operator", UUID.randomUUID(), Instant.now());
+            try {
+                mfaService.resetMfaBreakGlass(operator.getEmail(), "Jane Doe", "lost phone", "it@test-host", Duration.ofSeconds(30));
+
+                assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                        Boolean.class, operator.getId())).isFalse();
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM mfa_backup_codes WHERE user_id = ?",
+                        Integer.class, operator.getId())).isZero();
+                assertThat(jdbcTemplate.queryForList("SELECT email_type FROM auth_email_outbox WHERE user_id = ?",
+                        String.class, operator.getId())).containsExactly("MFA_RESET");
+                assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh))
+                        .isInstanceOf(BusinessException.class);
+                org.mockito.Mockito.verify(auditEventPublisher).publishAuthConfirmed(
+                        org.mockito.ArgumentMatchers.eq(operator.getId()),
+                        org.mockito.ArgumentMatchers.eq("platform-operator"),
+                        org.mockito.ArgumentMatchers.eq(
+                                com.incidentplatform.shared.audit.AuditEventTypes.MFA_RESET_BREAK_GLASS),
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.eq("break-glass:Jane Doe"),
+                        org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.eq(Duration.ofSeconds(30)));
+            } finally {
+                deleteCommittedUser(operator.getId());
+            }
+        }
+
+        @Test
+        @DisplayName("break-glass finds only platform-operator users: the same email in another tenant is not found (review of #0-88)")
+        void breakGlassOperatorTenantOnly() {
+            final User customerAdmin = User.forTesting(null, "acme-bg", "same-email@example.com",
+                    "hashed-password", true, List.of("ROLE_ADMIN"));
+            customerAdmin.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            customerAdmin.enableMfa();
+            userRepository.saveAndFlush(customerAdmin);
+            startFreshRequest();
+
+            assertThatThrownBy(() -> mfaService.resetMfaBreakGlass("same-email@example.com", "Jane Doe",
+                    "lost phone", "it@test-host", Duration.ofSeconds(30)))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, customerAdmin.getId())).isTrue();
+        }
+
+        @Test
+        @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+        @DisplayName("break-glass reset whose audit Kafka does not confirm changes nothing (backlog #0-88)")
+        void breakGlassRollsBackWithoutAudit() {
+            final User operator = committedOperatorWithMfa("break-glass-rollback@example.com");
+            final String refresh = authTokenService.generateRefreshToken(
+                    operator, "platform-operator", UUID.randomUUID(), Instant.now());
+            org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.audit.AuditNotConfirmedException(
+                            "not confirmed", null))
+                    .given(auditEventPublisher).publishAuthConfirmed(
+                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+            try {
+                assertThatThrownBy(() -> mfaService.resetMfaBreakGlass(
+                        operator.getEmail(), "Jane Doe", "lost phone", "it@test-host", Duration.ofSeconds(30)))
+                        .isInstanceOf(com.incidentplatform.shared.audit.AuditNotConfirmedException.class);
+
+                assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                        Boolean.class, operator.getId())).as("factor kept").isTrue();
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM mfa_backup_codes WHERE user_id = ?",
+                        Integer.class, operator.getId())).as("backup codes kept").isEqualTo(1);
+                assertThat(jdbcTemplate.queryForList("SELECT email_type FROM auth_email_outbox WHERE user_id = ?",
+                        String.class, operator.getId())).as("no email queued").isEmpty();
+                assertThat(authTokenService.rotateRefreshToken(refresh).accessToken())
+                        .as("session still live").isNotBlank();
+            } finally {
+                deleteCommittedUser(operator.getId());
+            }
         }
 
         /**
@@ -1491,13 +1676,16 @@ class AuthRepositoryIntegrationTest {
         }
 
         @Test
-        @DisplayName("V23: the outbox accepts the MFA notification types and still rejects an unknown one")
+        @DisplayName("V23/V24: the outbox accepts every AuthEmailType and still rejects an unknown one")
         void outboxTypeConstraint() {
-            authEmailOutboxRepository.saveAndFlush(
-                    AuthEmailOutbox.request(user, AuthEmailType.MFA_DISABLED, java.time.Duration.ofHours(24)));
+            // Every type, so a new AuthEmailType without a migration fails here (as for token types, #0-51).
+            for (final AuthEmailType type : AuthEmailType.values()) {
+                authEmailOutboxRepository.saveAndFlush(
+                        AuthEmailOutbox.request(user, type, java.time.Duration.ofHours(24)));
+            }
             assertThat(jdbcTemplate.queryForList(
                     "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, user.getId()))
-                    .contains("MFA_ENABLED", "MFA_DISABLED");
+                    .contains("MFA_ENABLED", "MFA_DISABLED", "MFA_RESET");
 
             assertThatThrownBy(() -> jdbcTemplate.update("""
                     UPDATE auth_email_outbox SET email_type = 'SOMETHING_ELSE' WHERE user_id = ?

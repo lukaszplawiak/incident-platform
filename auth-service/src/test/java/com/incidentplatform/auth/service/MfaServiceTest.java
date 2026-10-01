@@ -8,12 +8,18 @@ import com.incidentplatform.auth.dto.MfaEnableWithLoginResponse;
 import com.incidentplatform.auth.dto.MfaSetupResponse;
 import com.incidentplatform.auth.dto.LoginResponse;
 import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
+import com.incidentplatform.auth.ratelimit.MfaResetRateLimiter;
+import com.incidentplatform.auth.ratelimit.RateLimitDecision;
+import com.incidentplatform.auth.ratelimit.RateLimitRefusedException;
 import com.incidentplatform.auth.repository.MfaBackupCodeRepository;
 import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.audit.AuditNotConfirmedException;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.exception.BusinessException;
+import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.junit.jupiter.api.AfterEach;
@@ -57,6 +63,7 @@ class MfaServiceTest {
     @Mock private BruteForceProtectionService bruteForceProtectionService;
     @Mock private AuthEmailRequestService authEmailRequestService;
     @Mock private MfaSessionStatusService mfaSessionStatusService;
+    @Mock private MfaResetRateLimiter mfaResetRateLimiter;
 
     private final PasswordEncoder passwordEncoder =
             Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
@@ -74,7 +81,8 @@ class MfaServiceTest {
                 userRepository, backupCodeRepository, authTokenService,
                 teamMemberRepository, totpService, aesEncryptionService,
                 passwordEncoder, jwtUtils, auditEventPublisher,
-                bruteForceProtectionService, authEmailRequestService, mfaSessionStatusService);
+                bruteForceProtectionService, authEmailRequestService, mfaSessionStatusService,
+                mfaResetRateLimiter);
         TenantContext.set(TENANT_ID);
         org.mockito.Mockito.lenient().when(authTokenService.isSessionLive(USER_ID, TENANT_ID, SESSION_ID)).thenReturn(true);
     }
@@ -795,49 +803,338 @@ class MfaServiceTest {
         then(userRepository).shouldHaveNoInteractions();
     }
 
-    // ── removeFactorEnrolledWithinGrace (backlog #0-83) ──────────────────
+    // ── resetMfaByAdmin (backlog #0-88) ──────────────────────────────────
 
     @Nested
-    @DisplayName("removeFactorEnrolledWithinGrace")
-    class RemoveFactorEnrolledWithinGrace {
+    @DisplayName("resetMfaByAdmin")
+    class ResetMfaByAdmin {
+
+        private static final UUID ADMIN_SESSION_ID = UUID.randomUUID();
+
+        private UserPrincipal admin() {
+            return new UserPrincipal(ADMIN_ID, TENANT_ID, "admin@example.com",
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), ADMIN_SESSION_ID);
+        }
+
+        private void adminSession(MfaSessionStatusService.Status status) {
+            given(mfaSessionStatusService.check(ADMIN_ID, TENANT_ID, ADMIN_SESSION_ID)).willReturn(status);
+        }
+
+        private void adminSessionCompletedMfa(boolean completed) {
+            adminSession(completed ? MfaSessionStatusService.Status.ACCEPTED : MfaSessionStatusService.Status.NO_MFA);
+            if (completed) {
+                org.mockito.Mockito.lenient().when(mfaResetRateLimiter.tryConsume(ADMIN_ID, TENANT_ID))
+                        .thenReturn(RateLimitDecision.ALLOWED);
+            }
+        }
 
         @Test
-        @DisplayName("a factor still within the grace period is removed, its sessions cleared, the owner told")
-        void removesRecentFactor() {
+        @DisplayName("removes factor, pending setup and backup codes, ends every session, tells the user, audits the admin")
+        void resetsFactor() {
             final User user = buildUser(true);
-            given(mfaSessionStatusService.isEstablished(any(), any())).willReturn(false);
+            user.storePendingMfaSecret("encrypted-pending");
+            adminSessionCompletedMfa(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
-            assertThat(service.removeFactorEnrolledWithinGrace(user, TENANT_ID)).isTrue();
+            service.resetMfaByAdmin(USER_ID, admin());
 
+            then(mfaResetRateLimiter).should().tryConsume(ADMIN_ID, TENANT_ID);
             assertThat(user.isMfaEnabled()).isFalse();
             assertThat(user.getMfaSecret()).isNull();
+            assertThat(user.getMfaPendingSecret()).isNull();
             then(userRepository).should().save(user);
             then(backupCodeRepository).should().deleteAllByUserId(USER_ID);
             then(authTokenService).should().forgetMfaOfAllSessions(USER_ID, TENANT_ID);
-            then(authEmailRequestService).should().requestMfaChangeNotification(user, false);
+            then(authTokenService).should().invalidateLoginContinuationTokens(USER_ID);
+            then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
+            then(authEmailRequestService).should().requestMfaResetNotification(user);
+            then(authEmailRequestService).should(org.mockito.Mockito.never())
+                    .requestMfaChangeNotification(any(), org.mockito.ArgumentMatchers.anyBoolean());
             then(auditEventPublisher).should().publishAuth(eq(USER_ID), eq(TENANT_ID),
-                    eq(com.incidentplatform.shared.audit.AuditEventTypes.MFA_DISABLED),
-                    anyString(), anyString(), anyString(), any());
+                    eq(AuditEventTypes.MFA_RESET_BY_ADMIN),
+                    eq("auth-service"), eq(ADMIN_ID.toString()), anyString(),
+                    eq(java.util.Map.of("resetBy", ADMIN_ID.toString())));
         }
 
         @Test
-        @DisplayName("an established factor is kept")
-        void keepsEstablishedFactor() {
+        @DisplayName("another admin's factor can be reset too")
+        void resetsAnotherAdmin() {
+            final User otherAdmin = User.forTesting(USER_ID, TENANT_ID, "admin2@example.com",
+                    null, true, List.of("ROLE_ADMIN"));
+            otherAdmin.storePendingMfaSecret("encrypted-secret");
+            otherAdmin.enableMfa();
+            adminSessionCompletedMfa(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(otherAdmin));
+
+            service.resetMfaByAdmin(USER_ID, admin());
+
+            assertThat(otherAdmin.isMfaEnabled()).isFalse();
+        }
+
+        @Test
+        @DisplayName("403 on one's own account, before anything is read")
+        void refusesOwnAccount() {
+            final UserPrincipal self = admin();
+
+            assertThatThrownBy(() -> service.resetMfaByAdmin(ADMIN_ID, self))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+            then(userRepository).shouldHaveNoInteractions();
+            then(mfaSessionStatusService).shouldHaveNoInteractions();
+            then(mfaResetRateLimiter).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("403 when the admin's session did not complete MFA (password alone, API key)")
+        void refusesWithoutMfaSession() {
+            adminSessionCompletedMfa(false);
+
+            assertThatThrownBy(() -> service.resetMfaByAdmin(USER_ID, admin()))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+            then(userRepository).shouldHaveNoInteractions();
+            then(authTokenService).shouldHaveNoInteractions();
+            // A refused step-up uses up no budget.
+            then(mfaResetRateLimiter).shouldHaveNoInteractions();
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.EnumSource(value = RateLimitDecision.Outcome.class,
+                names = "ALLOWED", mode = org.junit.jupiter.params.provider.EnumSource.Mode.EXCLUDE)
+        @DisplayName("a limit that refuses (429) or cannot be checked (503) stops the reset before anything changes")
+        void refusedByRateLimit(RateLimitDecision.Outcome outcome) {
+            adminSession(MfaSessionStatusService.Status.ACCEPTED);
+            final RateLimitDecision refusal =
+                    new RateLimitDecision(outcome, 42);
+            given(mfaResetRateLimiter.tryConsume(ADMIN_ID, TENANT_ID)).willReturn(refusal);
             final User user = buildUser(true);
-            given(mfaSessionStatusService.isEstablished(any(), any())).willReturn(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(user));
 
-            assertThat(service.removeFactorEnrolledWithinGrace(user, TENANT_ID)).isFalse();
-
+            assertThatThrownBy(() -> service.resetMfaByAdmin(USER_ID, admin()))
+                    .isInstanceOfSatisfying(RateLimitRefusedException.class,
+                            e -> assertThat(e.decision()).isEqualTo(refusal));
             assertThat(user.isMfaEnabled()).isTrue();
-            then(authEmailRequestService).shouldHaveNoInteractions();
+            then(userRepository).should(org.mockito.Mockito.never()).save(any());
             then(backupCodeRepository).shouldHaveNoInteractions();
+            then(authTokenService).shouldHaveNoInteractions();
+            then(authEmailRequestService).shouldHaveNoInteractions();
+            then(auditEventPublisher).shouldHaveNoInteractions();
         }
 
         @Test
-        @DisplayName("nothing to do without MFA")
-        void noFactor() {
-            assertThat(service.removeFactorEnrolledWithinGrace(buildUser(false), TENANT_ID)).isFalse();
+        @DisplayName("a deactivated user can be reset, so a stranger's factor goes before reactivation (review of #0-88)")
+        void resetsDeactivatedUser() {
+            final User deactivated = User.forTesting(USER_ID, TENANT_ID, "u@example.com", null, false,
+                    List.of("ROLE_RESPONDER"));
+            deactivated.storePendingMfaSecret("encrypted-secret");
+            deactivated.enableMfa();
+            adminSessionCompletedMfa(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(deactivated));
+
+            service.resetMfaByAdmin(USER_ID, admin());
+
+            assertThat(deactivated.isMfaEnabled()).isFalse();
+            assertThat(deactivated.isActive()).as("the reset does not reactivate").isFalse();
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest
+        @org.junit.jupiter.params.provider.EnumSource(value = MfaSessionStatusService.Status.class,
+                names = "ACCEPTED", mode = org.junit.jupiter.params.provider.EnumSource.Mode.EXCLUDE)
+        @DisplayName("403 for every way the admin's session fails the platform MFA rule: too old, factor too new (review of #0-88)")
+        void refusesEveryFailedStepUp(MfaSessionStatusService.Status status) {
+            adminSession(status);
+
+            assertThatThrownBy(() -> service.resetMfaByAdmin(USER_ID, admin()))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> {
+                        assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN);
+                        assertThat(e.getMessage()).isEqualTo(MfaService.stepUpRefusal(status));
+                    });
+            then(userRepository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("a too-new factor and an undelivered notice get one message, as on the platform API")
+        void stepUpMessages() {
+            assertThat(MfaService.stepUpRefusal(MfaSessionStatusService.Status.MFA_ENROLLED_TOO_RECENTLY))
+                    .isEqualTo(MfaService.stepUpRefusal(MfaSessionStatusService.Status.MFA_NOTICE_NOT_DELIVERED));
+            assertThat(MfaService.stepUpRefusal(MfaSessionStatusService.Status.MFA_TOO_OLD)).contains("recent");
+            assertThatThrownBy(() -> MfaService.stepUpRefusal(MfaSessionStatusService.Status.ACCEPTED))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+
+        @Test
+        @DisplayName("404 for a user not active in the admin's tenant")
+        void notFound() {
+            adminSessionCompletedMfa(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.resetMfaByAdmin(USER_ID, admin()))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            then(authTokenService).shouldHaveNoInteractions();
             then(authEmailRequestService).shouldHaveNoInteractions();
+            // A 404 spends no budget (review of #0-88).
+            then(mfaResetRateLimiter).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("409 when the user has no factor; nothing ended, nobody emailed")
+        void noFactor() {
+            adminSessionCompletedMfa(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(buildUser(false)));
+
+            assertThatThrownBy(() -> service.resetMfaByAdmin(USER_ID, admin()))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
+            then(authTokenService).shouldHaveNoInteractions();
+            then(authEmailRequestService).shouldHaveNoInteractions();
+            then(auditEventPublisher).shouldHaveNoInteractions();
+            // A 409 spends no budget either.
+            then(mfaResetRateLimiter).shouldHaveNoInteractions();
+        }
+    }
+
+    // ── resetMfaBreakGlass (backlog #0-88) ───────────────────────────────
+
+    @Nested
+    @DisplayName("resetMfaBreakGlass")
+    class ResetMfaBreakGlass {
+
+        private static final String OPERATOR = "platform-operator";
+        private static final java.time.Duration TIMEOUT = java.time.Duration.ofSeconds(30);
+        private static final String ORIGIN = "ops-laptop-user@host-1";
+
+        private User operatorWithMfa() {
+            final User user = User.forTesting(USER_ID, OPERATOR, "ops@example.com",
+                    null, true, List.of("ROLE_ADMIN"));
+            user.storePendingMfaSecret("encrypted-secret");
+            user.enableMfa();
+            return user;
+        }
+
+        @Test
+        @DisplayName("resets like the admin reset and audits MFA_RESET_BREAK_GLASS with a confirmed send")
+        void resets() {
+            final User user = operatorWithMfa();
+            given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(user));
+
+            assertThat(service.resetMfaBreakGlass("ops@example.com", " Jane Doe ", " lost phone ", ORIGIN, TIMEOUT))
+                    .isEqualTo(USER_ID);
+
+            assertThat(user.isMfaEnabled()).isFalse();
+            then(backupCodeRepository).should().deleteAllByUserId(USER_ID);
+            then(authTokenService).should().forgetMfaOfAllSessions(USER_ID, OPERATOR);
+            then(authTokenService).should().invalidateLoginContinuationTokens(USER_ID);
+            then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
+            then(authEmailRequestService).should().requestMfaResetNotification(user);
+            then(auditEventPublisher).should().publishAuthConfirmed(eq(USER_ID), eq(OPERATOR),
+                    eq(AuditEventTypes.MFA_RESET_BREAK_GLASS),
+                    eq("auth-service"), eq("break-glass:Jane Doe"), anyString(),
+                    eq(java.util.Map.of("resetBy", "break-glass:Jane Doe", "reason", "lost phone",
+                            "executedOn", ORIGIN)),
+                    eq(TIMEOUT));
+            then(auditEventPublisher).should(org.mockito.Mockito.never())
+                    .publishAuth(any(), any(), any(), any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("the email is matched as stored after trimming, and a miss explains the exact match")
+        void trimsEmailAndExplainsMiss() {
+            final User user = operatorWithMfa();
+            given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(user));
+
+            assertThat(service.resetMfaBreakGlass("  ops@example.com ", "Jane", "lost phone", ORIGIN, TIMEOUT))
+                    .isEqualTo(USER_ID);
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("Ops@Example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+                    .isInstanceOf(ResourceNotFoundException.class)
+                    .hasMessageContaining("case-sensitive");
+        }
+
+        @Test
+        @DisplayName("executedOn is required and checked like actor and reason")
+        void requiresExecutedOn() {
+            for (final String origin : new String[] {null, " ", "user@host\nINFO forged"}) {
+                assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", origin,
+                        TIMEOUT)).isInstanceOf(IllegalArgumentException.class);
+            }
+            then(userRepository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("ordinary text, accents and other scripts are fine in actor and reason")
+        void acceptsOrdinaryText() {
+            assertThat(MfaService.isUnsafeInLog('a')).isFalse();
+            assertThat("Łukasz Pławiak, zgubiony telefon — потерян".codePoints()
+                    .anyMatch(MfaService::isUnsafeInLog)).isFalse();
+        }
+
+        @Test
+        @DisplayName("only in platform-operator: a customer tenant's user is not found")
+        void operatorTenantOnly() {
+            given(userRepository.findByEmailAndTenantId("u@example.com", OPERATOR)).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("u@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            then(authTokenService).shouldHaveNoInteractions();
+            then(auditEventPublisher).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("actor and reason are required and bounded, checked before anything is read")
+        void requiresActorAndReason() {
+            final String tooLong = "x".repeat(MfaService.BREAK_GLASS_REASON_MAX + 1);
+            for (final String[] input : new String[][] {
+                    {null, "reason"}, {" ", "reason"}, {"Jane", null}, {"Jane", "  "},
+                    {"x".repeat(MfaService.BREAK_GLASS_ACTOR_MAX + 1), "reason"}, {"Jane", tooLong},
+                    {"Jane\nINFO forged line", "reason"}, {"Jane", "lost\rphone"}, {"Jane", "lost\tphone"},
+                    {"Jane\u2028INFO forged", "reason"}, {"Jane", "lost\u2029phone"},
+                    {"\u202EenaJ", "reason"}, {"Jane", "lost\u200Bphone"}}) {
+                assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", input[0], input[1], ORIGIN, TIMEOUT))
+                        .isInstanceOf(IllegalArgumentException.class);
+            }
+            then(userRepository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("409 for an operator user who is not an admin; nothing changed (review of #0-88)")
+        void adminsOnly() {
+            final User responder = User.forTesting(USER_ID, OPERATOR, "ops@example.com", null, true,
+                    List.of("ROLE_RESPONDER"));
+            responder.storePendingMfaSecret("encrypted-secret");
+            responder.enableMfa();
+            given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(responder));
+
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
+            assertThat(responder.isMfaEnabled()).isTrue();
+            then(auditEventPublisher).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("409 when the user has no factor; nothing changed or audited")
+        void noFactor() {
+            final User user = User.forTesting(USER_ID, OPERATOR, "ops@example.com", null, true, List.of("ROLE_ADMIN"));
+            given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(user));
+
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
+            then(authTokenService).shouldHaveNoInteractions();
+            then(auditEventPublisher).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("an unconfirmed audit event fails the call, so the transaction rolls back")
+        void auditNotConfirmed() {
+            given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR))
+                    .willReturn(Optional.of(operatorWithMfa()));
+            org.mockito.BDDMockito.willThrow(new AuditNotConfirmedException(
+                            "not confirmed", null))
+                    .given(auditEventPublisher).publishAuthConfirmed(any(), any(), any(), any(), any(), any(),
+                            any(), any());
+
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+                    .isInstanceOf(AuditNotConfirmedException.class);
         }
     }
 

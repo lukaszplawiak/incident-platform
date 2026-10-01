@@ -28,8 +28,16 @@ public enum AuthEmailType {
      */
     MFA_ENABLED,
 
-    /** Security notification (backlog #0-83): MFA was disabled on the account. No token. */
-    MFA_DISABLED;
+    /** Security notification (backlog #0-83): the user disabled MFA on the account. No token. */
+    MFA_DISABLED,
+
+    /**
+     * Security notification (backlog #0-88): an administrator reset the
+     * account's MFA (the admin reset or the break-glass command). Its own
+     * type, so the user can tell it from disabling MFA themselves and notice
+     * a reset they did not ask for. No token.
+     */
+    MFA_RESET;
 
     /** Whether an email of this type carries a token (a link to act on). */
     public boolean carriesToken() {
@@ -45,7 +53,7 @@ public enum AuthEmailType {
         return switch (this) {
             case INVITE -> AuthToken.Type.INVITE;
             case PASSWORD_RESET -> AuthToken.Type.PASSWORD_RESET;
-            case MFA_ENABLED, MFA_DISABLED ->
+            case MFA_ENABLED, MFA_DISABLED, MFA_RESET ->
                     throw new IllegalStateException(this + " is a notification and carries no token");
         };
     }

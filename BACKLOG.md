@@ -85,7 +85,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
 | [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
-| [0-88](#0-88-a-password-reset-removes-a-recent-second-factor-instead-of-an-admin-resetting-it) | A password reset removes a recent second factor instead of an admin resetting it | design | High | Open |
+| [0-89](#0-89-a-personal-api-key-survives-a-password-reset-and-an-mfa-reset) | A personal API key survives a password reset and an MFA reset | design | High | Open |
+| [0-90](#0-90-a-customer-tenants-only-admin-has-no-way-back-from-a-factor-they-did-not-enrol) | A customer tenant's only admin has no way back from a factor they did not enrol | design | Medium | Open |
+| [0-91](#0-91-one-writer-for-the-x-tenant-id-header-of-every-kafka-record) | One writer for the X-Tenant-Id header of every Kafka record | design | Low | Open |
 
 ---
 
@@ -1280,6 +1282,15 @@ transaction is active, and the existing Kafka sender used only by the relay. Dec
 outside a transaction (e.g. a failed login, which has no change to commit) keep a direct send. Also set
 `max.block.ms` / `delivery.timeout.ms` for every producer, which is worth doing on its own.
 
+**First users (#0-88).** The admin MFA reset (`MFA_RESET_BY_ADMIN`) is a security-relevant action audited
+through the fire-and-forget path today; it should be among the first to write to the outbox. The break-glass
+MFA reset meanwhile uses `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waits for Kafka's
+acknowledgement inside the transaction (no ack, no reset): acceptable for a one-off process, wrong for a
+request path, so it refuses to run on a request thread (a runtime guard). With the outbox the break-glass
+reset writes its event in the transaction like everything else; then delete `publishAuthConfirmed`,
+`AuditEventKafkaSender.sendConfirmed`, `AuditNotConfirmedException` and the guard, rather than keeping a
+second audit path.
+
 ---
 
 ### 0-85. A tenant id with data in other services but no user can be provisioned
@@ -1360,31 +1371,95 @@ operators.
 
 ---
 
-### 0-88. A password reset removes a recent second factor instead of an admin resetting it
+### 0-89. A personal API key survives a password reset and an MFA reset
 
-**Type:** design · **Priority:** High · **Status:** Open (interim behaviour shipped in #0-83)
+**Type:** design · **Priority:** High · **Status:** Open (found while implementing #0-88)
 
-**Problem.** Since #0-83 a password reset by email removes a second factor whose "MFA enabled"
-email went out less than 24 h ago (`MfaService.removeFactorEnrolledWithinGrace`). It is the only
-remedy today for an owner whose password was used to enrol someone else's factor: auth-service has
-no way for anyone else to remove a user's factor (`/mfa/disable` needs the factor itself). But it
-lets a mailbox alone undo MFA: someone who can read the owner's email, without the password, resets
-the password within 24 h of a genuine enrolment and logs in with the password only. Mature systems
-never do this (GitHub, Google, Entra ID, Okta, Auth0: a reset by email keeps MFA; NIST SP 800-63B,
-recovery must not lower the assurance level). Found in the review of #0-83, in every tenant.
+**Problem.** Any user can create a PERSONAL API key (`POST /api/v1/api-keys`) from a session with
+their password alone. auth-service accepts it (`ApiKeyLookupServiceImpl`) with the owner's current
+roles, an admin's included, and nothing revokes it but archiving or anonymizing the user
+(`ApiKeyService.revokeAllPersonalKeysForUser`). So someone who had the password for a moment keeps
+access after the owner recovers the account: a password reset (#0-83) and an admin MFA reset (#0-88)
+end every session, but not the key. The platform API and the MFA reset refuse API keys, so the key
+cannot reach those; everything else in auth-service an owner's role allows, it can. The same holds
+for a TENANT key created with a stolen admin password, though another admin can list and revoke it.
+Other services do not accept personal keys (ingestion's introspection answers `active:false` for
+them, #0-16).
 
-**Approach.** The B2B pattern (Okta "Reset Multifactor", Entra ID "Require re-register MFA"):
-- An admin of the user's tenant resets the user's MFA: factor, backup codes and the sessions' MFA
-  marks cleared, the user emailed (MFA_DISABLED through the auth email outbox), audited. Not on
-  one's own account. In `platform-operator` that is another operator admin; with a single operator,
-  a documented break-glass step as `incident_app`, audited.
-- In the same change a password reset stops touching MFA: `removeFactorEnrolledWithinGrace` and its
-  call in `PasswordService` go, and the MFA_ENABLED email, README, the operator guide and `.ai/` name
-  "ask your administrator" as the remedy instead.
-- The platform API's grace period (#0-83) stays: it still keeps a fresh factor out of the platform
-  API until the owner had a chance to react.
+**Options, to decide.**
+- **Revoke on recovery.** A password reset and an admin MFA reset also revoke the user's personal
+  keys, in the same transaction, and say so in the email. Simple and closes the gap after the fact;
+  costs a legitimate owner their keys on every reset.
+- **Step-up to create.** Creating a key needs a session that passes the MFA rule the admin MFA reset
+  uses (#0-88, `MfaSessionStatusService.check`), for users who have MFA; without MFA there is nothing
+  stronger to ask for.
+- **Tell the owner.** An email through the auth email outbox on every key creation (the #0-83
+  pattern), so a key the owner did not create is noticed, and the key list shows who created a key
+  and from which session.
+- These combine; revoke-on-recovery plus the email is the likely minimum.
 
-**When.** Right after #0-83, before any real deployment.
+**When.** Before any real deployment, like #0-88.
+
+---
+
+### 0-90. A customer tenant's only admin has no way back from a factor they did not enrol
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the review of #0-88)
+
+**Problem.** Since #0-88 a password reset never removes a second factor, and an admin of the tenant
+resets it instead. A customer tenant with a single admin has nobody to do that for the admin: if
+someone enrolled a factor with that admin's password (the MFA_ENABLED email warns them), or the admin
+lost both their phone and their backup codes, they are locked out for good. The break-glass command
+covers only `platform-operator`, and the platform never acts inside a tenant that has an admin (#0-80).
+A lockout, not a leak: the stranger's factor still needs the admin's new password.
+
+**How mature systems handle it.** Prevention first: backup codes at enrolment (there are), and urging
+or requiring a second admin. Then recovery through the vendor, with the person's identity verified
+outside the account's own channels (domain ownership by a DNS record, a call to a known number), a
+waiting period announced to the account so its real owner can object, and an audit trail on both
+sides.
+
+**Approach.** Design first, as a new operator action under #0-80's rule (operator admin with MFA, in
+the operator tenant's audit, rate-limited, a backlog decision):
+- operator-assisted MFA reset of a customer tenant's admin, only when the tenant has no other active
+  admin, with out-of-band verification recorded in the request, a waiting period (e.g. 72 h) announced
+  to the account and cancellable by it, audited in both tenants;
+- prevention: a warning to a tenant's admins while it has only one admin (in the API response or by
+  email), possibly a policy requiring two.
+
+---
+
+### 0-91. One writer for the X-Tenant-Id header of every Kafka record
+
+**Type:** design · **Priority:** Low · **Status:** Open (found in the review of #0-88)
+
+**Problem.** A record's tenant header has two writers. Senders that know the record's tenant set it
+explicitly (`AuditEventKafkaSender` since #0-88, `AlertKafkaProducer`, `IncidentEventKafkaSender`), and
+`TenantKafkaProducerInterceptor` adds it from `TenantContext`, a thread-local that a login, a scheduled
+job or a consumer thread does not have. Two writers produced two headers per record until #0-88 (consumers
+read the last, so the thread's context won over the record's own tenant); now the interceptor leaves an
+existing header alone. The interceptor is registered only in ingestion-, incident- and escalation-service,
+so auth-, notification-, postmortem- and oncall-service rely on explicit headers alone; the dead-letter
+records of notification- and postmortem-service (`DeadLetterPublisher`) have none. Checked locally before
+#0-88: 151 of 155 audit records had no header. Consumers fall back to the payload's `tenantId`
+(`TenantKafkaRecordResolver`), so nothing is misrouted today; a record whose payload cannot be parsed has
+no tenant at all. CLAUDE.md's "stamps X-Tenant-Id on every record" carries a footnote pointing here.
+
+**How production systems handle it.** One explicit writer: the tenant (with the other routing metadata:
+event type, correlation id) is set by the one component that builds the record, from the message itself,
+often as an envelope (CloudEvents-style attributes) or a publisher API that cannot be called without a
+tenant. Ambient thread context is not a source of record data. Interceptors, if any, validate (count and
+alert on a record without the header) rather than write.
+
+**Approach.** A tenant-aware publisher in `shared` that every producer uses (audit, dead-letter,
+incident events, alerts), taking the tenant as a required argument and setting key and header; turn
+`TenantKafkaProducerInterceptor` into a validator (a metric and a WARN for a header-less record, no
+writes) registered in all seven services; `DeadLetterPublisher` passes the failed record's resolved
+tenant (or its original header). On the consuming side, `TenantKafkaRecordResolver` takes the header
+first and the payload's `tenantId` only as a fallback, without comparing the two when both are
+present (found in the review of #0-88): a record whose header and payload disagree should go to the
+dead-letter topic rather than be processed under either tenant. Then make CLAUDE.md state the rule without a footnote. Relates to the
+envelope idea in `AlertKafkaProducer`'s TODO.
 
 ---
 
@@ -1419,6 +1494,7 @@ recovery must not lower the assurance level). Found in the review of #0-83, in e
 | 0-78 | The services' database role `incident_app` was a Postgres superuser (checked on a running database: `rolsuper = t`): the image's `POSTGRES_USER` created it, so SQL injection in any service was command execution in the database container (`COPY ... TO PROGRAM`). Now `POSTGRES_USER` is the admin, used by no service, and `k8s/base/infrastructure/postgresql-init.sh` (one file, mounted by docker-compose, generated into a ConfigMap by Kustomize) creates `incident_app` with `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` as owner of the database and the `public` schema; it reads its values with psql `\getenv`, so no password is on a command line, and refuses `APP_DB_USER` = `POSTGRES_USER`. No migration needed superuser rights (the extensions are trusted). The role's password and the services' `DB_PASSWORD` have one source: `docker/.env` (both database passwords now required, no default) or each overlay's `app-secrets`, now wired to the six Deployments; the admin comes from a per-overlay `postgresql-admin` Secret, and the base `postgresql-secret` with its committed password is gone (part of #0-66). No name is hard-coded: probes, CI and the migration read `POSTGRES_USER`. Probes: the init-phase server listens on its socket only, so a socket check reported ready before the role existed (reproduced); compose's healthcheck and the k8s readiness and startup probes now use TCP, liveness the socket after the startup probe. CI: the smoke test checks the role's attributes, that it is a member of no role and that `COPY ... TO PROGRAM` is refused; a new job runs `.github/scripts/test-postgres-roles.sh` against the real image (init with a hostile password and a non-default admin, the guard, the migration). An existing database cannot be demoted in place (`incident_app` is the bootstrap role, which must stay superuser), so `docs/database-roles.md` and `docs/database-roles-migrate.sql` give the procedure: rename it to the admin, create a new `incident_app`, move ownership, in one transaction with a completeness check, passwords from the database container's environment. Because the services' role owns `public` and could plant a trigger, rule, default, view or function that runs as whoever fires it, the superuser never touches anything outside `pg_catalog` in the database: the guide's "Working as the admin" routes service data, backups and restores through an `incident_app` login (`SET ROLE` is no boundary, planted code can `RESET ROLE`; the CI job shows both cases), and the admin's `search_path` is `pg_catalog` as a second line of defence; the migration itself runs with `search_path = pg_catalog` and only `ALTER ... OWNER`, after a preflight that refuses to run while an event trigger or an extra superuser exists (it is for databases not suspected of compromise; those are restored); CI also runs the guide's backup/restore commands as `incident_app`. Not covered: the role still owns every table, so grants and RLS do not separate services (#0-67) | PR #443 |
 | 0-80 | Every new database got a `ROLE_ADMIN` account `admin@incidentplatform.com` / `changeme` in tenant `default` from the Flyway Java migration `V1_1__seed_admin_user` (no deployment set `ADMIN_PASSWORD`; login returned 200, and the Ingress routes `/api/v1/auth`). `V1_1` now creates nothing (the class stays for Flyway's history); `V20__archive_default_seed_admin` archives that account and invalidates its tokens where its password still verifies as `changeme`, and leaves a changed one with a WARN. Customer tenants are now provisioned by a platform operator: `tenants` table (V21, backfilled from existing users), `POST /api/v1/platform/tenants` creates the tenant and invites its first admin in one transaction, `POST .../{tenantId}/admin-invite` reissues a lost or expired first invite (sharing `TenantAdminReconciler` with `OperatorTenantBootstrap`, #0-49, which now also records the operator tenant's row), `GET` shows one tenant's or lists tenants' metadata. Only an admin of `platform-operator` with a JWT gets in (`PlatformAccess`, in the filter chain and on every method; API keys, service and purpose tokens refused); audited as `TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` (`shared`). This narrowly reverses #0-16's "no cross-tenant create tenant endpoint". The reissue never creates a user (an archived first admin is not revived; reopening is #0-82), provisioning refuses an id that has users, archived ones included, and V20 also revokes the account's API keys. Testcontainers tests of V20, V21 and provisioning (incl. rollback when the admin insert fails), security tests with real tokens. Guide: `docs/tenant-provisioning.md`; suspension and offboarding: #0-82 | PR #445 |
 | 0-83 | The platform API (#0-80) accepted an operator admin's password alone and had no rate limit. `PlatformAccess` now also requires that the access token's session completed MFA within 12 h (`platform.mfa.max-session-age`) with a factor whose MFA_ENABLED notice was sent at least 24 h ago (`platform.mfa.enrolment-grace`): recorded on the session (`auth_tokens.mfa_verified_at`, V22) when a login finishes with a TOTP or backup code, carried unchanged by refresh rotation, cleared when the user disables MFA, and checked server-side per request (a live session only, so logout ends access at once). The grace period, plus an email to the account on every MFA enable/disable (outbox types `MFA_ENABLED` / `MFA_DISABLED`, V23) with the grace period counted from when that notice was sent (`users.mfa_enabled_notice_sent_at`, kept on the user because the outbox purges sent rows after 30 days), a password reset by email that removes a factor still within the grace period (interim, replaced by an admin reset in #0-88) and kills unfinished logins (MFA session / setup tokens), enrolment only from a live session, and existing factors enabled at least 24 h before the deploy backfilled as established by V23 (a newer one gets the grace period like any other, and an operator admin's factor never: operators re-enrol once), answers a review finding: enabling MFA needs only a password, so a password thief could enrol their own factor. Also fixed on the way: bulk UPDATEs in `AuthTokenRepository`, `ApiKeyRepository` and `MfaBackupCodeRepository` (and the new one in `UserRepository`) cleared the persistence context without flushing it, silently dropping earlier changes to other tables in the transaction. Decided against an `amr` JWT claim: only auth-service needs it, so `shared` and the token format stay unchanged; `amr` remains the path if another service needs step-up. A refusal names the failed MFA condition (`PlatformAccessDeniedHandler`). Writes are limited per operator and in total (`PlatformRateLimiter`, bucket4j + Redis, default 20/h per operator and 50/h for the platform, `@CircuitBreaker` opened by any failure), fail-closed (503) unlike ingestion's fail-open #67, with a lazy Redis connection so auth-service starts without Redis. Critical alerts `PlatformTenantProvisioningSpike` and `PlatformApiRateLimited`, high `PlatformApiRateLimitUnavailable`, with promtool tests | PR #446 |
+| 0-88 | Since #0-83 a password reset by email removed a second factor still within the grace period, the only way then to undo a factor someone else enrolled with the owner's password, but one that let a mailbox alone undo MFA. A password reset now never touches MFA (NIST SP 800-63B; Okta, Entra ID, Google keep MFA on reset); `MfaService.removeFactorEnrolledWithinGrace` is gone. Instead an admin of the tenant resets another user's MFA (`POST /api/v1/users/{id}/mfa-reset`, `MfaService.resetMfaByAdmin`): factor, pending setup, backup codes and the sessions' MFA marks cleared, every session and unfinished login ended, audited as `MFA_RESET_BY_ADMIN` (`shared`, distinct from the self-service `MFA_DISABLED`). Any other user of the tenant that is not archived (deactivated ones too, so a stranger's factor goes before reactivation), admins included, never one's own account; only from the admin's own session passing the platform API's MFA rule (`MfaSessionStatusService.check`: MFA within 12 h, a factor whose MFA_ENABLED notice went out at least 24 h ago; a weaker "completed MFA" rule was found in review to let a password thief enrol a factor and reset everyone at once, or a 30-day refresh chain act weeks later), so an admin's password, a fresh factor or an API key gets 403. Resets are limited per admin and per tenant (`MfaResetRateLimiter`, fail-closed like the platform API's limiter, counted only for a reset about to happen, 429/503 with Retry-After, alerts `AdminMfaResetRateLimited` / `AdminMfaResetRateLimitUnavailable`; shared `RateLimitDecision` / `RedisTokenBuckets` with `PlatformRateLimiter`). Audit records now carry `X-Tenant-Id` from the event's tenant (`AuditEventKafkaSender`; most had none, the rest is #0-91), and the producer interceptor no longer appends a second, context-derived one. `publishAuthConfirmed` refuses to run on a request thread. The user is emailed with a notice of its own (`MFA_RESET`, V24), so a reset they did not ask for stands out from disabling MFA themselves. The MFA_ENABLED email now says: reset the password, then ask an administrator to reset MFA (in that order, or the old password's holder could enrol again). A single platform operator has no second admin: a one-off break-glass command of auth-service (`BreakGlassMfaResetRunner`, `--break-glass.mfa-reset.*`, started only by the subcommand `break-glass-mfa-reset` as the first argument (the options alone, or an environment variable left in a deployment, start nothing), no web server, no scheduled jobs (runner and scheduling share one marker condition, `BreakGlassCommand`), admins of `platform-operator` only, actor and reason without control, line-separator or formatting characters) runs the same reset, emailed, and audited as `MFA_RESET_BREAK_GLASS` with the operator's name, reason and `executedOn` (OS user and host of the process) through `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waits for Kafka's acknowledgement inside the transaction, so a break-glass reset never happens unaudited; chosen over a SQL procedure, which could neither email nor audit. The platform API's grace period (#0-83) stays. A customer tenant's only admin has no remedy yet: #0-90; the admin reset's audit moves to #0-84's outbox. Testcontainers tests of the reset, the break-glass reset and its rollback without an audit acknowledgement, and a password reset that keeps a fresh factor | PR #447 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

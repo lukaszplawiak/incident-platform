@@ -6,6 +6,9 @@ import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
 import com.incidentplatform.auth.dto.UserSummaryDto;
+import com.incidentplatform.auth.ratelimit.RateLimitDecision;
+import com.incidentplatform.auth.ratelimit.RateLimitRefusedException;
+import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.PasswordService;
 import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.auth.service.UserManagementService;
@@ -21,11 +24,14 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -51,17 +57,20 @@ public class UserController {
     private final UserManagementService userManagementService;
     private final PasswordService passwordService;
     private final ResendInviteService resendInviteService;
+    private final MfaService mfaService;
 
     public UserController(UserService userService,
                           UserQueryService userQueryService,
                           UserManagementService userManagementService,
                           PasswordService passwordService,
-                          ResendInviteService resendInviteService) {
+                          ResendInviteService resendInviteService,
+                          MfaService mfaService) {
         this.userService = userService;
         this.userQueryService = userQueryService;
         this.userManagementService = userManagementService;
         this.passwordService = passwordService;
         this.resendInviteService = resendInviteService;
+        this.mfaService = mfaService;
     }
 
     // ── POST /users ───────────────────────────────────────────────────────
@@ -208,6 +217,58 @@ public class UserController {
     public ResponseEntity<Void> resendInvite(@PathVariable UUID id) {
         resendInviteService.resendInvite(id);
         return ResponseEntity.accepted().build();
+    }
+
+    // ── POST /users/{id}/mfa-reset ───────────────────────────────────────
+
+    @PostMapping(value = "/{id}/mfa-reset")
+    @PreAuthorize("hasRole('ADMIN')")
+    @Operation(
+            summary = "Reset a user's MFA",
+            description = """
+                    Removes another user's second factor (backlog #0-88): the
+                    factor, its backup codes, and every session and unfinished
+                    login of the user. The user is emailed and logs in with the
+                    password alone, then enrols a factor again.
+
+                    For a lost phone, or a factor someone else enrolled with the
+                    user's password. In the second case the user resets the
+                    password first, or the password's holder could enrol again.
+
+                    The caller's session must have completed MFA within 12 h, with a
+                    factor announced at least 24 h ago. Rate-limited per admin and
+                    per tenant. Not for your own account: use
+                    POST /api/v1/auth/mfa/disable.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "204", description = "MFA reset"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Forbidden — ROLE_ADMIN required, " +
+                    "the caller's session did not complete MFA, or own account"),
+            @ApiResponse(responseCode = "404", description = "User not found in tenant"),
+            @ApiResponse(responseCode = "409", description = "The user has no MFA enabled"),
+            @ApiResponse(responseCode = "429", description = "Per-admin or per-tenant limit reached; see Retry-After"),
+            @ApiResponse(responseCode = "503", description = "The limit cannot be checked now; see Retry-After")
+    })
+    public ResponseEntity<Void> resetMfa(
+            @PathVariable UUID id,
+            @AuthenticationPrincipal UserPrincipal principal) {
+        mfaService.resetMfaByAdmin(id, principal);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 429 or 503 with Retry-After and no body (backlog #0-88), as the platform
+     * API's limiter answers (#0-83).
+     */
+    @ExceptionHandler(RateLimitRefusedException.class)
+    ResponseEntity<Void> rateLimited(RateLimitRefusedException refused) {
+        final RateLimitDecision decision = refused.decision();
+        final HttpStatus status = decision.outcome() == RateLimitDecision.Outcome.LIMITED
+                ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.SERVICE_UNAVAILABLE;
+        return ResponseEntity.status(status)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(decision.retryAfterSeconds()))
+                .build();
     }
 
     // ── DELETE /users/{id} ────────────────────────────────────────────────

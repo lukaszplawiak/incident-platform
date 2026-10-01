@@ -5,7 +5,9 @@ import com.incidentplatform.shared.dto.AuditEventMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.context.request.RequestContextHolder;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 
@@ -134,6 +136,39 @@ public class AuditEventPublisher {
         publish(AuditEventMessage.authSystem(
                 userId, tenantId, eventType,
                 sourceService, detail, metadata));
+    }
+
+    /**
+     * Like {@link #publishAuth}, but waits until Kafka acknowledges the event
+     * and throws instead of logging a failure (backlog #0-88). For an action
+     * that must not happen unaudited (the break-glass MFA reset): called
+     * inside the action's transaction, a failure rolls the action back. The
+     * opposite failure, an event for an action whose commit then fails,
+     * remains possible (backlog #0-84) and is the safer one here.
+     *
+     * <p>Not for request paths: while Kafka is down it holds the caller's
+     * thread and database connection for up to {@code timeout}, and fails the
+     * action. A request path waits for #0-84's audit outbox instead.
+     *
+     * @throws AuditNotConfirmedException if the event was not acknowledged within {@code timeout}
+     */
+    public void publishAuthConfirmed(UUID userId,
+                                     String tenantId,
+                                     String eventType,
+                                     String sourceService,
+                                     String actor,
+                                     String detail,
+                                     Map<String, Object> metadata,
+                                     Duration timeout) {
+        // Enforced, not only documented (found in review): the method is
+        // public in shared, visible to every service.
+        if (RequestContextHolder.getRequestAttributes() != null) {
+            throw new IllegalStateException("publishAuthConfirmed is not for request paths: it blocks for up to "
+                    + timeout + " while Kafka is down (backlog #0-88); use publishAuth");
+        }
+        sender.sendConfirmed(AuditEventMessage.auth(
+                userId, tenantId, eventType,
+                sourceService, actor, detail, metadata), timeout);
     }
 
     // ── internal ──────────────────────────────────────────────────────────

@@ -325,6 +325,7 @@ public class AuthEmailScheduler {
                         entry.getEmail(), true, entry.getCreatedAt());
                 case MFA_DISABLED -> emailService.sendMfaChangeNotification(
                         entry.getEmail(), false, entry.getCreatedAt());
+                case MFA_RESET -> emailService.sendMfaResetNotification(entry.getEmail(), entry.getCreatedAt());
             }
         } catch (Exception e) {
             failedCounters.get(type).increment();

@@ -88,6 +88,22 @@ public final class AuditEventTypes {
     // ── MFA ─────────────────────────────────────────────────────────────────
     public static final String MFA_ENABLED                = "MFA_ENABLED";
     public static final String MFA_DISABLED               = "MFA_DISABLED";
+    /**
+     * An admin of the user's tenant removed the user's second factor (backlog
+     * #0-88): the factor, its backup codes and every session of the user. The
+     * actor is the admin. Distinct from {@link #MFA_DISABLED}, which means the
+     * user turned MFA off with their own password and code: an auditor
+     * filtering by type must not get both meanings.
+     */
+    public static final String MFA_RESET_BY_ADMIN         = "MFA_RESET_BY_ADMIN";
+    /**
+     * The break-glass form of {@link #MFA_RESET_BY_ADMIN} (backlog #0-88): run
+     * from the command line by whoever operates the deployment, for a
+     * platform operator with no other operator admin to reset them. The actor
+     * is the name given on the command line, with the reason in the metadata.
+     * Its own type, so every use of break-glass can be found by type.
+     */
+    public static final String MFA_RESET_BREAK_GLASS      = "MFA_RESET_BREAK_GLASS";
     public static final String MFA_VERIFY_SUCCESS         = "MFA_VERIFY_SUCCESS";
     public static final String MFA_VERIFY_FAILED          = "MFA_VERIFY_FAILED";
     public static final String MFA_BACKUP_CODE_USED       = "MFA_BACKUP_CODE_USED";

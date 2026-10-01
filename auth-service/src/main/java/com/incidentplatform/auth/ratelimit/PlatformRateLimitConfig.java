@@ -20,7 +20,9 @@ import org.springframework.context.annotation.Lazy;
 import java.time.Duration;
 
 /**
- * bucket4j's Redis state for {@link PlatformRateLimiter} (backlog #0-83). The
+ * bucket4j's Redis state for {@link PlatformRateLimiter} (backlog #0-83), and
+ * since backlog #0-88 for {@link MfaResetRateLimiter} too (its own keys and
+ * circuit breaker, the same connection). The
  * same setup as ingestion-service's {@code RedisRateLimitConfig} (#67): a Lettuce
  * connection of its own with a byte-array codec, which bucket4j's
  * {@code LettuceBasedProxyManager} needs, to the Redis that

@@ -517,6 +517,15 @@ jobs:
           amtool config routes test --config.file=alertmanager.yml \
             --verify.receivers=platform-webhook \
             alertname=PlatformApiRateLimitUnavailable scope=platform severity=high
+          # Backlog #0-88: the admin MFA reset limit's alerts. Reaching the limit
+          # may mean a taken-over admin account, so it reaches the operator by
+          # email too.
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email,platform-webhook \
+            alertname=AdminMfaResetRateLimited scope=platform severity=critical
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=platform-webhook \
+            alertname=AdminMfaResetRateLimitUnavailable scope=platform severity=high
 
   # ──────────────────────────────────────────────────────────
   # Job 5: Smoke test — boot the real stack via docker compose and

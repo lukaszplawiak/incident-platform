@@ -1,6 +1,5 @@
 package com.incidentplatform.auth.ratelimit;
 
-import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.BucketConfiguration;
 import io.github.bucket4j.ConsumptionProbe;
 import io.github.bucket4j.distributed.proxy.ProxyManager;
@@ -15,7 +14,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.util.UUID;
 
 /**
@@ -62,7 +60,7 @@ import java.util.UUID;
  * wait: onboarding a tenant five minutes later costs nothing, while a limit
  * that disappears whenever Redis is unreachable would be off exactly when an
  * attacker could arrange it. So any Redis failure, and an open circuit, answers
- * {@link Outcome#UNAVAILABLE} (the controller: 503 with Retry-After). The
+ * {@link RateLimitDecision.Outcome#UNAVAILABLE} (the controller: 503 with Retry-After). The
  * circuit breaker ({@code platform-ratelimit}) only makes that answer fast.
  */
 @Service
@@ -78,16 +76,6 @@ public class PlatformRateLimiter {
 
     /** Retry-After while Redis cannot be checked: the breaker's open-state wait. */
     static final long UNAVAILABLE_RETRY_AFTER_SECONDS = 30;
-
-    /** What a write operation may do now. */
-    public enum Outcome { ALLOWED, LIMITED, UNAVAILABLE }
-
-    /** @param retryAfterSeconds for LIMITED and UNAVAILABLE; 0 when allowed */
-    public record Decision(Outcome outcome, long retryAfterSeconds) {
-        public boolean allowed() {
-            return outcome == Outcome.ALLOWED;
-        }
-    }
 
     private final ProxyManager<String> proxyManager;
     private final BucketConfiguration operatorBucket;
@@ -112,23 +100,14 @@ public class PlatformRateLimiter {
                     + operationsPerHour + ")");
         }
         this.proxyManager = proxyManager;
-        this.operatorBucket = perHour(operationsPerHour);
-        this.globalBucket = perHour(globalOperationsPerHour);
+        this.operatorBucket = RedisTokenBuckets.perHour(operationsPerHour);
+        this.globalBucket = RedisTokenBuckets.perHour(globalOperationsPerHour);
         this.rejectedByOperatorLimit = rejectedCounter("operator", meterRegistry);
         this.rejectedByGlobalLimit = rejectedCounter("global", meterRegistry);
         this.unavailable = Counter.builder("platform.ratelimit.unavailable")
                 .description("Platform API write operations refused because the limit could not be "
                         + "checked in Redis (fail-closed, backlog #0-83)")
                 .register(meterRegistry);
-    }
-
-    private static BucketConfiguration perHour(long operations) {
-        return BucketConfiguration.builder()
-                .addLimit(Bandwidth.builder()
-                        .capacity(operations)
-                        .refillGreedy(operations, Duration.ofHours(1))
-                        .build())
-                .build();
     }
 
     private static Counter rejectedCounter(String limit, MeterRegistry meterRegistry) {
@@ -142,10 +121,10 @@ public class PlatformRateLimiter {
      * Takes one operation from the operator's bucket, then from the shared
      * one. No try/catch: a Redis failure must reach the
      * {@code @CircuitBreaker} proxy to be recorded, and its fallback turns it
-     * into {@link Outcome#UNAVAILABLE}.
+     * into {@link RateLimitDecision.Outcome#UNAVAILABLE}.
      */
     @CircuitBreaker(name = "platform-ratelimit", fallbackMethod = "unavailable")
-    public Decision tryConsume(UUID operatorUserId) {
+    public RateLimitDecision tryConsume(UUID operatorUserId) {
         final ConsumptionProbe operator = consume(KEY_PREFIX + operatorUserId, operatorBucket);
         if (!operator.isConsumed()) {
             return limited(operator, rejectedByOperatorLimit, "per-operator", operatorUserId);
@@ -154,24 +133,23 @@ public class PlatformRateLimiter {
         if (!global.isConsumed()) {
             return limited(global, rejectedByGlobalLimit, "platform-wide", operatorUserId);
         }
-        return new Decision(Outcome.ALLOWED, 0);
+        return RateLimitDecision.ALLOWED;
     }
 
     private ConsumptionProbe consume(String key, BucketConfiguration configuration) {
-        return proxyManager.builder()
-                .build(key, () -> configuration)
-                .tryConsumeAndReturnRemaining(1);
+        return RedisTokenBuckets.consume(proxyManager, key, configuration);
     }
 
-    private static Decision limited(ConsumptionProbe probe, Counter rejected, String limit, UUID operatorUserId) {
+    private static RateLimitDecision limited(ConsumptionProbe probe, Counter rejected, String limit,
+                                             UUID operatorUserId) {
         rejected.increment();
-        final long retryAfter = Math.max(1, Duration.ofNanos(probe.getNanosToWaitForRefill()).toSeconds());
+        final long retryAfter = RedisTokenBuckets.retryAfterSeconds(probe);
         log.warn("Platform API operation refused by the {} limit: operator={}, retryAfterSeconds={}",
                 limit, operatorUserId, retryAfter);
-        return new Decision(Outcome.LIMITED, retryAfter);
+        return new RateLimitDecision(RateLimitDecision.Outcome.LIMITED, retryAfter);
     }
 
-    Decision unavailable(UUID operatorUserId, Throwable cause) {
+    RateLimitDecision unavailable(UUID operatorUserId, Throwable cause) {
         unavailable.increment();
         if (cause instanceof CallNotPermittedException) {
             // The circuit is open: Redis was not tried, and the failure that
@@ -182,6 +160,6 @@ public class PlatformRateLimiter {
             log.error("Platform API limit cannot be checked in Redis — refusing the operation "
                     + "(fail-closed): operator={}", operatorUserId, cause);
         }
-        return new Decision(Outcome.UNAVAILABLE, UNAVAILABLE_RETRY_AFTER_SECONDS);
+        return new RateLimitDecision(RateLimitDecision.Outcome.UNAVAILABLE, UNAVAILABLE_RETRY_AFTER_SECONDS);
     }
 }

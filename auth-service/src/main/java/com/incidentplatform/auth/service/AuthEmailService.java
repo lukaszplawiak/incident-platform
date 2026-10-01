@@ -40,6 +40,22 @@ public class AuthEmailService {
     private static final Logger log =
             LoggerFactory.getLogger(AuthEmailService.class);
 
+    /**
+     * Backlog #0-88: a password reset no longer removes a factor (it did
+     * within the grace period, #0-83); an admin of the tenant resets it, and
+     * only after the password has changed, or its holder could enrol again.
+     */
+    private static final String MFA_ENABLED_WARNING = """
+            If this was not you, someone else knows your password and has set up
+            their own second factor on your account. Reset your password now with
+            "Forgot password", then ask an administrator of your organisation to
+            reset your MFA, so you can set up your own.""";
+
+    /** An admin's MFA reset has its own email (backlog #0-88), so this is the user's own change. */
+    private static final String MFA_DISABLED_WARNING = """
+            If this was not you, someone else knows your password: reset it now
+            with "Forgot password" and tell your administrator.""";
+
     private final JavaMailSender mailSender;
     private final String fromAddress;
     private final String appBaseUrl;
@@ -99,8 +115,21 @@ public class AuthEmailService {
         final String what = enabled ? "enabled" : "disabled";
         send(recipientEmail,
                 "Two-factor authentication was " + what + " on your Incident Platform account",
-                buildMfaChangeBody(recipientEmail, what, changedAt));
+                buildMfaChangeBody(recipientEmail, what, changedAt,
+                        enabled ? MFA_ENABLED_WARNING : MFA_DISABLED_WARNING));
         log.info("MFA {} notification sent: to={}", what, recipientEmail);
+    }
+
+    /**
+     * Tells the account an administrator reset its MFA (backlog #0-88): its
+     * own text, so a reset the owner did not ask for stands out from them
+     * disabling MFA themselves.
+     */
+    public void sendMfaResetNotification(String recipientEmail, Instant resetAt) {
+        send(recipientEmail,
+                "An administrator reset two-factor authentication on your Incident Platform account",
+                buildMfaResetBody(recipientEmail, resetAt));
+        log.info("MFA reset notification sent: to={}", recipientEmail);
     }
 
     // ── private ───────────────────────────────────────────────────────────
@@ -204,7 +233,8 @@ public class AuthEmailService {
                 resetLink, resetLink, resetLink, recipientEmail);
     }
 
-    private String buildMfaChangeBody(String recipientEmail, String what, Instant changedAt) {
+    private String buildMfaChangeBody(String recipientEmail, String what, Instant changedAt,
+                                      String warning) {
         return String.format("""
                 <html>
                 <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -212,10 +242,7 @@ public class AuthEmailService {
                     <p>Two-factor authentication (MFA) was %s on your Incident Platform
                        account at %s (UTC).</p>
                     <p style="color: #c0392b; font-weight: bold;">
-                        If this was not you, someone else may know your password.
-                        Reset it now with "Forgot password": a reset made soon after the
-                        change (within 24 hours, unless your platform set another period)
-                        also removes the new second factor. Then tell your administrator.
+                        %s
                     </p>
                     <p style="color: #7f8c8d; font-size: 12px;">
                         If you made this change, no action is needed.
@@ -228,6 +255,33 @@ public class AuthEmailService {
                 </html>
                 """,
                 what, what, DateTimeFormatter.ISO_INSTANT.format(changedAt.truncatedTo(ChronoUnit.SECONDS)),
+                warning,
+                recipientEmail);
+    }
+
+    private String buildMfaResetBody(String recipientEmail, Instant resetAt) {
+        return String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #2c3e50;">Two-factor authentication reset</h2>
+                    <p>An administrator reset two-factor authentication (MFA) on your Incident
+                       Platform account at %s (UTC). Your second factor and backup codes were
+                       removed and you were signed out everywhere (a page already open may keep
+                       working for up to 15 minutes).</p>
+                    <p>Log in with your password and set up MFA again with your own
+                       authenticator app.</p>
+                    <p style="color: #c0392b; font-weight: bold;">
+                        If you did not ask for this, tell your administrator now, and reset your
+                        password with "Forgot password" before you set up MFA again.
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #ecf0f1; margin: 30px 0;"/>
+                    <p style="color: #bdc3c7; font-size: 11px;">
+                        Incident Platform — sent to %s
+                    </p>
+                </body>
+                </html>
+                """,
+                DateTimeFormatter.ISO_INSTANT.format(resetAt.truncatedTo(ChronoUnit.SECONDS)),
                 recipientEmail);
     }
 }

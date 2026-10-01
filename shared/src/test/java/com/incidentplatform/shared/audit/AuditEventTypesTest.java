@@ -76,4 +76,15 @@ class AuditEventTypesTest {
                 .isEqualTo("TENANT_ADMIN_REINVITED")
                 .isNotEqualTo(AuditEventTypes.USER_INVITE_RESENT);
     }
+
+    @Test
+    @DisplayName("an admin's MFA reset and its break-glass form have their own types (backlog #0-88)")
+    void mfaResetByAdminType() {
+        assertThat(AuditEventTypes.MFA_RESET_BY_ADMIN)
+                .isEqualTo("MFA_RESET_BY_ADMIN")
+                .isNotEqualTo(AuditEventTypes.MFA_DISABLED);
+        assertThat(AuditEventTypes.MFA_RESET_BREAK_GLASS)
+                .isEqualTo("MFA_RESET_BREAK_GLASS")
+                .isNotEqualTo(AuditEventTypes.MFA_RESET_BY_ADMIN);
+    }
 }

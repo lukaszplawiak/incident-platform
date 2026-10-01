@@ -1,8 +1,11 @@
 package com.incidentplatform.auth;
 
+import com.incidentplatform.auth.breakglass.BreakGlassCommand;
+import com.incidentplatform.auth.breakglass.BreakGlassMfaResetRunner;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
+import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.context.annotation.ComponentScan;
 
 /**
@@ -95,6 +98,16 @@ import org.springframework.context.annotation.ComponentScan;
 public class AuthServiceApplication {
 
     public static void main(String[] args) {
-        SpringApplication.run(AuthServiceApplication.class, args);
+        final SpringApplication application = new SpringApplication(AuthServiceApplication.class);
+        // "break-glass-mfa-reset" as the first argument runs the one-off
+        // command (backlog #0-88): no web server, no scheduling.
+        final String[] springArgs = BreakGlassCommand.prepare(application, args);
+        final ConfigurableApplicationContext context = application.run(springArgs);
+        // Started as the one-off break-glass command (backlog #0-88): end the
+        // process with the command's exit code, collected from its
+        // ExitCodeGenerator. As a service, keep running.
+        if (BreakGlassMfaResetRunner.isCommand(context)) {
+            System.exit(SpringApplication.exit(context));
+        }
     }
 }

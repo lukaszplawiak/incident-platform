@@ -1,10 +1,12 @@
 package com.incidentplatform.auth.config;
 
+import com.incidentplatform.auth.breakglass.NotBreakGlassCommand;
 import com.incidentplatform.auth.service.WorkSimulator;
 import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.EnableScheduling;
@@ -20,9 +22,19 @@ import java.util.concurrent.ThreadLocalRandom;
  * outbox at a time, preventing duplicate invite emails.
  */
 @Configuration
-@EnableScheduling
 @EnableSchedulerLock(defaultLockAtMostFor = "5m")
 public class SchedulerConfig {
+
+    /**
+     * Scheduling is on except when auth-service runs as the break-glass
+     * command (backlog #0-88, {@link NotBreakGlassCommand}); the lock
+     * provider and the rest of this class stay, as other beans need them.
+     */
+    @Configuration
+    @EnableScheduling
+    @Conditional(NotBreakGlassCommand.class)
+    static class Scheduling {
+    }
 
     /**
      * Production {@link WorkSimulator} for {@code ForgotPasswordService}.

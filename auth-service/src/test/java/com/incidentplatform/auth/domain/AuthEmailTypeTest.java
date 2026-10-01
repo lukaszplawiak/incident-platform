@@ -22,7 +22,7 @@ class AuthEmailTypeTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = AuthEmailType.class, names = {"MFA_ENABLED", "MFA_DISABLED"})
+    @EnumSource(value = AuthEmailType.class, names = {"MFA_ENABLED", "MFA_DISABLED", "MFA_RESET"})
     @DisplayName("an MFA notice carries no token, and asking for its token type is a bug")
     void notificationsCarryNoToken(AuthEmailType type) {
         assertThat(type.carriesToken()).isFalse();

@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("PasswordService")
@@ -43,7 +44,6 @@ class PasswordServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenService authTokenService;
     @Mock private AuditEventPublisher auditEventPublisher;
-    @Mock private MfaService mfaService;
 
     private PasswordService service;
 
@@ -59,7 +59,7 @@ class PasswordServiceTest {
     void setUp() {
         service = new PasswordService(
                 userRepository, authTokenService,
-                ENCODER, auditEventPublisher, mfaService);
+                ENCODER, auditEventPublisher);
     }
 
     @AfterEach
@@ -240,8 +240,28 @@ class PasswordServiceTest {
         }
 
         @Test
-        @DisplayName("removes a second factor enabled within the grace period (backlog #0-83)")
-        void removesRecentFactor() {
+        @DisplayName("keeps a second factor, even one enabled moments ago (backlog #0-88)")
+        void keepsSecondFactor() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            // Enabled just now, its notice not even sent: the case #0-83's
+            // interim removal covered. A mailbox alone must not undo it.
+            user.storePendingMfaSecret("encrypted-secret");
+            user.enableMfa();
+            final AuthToken token = buildResetToken(user);
+            given(authTokenService.consumeToken("valid-token",
+                    AuthToken.Type.PASSWORD_RESET)).willReturn(token);
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
+
+            assertThat(user.isMfaEnabled()).isTrue();
+            assertThat(user.getMfaSecret()).isEqualTo("encrypted-secret");
+            then(authTokenService).should(never()).forgetMfaOfAllSessions(any(), any());
+        }
+
+        @Test
+        @DisplayName("ends unfinished logins: MFA session and setup tokens (backlog #0-83)")
+        void invalidatesLoginContinuationTokens() {
             final User user = buildUserWithPassword(CURRENT_PASSWORD);
             final AuthToken token = buildResetToken(user);
             given(authTokenService.consumeToken("valid-token",
@@ -250,7 +270,6 @@ class PasswordServiceTest {
 
             service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
 
-            then(mfaService).should().removeFactorEnrolledWithinGrace(user, TENANT_ID);
             then(authTokenService).should().invalidateLoginContinuationTokens(USER_ID);
         }
 

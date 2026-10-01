@@ -72,6 +72,17 @@ public class AuthEmailRequestService {
                 securityNotificationDeadline));
     }
 
+    /**
+     * Queues the notice that an administrator reset the user's MFA (backlog
+     * #0-88); part of the caller's transaction, same deadline as the other
+     * security notifications.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthEmailOutbox requestMfaResetNotification(User user) {
+        return outboxRepository.save(AuthEmailOutbox.request(
+                user, AuthEmailType.MFA_RESET, securityNotificationDeadline));
+    }
+
     private AuthEmailOutbox request(User user, AuthEmailType type) {
         return outboxRepository.save(AuthEmailOutbox.request(
                 user, type, AuthTokenService.emailTokenLifetime(type.tokenType())));

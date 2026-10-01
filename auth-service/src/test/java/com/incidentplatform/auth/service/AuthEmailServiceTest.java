@@ -179,7 +179,10 @@ class AuthEmailServiceTest {
                     .isEqualTo("Two-factor authentication was enabled on your Incident Platform account");
             assertThat(message.getAllRecipients()[0].toString()).isEqualTo(RECIPIENT);
             assertThat(body).contains("was enabled", "2026-10-01T12:34:56Z", "If this was not you",
-                    "Forgot password");
+                    "Forgot password", "then ask an administrator of your organisation");
+            // Backlog #0-88: a password reset no longer removes the factor, so
+            // the email must not promise it does.
+            assertThat(body).doesNotContain("also removes").doesNotContain("24 hours");
             assertThat(body).doesNotContain("href").doesNotContain("token");
         }
 
@@ -189,7 +192,26 @@ class AuthEmailServiceTest {
             final jakarta.mail.internet.MimeMessage message = sent(false);
 
             assertThat(message.getSubject()).contains("disabled");
-            assertThat((String) message.getContent()).contains("was disabled");
+            assertThat((String) message.getContent()).contains("was disabled",
+                    "If this was not you", "Forgot password");
+        }
+
+        @Test
+        @DisplayName("an admin's reset has its own subject and text, so the owner can tell it apart (backlog #0-88)")
+        void reset() throws Exception {
+            final jakarta.mail.internet.MimeMessage message =
+                    new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+            given(mailSender.createMimeMessage()).willReturn(message);
+
+            emailService.sendMfaResetNotification(RECIPIENT, java.time.Instant.parse("2026-10-01T12:34:56.789Z"));
+
+            then(mailSender).should().send(message);
+            assertThat(message.getSubject())
+                    .isEqualTo("An administrator reset two-factor authentication on your Incident Platform account");
+            assertThat((String) message.getContent())
+                    .contains("An administrator reset", "2026-10-01T12:34:56Z", "you were signed out everywhere", "up to 15 minutes",
+                            "If you did not ask for this", "Forgot password")
+                    .doesNotContain("href").doesNotContain("token");
         }
     }
 }
