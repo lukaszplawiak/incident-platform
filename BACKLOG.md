@@ -945,7 +945,7 @@ provider, auth-service to the SMTP server. Needs a CNI that enforces NetworkPoli
 ### 0-66. Redis and Kafka in Kubernetes have no authentication, and no data store uses TLS
 
 **Type:** design · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit;
-the Postgres part is done: the Secret with #0-78, the default password in PR #TBD)
+the Postgres part is done: the Secret with #0-78, the default password in PR #444)
 
 **Problem.**
 - **Redis** (`k8s/base/infrastructure/redis.yml`) runs `redis-server --appendonly yes` with no password. It holds
