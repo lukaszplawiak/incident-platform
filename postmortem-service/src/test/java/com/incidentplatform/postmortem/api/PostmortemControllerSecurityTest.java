@@ -5,7 +5,6 @@ import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.service.PostmortemService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
-import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.TenantContext;
@@ -16,7 +15,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.Page;
@@ -49,12 +47,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * The real implementation writes a proper 401 JSON response via
  * {@code ObjectMapper}, which is available in the web slice.
  *
- * <h2>Why a nested @SpringBootApplication</h2>
- * {@code PostmortemServiceApplication} carries a broad {@code @ComponentScan}
- * that pulls in {@code GeminiClientImpl} (needs {@code RestClient.Builder}),
- * {@code ShedLockConfig} (needs {@code DataSource}) and Kafka beans — none
- * available in the web slice. The inner {@code TestApplication} restricts
- * scanning to only the packages needed for the web and security layers.
+ * <p>The application context comes from {@link PostmortemApiTestApplication},
+ * shared by every {@code @WebMvcTest} in this package (it replaced a nested
+ * {@code TestApplication} that clashed with a second test class).
  */
 @WebMvcTest(PostmortemController.class)
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
@@ -66,21 +61,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 })
 @DisplayName("PostmortemController — security")
 class PostmortemControllerSecurityTest {
-
-    @SpringBootApplication(scanBasePackages = {
-            "com.incidentplatform.postmortem.api",
-            "com.incidentplatform.postmortem.config",
-            "com.incidentplatform.shared.security",
-            "com.incidentplatform.shared.exception",
-            "com.incidentplatform.shared.observability"
-    })
-    static class TestApplication {
-
-        @org.springframework.context.annotation.Bean
-        public JwtAuthFilter jwtAuthFilter(JwtUtils jwtUtils) {
-            return new JwtAuthFilter(jwtUtils);
-        }
-    }
 
     @Autowired
     private MockMvc mockMvc;
