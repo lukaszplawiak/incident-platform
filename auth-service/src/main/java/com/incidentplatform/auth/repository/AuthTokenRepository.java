@@ -12,6 +12,15 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Fixed (found in the review of backlog #0-83): every bulk UPDATE here that
+ * clears the persistence context also flushes it first
+ * ({@code flushAutomatically}). Hibernate flushes before a JPQL bulk statement
+ * only the pending changes of the tables that statement touches, so a change
+ * to another table made earlier in the same transaction (an outbox INSERT, a
+ * user update) was silently dropped by the clear. A password reset lost its
+ * MFA_DISABLED notification this way.
+ */
 @Repository
 public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
 
@@ -156,7 +165,7 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
      *
      * @return the number of tokens invalidated
      */
-    @Modifying(clearAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             UPDATE AuthToken t
             SET t.usedAt = :now
@@ -179,7 +188,7 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
      * @return the number of tokens invalidated (0 or 1 in practice, since
      *         a session has at most one active refresh token at a time)
      */
-    @Modifying(clearAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             UPDATE AuthToken t
             SET t.usedAt = :now
@@ -217,7 +226,7 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
      *
      * @return the number of tokens invalidated
      */
-    @Modifying(clearAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             UPDATE AuthToken t
             SET t.usedAt = :now
@@ -258,11 +267,81 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
      * regardless, protecting any future code added to that same
      * transactional scope.
      */
-    @Modifying(clearAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("""
             DELETE FROM AuthToken t
             WHERE t.usedAt IS NOT NULL
                OR t.expiresAt < :threshold
             """)
     int deleteExpiredAndUsed(@Param("threshold") Instant threshold);
+
+    /**
+     * The MFA facts of the user's live login session (backlog #0-83): an
+     * unused, unexpired REFRESH token of that session, with its account.
+     * "Live" makes the platform API's check revocable at once: logout marks
+     * the session's refresh token used, and disabling MFA clears
+     * {@code mfa_verified_at} ({@link #clearMfaVerified}), so the session's
+     * remaining access token is refused from that moment, not 15 minutes
+     * later. Empty when the session is not live. Normally one row (a session
+     * has one unused refresh token at a time); should a rotation race leave
+     * two, the newest comes first, so the caller's choice is deterministic
+     * (both carry the same {@code mfa_verified_at}, which rotation copies).
+     * Served by {@code idx_auth_tokens_user_session} (V16).
+     */
+    @Query("""
+            SELECT new com.incidentplatform.auth.repository.MfaSessionFacts(
+                       t.mfaVerifiedAt, u.mfaEnabled, u.mfaEnabledAt, u.mfaEnabledNoticeSentAt)
+            FROM AuthToken t JOIN t.user u
+            WHERE u.id = :userId
+              AND t.tenantId = :tenantId
+              AND t.sessionId = :sessionId
+              AND t.type = 'REFRESH'
+              AND t.usedAt IS NULL
+              AND t.expiresAt > :now
+            ORDER BY t.createdAt DESC
+            """)
+    List<MfaSessionFacts> findLiveSessionMfaFacts(@Param("userId") UUID userId,
+                                                  @Param("tenantId") String tenantId,
+                                                  @Param("sessionId") UUID sessionId,
+                                                  @Param("now") Instant now);
+
+    /**
+     * Whether the user's login session is live: an unused, unexpired REFRESH
+     * token of it (backlog #0-83). An access token outlives its session by up to
+     * 15 minutes after logout or a password reset; enrolling a second factor
+     * requires the session itself, so a token from before a reset cannot add
+     * one. Served by {@code idx_auth_tokens_user_session} (V16).
+     */
+    @Query("""
+            SELECT COUNT(t) > 0 FROM AuthToken t
+            WHERE t.user.id = :userId
+              AND t.tenantId = :tenantId
+              AND t.sessionId = :sessionId
+              AND t.type = 'REFRESH'
+              AND t.usedAt IS NULL
+              AND t.expiresAt > :now
+            """)
+    boolean existsLiveSession(@Param("userId") UUID userId,
+                              @Param("tenantId") String tenantId,
+                              @Param("sessionId") UUID sessionId,
+                              @Param("now") Instant now);
+
+    /**
+     * Clears "completed MFA" from every session of the user, when they disable
+     * MFA (backlog #0-83): a session's second factor no longer means anything
+     * once the factor itself is gone. {@code flushAutomatically}: the caller
+     * has just changed the user in the same transaction, and the
+     * {@code clearAutomatically} that follows must not discard that change.
+     *
+     * @return the number of tokens changed
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            UPDATE AuthToken t
+            SET t.mfaVerifiedAt = null
+            WHERE t.user.id = :userId
+              AND t.tenantId = :tenantId
+              AND t.mfaVerifiedAt IS NOT NULL
+            """)
+    int clearMfaVerified(@Param("userId") UUID userId, @Param("tenantId") String tenantId);
 }

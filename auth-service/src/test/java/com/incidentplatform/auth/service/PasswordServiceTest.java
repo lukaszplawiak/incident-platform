@@ -43,6 +43,7 @@ class PasswordServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenService authTokenService;
     @Mock private AuditEventPublisher auditEventPublisher;
+    @Mock private MfaService mfaService;
 
     private PasswordService service;
 
@@ -58,7 +59,7 @@ class PasswordServiceTest {
     void setUp() {
         service = new PasswordService(
                 userRepository, authTokenService,
-                ENCODER, auditEventPublisher);
+                ENCODER, auditEventPublisher, mfaService);
     }
 
     @AfterEach
@@ -236,6 +237,36 @@ class PasswordServiceTest {
             service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
 
             then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
+        }
+
+        @Test
+        @DisplayName("removes a second factor enabled within the grace period (backlog #0-83)")
+        void removesRecentFactor() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            final AuthToken token = buildResetToken(user);
+            given(authTokenService.consumeToken("valid-token",
+                    AuthToken.Type.PASSWORD_RESET)).willReturn(token);
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
+
+            then(mfaService).should().removeFactorEnrolledWithinGrace(user, TENANT_ID);
+            then(authTokenService).should().invalidateLoginContinuationTokens(USER_ID);
+        }
+
+        @Test
+        @DisplayName("drops an MFA setup that was started but not enabled (backlog #0-83)")
+        void discardsPendingMfaSetup() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            user.storePendingMfaSecret("encrypted-pending-secret");
+            final AuthToken token = buildResetToken(user);
+            given(authTokenService.consumeToken("valid-token",
+                    AuthToken.Type.PASSWORD_RESET)).willReturn(token);
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
+
+            assertThat(user.getMfaPendingSecret()).isNull();
         }
 
         @Test

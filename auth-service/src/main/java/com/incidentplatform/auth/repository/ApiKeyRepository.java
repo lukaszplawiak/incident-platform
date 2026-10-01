@@ -13,6 +13,15 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+/**
+ * Fixed (found in the review of backlog #0-83): every bulk UPDATE here that
+ * clears the persistence context also flushes it first
+ * ({@code flushAutomatically}). Hibernate flushes before a JPQL bulk statement
+ * only the pending changes of the tables that statement touches, so a change
+ * to another table made earlier in the same transaction (an outbox INSERT, a
+ * user update) was silently dropped by the clear. A password reset lost its
+ * MFA_DISABLED notification this way.
+ */
 @Repository
 public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
 
@@ -80,7 +89,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
      * default for this exact class of query regardless, protecting any
      * future code added to that same transactional scope.
      */
-    @Modifying(clearAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("UPDATE ApiKey k SET k.revokedAt = :now " +
             "WHERE k.ownerUser.id = :userId AND k.revokedAt IS NULL")
     void revokeAllPersonalKeysForUser(
@@ -97,7 +106,7 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
      *
      * @return number of rows updated (0 when the key was used recently)
      */
-    @Modifying(clearAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("UPDATE ApiKey k SET k.lastUsedAt = :now " +
             "WHERE k.id = :id AND (k.lastUsedAt IS NULL OR k.lastUsedAt < :threshold)")
     int touchLastUsedAt(@Param("id") UUID id,

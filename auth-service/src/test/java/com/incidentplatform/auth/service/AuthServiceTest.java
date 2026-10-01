@@ -109,7 +109,7 @@ class AuthServiceTest {
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                     any(), anyString())).willReturn(List.of());
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any(), isNull()))
                     .willReturn("raw-refresh-token");
 
             final LoginResponse response =
@@ -142,7 +142,7 @@ class AuthServiceTest {
             given(teamMemberRepository.findManagedTeamIdsByUserIdAndTenantId(
                     any(), anyString())).willReturn(List.of());
             given(jwtUtils.getRefreshTokenTtl()).willReturn(Duration.ofDays(30));
-            given(authTokenService.generateRefreshToken(any(), anyString(), any()))
+            given(authTokenService.generateRefreshToken(any(), anyString(), any(), isNull()))
                     .willReturn("raw-refresh-token");
 
             authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID);

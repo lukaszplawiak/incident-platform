@@ -9,12 +9,41 @@ How a customer tenant comes into existence, and how its first admin gets in. Bac
   admin invite went to, when and by which operator it was created. The other services keep treating
   `tenant_id` as a plain string on their own rows.
 - Only a **platform operator** creates one: an admin of the reserved `platform-operator` tenant,
-  logged in with a JWT. The platform API, `/api/v1/platform/tenants`, refuses everyone else with
-  `403`: admins of customer tenants, other roles of the operator tenant, API keys (also an operator
-  admin's own personal key), service tokens and purpose tokens. The rule is enforced in auth-service's
-  filter chain and again on every controller method (`PlatformAccess`). In Kubernetes the Ingress
-  routes `/api/v1/platform` like every other auth-service path, so the API is reachable from
-  wherever the Ingress is; that rule is its only protection.
+  logged in with a JWT, **in a session that completed MFA recently, with a factor the account has
+  had for a while** (backlog #0-83):
+  - the login finished with a TOTP or backup code, at most `platform.mfa.max-session-age` ago
+    (default 12 h, `PLATFORM_MFA_MAX_SESSION_AGE`; refreshing the token does not renew it);
+  - the email announcing the account's factor ("Two-factor authentication was enabled") was sent at
+    least `platform.mfa.enrolment-grace` ago (default 24 h, `PLATFORM_MFA_ENROLMENT_GRACE`). Enabling
+    MFA needs only a password, so without the grace period someone who has only an operator's password
+    could enrol a factor of their own. Every enable and disable emails the account's address, the grace
+    period gives its owner that long to react (counted from when the email went out, so an SMTP delay
+    does not shorten it), and a password reset by email within it removes the new factor. Disabling and
+    re-enabling MFA (e.g. a new phone) starts the grace period again; so does it to send a lost notice
+    again. A password reset during the grace period also removes a factor you enrolled yourself: enrol
+    it again afterwards.
+
+  The platform API, `/api/v1/platform/tenants`, refuses everyone else with `403`: admins of
+  customer tenants, other roles of the operator tenant, an operator admin whose session does not
+  meet the conditions above (the `403` names the failed condition; a factor that is too new and one
+  whose email was never sent share one message), API keys (also an operator admin's own personal
+  key), service tokens and purpose tokens. The rule is enforced in auth-service's filter chain and
+  again on every controller method (`PlatformAccess`). The MFA part is checked on the server per
+  request, from the session the access token names, so logging out or disabling MFA ends access at
+  once. In Kubernetes the Ingress routes
+  `/api/v1/platform` like every other auth-service path, so the API is reachable from wherever the
+  Ingress is; that rule is its only protection.
+- **Writes are limited per operator and in total**: creating a tenant and reissuing an invite share
+  a budget of `platform.rate-limit.operations-per-hour` per operator (default 20,
+  `PLATFORM_RATE_LIMIT_OPERATIONS_PER_HOUR`) and of
+  `platform.rate-limit.global-operations-per-hour` for all operators together (default 50,
+  `PLATFORM_RATE_LIMIT_GLOBAL_OPERATIONS_PER_HOUR`, at least the per-operator value), so several
+  taken-over operator accounts cannot multiply the number of invite emails. Both kept in Redis. Over
+  either: `429` with `Retry-After`. While Redis cannot be checked: `503` with `Retry-After`
+  (fail-closed: onboarding waits rather than running unlimited). Reads are not limited.
+- **Unusual activity alerts by email** (critical, so outside the platform): more than 10 tenants
+  created in an hour (`PlatformTenantProvisioningSpike`), or either limit being reached
+  (`PlatformApiRateLimited`). `PlatformApiRateLimitUnavailable` (high) reports the Redis case.
 - The tenant's **first admin is invited**, never given a password. Creating the tenant writes the
   tenant row, the admin user (no password, `ROLE_ADMIN`) and the invite email, in one transaction:
   if any of it fails, nothing is created. The admin sets their password by accepting the invite, as
@@ -35,25 +64,69 @@ the alternatives (a seeded admin with a known password, as `V1_1` used to create
 entry and a restart per tenant) do not scale and put credentials or tenant lists into deployment
 config.
 
-**Protect the operator accounts accordingly.** Turn on MFA for the operator tenant
-(`POST /api/v1/tenants/settings` with `{"mfaRequired": true}`, as its admin), and keep the number of
-operator admins small. The platform API does not check this yet: backlog #0-83.
+**Protect the operator accounts accordingly.** Keep the number of operator admins small. The
+platform API already requires MFA of the caller's session; also turn on `mfaRequired` for the
+operator tenant (`POST /api/v1/tenants/settings` with `{"mfaRequired": true}`, as its admin), so
+every operator account, not only those that use the platform API, has a second factor.
 
 ## Prerequisite: an operator admin
 
 The operator tenant bootstraps itself: with `OPERATOR_ADMIN_EMAIL` set
 (`platform.operator.bootstrap.admin-email`), auth-service invites that address as the operator
 tenant's first admin (`OperatorTenantBootstrap`, backlog #0-16, #0-49). Accept the invite and log
-in as README "Step 5" shows (steps 2 and 3). Every command below uses that login:
+in as README "Step 5" shows (steps 2 and 3).
+
+An operator admin who already had MFA before backlog #0-83 was deployed does too: that migration
+(V23) takes over older factors as established for every other tenant, but not for
+`platform-operator`, since such a factor may have been enrolled with the password alone. Disable
+MFA and enable it again once, as below, and wait out the grace period.
+
+That login has no second factor yet, so the platform API answers `403`. Enable MFA once, with that
+password-only token, from a real login (setup and enable need a live login session; a token whose
+session was ended by logout or a password reset gets `401`). The account's address then gets a
+"Two-factor authentication was enabled" email, and the platform API accepts the new factor **24 hours
+after that email went out** (the grace period above); plan the first operator's setup a day ahead.
 
 ```bash
-OP_TOKEN=$(curl -s -X POST http://localhost:8087/api/v1/auth/login \
-  -H "X-Tenant-Id: platform-operator" -H "Content-Type: application/json" \
-  -d '{"email": "ops@incident-platform.local", "password": "<password>"}' | jq -r .accessToken)
+# 1. Get a TOTP secret: add the response's qrUrl (an otpauth:// URI) to an authenticator app,
+#    or enter its secret by hand
+curl -s -X POST http://localhost:8087/api/v1/auth/mfa/setup -H "Authorization: Bearer $OP_TOKEN"
+# 2. Confirm with a current code; store the backup codes the response returns
+curl -s -X POST http://localhost:8087/api/v1/auth/mfa/enable \
+  -H "Authorization: Bearer $OP_TOKEN" -H "Content-Type: application/json" -d '{"totpCode": "123456"}'
 ```
 
-(The access token lives 15 minutes. With MFA on, the login returns an `mfaToken` instead of an
-access token; exchange it with `POST /api/v1/auth/mfa/verify`.)
+From then on, every command below uses a login that completed MFA:
+
+```bash
+MFA_TOKEN=$(curl -s -X POST http://localhost:8087/api/v1/auth/login \
+  -H "X-Tenant-Id: platform-operator" -H "Content-Type: application/json" \
+  -d '{"email": "ops@incident-platform.local", "password": "<password>"}' | jq -r .mfaToken)
+OP_TOKEN=$(curl -s -X POST http://localhost:8087/api/v1/auth/mfa/verify \
+  -H "Content-Type: application/json" \
+  -d "{\"mfaToken\": \"$MFA_TOKEN\", \"totpCode\": \"<current code>\"}" | jq -r .accessToken)
+```
+
+The access token lives 15 minutes; `POST /api/v1/auth/refresh` keeps the session, MFA included, but
+not beyond 12 hours after the MFA login: then log in again with a code. Logging out, or disabling
+MFA, ends the session's access to the platform API at once.
+
+**An unexpected "Two-factor authentication was enabled" email** means someone used the account's
+password. Reset the password with "Forgot password" within 24 hours of that email: the reset also
+removes the new factor (any factor whose email went out less than the grace period ago, or not at
+all), ends every session and every unfinished login. Then enable MFA with your own authenticator and
+check the operator tenant's audit log (`MFA_ENABLED`, `MFA_DISABLED`, `TENANT_*`). Once the grace
+period has passed a reset keeps the factor, and there is no API to remove another user's factor: it is removed in the database, as
+the application role, after confirming with the account's owner. (Interim: backlog #0-88 replaces the
+reset's removal with an admin MFA reset.) An unexpected "disabled" email also
+means the password is known: reset it.
+
+**The 403 says the factor is not accepted yet.** Either the grace period since the notice is still
+running, or the notice was never sent (SMTP failing past its deadline, 24 h or the grace period if
+longer, raises
+`AuthEmailPermanentlyFailed`). If the email never arrived, disable and enable MFA again to send a new
+one. Factors enabled before this check existed were taken over as established (V23), so their owners
+need do nothing.
 
 ## Create a tenant
 
@@ -204,6 +277,20 @@ first, at most 100 per page. `adminActive` is true once the tenant has an active
 set a password; a tenant that stays `false` for days needs a reissued invite or a call to the
 customer. On a new database `platform-operator` appears once its bootstrap has run (about 30 s after
 auth-service starts, with `OPERATOR_ADMIN_EMAIL` set).
+
+## `429` and `503` on a write
+
+- `429` + `Retry-After`: you, or all operators together, used the hour's budget of writes (each
+  attempt counts, also one that then fails, e.g. with `409`). The auth-service WARN line says which
+  limit refused, and so does the `limit` tag (`operator` / `global`) of
+  `platform_ratelimit_rejected_total`. Wait, or raise `PLATFORM_RATE_LIMIT_OPERATIONS_PER_HOUR` (and
+  `PLATFORM_RATE_LIMIT_GLOBAL_OPERATIONS_PER_HOUR`, if needed) for a planned bulk onboarding. A
+  bucket keeps the limit it was created with until its Redis key expires (5 minutes after it would
+  be full again), so a raised limit applies at once only to an operator who has not written for
+  about an hour; otherwise delete the `ratelimit:platform:*` keys in Redis after the restart. Each
+  `429` also raises the critical `PlatformApiRateLimited` alert.
+- `503` + `Retry-After`: auth-service cannot reach Redis to check the limit, so it refuses rather
+  than runs without one. Reads still work. Fix Redis; `PlatformApiRateLimitUnavailable` tracks it.
 
 ## Not here yet
 

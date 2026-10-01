@@ -118,6 +118,34 @@ auth:
     # how long the now-useless rows stick around before being pruned.
     interval-ms: ${AUTH_TOKEN_CLEANUP_INTERVAL_MS:86400000}
 
+resilience4j:
+  circuit-breaker:
+    instances:
+      # Backlog #0-83: PlatformRateLimiter's Redis calls (bucket4j's own Lettuce
+      # connection, so no Spring Data Redis exception can occur on this path).
+      # Same thresholds as ingestion-service's redis-ratelimit. While open, the
+      # fallback answers at once and the platform API's write operations get
+      # 503 (fail-closed), instead of each request waiting out a Redis timeout.
+      # Every exception counts (no record-exceptions list, unlike
+      # ingestion-service): any failure of tryConsume means the limit cannot be
+      # checked and the call is refused anyway, so opening the circuit only makes
+      # that refusal fast. A list would have to name every way a failure
+      # surfaces - Lettuce's RedisException (bucket4j 8.10 rethrows connection
+      # and command-timeout errors as it), a failed creation of the lazy
+      # connection (BeanCreationException), bucket4j's own TimeoutException -
+      # and a missed one would leave each request waiting out the Redis timeout
+      # (found in review).
+      # No health indicator: an open breaker must not take auth-service out of
+      # readiness, since login and every other API do not depend on it.
+      platform-ratelimit:
+        register-health-indicator: false
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 2
+        automatic-transition-from-open-to-half-open-enabled: true
+
 management:
   metrics:
     tags:
@@ -197,3 +225,24 @@ platform:
       initial-delay-ms: ${OPERATOR_BOOTSTRAP_INITIAL_DELAY_MS:30000}
       reconcile-interval-ms: ${OPERATOR_BOOTSTRAP_RECONCILE_INTERVAL_MS:3600000}
       gauge-refresh-interval-ms: ${OPERATOR_BOOTSTRAP_GAUGE_REFRESH_INTERVAL_MS:300000}
+  # Backlog #0-83: limits on the platform API's write operations (create a
+  # tenant, reissue a first admin invite), which send invite emails: per
+  # operator, and for the whole platform API (so several taken-over operator
+  # accounts do not multiply the per-operator number; at least
+  # operations-per-hour, checked at startup). Token buckets in Redis;
+  # fail-closed: while Redis cannot be checked the operations answer 503
+  # (PlatformRateLimiter's Javadoc says why).
+  rate-limit:
+    operations-per-hour: ${PLATFORM_RATE_LIMIT_OPERATIONS_PER_HOUR:20}
+    global-operations-per-hour: ${PLATFORM_RATE_LIMIT_GLOBAL_OPERATIONS_PER_HOUR:50}
+  # Backlog #0-83: what the platform API requires of a caller's second factor
+  # (MfaSessionStatusService): the session completed MFA within
+  # max-session-age, and the MFA_ENABLED email of the account's current factor
+  # was sent at least enrolment-grace ago (counted from the send, not the
+  # enrolment, so a delayed email does not shorten it). Enabling or disabling
+  # MFA emails the account, and the grace period gives its owner time to react
+  # to a factor someone else enrolled with their password. (V23's one-off
+  # backfill of existing factors used the default, 24 h.)
+  mfa:
+    max-session-age: ${PLATFORM_MFA_MAX_SESSION_AGE:PT12H}
+    enrolment-grace: ${PLATFORM_MFA_ENROLMENT_GRACE:PT24H}

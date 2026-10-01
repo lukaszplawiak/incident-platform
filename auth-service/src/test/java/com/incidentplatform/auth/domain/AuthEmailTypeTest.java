@@ -1,0 +1,33 @@
+package com.incidentplatform.auth.domain;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+/** Which auth emails carry a token (backlog #0-83 added the token-less MFA notices). */
+@DisplayName("AuthEmailType")
+class AuthEmailTypeTest {
+
+    @Test
+    @DisplayName("invite and password reset carry their own token type")
+    void tokenCarryingTypes() {
+        assertThat(AuthEmailType.INVITE.carriesToken()).isTrue();
+        assertThat(AuthEmailType.INVITE.tokenType()).isEqualTo(AuthToken.Type.INVITE);
+        assertThat(AuthEmailType.PASSWORD_RESET.carriesToken()).isTrue();
+        assertThat(AuthEmailType.PASSWORD_RESET.tokenType()).isEqualTo(AuthToken.Type.PASSWORD_RESET);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = AuthEmailType.class, names = {"MFA_ENABLED", "MFA_DISABLED"})
+    @DisplayName("an MFA notice carries no token, and asking for its token type is a bug")
+    void notificationsCarryNoToken(AuthEmailType type) {
+        assertThat(type.carriesToken()).isFalse();
+        assertThatThrownBy(type::tokenType)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("carries no token");
+    }
+}

@@ -311,12 +311,18 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
      *                  overload for the access token issued at this same
      *                  login — see {@link AuthToken#sessionId}'s own
      *                  Javadoc for the full account.
+     * @param mfaVerifiedAt when this login completed MFA (TOTP or backup
+     *                      code), or null for a password-only login: recorded
+     *                      on the session for the platform API's MFA
+     *                      requirement (backlog #0-83,
+     *                      {@link AuthToken#getMfaVerifiedAt()})
      * @return the raw (unhashed) refresh token
      */
     @Transactional
-    public String generateRefreshToken(User user, String tenantId, UUID sessionId) {
+    public String generateRefreshToken(User user, String tenantId, UUID sessionId,
+                                       Instant mfaVerifiedAt) {
         return generate(user, tenantId, AuthToken.Type.REFRESH,
-                jwtUtils.getRefreshTokenTtl(), sessionId).rawToken();
+                jwtUtils.getRefreshTokenTtl(), sessionId, mfaVerifiedAt).rawToken();
     }
 
     /**
@@ -369,10 +375,14 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
         final Instant accessExpiresAt = Instant.now()
                 .plus(jwtUtils.getAccessTokenTtl());
 
-        // Generate new refresh token (rotation)
+        // Generate new refresh token (rotation). When the session completed
+        // MFA is carried forward unchanged, like its sessionId: rotation
+        // neither proves a second factor nor makes an old one recent
+        // (backlog #0-83).
         final String newRawRefreshToken = generate(
                 user, tenantId, AuthToken.Type.REFRESH,
-                jwtUtils.getRefreshTokenTtl(), sessionId).rawToken();
+                jwtUtils.getRefreshTokenTtl(), sessionId,
+                oldToken.getMfaVerifiedAt()).rawToken();
 
         final Instant refreshExpiresAt = Instant.now()
                 .plus(jwtUtils.getRefreshTokenTtl());
@@ -476,6 +486,44 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
     }
 
     /**
+     * Invalidates the user's unused tokens that continue a login: MFA session
+     * tokens (password passed, code pending) and MFA setup-required tokens
+     * (backlog #0-83, found in review). A password reset already ends every
+     * refresh token; without this, a token issued to a password thief before
+     * the reset could still finish a login or enrol a factor for up to 10
+     * minutes after it, on the account the owner just recovered.
+     */
+    @Transactional
+    public void invalidateLoginContinuationTokens(UUID userId) {
+        final Instant now = Instant.now();
+        final int changed = tokenRepository.invalidateValidTokens(userId, AuthToken.Type.MFA_SESSION, now)
+                + tokenRepository.invalidateValidTokens(userId, AuthToken.Type.MFA_SETUP_REQUIRED, now);
+        log.info("Login-continuation tokens invalidated: userId={}, tokens={}", userId, changed);
+    }
+
+    /**
+     * Whether the access token's login session is still live (backlog #0-83);
+     * false for a token without a session.
+     */
+    @Transactional(readOnly = true)
+    public boolean isSessionLive(UUID userId, String tenantId, UUID sessionId) {
+        return userId != null && tenantId != null && sessionId != null
+                && tokenRepository.existsLiveSession(userId, tenantId, sessionId, Instant.now());
+    }
+
+    /**
+     * Clears "completed MFA" from every session of the user (backlog #0-83):
+     * called when they disable MFA, so the platform API stops accepting
+     * their sessions at once. Tenant-scoped like every query, though a user
+     * id alone is unique.
+     */
+    @Transactional
+    public void forgetMfaOfAllSessions(UUID userId, String tenantId) {
+        final int changed = tokenRepository.clearMfaVerified(userId, tenantId);
+        log.info("MFA cleared from the user's sessions: userId={}, tokens={}", userId, changed);
+    }
+
+    /**
      * Result of {@link #rotateRefreshToken} — new access token, new refresh
      * token, and their expiry times, plus the authenticated user context.
      */
@@ -511,6 +559,12 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
     private GeneratedToken generate(User user, String tenantId,
                                     AuthToken.Type type, Duration ttl,
                                     UUID sessionId) {
+        return generate(user, tenantId, type, ttl, sessionId, null);
+    }
+
+    private GeneratedToken generate(User user, String tenantId,
+                                    AuthToken.Type type, Duration ttl,
+                                    UUID sessionId, Instant mfaVerifiedAt) {
         final byte[] bytes = new byte[TOKEN_BYTES];
         secureRandom.nextBytes(bytes);
         final String rawToken = Base64.getUrlEncoder()
@@ -519,7 +573,7 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
 
         final AuthToken token = AuthToken.create(
                 user, tenantId, hash(rawToken), type,
-                Instant.now().plus(ttl), sessionId);
+                Instant.now().plus(ttl), sessionId, mfaVerifiedAt);
 
         tokenRepository.save(token);
 

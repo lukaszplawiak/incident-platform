@@ -26,6 +26,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
@@ -50,6 +51,8 @@ public class MfaService {
     private final JwtUtils jwtUtils;
     private final AuditEventPublisher auditEventPublisher;
     private final BruteForceProtectionService bruteForceProtectionService;
+    private final AuthEmailRequestService authEmailRequestService;
+    private final MfaSessionStatusService mfaSessionStatusService;
 
     public MfaService(UserRepository userRepository,
                       MfaBackupCodeRepository backupCodeRepository,
@@ -60,7 +63,9 @@ public class MfaService {
                       PasswordEncoder passwordEncoder,
                       JwtUtils jwtUtils,
                       AuditEventPublisher auditEventPublisher,
-                      BruteForceProtectionService bruteForceProtectionService) {
+                      BruteForceProtectionService bruteForceProtectionService,
+                      AuthEmailRequestService authEmailRequestService,
+                      MfaSessionStatusService mfaSessionStatusService) {
         this.userRepository       = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.authTokenService     = authTokenService;
@@ -71,6 +76,8 @@ public class MfaService {
         this.jwtUtils             = jwtUtils;
         this.auditEventPublisher  = auditEventPublisher;
         this.bruteForceProtectionService = bruteForceProtectionService;
+        this.authEmailRequestService = authEmailRequestService;
+        this.mfaSessionStatusService = mfaSessionStatusService;
     }
 
     // ── Setup (step 1) ────────────────────────────────────────────────────
@@ -84,6 +91,7 @@ public class MfaService {
      */
     @Transactional
     public MfaSetupResponse setupMfa(UserPrincipal principal) {
+        requireLiveSession(principal);
         final String tenantId = TenantContext.get();
         final User user = requireUser(principal.userId(), tenantId);
 
@@ -103,6 +111,7 @@ public class MfaService {
      */
     @Transactional
     public MfaEnableResponse enableMfa(String totpCode, UserPrincipal principal) {
+        requireLiveSession(principal);
         final String tenantId = TenantContext.get();
         final User user = requireUser(principal.userId(), tenantId);
 
@@ -152,6 +161,11 @@ public class MfaService {
         user.disableMfa();
         userRepository.save(user);
         backupCodeRepository.deleteAllByUserId(principal.userId());
+        // The user's sessions no longer count as MFA-verified, so the platform
+        // API stops accepting them now, not at their next login, and the
+        // account's address is told (backlog #0-83).
+        authTokenService.forgetMfaOfAllSessions(principal.userId(), tenantId);
+        authEmailRequestService.requestMfaChangeNotification(user, false);
 
         auditEventPublisher.publishAuth(
                 principal.userId(), tenantId,
@@ -162,6 +176,57 @@ public class MfaService {
                 Map.of());
 
         log.info("MFA disabled: userId={}, tenant={}", principal.userId(), tenantId);
+    }
+
+    /**
+     * Removes a second factor enabled within the grace period, as part of a
+     * password reset by email (backlog #0-83, called by
+     * {@code PasswordService.resetPassword}).
+     *
+     * <h2>Why</h2>
+     * Enabling MFA needs only a password. If someone else enrolled a factor
+     * with the owner's password, the owner gets the MFA_ENABLED email, and
+     * the remedy it names is a password reset. A reset alone would leave the
+     * stranger's factor in place: the owner locked out of their own login,
+     * and the factor opening the platform API once the grace period ends.
+     * The reset link proves control of the mailbox, a channel the password
+     * thief does not have, so it may undo what the password alone did. "Within
+     * the grace period" means the same as for the platform API: until the
+     * grace period has passed since the factor's notice was sent (or while it
+     * was never sent). An established factor is kept: it has stood
+     * unchallenged for that long, and an ordinary forgotten password must not
+     * cost the user their MFA.
+     *
+     * <h2>Interim (backlog #0-88)</h2>
+     * It also lets a mailbox alone undo a fresh factor, which mature systems
+     * never allow (found in review). It stays only because nothing else can
+     * remove another user's factor yet; #0-88 replaces it with an admin MFA
+     * reset and deletes this method.
+     *
+     * @return whether a factor was removed
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean removeFactorEnrolledWithinGrace(User user, String tenantId) {
+        if (!user.isMfaEnabled()
+                || mfaSessionStatusService.isEstablished(user.getMfaEnabledNoticeSentAt(), Instant.now())) {
+            return false;
+        }
+        final UUID userId = user.getId();
+        user.disableMfa();
+        userRepository.save(user);
+        backupCodeRepository.deleteAllByUserId(userId);
+        authTokenService.forgetMfaOfAllSessions(userId, tenantId);
+        authEmailRequestService.requestMfaChangeNotification(user, false);
+        auditEventPublisher.publishAuth(
+                userId, tenantId,
+                AuditEventTypes.MFA_DISABLED,
+                "auth-service",
+                userId.toString(),
+                "MFA enabled within the grace period removed by a password reset (backlog #0-83)",
+                Map.of());
+        log.warn("MFA enabled within the grace period removed by a password reset: userId={}, tenant={}",
+                userId, tenantId);
+        return true;
     }
 
     // ── Verify TOTP ───────────────────────────────────────────────────────
@@ -514,6 +579,10 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
 
     user.enableMfa();
     userRepository.save(user);
+    // Backlog #0-83: tell the account's address, so an owner whose password
+    // was used to enrol someone else's factor finds out (sent by the outbox
+    // after this commits).
+    authEmailRequestService.requestMfaChangeNotification(user, true);
 
     final List<String> plainCodes = totpService.generateBackupCodes();
     saveBackupCodes(user, plainCodes);
@@ -604,7 +673,11 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
 
         final Instant accessExpiresAt  = Instant.now().plus(jwtUtils.getAccessTokenTtl());
         final String rawRefreshToken   =
-                authTokenService.generateRefreshToken(user, tenantId, sessionId);
+                // MFA verified now: every caller of this method has just
+                // verified a TOTP or backup code (verifyMfaToken,
+                // enableMfaWithSetupToken, verifyWithBackupCode); the
+                // platform API requires it of the session (backlog #0-83).
+                authTokenService.generateRefreshToken(user, tenantId, sessionId, Instant.now());
         final Instant refreshExpiresAt = Instant.now().plus(jwtUtils.getRefreshTokenTtl());
 
         auditEventPublisher.publishAuth(
@@ -631,6 +704,22 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
             entities.add(MfaBackupCode.create(user, passwordEncoder.encode(plain)));
         }
         backupCodeRepository.saveAll(entities);
+    }
+
+    /**
+     * Enrolling a factor needs a live login session, not just an unexpired
+     * access token (backlog #0-83, found in review): after a password reset
+     * ended every session, a token stolen before it could otherwise still add
+     * a factor for up to 15 minutes, leaving the owner locked out of the
+     * account they just recovered.
+     */
+    private void requireLiveSession(UserPrincipal principal) {
+        if (!authTokenService.isSessionLive(principal.userId(), principal.tenantId(), principal.sessionId())) {
+            throw new BusinessException(
+                    ErrorCodes.UNAUTHORIZED,
+                    "This login session has ended. Log in again to set up MFA.",
+                    HttpStatus.UNAUTHORIZED);
+        }
     }
 
     private User requireUser(UUID userId, String tenantId) {

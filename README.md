@@ -162,7 +162,7 @@ The notification consumer deserializes Kafka messages to `JsonNode` and extracts
 `ingestion-service` processes batches — one bad alert must not block the rest, so it uses a custom `DeadLetterPublisher`. `incident-service` processes single messages where Spring Kafka's built-in DLT handles retries correctly.
 
 **Why bucket4j backed by Redis instead of in-memory rate limiting?**
-This reverses an earlier in-memory design. In-memory buckets were per-pod (each replica kept independent counters, so the effective limit multiplied with the replica count) and were held in unbounded maps keyed by tenant and IP — a memory-exhaustion vector, since the client IP comes from the caller-controlled `X-Forwarded-For` header. `RateLimitingService` now keeps bucket state in Redis through bucket4j's `ProxyManager` (`bucket4j-redis`): state is shared across replicas and expires automatically. The Redis call is protected by `@CircuitBreaker` (backlog #67) and fails open, matching the dedup layer's policy for the same dependency.
+This reverses an earlier in-memory design. In-memory buckets were per-pod (each replica kept independent counters, so the effective limit multiplied with the replica count) and were held in unbounded maps keyed by tenant and IP — a memory-exhaustion vector, since the client IP comes from the caller-controlled `X-Forwarded-For` header. `RateLimitingService` now keeps bucket state in Redis through bucket4j's `ProxyManager` (`bucket4j-redis`): state is shared across replicas and expires automatically. The Redis call is protected by `@CircuitBreaker` (backlog #67) and fails open, matching the dedup layer's policy for the same dependency. auth-service's platform API has the one limiter that fails closed (`PlatformRateLimiter`, backlog #0-83): it is a security control on a rare operator action, so while Redis cannot be checked, tenant provisioning answers 503 — those writes depend on Redis, logins and every other auth-service API do not.
 
 **Why auth-service is a modular monolith rather than split into auth + identity?**
 All identity concerns (users, teams, API keys, integrations) are colocated with authentication to avoid distributed transaction complexity and HTTP latency on the login hot path. `AuthService.login()` reads `User` credentials in the same database transaction — after splitting this would require a Redis credential cache (Wzorzec B) and Outbox Pattern for invite flow. This is documented as a future backlog item in `AuthServiceApplication.java` with the exact migration plan.
@@ -177,7 +177,7 @@ Label-based routing (RoutingRules matching on alert labels) requires DevOps team
 On-call schedule management is a distinct bounded context. A separate service allows independent scaling, independent deployment, and future extension (PagerDuty integration, calendar sync) without touching the notification pipeline.
 
 **Why tenants are created by a platform operator through an API, not by a seed or configuration?**
-A multi-tenant platform onboards customers while it runs. A Flyway seed gave every database the same admin with a known password (backlog #0-80), and a configuration entry per tenant would need a deployment change and a restart for each customer. Instead an admin of the reserved `platform-operator` tenant calls `POST /api/v1/platform/tenants`: the tenant row, its first admin (no password) and the invite email are written in one transaction, and the admin sets their own password by accepting the invite. It is the platform's one cross-tenant capability, kept narrow on purpose: create, reissue the first invite while the tenant has no admin, show and list metadata; JWT only, no API keys; audited in both tenants. It reverses backlog #0-16's "no cross-tenant create tenant endpoint" for customer tenants only; the operator tenant still bootstraps itself. Guide: [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
+A multi-tenant platform onboards customers while it runs. A Flyway seed gave every database the same admin with a known password (backlog #0-80), and a configuration entry per tenant would need a deployment change and a restart for each customer. Instead an admin of the reserved `platform-operator` tenant calls `POST /api/v1/platform/tenants`: the tenant row, its first admin (no password) and the invite email are written in one transaction, and the admin sets their own password by accepting the invite. It is the platform's one cross-tenant capability, kept narrow on purpose: create, reissue the first invite while the tenant has no admin, show and list metadata; JWT only, no API keys, a recent MFA login with an established factor (backlog #0-83); audited in both tenants. It reverses backlog #0-16's "no cross-tenant create tenant endpoint" for customer tenants only; the operator tenant still bootstraps itself. Guide: [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
 
 ---
 
@@ -195,8 +195,8 @@ A multi-tenant platform onboards customers while it runs. A Flyway seed gave eve
 | Email | Spring Mail + Mailtrap SMTP | Real SMTP integration, safe sandbox |
 | Slack | Bot Token + chat.postMessage | DM + channel posts, per tenant; ACK-via-Slack returns with the OAuth install (backlog #0-35) |
 | AI | Gemini API via RestClient | Vendor-neutral, no SDK lock-in |
-| Resilience | Resilience4j | Circuit breakers on Redis, Gemini and inter-service HTTP clients (oncall-service, incident ACK), retry with backoff (the oncall client's own retry is unverified, backlog #0-23) |
-| Rate Limiting | bucket4j + Redis | Per-tenant + per-IP, state shared across replicas via `bucket4j-redis` |
+| Resilience | Resilience4j | Circuit breakers on Redis (ingestion-service fail-open, auth-service's platform API limit fail-closed), Gemini and inter-service HTTP clients (oncall-service, incident ACK), retry with backoff (the oncall client's own retry is unverified, backlog #0-23) |
+| Rate Limiting | bucket4j + Redis | ingestion-service per tenant + per IP; auth-service's platform API per operator and in total (backlog #0-83); state shared across replicas via `bucket4j-redis` |
 | API Docs | SpringDoc OpenAPI 3 | Auto-generated, available at `/swagger-ui.html` |
 | Build | Maven multi-module | Shared dependency management, incremental builds |
 | Observability | Micrometer + Prometheus + Grafana | HTTP metrics, JVM, Kafka lag, rate limit rejections |
@@ -396,8 +396,15 @@ Summary; details in [Resilience & Security](#security).
   and on every method; it creates a tenant with an invited first admin, reissues that invite while the tenant has
   no admin, and shows and lists tenants' metadata, audited in the operator tenant. The Ingress routes it like
   every auth-service path, so that rule is its only protection (backlog #0-80,
-  [docs/tenant-provisioning.md](docs/tenant-provisioning.md)). Turn on MFA for the operator tenant (not enforced yet:
-  backlog #0-83).
+  [docs/tenant-provisioning.md](docs/tenant-provisioning.md)). Since backlog #0-83 the caller's session must have
+  completed MFA within 12 h, with a factor whose "MFA enabled" email went out at least 24 h ago (checked on the server per
+  request, so logout or disabling MFA ends access at once). Writes are limited per operator and in total in Redis
+  (fail-closed: 503 while Redis cannot be checked, unlike ingestion's fail-open limiter), and a provisioning
+  spike (`PlatformTenantProvisioningSpike`) or a reached limit (`PlatformApiRateLimited`) alerts the operator
+  by email; `PlatformApiRateLimitUnavailable` reports the Redis case.
+- **MFA change notifications**: enabling or disabling MFA on any account emails the account's address (backlog
+  #0-83), so an owner learns when someone else used their password to change the second factor; a password reset by
+  email within 24 h of that email removes the new factor and ends unfinished logins (interim, see the gap below).
 - **Service identity**: service tokens carry the tenant as a signed claim and an `aud` naming the one service that
   accepts them; the only tenant-less token is the API-key introspection purpose token, accepted on one route.
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
@@ -446,8 +453,11 @@ Open items from the audit and earlier, most important first within each area. Ea
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
   - A tenant cannot be suspended or offboarded: its users, API keys and data stay until someone edits the database:
     backlog #0-82.
-  - The platform API does not require MFA (the operator tenant's `mfaRequired` is advised, not enforced) and has
-    no per-operator rate limit: backlog #0-83.
+  - A password reset by email within 24 h of enabling MFA removes the factor, so a mailbox alone can undo a fresh
+    second factor; the production pattern is an admin resetting MFA, and a reset that never touches it: backlog
+    #0-88 (High).
+  - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
+    mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
   - Audit events are sent to Kafka inside the database transaction, not through an outbox: an event can record
     a rolled-back action, a committed action can lose its event silently, and a Kafka outage stalls requests:
     backlog #0-84.
@@ -797,7 +807,9 @@ docker compose up -d
 > 32-byte base64 AES-256-GCM keys, for TOTP secrets and tenants' Slack bot tokens at rest. See `docker/.env.example` for all required variables.
 
 > **Customer tenants**: no account and no customer tenant is seeded. A platform operator creates each one: accept
-> the operator admin's invite and log in (Step 5, steps 2-3), then `POST /api/v1/platform/tenants` with
+> the operator admin's invite and log in (Step 5, steps 2-3), enable MFA for that account and log in again with a
+> code (the platform API requires a session that completed MFA; commands in the guide), then
+> `POST /api/v1/platform/tenants` with
 > `{"tenantId": "acme", "displayName": "Acme Corp", "adminEmail": "..."}`. The tenant's first admin gets an
 > invite in Mailpit (http://localhost:8025) and accepts it with `POST /api/v1/auth/accept-invite`. Details:
 > [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
@@ -826,7 +838,9 @@ it goes out. A failed send is retried after 1 min, 5 min, 30 min, 2 h and then e
 (`INVITE_EMAIL_RETRY_BACKOFF`) until the request's own deadline (the same 7 days / 15 minutes after it was
 made). When sends keep failing for 30 minutes with none succeeding, `AuthEmailDeliveryFailing` (critical)
 fires; each email given up is reported by `AuthEmailPermanentlyFailed` (high) — resend the invite, or have
-the user request a new reset.
+the user request a new reset. The same outbox sends the "two-factor authentication was enabled/disabled"
+notices (backlog #0-83): no token, no link, retried for at least 24 h (as long as the platform API's grace
+period). An MFA_ENABLED notice that was never sent keeps that factor out of the platform API.
 
 One-time setup (needs the services from Step 4 running). auth-service invites the operator
 tenant's first admin about 30 s after startup when `OPERATOR_ADMIN_EMAIL` is set (`docker/.env` for
@@ -1386,11 +1400,12 @@ incident-platform/
 │       │                          # ApiKeyController, IntegrationController, TenantSettingsController,
 │       │                          # PlatformTenantController (operator tenant provisioning)
 │       ├── bootstrap/             # OperatorTenantBootstrap, TenantAdminReconciler
-│       ├── config/                # SecurityConfig, PlatformAccess
+│       ├── config/                # SecurityConfig, PlatformAccess, PlatformAccessDeniedHandler
+│       ├── ratelimit/             # BruteForceProtectionService, PlatformRateLimiter (+ Config)
 │       ├── service/               # AuthService, UserService, TeamService, MfaService,
 │       │                          # ApiKeyService, IntegrationService, TenantSettingsService
 │       │                          # AuthTokenService, InviteService, ForgotPasswordService,
-│       │                          # TenantProvisioningService
+│       │                          # TenantProvisioningService, MfaSessionStatusService
 │       ├── domain/                # User, Team, TeamMember, ApiKey, Integration,
 │       │                          # AuthToken, MfaBackupCode, TenantSettings, Tenant
 │       └── repository/            # JPA repositories for all domain entities

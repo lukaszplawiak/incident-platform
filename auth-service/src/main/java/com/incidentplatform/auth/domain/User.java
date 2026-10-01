@@ -148,6 +148,16 @@ public class User {
     private Instant mfaEnabledAt;
 
     /**
+     * When the MFA_ENABLED notice of the current factor was sent (backlog
+     * #0-83, migration V23). The platform API's grace period counts from it.
+     * Set only by {@code UserRepository.recordMfaEnabledNoticeSent}, from the
+     * email scheduler; cleared whenever MFA is enabled or disabled, so a notice
+     * of an earlier factor never counts for a new one.
+     */
+    @Column(name = "mfa_enabled_notice_sent_at")
+    private Instant mfaEnabledNoticeSentAt;
+
+    /**
      * Last TOTP time-step (epochSeconds / 30) accepted for this user
      * (backlog #59). NULL until the first successful TOTP verification.
      *
@@ -347,6 +357,17 @@ public class User {
     }
 
     /**
+     * Drops an MFA setup that was started but not enabled (backlog #0-83): a
+     * password reset ends whatever the old password's holder had begun.
+     */
+    public void discardPendingMfaSecret() {
+        if (this.mfaPendingSecret != null) {
+            this.mfaPendingSecret = null;
+            this.updatedAt = Instant.now();
+        }
+    }
+
+    /**
      * Activates MFA — moves pending secret to active secret (step 2).
      * Called after the user has verified the TOTP code from their
      * authenticator app, confirming the secret was scanned correctly.
@@ -360,6 +381,7 @@ public class User {
         this.mfaPendingSecret = null;
         this.mfaEnabled = true;
         this.mfaEnabledAt = Instant.now();
+        this.mfaEnabledNoticeSentAt = null;
         this.updatedAt = Instant.now();
     }
 
@@ -372,6 +394,7 @@ public class User {
         this.mfaSecret = null;
         this.mfaPendingSecret = null;
         this.mfaEnabledAt = null;
+        this.mfaEnabledNoticeSentAt = null;
         this.updatedAt = Instant.now();
     }
 
@@ -379,6 +402,7 @@ public class User {
     public String getMfaSecret()         { return mfaSecret; }
     public String getMfaPendingSecret()  { return mfaPendingSecret; }
     public Instant getMfaEnabledAt()     { return mfaEnabledAt; }
+    public Instant getMfaEnabledNoticeSentAt() { return mfaEnabledNoticeSentAt; }
     public Long getMfaLastUsedTimeStep() { return mfaLastUsedTimeStep; }
 
     /**

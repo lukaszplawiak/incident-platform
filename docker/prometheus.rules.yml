@@ -266,6 +266,61 @@ groups:
             The auth-service ERROR log names the user; resend the invite, or ask
             the user to request a new password reset.
 
+      - alert: PlatformTenantProvisioningSpike
+        # Backlog #0-83: more tenants created through the platform API in an
+        # hour than onboarding normally needs. A taken-over operator session can
+        # create tenants (and send invite emails) below the per-operator limit;
+        # this is how it gets noticed. Critical, so it reaches the operator by
+        # email outside the platform: an attacker acting as an operator could
+        # otherwise resolve the incident in the operator tenant. Raise the
+        # threshold for a planned bulk onboarding.
+        expr: |
+          sum(increase(platform_tenants_provisioned_total[1h])) > 10
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "Unusually many tenants created through the platform API"
+          description: >
+            {{ $value | printf "%.0f" }} tenants were created in the last hour.
+            Check the TENANT_PROVISIONED audit events in the platform-operator
+            tenant: which operator, which tenants, which admin addresses.
+
+      - alert: PlatformApiRateLimited
+        # Backlog #0-83: the platform API refused a write by its per-operator
+        # limit (platform.rate-limit.operations-per-hour) or its platform-wide
+        # one (global-operations-per-hour); the counter's `limit` tag says
+        # which. Either a script went wrong or accounts are being abused.
+        # Critical for the same reason as PlatformTenantProvisioningSpike.
+        expr: |
+          sum(increase(platform_ratelimit_rejected_total[1h])) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "The platform API's rate limit was reached"
+          description: >
+            The platform API refused write operations for exceeding its
+            per-operator or platform-wide limit in the last hour. The
+            auth-service WARN log names the operator and the limit; check the
+            recent TENANT_* audit events.
+
+      - alert: PlatformApiRateLimitUnavailable
+        # Backlog #0-83: the platform API's limit could not be checked in Redis,
+        # so its write operations were refused (fail-closed, 503). Tenant
+        # onboarding is blocked until Redis is reachable from auth-service.
+        expr: |
+          sum(increase(platform_ratelimit_unavailable_total[15m])) > 0
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "Platform API write operations refused: rate limit unavailable"
+          description: >
+            auth-service could not reach Redis to check the platform API's
+            limit in the last 15 minutes and refused tenant provisioning. Check
+            Redis and the PlatformRateLimiter ERROR lines in the auth-service log.
+
       - alert: HighHttpErrorRate
         # Fire when > 1% of requests to any service return 5xx
         expr: |

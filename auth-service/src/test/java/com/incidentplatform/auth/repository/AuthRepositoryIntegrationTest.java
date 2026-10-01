@@ -27,6 +27,7 @@ import com.incidentplatform.auth.service.ForgotPasswordService;
 import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.auth.service.UserService;
+import com.incidentplatform.auth.service.MfaSessionStatusService;
 import com.incidentplatform.auth.service.TenantProvisioningService;
 import com.incidentplatform.auth.dto.ProvisionTenantRequest;
 import com.incidentplatform.auth.dto.ProvisionTenantResponse;
@@ -157,9 +158,11 @@ class AuthRepositoryIntegrationTest {
     @Autowired private UserRepository userRepository;
     @Autowired private AuthTokenRepository authTokenRepository;
     @Autowired private ApiKeyRepository apiKeyRepository;
+    @Autowired private MfaBackupCodeRepository mfaBackupCodeRepository;
     @Autowired private SlackWorkspaceRepository slackWorkspaceRepository;
     @Autowired private TenantRepository tenantRepository;
     @Autowired private TenantProvisioningService tenantProvisioningService;
+    @Autowired private com.incidentplatform.auth.service.MfaSessionStatusService mfaSessionStatusService;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private AuthEmailOutboxRepository authEmailOutboxRepository;
     @Autowired private EntityManager entityManager;
@@ -183,6 +186,13 @@ class AuthRepositoryIntegrationTest {
     @MockitoBean private BruteForceProtectionService bruteForceProtectionService;
 
     private static final String TENANT_ID = "test-tenant";
+
+    /** The bulk queries with {@code clearAutomatically} (see {@code bulkUpdateKeepsEarlierChange}). */
+    enum BulkUpdate {
+        REVOKE_PERSONAL_API_KEYS, TOUCH_API_KEY, INVALIDATE_ALL_REFRESH_TOKENS, INVALIDATE_SESSION,
+        INVALIDATE_OTHER_SESSIONS, DELETE_EXPIRED_TOKENS, CLEAR_MFA_VERIFIED, DELETE_BACKUP_CODES,
+        RECORD_MFA_NOTICE
+    }
 
     private User persistUser(String email, List<String> roleNames) {
         final User user = User.forTesting(
@@ -373,7 +383,7 @@ class AuthRepositoryIntegrationTest {
         void resetPasswordPersistsNewPasswordAndRevokesSessions() {
             final User user = persistUser("resets@example.com", List.of("ROLE_RESPONDER"));
             final String rawRefresh = authTokenService.generateRefreshToken(
-                    user, TENANT_ID, UUID.randomUUID());
+                    user, TENANT_ID, UUID.randomUUID(), null);
             final String rawReset = authTokenService.generatePasswordResetToken(user, TENANT_ID);
             startFreshRequest();
 
@@ -392,7 +402,7 @@ class AuthRepositoryIntegrationTest {
         void refreshRotationWorks() {
             final User user = persistUser("refreshes@example.com", List.of("ROLE_RESPONDER"));
             final String rawRefresh = authTokenService.generateRefreshToken(
-                    user, TENANT_ID, UUID.randomUUID());
+                    user, TENANT_ID, UUID.randomUUID(), null);
             startFreshRequest();
 
             final AuthTokenService.RotationResult result =
@@ -426,6 +436,101 @@ class AuthRepositoryIntegrationTest {
                     Long.class, user.getId())).isNotNull();
             assertThatThrownBy(() -> authTokenService.consumeToken(
                     rawMfaToken, AuthToken.Type.MFA_SESSION))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("disabling MFA persists, ends its sessions' MFA, and queues the notification (backlog #0-83)")
+        void disableMfaEndToEnd() throws Exception {
+            final User user = persistUser("mfa-disable@example.com", List.of("ROLE_ADMIN"));
+            user.setPasswordHash(passwordEncoder.encode("a-password"));
+            final String secret = totpService.generateSecret();
+            user.storePendingMfaSecret(mfaEncryptionService.encrypt(secret));
+            user.enableMfa();
+            userRepository.saveAndFlush(user);
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session, Instant.now());
+            startFreshRequest();
+
+            TenantContext.set(TENANT_ID);
+            try {
+                mfaService.disableMfa("a-password", currentTotpCode(secret),
+                        new com.incidentplatform.shared.security.UserPrincipal(user.getId(), TENANT_ID,
+                                user.getEmail(), List.of("ROLE_ADMIN"), List.of()));
+            } finally {
+                TenantContext.clear();
+            }
+            entityManager.flush();
+
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT mfa_enabled FROM users WHERE id = ?", Boolean.class, user.getId()))
+                    .as("the user change survives the session clear").isFalse();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM auth_tokens WHERE user_id = ? AND mfa_verified_at IS NOT NULL",
+                    Integer.class, user.getId())).isZero();
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, user.getId()))
+                    .contains("MFA_DISABLED");
+        }
+
+        @Test
+        @DisplayName("invalidateLoginContinuationTokens ends the user's MFA session and setup tokens, nothing else (backlog #0-83)")
+        void loginContinuationTokensOnly() {
+            final User user = persistUser("continuation@example.com", List.of("ROLE_ADMIN"));
+            final User other = persistUser("continuation-other@example.com", List.of("ROLE_ADMIN"));
+            final String mfaSession = authTokenService.generateMfaSessionToken(user, TENANT_ID);
+            final String setupRequired = authTokenService.generateMfaSetupRequiredToken(user, TENANT_ID);
+            final String reset = authTokenService.generatePasswordResetToken(user, TENANT_ID);
+            final String othersMfaSession = authTokenService.generateMfaSessionToken(other, TENANT_ID);
+            startFreshRequest();
+
+            authTokenService.invalidateLoginContinuationTokens(user.getId());
+            startFreshRequest();
+
+            assertThatThrownBy(() -> authTokenService.consumeToken(mfaSession, AuthToken.Type.MFA_SESSION))
+                    .isInstanceOf(BusinessException.class);
+            assertThatThrownBy(() -> authTokenService.consumeToken(setupRequired, AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .isInstanceOf(BusinessException.class);
+            assertThat(authTokenService.consumeToken(reset, AuthToken.Type.PASSWORD_RESET).getUser().getId())
+                    .as("another type of the same user").isEqualTo(user.getId());
+            assertThat(authTokenService.consumeToken(othersMfaSession, AuthToken.Type.MFA_SESSION).getUser().getId())
+                    .as("the same type of another user").isEqualTo(other.getId());
+        }
+
+        @Test
+        @DisplayName("a password reset removes a factor still within the grace period, and keeps an established one (backlog #0-83)")
+        void passwordResetAndRecentFactor() {
+            final User fresh = persistUser("reset-fresh@example.com", List.of("ROLE_ADMIN"));
+            final User established = persistUser("reset-old@example.com", List.of("ROLE_ADMIN"));
+            for (final User user : List.of(fresh, established)) {
+                user.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+                user.enableMfa();
+                userRepository.saveAndFlush(user);
+            }
+            jdbcTemplate.update("UPDATE users SET mfa_enabled_at = now() - INTERVAL '26 hours', "
+                    + "mfa_enabled_notice_sent_at = now() - INTERVAL '25 hours' WHERE id = ?", established.getId());
+            final String freshReset = authTokenService.generatePasswordResetToken(fresh, TENANT_ID);
+            final String setupToken = authTokenService.generateMfaSetupRequiredToken(fresh, TENANT_ID);
+            final String mfaSessionToken = authTokenService.generateMfaSessionToken(fresh, TENANT_ID);
+            final String oldReset = authTokenService.generatePasswordResetToken(established, TENANT_ID);
+            startFreshRequest();
+
+            passwordService.resetPassword(new ResetPasswordRequest(freshReset, "a-new-password"), TENANT_ID);
+            passwordService.resetPassword(new ResetPasswordRequest(oldReset, "a-new-password"), TENANT_ID);
+            entityManager.flush();
+
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, fresh.getId())).as("factor enabled minutes ago").isFalse();
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, fresh.getId()))
+                    .contains("MFA_DISABLED");
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, established.getId())).as("factor enabled 25 h ago").isTrue();
+            assertThat(passwordEncoder.matches("a-new-password", passwordHashOf(fresh.getId()))).isTrue();
+            // A half-finished login from before the reset is dead too.
+            assertThatThrownBy(() -> authTokenService.consumeToken(setupToken, AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .isInstanceOf(BusinessException.class);
+            assertThatThrownBy(() -> authTokenService.consumeToken(mfaSessionToken, AuthToken.Type.MFA_SESSION))
                     .isInstanceOf(BusinessException.class);
         }
 
@@ -851,7 +956,7 @@ class AuthRepositoryIntegrationTest {
                 authEmailPersistenceService.recordGivenUp(latest.getId(), send.tokenId(), "smtp down",
                         Instant.now());
             } else {
-                authEmailPersistenceService.recordSent(latest.getId(), Instant.now());
+                authEmailPersistenceService.recordSent(latest, Instant.now());
             }
             entityManager.flush();
             entityManager.clear();
@@ -1143,6 +1248,323 @@ class AuthRepositoryIntegrationTest {
                 jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", tenantId);
                 jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", tenantId);
             }
+        }
+    }
+
+    /**
+     * Backlog #0-83: what the platform API requires of a session's second
+     * factor, on the real schema (V22) and the real token service, through the
+     * life of a session. Defaults: MFA verified within 12 h, factor enabled at
+     * least 24 h ago.
+     */
+    @Nested
+    @DisplayName("Session MFA status (backlog #0-83)")
+    class SessionMfaStatus {
+
+        private User user;
+
+        @org.junit.jupiter.api.BeforeEach
+        void userWithEstablishedFactor() {
+            user = persistUser("mfa-session-" + UUID.randomUUID() + "@example.com", List.of("ROLE_ADMIN"));
+            user.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            user.enableMfa();
+            userRepository.saveAndFlush(user);
+            enrolledAgo(java.time.Duration.ofHours(50));
+            noticeSentAgo(java.time.Duration.ofHours(48));
+        }
+
+        /**
+         * The MFA_ENABLED notice of the enrolment, sent through the real
+         * outbox path (request, then the scheduler's recordSent), which also
+         * records it on the user; then dated back.
+         */
+        private void noticeSentAgo(java.time.Duration ago) {
+            final AuthEmailOutbox notice = authEmailOutboxRepository.saveAndFlush(
+                    AuthEmailOutbox.request(user, AuthEmailType.MFA_ENABLED, java.time.Duration.ofHours(24)));
+            assertThat(authEmailPersistenceService.recordSent(notice, Instant.now())).isTrue();
+            entityManager.flush();
+            entityManager.clear();
+            jdbcTemplate.update("UPDATE users SET mfa_enabled_notice_sent_at = ? WHERE id = ?",
+                    java.sql.Timestamp.from(Instant.now().minus(ago)), user.getId());
+        }
+
+        private void enrolledAgo(java.time.Duration ago) {
+            jdbcTemplate.update("UPDATE users SET mfa_enabled_at = ? WHERE id = ?",
+                    java.sql.Timestamp.from(Instant.now().minus(ago)), user.getId());
+        }
+
+        private void flushAndClear() {
+            entityManager.flush();
+            entityManager.clear();
+        }
+
+        private MfaSessionStatusService.Status status(UUID session) {
+            return mfaSessionStatusService.check(user.getId(), TENANT_ID, session);
+        }
+
+        @Test
+        @DisplayName("an MFA session of an established factor is accepted; password-only, another user's and none are not")
+        void recordedAtLogin() {
+            final UUID mfaSession = UUID.randomUUID();
+            final UUID passwordSession = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, mfaSession, Instant.now());
+            authTokenService.generateRefreshToken(user, TENANT_ID, passwordSession, null);
+            flushAndClear();
+
+            assertThat(status(mfaSession)).isEqualTo(MfaSessionStatusService.Status.ACCEPTED);
+            assertThat(status(passwordSession)).isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+            assertThat(mfaSessionStatusService.check(UUID.randomUUID(), TENANT_ID, mfaSession))
+                    .isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+            assertThat(mfaSessionStatusService.check(user.getId(), TENANT_ID, null))
+                    .isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+        }
+
+        @Test
+        @DisplayName("another tenant's id for the same user and session finds no session (tenant-scoped)")
+        void otherTenant() {
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session, Instant.now());
+            flushAndClear();
+
+            assertThat(mfaSessionStatusService.check(user.getId(), "other-tenant", session))
+                    .isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+            assertThat(authTokenService.isSessionLive(user.getId(), "other-tenant", session)).isFalse();
+        }
+
+        @Test
+        @DisplayName("isSessionLive: live, then not after logout; an expired session is not live")
+        void sessionLiveness() {
+            final UUID loggedOut = UUID.randomUUID();
+            final UUID expired = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, loggedOut, null);
+            authTokenService.generateRefreshToken(user, TENANT_ID, expired, null);
+            flushAndClear();
+            jdbcTemplate.update("UPDATE auth_tokens SET expires_at = now() - INTERVAL '1 minute' "
+                    + "WHERE session_id = ?", expired);
+
+            assertThat(authTokenService.isSessionLive(user.getId(), TENANT_ID, loggedOut)).isTrue();
+            assertThat(authTokenService.isSessionLive(user.getId(), TENANT_ID, expired)).isFalse();
+            authTokenService.invalidateRefreshTokenForSession(user.getId(), loggedOut);
+            flushAndClear();
+            assertThat(authTokenService.isSessionLive(user.getId(), TENANT_ID, loggedOut)).isFalse();
+            assertThat(authTokenService.isSessionLive(user.getId(), TENANT_ID, null)).isFalse();
+        }
+
+        @Test
+        @DisplayName("a notice is recorded once, and not on an account whose MFA is now off")
+        void noticeRecordingGuards() {
+            final Instant requestedAt = Instant.now();
+            assertThat(userRepository.recordMfaEnabledNoticeSent(user.getId(), TENANT_ID, requestedAt, Instant.now()))
+                    .as("already recorded by the fixture").isZero();
+
+            jdbcTemplate.update("UPDATE users SET mfa_enabled_notice_sent_at = NULL, mfa_enabled = FALSE "
+                    + "WHERE id = ?", user.getId());
+            assertThat(userRepository.recordMfaEnabledNoticeSent(user.getId(), TENANT_ID, requestedAt, Instant.now()))
+                    .as("MFA is off").isZero();
+
+            jdbcTemplate.update("UPDATE users SET mfa_enabled = TRUE WHERE id = ?", user.getId());
+            assertThat(userRepository.recordMfaEnabledNoticeSent(user.getId(), "other-tenant", requestedAt, Instant.now()))
+                    .as("another tenant's id").isZero();
+            assertThat(userRepository.recordMfaEnabledNoticeSent(user.getId(), TENANT_ID, requestedAt, Instant.now()))
+                    .as("current enrolment, nothing recorded yet").isEqualTo(1);
+        }
+
+        @Test
+        @DisplayName("MFA verified longer ago than the maximum session age is refused")
+        void tooOld() {
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session,
+                    Instant.now().minus(java.time.Duration.ofHours(13)));
+            flushAndClear();
+
+            assertThat(status(session)).isEqualTo(MfaSessionStatusService.Status.MFA_TOO_OLD);
+        }
+
+        @Test
+        @DisplayName("a factor whose notice went out less than the grace period ago is refused, even in an MFA session")
+        void enrolledTooRecently() {
+            noticeSentAgo(java.time.Duration.ofHours(1));
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session, Instant.now());
+            flushAndClear();
+
+            assertThat(status(session)).isEqualTo(MfaSessionStatusService.Status.MFA_ENROLLED_TOO_RECENTLY);
+        }
+
+        @Test
+        @DisplayName("a factor whose MFA_ENABLED notice was never sent is refused")
+        void noticeNotDelivered() {
+            jdbcTemplate.update("UPDATE users SET mfa_enabled_notice_sent_at = NULL WHERE id = ?", user.getId());
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session, Instant.now());
+            flushAndClear();
+
+            assertThat(status(session)).isEqualTo(MfaSessionStatusService.Status.MFA_NOTICE_NOT_DELIVERED);
+        }
+
+        @Test
+        @DisplayName("a verified session of an account whose MFA is now off, or has no enrolment time, is refused")
+        void defensiveBranches() {
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session, Instant.now());
+            flushAndClear();
+
+            jdbcTemplate.update("UPDATE users SET mfa_enabled_at = NULL WHERE id = ?", user.getId());
+            assertThat(status(session)).isEqualTo(MfaSessionStatusService.Status.MFA_NOTICE_NOT_DELIVERED);
+
+            jdbcTemplate.update("UPDATE users SET mfa_enabled = FALSE WHERE id = ?", user.getId());
+            assertThat(status(session)).isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+        }
+
+        @Test
+        @DisplayName("the decision outlives the outbox purge: sent rows deleted, factor still accepted")
+        void survivesOutboxPurge() {
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session, Instant.now());
+            flushAndClear();
+            jdbcTemplate.update("DELETE FROM auth_email_outbox WHERE user_id = ?", user.getId());
+
+            assertThat(status(session)).isEqualTo(MfaSessionStatusService.Status.ACCEPTED);
+        }
+
+        @Test
+        @DisplayName("a notice of an earlier enrolment never marks a new factor")
+        void earlierNoticeDoesNotCount() {
+            final AuthEmailOutbox earlier = authEmailOutboxRepository.saveAndFlush(
+                    AuthEmailOutbox.request(user, AuthEmailType.MFA_ENABLED, java.time.Duration.ofHours(24)));
+            jdbcTemplate.update("UPDATE auth_email_outbox SET created_at = now() - INTERVAL '1 hour' WHERE id = ?",
+                    earlier.getId());
+            entityManager.clear();
+            // Re-enrol: the factor's time moves to now and the recorded notice is cleared.
+            final User reloaded = userRepository.findById(user.getId()).orElseThrow();
+            reloaded.disableMfa();
+            reloaded.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            reloaded.enableMfa();
+            userRepository.saveAndFlush(reloaded);
+            final AuthEmailOutbox earlierRow = authEmailOutboxRepository.findById(earlier.getId()).orElseThrow();
+
+            authEmailPersistenceService.recordSent(earlierRow, Instant.now());
+            flushAndClear();
+
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT mfa_enabled_notice_sent_at FROM users WHERE id = ?", java.sql.Timestamp.class,
+                    user.getId())).as("the earlier enrolment's notice").isNull();
+        }
+
+        /**
+         * Every bulk UPDATE/DELETE that clears the persistence context flushes
+         * it first (found in review): otherwise a change made earlier in the
+         * same transaction, here to the user, is silently discarded. One case
+         * per such query, so dropping {@code flushAutomatically} from any of
+         * them fails here. The queries need not match a row: Spring Data
+         * flushes and clears either way.
+         */
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+        @org.junit.jupiter.params.provider.EnumSource(BulkUpdate.class)
+        @DisplayName("a bulk update flushes first: an earlier change to the user in the transaction survives")
+        void bulkUpdateKeepsEarlierChange(BulkUpdate bulkUpdate) {
+            final User managed = userRepository.findById(user.getId()).orElseThrow();
+            managed.setPasswordHash("changed-before-" + bulkUpdate);
+
+            final UUID userId = user.getId();
+            final Instant now = Instant.now();
+            switch (bulkUpdate) {
+                case REVOKE_PERSONAL_API_KEYS -> apiKeyRepository.revokeAllPersonalKeysForUser(userId, now);
+                case TOUCH_API_KEY -> apiKeyRepository.touchLastUsedAt(UUID.randomUUID(), now, now);
+                case INVALIDATE_ALL_REFRESH_TOKENS -> authTokenRepository.invalidateAllRefreshTokens(userId, now);
+                case INVALIDATE_SESSION -> authTokenRepository.invalidateRefreshTokenForSession(
+                        userId, UUID.randomUUID(), now);
+                case INVALIDATE_OTHER_SESSIONS -> authTokenRepository.invalidateAllRefreshTokensExceptSession(
+                        userId, UUID.randomUUID(), now);
+                case DELETE_EXPIRED_TOKENS -> authTokenRepository.deleteExpiredAndUsed(now.minusSeconds(86_400));
+                case CLEAR_MFA_VERIFIED -> authTokenRepository.clearMfaVerified(userId, TENANT_ID);
+                case DELETE_BACKUP_CODES -> mfaBackupCodeRepository.deleteAllByUserId(userId);
+                case RECORD_MFA_NOTICE -> userRepository.recordMfaEnabledNoticeSent(userId, TENANT_ID, now, now);
+            }
+            entityManager.clear();
+
+            assertThat(passwordHashOfUser(userId)).isEqualTo("changed-before-" + bulkUpdate);
+        }
+
+        private String passwordHashOfUser(UUID userId) {
+            return jdbcTemplate.queryForObject("SELECT password_hash FROM users WHERE id = ?", String.class, userId);
+        }
+
+        @Test
+        @DisplayName("V23: the outbox accepts the MFA notification types and still rejects an unknown one")
+        void outboxTypeConstraint() {
+            authEmailOutboxRepository.saveAndFlush(
+                    AuthEmailOutbox.request(user, AuthEmailType.MFA_DISABLED, java.time.Duration.ofHours(24)));
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, user.getId()))
+                    .contains("MFA_ENABLED", "MFA_DISABLED");
+
+            assertThatThrownBy(() -> jdbcTemplate.update("""
+                    UPDATE auth_email_outbox SET email_type = 'SOMETHING_ELSE' WHERE user_id = ?
+                    """, user.getId()))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("chk_auth_email_outbox_type");
+        }
+
+        @Test
+        @DisplayName("rotation keeps the original verification time and a password-only session stays one; logout ends it")
+        void rotationKeepsLogoutEnds() {
+            final UUID session = UUID.randomUUID();
+            final Instant verifiedAt = Instant.now().minus(java.time.Duration.ofHours(2))
+                    .truncatedTo(ChronoUnit.MICROS);
+            final String raw = authTokenService.generateRefreshToken(user, TENANT_ID, session, verifiedAt);
+            final UUID passwordSession = UUID.randomUUID();
+            final String rawPassword = authTokenService.generateRefreshToken(user, TENANT_ID, passwordSession, null);
+            flushAndClear();
+
+            authTokenService.rotateRefreshToken(raw);
+            authTokenService.rotateRefreshToken(rawPassword);
+            flushAndClear();
+            assertThat(status(session)).as("after rotation").isEqualTo(MfaSessionStatusService.Status.ACCEPTED);
+            assertThat(jdbcTemplate.queryForObject("""
+                    SELECT mfa_verified_at FROM auth_tokens
+                    WHERE session_id = ? AND used_at IS NULL
+                    """, java.sql.Timestamp.class, session).toInstant())
+                    .as("rotation does not make the verification recent").isEqualTo(verifiedAt);
+            assertThat(status(passwordSession)).as("password-only after rotation")
+                    .isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+
+            authTokenService.invalidateRefreshTokenForSession(user.getId(), session);
+            flushAndClear();
+            assertThat(status(session)).as("after logout").isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+        }
+
+        @Test
+        @DisplayName("disabling MFA ends it for every session at once")
+        void disablingMfaEndsIt() {
+            final UUID first = UUID.randomUUID();
+            final UUID second = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, first, Instant.now());
+            authTokenService.generateRefreshToken(user, TENANT_ID, second, Instant.now());
+            flushAndClear();
+
+            authTokenService.forgetMfaOfAllSessions(user.getId(), "other-tenant");
+            flushAndClear();
+            assertThat(status(first)).as("another tenant's id changes nothing")
+                    .isEqualTo(MfaSessionStatusService.Status.ACCEPTED);
+
+            authTokenService.forgetMfaOfAllSessions(user.getId(), TENANT_ID);
+            flushAndClear();
+
+            assertThat(status(first)).isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+            assertThat(status(second)).isEqualTo(MfaSessionStatusService.Status.NO_MFA);
+        }
+
+        @Test
+        @DisplayName("an expired session does not count")
+        void expiredSession() {
+            final UUID session = UUID.randomUUID();
+            authTokenService.generateRefreshToken(user, TENANT_ID, session, Instant.now());
+            flushAndClear();
+            jdbcTemplate.update("UPDATE auth_tokens SET expires_at = now() - INTERVAL '1 minute' "
+                    + "WHERE session_id = ?", session);
+
+            assertThat(status(session)).isEqualTo(MfaSessionStatusService.Status.NO_MFA);
         }
     }
 

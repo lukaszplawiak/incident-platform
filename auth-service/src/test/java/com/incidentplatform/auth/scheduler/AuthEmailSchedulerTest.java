@@ -147,12 +147,12 @@ class AuthEmailSchedulerTest {
             final AuthEmailOutbox entry = invite();
             duePending(entry);
             readyToSend(entry);
-            given(persistenceService.recordSent(eq(entry.getId()), any())).willReturn(true);
+            given(persistenceService.recordSent(eq(entry), any())).willReturn(true);
 
             scheduler.processPending();
 
             then(emailService).should().sendInviteEmail("user@firma.pl", "raw-user@firma.pl");
-            then(persistenceService).should().recordSent(eq(entry.getId()), any());
+            then(persistenceService).should().recordSent(eq(entry), any());
             assertThat(count(AuthEmailScheduler.SEND_COUNTER, "type", "INVITE", "outcome", "sent"))
                     .isEqualTo(1.0);
         }
@@ -171,12 +171,29 @@ class AuthEmailSchedulerTest {
         }
 
         @Test
+        @DisplayName("routes MFA notifications to the notification template, with the change time (backlog #0-83)")
+        void sendsMfaNotifications() {
+            final AuthEmailOutbox enabled = entry("user@firma.pl", AuthEmailType.MFA_ENABLED, Duration.ofHours(24));
+            final AuthEmailOutbox disabled = entry("other@firma.pl", AuthEmailType.MFA_DISABLED, Duration.ofHours(24));
+            duePending(enabled, disabled);
+            given(persistenceService.prepareAttempt(any(), any(), any())).willReturn(new Attempt.Send(null, null));
+            given(persistenceService.recordSent(any(), any())).willReturn(true);
+
+            scheduler.processPending();
+
+            then(emailService).should().sendMfaChangeNotification("user@firma.pl", true, enabled.getCreatedAt());
+            then(emailService).should().sendMfaChangeNotification("other@firma.pl", false, disabled.getCreatedAt());
+            assertThat(count(AuthEmailScheduler.SEND_COUNTER, "type", "MFA_ENABLED", "outcome", "sent"))
+                    .isEqualTo(1.0);
+        }
+
+        @Test
         @DisplayName("an entry closed by someone else after the send still counts the email as sent")
         void sentButAlreadyClosed() {
             final AuthEmailOutbox entry = invite();
             duePending(entry);
             readyToSend(entry);
-            given(persistenceService.recordSent(eq(entry.getId()), any())).willReturn(false);
+            given(persistenceService.recordSent(eq(entry), any())).willReturn(false);
 
             scheduler.processPending();
 
@@ -218,7 +235,7 @@ class AuthEmailSchedulerTest {
             then(emailService).should(times(2)).sendInviteEmail(anyString(), anyString());
             then(persistenceService).should().recordFailed(
                     eq(failing.getId()), eq(TOKEN_ID), eq("SMTP timeout"), any(), any());
-            then(persistenceService).should().recordSent(eq(succeeding.getId()), any());
+            then(persistenceService).should().recordSent(eq(succeeding), any());
         }
 
         @Test

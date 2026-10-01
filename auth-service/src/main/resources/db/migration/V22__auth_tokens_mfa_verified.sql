@@ -1,0 +1,27 @@
+-- When a login session completed MFA (backlog #0-83).
+--
+-- The platform API (/api/v1/platform/**, backlog #0-80) is the platform's one
+-- cross-tenant capability. It now requires that the caller's session passed a
+-- second factor recently, not only a password. The access token already
+-- carries the session (its sessionId claim, V16), and auth-service owns the
+-- sessions, so the fact is recorded here, on the session's REFRESH rows, and
+-- checked by PlatformAccess per request (MfaSessionStatusService). The token
+-- format does not change and no other service is involved. Alternative kept
+-- for later: an "amr" claim in the JWT (RFC 8176), if a service other than
+-- auth-service ever needs step-up.
+--
+-- A timestamp, not a flag, so the check can also require that the second
+-- factor is recent (platform.mfa.max-session-age): a refresh token lives for
+-- 30 days, and a session verified that long ago should not keep the
+-- platform's widest capability.
+--
+-- Set when the session is created after a TOTP or backup code
+-- (MfaService), NULL after a password-only login (AuthService), copied by
+-- refresh-token rotation, and cleared for all of a user's sessions when they
+-- disable MFA. Only REFRESH rows use it; every other type keeps NULL.
+--
+-- Nullable, no default: existing sessions count as "no MFA proven", so an
+-- operator logs in again once after this deploys. Adding a nullable column
+-- without a default is a catalog-only change, no table rewrite. The lookup uses
+-- idx_auth_tokens_user_session (V16).
+ALTER TABLE auth_tokens ADD COLUMN mfa_verified_at TIMESTAMPTZ;

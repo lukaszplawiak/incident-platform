@@ -1,6 +1,7 @@
 package com.incidentplatform.auth.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.auth.service.MfaSessionStatusService;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
@@ -130,16 +131,32 @@ public class SecurityConfig {
                 Set.of(TokenPurposes.API_KEY_INTROSPECTION));
     }
 
+    /** Backlog #0-80/#0-83; named for {@code @PreAuthorize("@platformAccess...")}. */
+    @Bean
+    public PlatformAccess platformAccess(MfaSessionStatusService mfaSessionStatusService) {
+        return new PlatformAccess(mfaSessionStatusService);
+    }
+
+    @Bean
+    public PlatformAccessDeniedHandler platformAccessDeniedHandler(ObjectMapper objectMapper) {
+        return new PlatformAccessDeniedHandler(objectMapper);
+    }
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http,
                                                    JwtAuthFilter jwtAuthFilter,
                                                    CorsConfigurationSource corsConfigurationSource,
                                                    UnauthorizedEntryPoint unauthorizedEntryPoint,
-                                                   ApiKeyAuthFilter apiKeyAuthFilter)
+                                                   ApiKeyAuthFilter apiKeyAuthFilter,
+                                                   PlatformAccess platformAccess,
+                                                   PlatformAccessDeniedHandler platformAccessDeniedHandler)
             throws Exception {
         return SharedSecurityAutoConfiguration
                 .buildCommonSecurity(http, jwtAuthFilter, unauthorizedEntryPoint)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource))
+                // Backlog #0-83: explains a platform API refusal for lack of MFA;
+                // every other denial keeps Spring Security's default answer.
+                .exceptionHandling(ex -> ex.accessDeniedHandler(platformAccessDeniedHandler))
                 .addFilterBefore(apiKeyAuthFilter, JwtAuthFilter.class)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(SharedSecurityAutoConfiguration.PUBLIC_PATHS).permitAll()
@@ -161,9 +178,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/internal/api-keys/introspect")
                         .hasRole(SecurityRoles.API_KEY_INTROSPECTION)
                         // Backlog #0-80: the platform API (tenant provisioning) is for
-                        // an admin of the platform-operator tenant with a JWT only;
-                        // the controller repeats the rule with @PreAuthorize.
-                        .requestMatchers("/api/v1/platform/**").access(PlatformAccess.forRequests())
+                        // an admin of the platform-operator tenant with a JWT only, in
+                        // a session that completed MFA (#0-83); the controller repeats
+                        // the rule with @PreAuthorize.
+                        .requestMatchers("/api/v1/platform/**").access(platformAccess.forRequests())
                         // Deny by default for purpose tokens (backlog #0-16, #0-14):
                         // authenticated() would let one reach every route below.
                         .anyRequest().access(
