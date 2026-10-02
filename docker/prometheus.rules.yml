@@ -266,30 +266,57 @@ groups:
             The auth-service ERROR log names the user; resend the invite, or ask
             the user to request a new password reset.
 
-      - alert: AuditEventsDropped
-        # Backlog #0-89: auth-service hands the audit events of API key
-        # creation and revocation to a bounded queue after commit (AfterCommit);
-        # when Kafka stalls long enough to fill it, or a publish throws, events
-        # are dropped (for every tenant at once when the queue is full). A send
-        # that fails later inside the Kafka client is not counted: the alert is
-        # a lower bound of what is lost until #0-84. A dropped event may hide what an
-        # intruder did, so critical: it reaches the operator by email outside
-        # the platform. The auth-service ERROR log has each drop; fix Kafka.
-        # Interim until #0-84's audit outbox. Resolves an hour after the last.
+      - alert: AuditOutboxBacklog
+        # Backlog #0-84: services write audit events to their own outbox table,
+        # in the transaction of the action, and a relay sends them to Kafka,
+        # retrying until Kafka acknowledges. Nothing is dropped any more, but an
+        # event waiting long means the trail is behind: Kafka down, a row Kafka
+        # refuses, or the relay not running. The gauge is read from the table
+        # when Prometheus scrapes, on every replica, not by the relay (found in
+        # review: a relay that stopped froze a gauge it refreshed itself), so a
+        # stopped relay, or a break-glass command's event left for the service,
+        # shows as a growing age. A service that is down has no gauge at all:
+        # PlatformServiceDown covers it. 10 minutes is far beyond normal
+        # (seconds). Critical: until it clears, recent actions (logins, MFA
+        # resets, API keys) are missing from their tenants' audit trail, and an
+        # operator should know by email.
         expr: |
-          sum(increase(auth_audit_after_commit_rejected_total[1h])) > 0
+          max by (job) (audit_outbox_oldest_pending_age_seconds) > 600
+        for: 5m
         labels:
           severity: critical
           scope: platform
         annotations:
-          summary: "auth-service dropped audit events"
+          summary: "{{ $labels.job }} audit events waiting in the outbox for over 10 minutes"
           description: >
-            auth-service dropped at least one audit event in the last hour,
-            before it reached the Kafka client: the after-commit audit queue was
-            full (usually Kafka slow or down) or the publish failed. Those API
-            key creations or revocations are missing from their tenants' audit
-            trail, and more may be lost unseen. Check Kafka and the auth-service
-            ERROR log ("Audit event dropped").
+            The oldest audit event in {{ $labels.job }}'s outbox has waited
+            {{ $value | humanizeDuration }}. Nothing is lost, but the audit
+            trail is behind until the relay sends it. Check Kafka and the
+            service's "Audit event not sent" WARN lines.
+
+      - alert: AuditEventsRejected
+        # Backlog #0-84: incident-service's audit consumer could not store a
+        # record (unreadable, or a constraint other than its idempotency keys)
+        # and sent it to the dead-letter topic. The producer's outbox counted
+        # it as delivered, so AuditOutboxBacklog never sees it: without this
+        # alert the event would be missing from the tenant's trail unnoticed
+        # (found in review). Critical, as AuditOutboxBacklog: a gap in the
+        # audit trail. Resolves by itself an hour after the last one.
+        expr: |
+          sum by (job, reason) (
+            increase(audit_events_rejected_total[1h])
+          ) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} rejected audit events ({{ $labels.reason }})"
+          description: >
+            {{ $labels.job }} could not store at least one audit event in the
+            last hour ({{ $labels.reason }}); it is in the dead-letter topic
+            (incidents.dead-letter, sourceTopic audit.events) and missing from
+            the tenant's audit trail. The ERROR log "Audit event rejected"
+            names it.
 
       - alert: PlatformTenantProvisioningSpike
         # Backlog #0-83: more tenants created through the platform API in an

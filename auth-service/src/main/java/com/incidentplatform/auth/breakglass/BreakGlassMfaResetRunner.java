@@ -1,10 +1,12 @@
 package com.incidentplatform.auth.breakglass;
 
 import com.incidentplatform.auth.service.MfaService;
+import com.incidentplatform.shared.audit.AuditOutboxRelay;
 import com.incidentplatform.shared.security.ReservedTenants;
 import com.incidentplatform.shared.security.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -16,7 +18,6 @@ import org.springframework.stereotype.Component;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.time.Duration;
 import java.util.UUID;
 
 /**
@@ -41,8 +42,7 @@ import java.util.UUID;
  * the trail the database would not.
  *
  * <h2>Process</h2>
- * Exits with 0 after a reset, 1 when it refused or failed (nothing changed;
- * a missing Kafka acknowledgement of the audit event rolls the reset back),
+ * Exits with 0 after a reset, 1 when it refused or failed (nothing changed),
  * 2 if it finds itself in a web server context (a safeguard: main never
  * starts one for the command). The runner only records the code
  * ({@link ExitCodeGenerator}); {@code AuthServiceApplication.main} ends the
@@ -53,6 +53,18 @@ import java.util.UUID;
  * whenever this command is given, so it takes no ShedLock lock that an exit
  * could leave held for minutes. The email is sent by the running
  * auth-service's outbox scheduler.
+ *
+ * <h2>The audit event (backlog #0-84)</h2>
+ * Written to {@code auth_audit_outbox} in the reset's transaction: no event,
+ * no reset. After the commit the command runs the outbox relay once
+ * ({@code AuditOutboxRelay.relayNow}, under the relay's own lock, released
+ * when it returns; at most one batch timeout while Kafka is unreachable) and
+ * logs whether the event reached Kafka. If not, the running auth-service
+ * sends it, and {@code AuditOutboxBacklog} alerts the operator when it waits
+ * over 10 minutes ({@code PlatformServiceDown} when no auth-service runs).
+ * Until #0-84 the command waited for Kafka's acknowledgement inside the
+ * transaction and rolled the reset back without it; the reset no longer
+ * depends on Kafka, its audit event still on the database.
  */
 @Component
 @Conditional(BreakGlassCommand.class)
@@ -66,27 +78,27 @@ public class BreakGlassMfaResetRunner implements ApplicationRunner, ExitCodeGene
     private static final Logger log = LoggerFactory.getLogger(BreakGlassMfaResetRunner.class);
 
     private final MfaService mfaService;
+    private final ObjectProvider<AuditOutboxRelay> auditRelay;
     private final ApplicationContext context;
     private final String userEmail;
     private final String actor;
     private final String reason;
-    private final Duration auditTimeout;
 
     private volatile int exitCode = NOT_RUN;
 
     public BreakGlassMfaResetRunner(
             MfaService mfaService,
+            ObjectProvider<AuditOutboxRelay> auditRelay,
             ApplicationContext context,
             @Value("${" + PREFIX + ".user-email:}") String userEmail,
             @Value("${" + PREFIX + ".actor:}") String actor,
-            @Value("${" + PREFIX + ".reason:}") String reason,
-            @Value("${" + PREFIX + ".audit-timeout:PT30S}") Duration auditTimeout) {
+            @Value("${" + PREFIX + ".reason:}") String reason) {
         this.mfaService = mfaService;
+        this.auditRelay = auditRelay;
         this.context = context;
         this.userEmail = userEmail;
         this.actor = actor;
         this.reason = reason;
-        this.auditTimeout = auditTimeout;
     }
 
     /**
@@ -156,16 +168,45 @@ public class BreakGlassMfaResetRunner implements ApplicationRunner, ExitCodeGene
         // AuditEventKafkaSender from the event itself, backlog #0-88.)
         TenantContext.set(ReservedTenants.PLATFORM_OPERATOR);
         try {
-            final UUID userId = mfaService.resetMfaBreakGlass(userEmail, actor, reason, executedOn(), auditTimeout);
-            log.warn("Break-glass MFA reset done: userId={}, tenant={}. "
-                    + "The account is emailed by the running auth-service; audited as MFA_RESET_BREAK_GLASS.",
-                    userId, ReservedTenants.PLATFORM_OPERATOR);
+            final UUID userId = mfaService.resetMfaBreakGlass(userEmail, actor, reason, executedOn());
+            log.warn("Break-glass MFA reset done: userId={}, tenant={}. The account is emailed by the running "
+                    + "auth-service (email outbox).", userId, ReservedTenants.PLATFORM_OPERATOR);
+            sendAuditEventNow();
             return 0;
         } catch (RuntimeException e) {
             log.error("Break-glass MFA reset failed, nothing was changed: {}", e.getMessage(), e);
             return 1;
         } finally {
             TenantContext.clear();
+        }
+    }
+
+    /**
+     * Sends the committed audit event now when Kafka is reachable. The reset
+     * is done either way: an event left in the outbox is sent by the running
+     * service (see the class Javadoc), so nothing here changes the exit code.
+     */
+    private void sendAuditEventNow() {
+        final AuditOutboxRelay relay = auditRelay.getIfAvailable();
+        if (relay == null) {
+            log.error("No audit outbox configured (audit.outbox.table): the MFA_RESET_BREAK_GLASS event was "
+                    + "sent the old way, without confirmation");
+            return;
+        }
+        try {
+            final AuditOutboxRelay.RunResult result = relay.relayNow();
+            if (result.failed() == 0 && result.sent() > 0) {
+                log.warn("MFA_RESET_BREAK_GLASS audit event sent to Kafka ({} event(s) from the outbox).",
+                        result.sent());
+                return;
+            }
+            log.warn("MFA_RESET_BREAK_GLASS audit event not sent now ({} sent, {} failed; Kafka unreachable, or "
+                    + "a running auth-service holds the relay lock). It is stored in auth_audit_outbox: the running "
+                    + "auth-service sends it, and AuditOutboxBacklog alerts if it waits over 10 minutes.",
+                    result.sent(), result.failed());
+        } catch (RuntimeException e) {
+            log.warn("MFA_RESET_BREAK_GLASS audit event not sent now; it is stored in auth_audit_outbox and the "
+                    + "running auth-service sends it.", e);
         }
     }
 }

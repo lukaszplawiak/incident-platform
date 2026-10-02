@@ -58,7 +58,6 @@ public class ApiKeyService {
     private final AuthEmailRequestService authEmailRequestService;
     private final IntegrationRepository integrationRepository;
     private final ApiKeyCreationLimit creationLimit;
-    private final AfterCommit afterCommit;
 
     public ApiKeyService(ApiKeyRepository apiKeyRepository,
                          UserRepository userRepository,
@@ -66,8 +65,7 @@ public class ApiKeyService {
                          AuditEventPublisher auditEventPublisher,
                          AuthEmailRequestService authEmailRequestService,
                          IntegrationRepository integrationRepository,
-                         ApiKeyCreationLimit creationLimit,
-                         AfterCommit afterCommit) {
+                         ApiKeyCreationLimit creationLimit) {
         this.apiKeyRepository   = apiKeyRepository;
         this.userRepository     = userRepository;
         this.apiKeyHasher       = apiKeyHasher;
@@ -75,7 +73,6 @@ public class ApiKeyService {
         this.authEmailRequestService = authEmailRequestService;
         this.integrationRepository = integrationRepository;
         this.creationLimit = creationLimit;
-        this.afterCommit = afterCommit;
     }
 
     // ── Create ────────────────────────────────────────────────────────────
@@ -209,16 +206,15 @@ public class ApiKeyService {
         final ApiKey saved = apiKeyRepository.save(apiKey);
         authEmailRequestService.requestApiKeyCreatedNotification(creator, saved.getId());
 
-        // After commit (backlog #0-89, review): not while the creator's row is locked.
-        afterCommit.run(() -> auditEventPublisher.publishAuth(
-                    principal.userId(), tenantId,
-                    AuditEventTypes.API_KEY_CREATED,
-                    "auth-service",
-                    principal.userId().toString(),
-                    "API key created: " + request.name(),
-                    Map.of("keyId", saved.getId().toString(),
-                            "keyType", request.keyType().name(),
-                            "scopes", String.join(",", scopeNames))));
+        auditEventPublisher.publishAuth(
+                principal.userId(), tenantId,
+                AuditEventTypes.API_KEY_CREATED,
+                "auth-service",
+                principal.userId().toString(),
+                "API key created: " + request.name(),
+                Map.of("keyId", saved.getId().toString(),
+                        "keyType", request.keyType().name(),
+                        "scopes", String.join(",", scopeNames)));
 
         log.info("API key created: keyId={}, name={}, type={}, tenant={}, by={}",
                 saved.getId(), request.name(), request.keyType(),
@@ -295,15 +291,14 @@ public class ApiKeyService {
         apiKey.revoke();
         apiKeyRepository.save(apiKey);
 
-        // After commit, on the audit pool, like the other key audits (backlog #0-89, review).
-        afterCommit.run(() -> auditEventPublisher.publishAuth(
+        auditEventPublisher.publishAuth(
                 principal.userId(), tenantId,
                 AuditEventTypes.API_KEY_REVOKED,
                 "auth-service",
                 principal.userId().toString(),
                 "API key revoked: " + apiKey.getName(),
                 Map.of("keyId", keyId.toString(),
-                        "keyType", apiKey.getKeyType().name())));
+                    "keyType", apiKey.getKeyType().name()));
 
         log.info("API key revoked: keyId={}, name={}, type={}, tenant={}, by={}",
                 keyId, apiKey.getName(), apiKey.getKeyType(),
@@ -352,19 +347,18 @@ public class ApiKeyService {
 
         // The actor first, as for one revoked key and INTEGRATION_REVOKED
         // (review: a search by user found these under different users).
-        // After commit, on the audit executor, as the creations (review).
         final Map<String, Object> metadata = Map.of("createdBy", userId.toString(),
                 "since", since == null ? "any" : since.toString(),
                 "count", String.valueOf(revoked.count()),
                 "keyIds", joined(revoked.revokedKeyIds()),
                 "integrationIds", joined(revoked.revokedIntegrationIds()));
-        afterCommit.run(() -> auditEventPublisher.publishAuth(
+        auditEventPublisher.publishAuth(
                 admin.userId(), tenantId,
                 AuditEventTypes.API_KEY_REVOKED,
                 "auth-service",
                 admin.userId().toString(),
                 "API keys created by a user revoked",
-                metadata));
+                metadata);
 
         log.warn("API keys created by a user revoked: createdBy={}, since={}, keys={}, integrations={}, "
                         + "tenant={}, by={}", userId, since, revoked.count(),
@@ -402,14 +396,14 @@ public class ApiKeyService {
             keyIds.add(key.getId());
         }
         for (final UUID integrationId : integrationIds) {
-            afterCommit.run(() -> auditEventPublisher.publishAuth(
-                    actorId, tenantId,
-                    AuditEventTypes.INTEGRATION_REVOKED,
-                    "auth-service",
-                    actorId.toString(),
-                    "Integration revoked with the keys its creator made",
-                    Map.of("integrationId", integrationId.toString(),
-                            "createdBy", userId.toString())));
+            auditEventPublisher.publishAuth(
+                actorId, tenantId,
+                AuditEventTypes.INTEGRATION_REVOKED,
+                "auth-service",
+                actorId.toString(),
+                "Integration revoked with the keys its creator made",
+                Map.of("integrationId", integrationId.toString(),
+                        "createdBy", userId.toString()));
         }
         return new RevokedApiKeysResponse(List.copyOf(keyIds), List.copyOf(integrationIds));
     }

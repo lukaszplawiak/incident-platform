@@ -31,7 +31,10 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -69,6 +72,7 @@ public class MfaService {
     private final MfaSessionStatusService mfaSessionStatusService;
     private final MfaResetRateLimiter mfaResetRateLimiter;
     private final ApiKeyService apiKeyService;
+    private final TransactionTemplate transaction;
 
     public MfaService(UserRepository userRepository,
                       MfaBackupCodeRepository backupCodeRepository,
@@ -83,7 +87,8 @@ public class MfaService {
                       AuthEmailRequestService authEmailRequestService,
                       MfaSessionStatusService mfaSessionStatusService,
                       MfaResetRateLimiter mfaResetRateLimiter,
-                      ApiKeyService apiKeyService) {
+                      ApiKeyService apiKeyService,
+                      PlatformTransactionManager transactionManager) {
         this.userRepository       = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.authTokenService     = authTokenService;
@@ -98,6 +103,7 @@ public class MfaService {
         this.mfaSessionStatusService = mfaSessionStatusService;
         this.mfaResetRateLimiter = mfaResetRateLimiter;
         this.apiKeyService = apiKeyService;
+        this.transaction = new TransactionTemplate(transactionManager);
     }
 
     // ── Setup (step 1) ────────────────────────────────────────────────────
@@ -330,10 +336,11 @@ public class MfaService {
      *
      * <p>Does exactly what the admin reset does, with the same email to the
      * account (MFA_RESET), and is audited as {@code MFA_RESET_BREAK_GLASS} with the
-     * operator's name and reason. The audit event must be acknowledged by
-     * Kafka inside this transaction; if it is not, the reset rolls back, so a
-     * break-glass reset never happens unaudited (unlike the ordinary audit
-     * path, which logs and drops a failed send, backlog #0-84).
+     * operator's name and reason. The audit event is written to the outbox in
+     * this transaction (backlog #0-84), so the reset and its event commit
+     * together or not at all; the running auth-service's relay sends it. Until
+     * #0-84 this waited for Kafka's acknowledgement inside the transaction
+     * ({@code publishAuthConfirmed}, removed).
      *
      * <p>Limited to admins of the {@code platform-operator} tenant: a customer
      * tenant's admins reset each other, and the platform never acts inside a
@@ -352,12 +359,9 @@ public class MfaService {
      * @throws ResourceNotFoundException if no operator user that is not archived has exactly
      *                                   this email (as stored: case-sensitive, like login)
      * @throws BusinessException 409 if the user is not an operator admin or has no factor
-     * @throws com.incidentplatform.shared.audit.AuditNotConfirmedException if Kafka did not
-     *         acknowledge the audit event (the reset is rolled back)
      */
     @Transactional
-    public UUID resetMfaBreakGlass(String email, String actor, String reason, String executedOn,
-                                   Duration auditTimeout) {
+    public UUID resetMfaBreakGlass(String email, String actor, String reason, String executedOn) {
         requireText("actor", actor, BREAK_GLASS_ACTOR_MAX);
         requireText("reason", reason, BREAK_GLASS_REASON_MAX);
         requireText("executedOn", executedOn, BREAK_GLASS_EXECUTED_ON_MAX);
@@ -382,15 +386,14 @@ public class MfaService {
         final int keysRevoked = resetFactorAndSessions(user, tenantId);
 
         final String auditActor = "break-glass:" + actor.strip();
-        auditEventPublisher.publishAuthConfirmed(
+        auditEventPublisher.publishAuth(
                 user.getId(), tenantId,
                 AuditEventTypes.MFA_RESET_BREAK_GLASS,
                 "auth-service",
                 auditActor,
                 "MFA reset by break-glass (no other operator admin)",
                 Map.of("resetBy", auditActor, "reason", reason.strip(), "executedOn", executedOn.strip(),
-                        ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked)),
-                auditTimeout);
+                        ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked)));
 
         log.warn("MFA reset by break-glass: userId={}, tenant={}, by={}, executedOn={}",
                 user.getId(), tenantId, auditActor, executedOn.strip());
@@ -454,9 +457,19 @@ public class MfaService {
      * legitimate, unexpired session token on a request that's about to
      * be rejected for lockout anyway. {@link AuthTokenService#consumeToken}
      * only runs once we know the request should proceed.
+     *
+     * <p>A transaction of its own ({@link #transaction}), not
+     * {@code @Transactional}: a wrong code rolls it back (the consumed
+     * token with it, so the user can try again) and the refusal is audited
+     * after it ended (see {@link #refuse}).
      */
-    @Transactional
     public LoginResponse verifyMfaToken(String rawMfaToken, String totpCode) {
+        return completeOrRefuse(transaction.execute(status -> verifyTotpInTransaction(
+                rawMfaToken, totpCode, status)));
+    }
+
+    private MfaAttempt verifyTotpInTransaction(String rawMfaToken, String totpCode,
+                                               TransactionStatus status) {
         final MfaSessionContext session =
                 resolveAndCheckMfaSession(rawMfaToken, "TOTP");
 
@@ -469,18 +482,9 @@ public class MfaService {
                     BruteForceProtectionService.Scope.MFA,
                     session.lockoutIdentifier(), session.tenantId());
 
-            auditEventPublisher.publishAuth(
-                    user.getId(), session.tenantId(),
-                    AuditEventTypes.MFA_VERIFY_FAILED,
-                    "auth-service",
-                    user.getId().toString(),
-                    "MFA verification failed — invalid TOTP code",
-                    Map.of());
-
-            throw new BusinessException(
-                    ErrorCodes.UNAUTHORIZED,
-                    "Invalid TOTP code",
-                    HttpStatus.UNAUTHORIZED);
+            status.setRollbackOnly();
+            return MfaAttempt.refused(user.getId(), session.tenantId(),
+                    "MFA verification failed — invalid TOTP code", "Invalid TOTP code");
         }
 
         // Fixed (backlog #59): explicit save for the mfaLastUsedTimeStep
@@ -503,7 +507,7 @@ public class MfaService {
                 BruteForceProtectionService.Scope.MFA,
                 session.lockoutIdentifier(), session.tenantId());
 
-        return issueTokens(user, session.tenantId());
+        return MfaAttempt.completed(issueTokens(user, session.tenantId()));
     }
 
     // ── Setup (forced flow — tenant requires MFA, no access token yet) ─────
@@ -579,9 +583,17 @@ public class MfaService {
      * counts toward the same lockout; a determined attacker shouldn't
      * get twice the total guesses just by alternating between the two
      * verification methods.
+     *
+     * <p>Its own transaction and a refusal audited after it, as
+     * {@link #verifyMfaToken}.
      */
-    @Transactional
     public LoginResponse verifyWithBackupCode(String rawMfaToken, String backupCode) {
+        return completeOrRefuse(transaction.execute(status -> verifyBackupCodeInTransaction(
+                rawMfaToken, backupCode, status)));
+    }
+
+    private MfaAttempt verifyBackupCodeInTransaction(String rawMfaToken, String backupCode,
+                                                     TransactionStatus status) {
         final MfaSessionContext session =
                 resolveAndCheckMfaSession(rawMfaToken, "backup code");
 
@@ -603,18 +615,9 @@ public class MfaService {
                     BruteForceProtectionService.Scope.MFA,
                     session.lockoutIdentifier(), session.tenantId());
 
-            auditEventPublisher.publishAuth(
-                    user.getId(), session.tenantId(),
-                    AuditEventTypes.MFA_VERIFY_FAILED,
-                    "auth-service",
-                    user.getId().toString(),
-                    "MFA verification failed — invalid backup code",
-                    Map.of());
-
-            throw new BusinessException(
-                    ErrorCodes.UNAUTHORIZED,
-                    "Invalid or already used backup code",
-                    HttpStatus.UNAUTHORIZED);
+            status.setRollbackOnly();
+            return MfaAttempt.refused(user.getId(), session.tenantId(),
+                    "MFA verification failed — invalid backup code", "Invalid or already used backup code");
         }
 
         bruteForceProtectionService.recordSuccess(
@@ -637,7 +640,7 @@ public class MfaService {
         log.warn("MFA backup code used: userId={}, tenant={}, remaining={}",
                 user.getId(), session.tenantId(), remaining);
 
-        return issueTokens(user, session.tenantId());
+        return MfaAttempt.completed(issueTokens(user, session.tenantId()));
     }
 
     // ── Backup codes status ───────────────────────────────────────────────
@@ -708,6 +711,51 @@ public class MfaService {
 
     private record MfaSessionContext(
             AuthToken token, String lockoutIdentifier, String tenantId) {}
+
+    /** A verification's outcome: tokens, or a refusal still to be audited. */
+    private record MfaAttempt(LoginResponse response, UUID userId, String tenantId,
+                              String auditDetail, String message) {
+
+        static MfaAttempt completed(LoginResponse response) {
+            return new MfaAttempt(response, null, null, null, null);
+        }
+
+        static MfaAttempt refused(UUID userId, String tenantId, String auditDetail, String message) {
+            return new MfaAttempt(null, userId, tenantId, auditDetail, message);
+        }
+    }
+
+    private LoginResponse completeOrRefuse(MfaAttempt attempt) {
+        if (attempt.response() != null) {
+            return attempt.response();
+        }
+        throw refuse(attempt);
+    }
+
+    /**
+     * Audits a wrong code after its transaction rolled back, then refuses.
+     *
+     * <h2>Fixed (backlog #0-84, found in review)</h2>
+     * With the audit outbox an event written inside the transaction is rolled
+     * back with it, and a wrong code must roll back (the consumed token comes
+     * back). The first fix wrote the refusal in a nested {@code REQUIRES_NEW}
+     * transaction, which holds a second pooled connection while the first is
+     * still open: with auth-service's pool of 5, a few concurrent wrong codes
+     * could leave every request waiting for a connection. Written here, after
+     * the transaction ended, the event commits on its own with one connection.
+     * A failure to write it surfaces as an error instead of the 401: no
+     * unaudited refusal.
+     */
+    private BusinessException refuse(MfaAttempt attempt) {
+        auditEventPublisher.publishAuth(
+                attempt.userId(), attempt.tenantId(),
+                AuditEventTypes.MFA_VERIFY_FAILED,
+                "auth-service",
+                attempt.userId().toString(),
+                attempt.auditDetail(),
+                Map.of());
+        return new BusinessException(ErrorCodes.UNAUTHORIZED, attempt.message(), HttpStatus.UNAUTHORIZED);
+    }
 
     /**
      * Shared logic between {@link #setupMfa} and

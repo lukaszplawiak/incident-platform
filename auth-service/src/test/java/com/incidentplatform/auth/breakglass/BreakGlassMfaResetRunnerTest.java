@@ -1,11 +1,13 @@
 package com.incidentplatform.auth.breakglass;
 
 import com.incidentplatform.auth.service.MfaService;
-import com.incidentplatform.shared.audit.AuditNotConfirmedException;
+import com.incidentplatform.shared.audit.AuditOutboxRelay;
 import com.incidentplatform.shared.security.ReservedTenants;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.DefaultApplicationArguments;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.WebApplicationType;
@@ -19,16 +21,17 @@ import org.springframework.context.support.GenericApplicationContext;
 import org.springframework.context.annotation.ConditionContext;
 import org.springframework.mock.env.MockEnvironment;
 
-import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -39,15 +42,23 @@ import static org.mockito.Mockito.mock;
 @DisplayName("BreakGlassMfaResetRunner")
 class BreakGlassMfaResetRunnerTest {
 
-    private static final Duration TIMEOUT = Duration.ofSeconds(30);
 
     private final MfaService mfaService = mock(MfaService.class);
+    private final AuditOutboxRelay relay = mock(AuditOutboxRelay.class);
 
-    private BreakGlassMfaResetRunner runner(ApplicationContext context) {
-        return new BreakGlassMfaResetRunner(mfaService, context, "ops@example.com", "Jane", "lost phone", TIMEOUT);
+    @SuppressWarnings("unchecked")
+    private ObjectProvider<AuditOutboxRelay> relayProvider(AuditOutboxRelay relayOrNull) {
+        final ObjectProvider<AuditOutboxRelay> provider = mock(ObjectProvider.class);
+        given(provider.getIfAvailable()).willReturn(relayOrNull);
+        return provider;
     }
 
-    /** As SpringApplication does, so the runner's {@code @Value} Duration converts. */
+    private BreakGlassMfaResetRunner runner(ApplicationContext context) {
+        return new BreakGlassMfaResetRunner(mfaService, relayProvider(relay), context,
+                "ops@example.com", "Jane", "lost phone");
+    }
+
+    /** As SpringApplication does, so the runner's {@code @Value}s convert. */
     private final ApplicationContextRunner contexts = new ApplicationContextRunner()
             .withInitializer(context -> context.getBeanFactory().setConversionService(
                     ApplicationConversionService.getSharedInstance()))
@@ -64,7 +75,7 @@ class BreakGlassMfaResetRunnerTest {
     @Test
     @DisplayName("reports 0 after a reset")
     void success() throws Exception {
-        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")), eq(TIMEOUT)))
+        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@"))))
                 .willReturn(UUID.randomUUID());
         final BreakGlassMfaResetRunner runner = runner(mock(ApplicationContext.class));
 
@@ -77,7 +88,7 @@ class BreakGlassMfaResetRunnerTest {
     @DisplayName("runs the reset in the operator tenant's TenantContext (log MDC, tenant-scoped calls), and clears it")
     void tenantContextForTheAudit() throws Exception {
         final AtomicReference<String> during = new AtomicReference<>();
-        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")), eq(TIMEOUT))).willAnswer(i -> {
+        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")))).willAnswer(i -> {
             during.set(TenantContext.get());
             return UUID.randomUUID();
         });
@@ -89,10 +100,10 @@ class BreakGlassMfaResetRunnerTest {
     }
 
     @Test
-    @DisplayName("reports 1 when the reset is refused or its audit is not confirmed")
+    @DisplayName("reports 1 when the reset is refused or fails")
     void failure() throws Exception {
-        willThrow(new AuditNotConfirmedException("not confirmed", null))
-                .given(mfaService).resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")), eq(TIMEOUT));
+        willThrow(new IllegalStateException("database down"))
+                .given(mfaService).resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")));
         final BreakGlassMfaResetRunner runner = runner(mock(ApplicationContext.class));
 
         runner.run(new DefaultApplicationArguments());
@@ -134,7 +145,7 @@ class BreakGlassMfaResetRunnerTest {
     @Test
     @DisplayName("SpringApplication.exit returns the command's code, as main uses it")
     void springApplicationExitCollectsTheCode() {
-        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")), eq(TIMEOUT)))
+        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@"))))
                 .willReturn(UUID.randomUUID());
         // ApplicationContextRunner does not call ApplicationRunners; SpringApplication.run would.
         command().run(context -> {
@@ -143,7 +154,7 @@ class BreakGlassMfaResetRunnerTest {
         });
 
         willThrow(new IllegalArgumentException("break-glass reason is required"))
-                .given(mfaService).resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")), eq(TIMEOUT));
+                .given(mfaService).resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), argThat(origin -> origin != null && origin.contains("@")));
         command().run(context -> {
             context.getBean(BreakGlassMfaResetRunner.class).run(new DefaultApplicationArguments());
             assertThat(SpringApplication.exit(context)).isEqualTo(1);
@@ -244,12 +255,62 @@ class BreakGlassMfaResetRunnerTest {
     @DisplayName("reports 1 without resetting when the user email is missing")
     void missingEmail() throws Exception {
         final BreakGlassMfaResetRunner runner = new BreakGlassMfaResetRunner(
-                mfaService, mock(ApplicationContext.class), " ", "Jane", "lost phone", TIMEOUT);
+                mfaService, relayProvider(relay), mock(ApplicationContext.class), " ", "Jane", "lost phone");
 
         runner.run(new DefaultApplicationArguments());
 
         assertThat(runner.getExitCode()).isEqualTo(1);
         then(mfaService).shouldHaveNoInteractions();
+    }
+
+    @Test
+    @DisplayName("after the reset it sends the outbox's audit event at once (backlog #0-84)")
+    void sendsAuditEventAfterReset() throws Exception {
+        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), anyString()))
+                .willReturn(UUID.randomUUID());
+        given(relay.relayNow()).willReturn(new AuditOutboxRelay.RunResult(1, 0));
+        final BreakGlassMfaResetRunner runner = runner(mock(ApplicationContext.class));
+
+        runner.run(new DefaultApplicationArguments());
+
+        assertThat(runner.getExitCode()).isZero();
+        final InOrder order = inOrder(mfaService, relay);
+        order.verify(mfaService).resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), anyString());
+        order.verify(relay).relayNow();
+    }
+
+    @Test
+    @DisplayName("Kafka unreachable after the reset: still 0, the event waits in the outbox for the service")
+    void auditEventLeftForService() throws Exception {
+        given(mfaService.resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), anyString()))
+                .willReturn(UUID.randomUUID());
+        final BreakGlassMfaResetRunner failing = runner(mock(ApplicationContext.class));
+        given(relay.relayNow()).willReturn(new AuditOutboxRelay.RunResult(0, 1));
+        failing.run(new DefaultApplicationArguments());
+        assertThat(failing.getExitCode()).isZero();
+
+        final BreakGlassMfaResetRunner throwing = runner(mock(ApplicationContext.class));
+        willThrow(new IllegalStateException("db")).given(relay).relayNow();
+        throwing.run(new DefaultApplicationArguments());
+        assertThat(throwing.getExitCode()).isZero();
+
+        final BreakGlassMfaResetRunner withoutOutbox = new BreakGlassMfaResetRunner(mfaService,
+                relayProvider(null), mock(ApplicationContext.class), "ops@example.com", "Jane", "lost phone");
+        withoutOutbox.run(new DefaultApplicationArguments());
+        assertThat(withoutOutbox.getExitCode()).isZero();
+    }
+
+    @Test
+    @DisplayName("a refused reset sends nothing")
+    void refusedResetSendsNothing() throws Exception {
+        willThrow(new IllegalArgumentException("no such operator"))
+                .given(mfaService).resetMfaBreakGlass(eq("ops@example.com"), eq("Jane"), eq("lost phone"), anyString());
+        final BreakGlassMfaResetRunner runner = runner(mock(ApplicationContext.class));
+
+        runner.run(new DefaultApplicationArguments());
+
+        assertThat(runner.getExitCode()).isEqualTo(1);
+        then(relay).shouldHaveNoInteractions();
     }
 
     private static ConditionContext conditionContext(MockEnvironment environment) {

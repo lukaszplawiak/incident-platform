@@ -28,8 +28,9 @@ spec:
       # No wait-for-kafka, but not because auth-service ignores Kafka.
       # Corrected (backlog #0-16): it does PRODUCE to audit.events, through
       # shared's AuditEventPublisher (docker-compose sets KAFKA_BOOTSTRAP_SERVERS
-      # for exactly that). It consumes nothing, and it starts without Kafka: a
-      # failed audit publish is logged by AuditEventPublisher, not fatal at startup.
+      # for exactly that). It consumes nothing, and it starts without Kafka:
+      # audit events go to auth_audit_outbox in the action's transaction and
+      # AuditOutboxRelay sends them once Kafka is reachable (backlog #0-84).
       initContainers:
         - name: wait-for-postgresql
           image: busybox:1.36

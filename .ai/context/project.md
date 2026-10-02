@@ -287,7 +287,7 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   stranger's factor before reactivation leaves no window in which it works. Clears factor, pending secret, backup codes and the sessions' MFA
   marks, and ends every session and unfinished login; emails its own outbox type `MFA_RESET` (V24; review:
   a shared MFA_DISABLED text hid a reset the owner did not ask for) and audits `MFA_RESET_BY_ADMIN` (`shared`,
-  distinct from self-service `MFA_DISABLED`; still fire-and-forget until #0-84's outbox).
+  distinct from self-service `MFA_DISABLED`; written to auth-service's audit outbox in the reset's transaction, #0-84).
   - Step-up: the admin's session must pass the platform API's rule (`MfaSessionStatusService.check` ==
     ACCEPTED: MFA within 12 h, factor announced >= 24 h ago). First built without the 12 h / 24 h parts; review
     showed a password thief could enrol a factor and reset the whole tenant at once, and a 30-day refresh chain
@@ -305,7 +305,9 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (`BreakGlassMfaResetRunner`), chosen only by the subcommand `break-glass-mfa-reset` as the first
     argument (as `manage.py <command>` / `kc.sh <subcommand>`): `BreakGlassCommand.prepare` in `main` turns
     the web server off, drops the subcommand and adds a named property source as a marker; the runner's
-    condition and `NotBreakGlassCommand` (scheduling off, so the exit leaves no ShedLock lock held) check only
+    condition and `NotBreakGlassCommand` (scheduling off: no scheduled job takes a ShedLock lock; the one
+    lock the command takes is the audit relay's, in its single `relayNow()` after the reset, released when
+    it returns, a killed process holding it at most `lockAtMostFor`, #0-84) check only
     that marker, which no environment variable or `--property` can create. Earlier versions started on the
     property `break-glass.mfa-reset.user-email` (args or env); review found a stray variable in a deployment
     would turn the service into the command. The options stay `--break-glass.mfa-reset.*`.
@@ -315,11 +317,12 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     stored (like login). The audit event also records `executedOn` (OS user and host of the process), since
     the actor is whatever name the operator types. The runner sets `TenantContext` to the operator tenant
     (log MDC). A customer tenant's only admin: #0-90.
-    Same code path as the admin reset, so the email goes out; audited as `MFA_RESET_BREAK_GLASS` through
-    `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waits for Kafka's ack inside the transaction:
-    no ack, no reset. Chosen over SQL (no email, no audit) and pgAudit/triggers (detection, not the audit
-    trail). The confirmed send is the only audit path that is not fire-and-forget until #0-84; it refuses to
-    run on a request thread (`RequestContextHolder`), since it holds a DB connection while Kafka is down.
+    Same code path as the admin reset, so the email goes out; audited as `MFA_RESET_BREAK_GLASS` into
+    `auth_audit_outbox` in the reset's transaction (#0-84): no event row, no reset. After the commit the runner
+    calls `AuditOutboxRelay.relayNow()` once and logs whether the event reached Kafka; if not, the running
+    auth-service's relay sends it. The exit code does not depend on Kafka. Chosen over SQL (no email, no audit)
+    and pgAudit/triggers (detection, not the audit trail). Until #0-84 it waited for Kafka's ack inside the
+    transaction (`publishAuthConfirmed`, removed with its `audit-timeout` option).
   - Audit records' `X-Tenant-Id` (found in this review): `AuditEventKafkaSender` (`shared`) sets the header from
     the event's tenant, as `AlertKafkaProducer` / `IncidentEventKafkaSender` do, and
     `TenantKafkaProducerInterceptor` no longer appends a second one from `TenantContext` to a record that has it
@@ -370,19 +373,69 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     `FOR NO KEY UPDATE NOWAIT`, so foreign-key `KEY SHARE` locks of a login or reset in flight do not
     conflict; through `ApiKeyCreationLimit.lockingCreator`: a second parallel request of the same user gets
     429 at once instead of waiting on a pooled connection; the active-key caps rely on the lock too). The
-    creation and bulk revocation audit events go through `AfterCommit` (a bean): at commit they are handed
-    to its private pool (2 threads, queue 1,000, `TenantAwareTaskDecorator`; deliberately not an `Executor`
-    bean, which would make Boot drop `applicationTaskExecutor`), because inside `afterCommit` the pooled
-    connection is still checked out (measured in `AuthRepositoryIntegrationTest`). A full queue or a publish
-    that throws drops and counts (`auth.audit.after_commit.rejected`, tag `reason` = `queue_full` / `failed`;
-    alert `AuditEventsDropped`, critical, with a promtool test and an amtool route line in CI; a lower bound,
-    as later failures inside the Kafka client are not seen). `AfterCommit` is a `SmartLifecycle` in phase 0:
-    stopped after the web server and before the Kafka producer factory (phase `Integer.MIN_VALUE`, whose
-    `stop()` closes the producer), so the queue drains (up to 10 s) while the producer works; daemon threads.
-    The single key and integration revocations also publish through it; a bulk revoke that revoked nothing publishes nothing, so it cannot
-    flood the shared queue. Interim until #0-84's outbox. 429 + Retry-After
+    creation and revocation audit events are written to `auth_audit_outbox` in the same transaction (#0-84;
+    they first went after commit on a bounded executor, `AfterCommit`, removed with the outbox); a bulk
+    revoke that revoked nothing publishes nothing. 429 + Retry-After
     (`RateLimitResponses`). `revokeCreatedBy` audits each integration as `INTEGRATION_REVOKED`, so the endpoint
     and the MFA reset (which also lists `keyIds` / `integrationIds`) leave the same trace.
+- **Audit outbox** (#0-84, first step: `shared`, incident-service, auth-service): `AuditEventPublisher.publish*`
+  INSERTs into the service's own table (`audit.outbox.table`, e.g. `auth_audit_outbox` V27,
+  `incident_audit_outbox` V14) through `AuditEventStore` -> `AuditOutbox` (JDBC, joins the caller's JPA
+  transaction; the interface keeps JDBC types out of the publisher, as ingestion-service has no
+  `spring-jdbc`), so an event exists iff its action committed and a Kafka outage stalls no request.
+  - Consequence: an audit call followed by a throw in the same transaction loses its event. A refusal is
+    audited after the rollback: `MfaService.verifyMfaToken` / `verifyWithBackupCode` run in a
+    `TransactionTemplate`, set rollback-only on a wrong code (the consumed MFA token comes back), then publish
+    `MFA_VERIFY_FAILED` and throw. Not a nested `REQUIRES_NEW` write: tried first, found in review to hold two
+    pooled connections per wrong code (auth-service's pool is 5).
+  - `AuditOutboxRelay` (`shared`, `@Scheduled` every `audit.outbox.poll-interval-ms`, ShedLock
+    `audit-outbox-relay-<table>` since all services share one `shedlock` table): hands a batch
+    (`batch-size`, 100) to the producer (`sendForRelay`), then awaits the acks within `send-timeout` (5 s);
+    up to `max-batches-per-run` (10) full batches a run; lock at most `send-timeout x batches + 30 s`. Acked
+    rows SENT in one `UPDATE ... WHERE id = ANY(?)` per batch; a failed row backs off 5 s doubling to
+    5 min (due again by the database's clock, `make_interval`), never given up. Only Kafka's own failures
+    (`RetriableException`, timeouts, anything unknown) end the batch and pause the relay by the same backoff;
+    a record Kafka refuses for itself (`RecordTooLargeException`, serialization) is backed off alone
+    (`isKafkaFailure`). `markSent` failing after the ack is logged, not counted as a failure (resent,
+    deduplicated). With the outbox the publisher refuses (IllegalArgumentException, failing the action) an
+    event the trail cannot store; without it (the services still on direct sends) it only logs the refusal
+    and sends nothing, as that path never throws: no tenant/resource/source, a field over its `audit_events` column, and with the outbox a payload
+    over 256 KiB (`MAX_PAYLOAD_BYTES`), so no row is ever one Kafka refuses for ever; also a metadata key
+    named like a secret (`looksSecret`: password, secret, credential, totp, *token, rawKey, apiKey).
+    Due rows are read `ORDER BY next_attempt_at, created_at`, the due index's order. SENT rows purged after
+    `retention`, 5,000 per statement, by the database's clock. `relayNow()` runs once ignoring the pause
+    (break-glass). Defaults live in `AuditOutboxProperties`.
+  - Outbox tables (V14, V27): `tenant_id NOT NULL`; indexes `_due (next_attempt_at, created_at)`,
+    `_pending_created (created_at)` for the gauge's `min`, `_sent (sent_at)` for the purge, all partial.
+  - Env overrides: `AUDIT_OUTBOX_POLL_INTERVAL_MS` (poll), `KAFKA_PRODUCER_MAX_BLOCK_MS` (5 s in auth- and
+    incident-service, or `send()` blocks Kafka's default 60 s per run while metadata is missing),
+    `SCHEDULING_POOL_SIZE` (4, auth-service only, which runs on platform threads, so a slow relay run does
+    not hold its other `@Scheduled` jobs; incident-service has virtual threads, where Boot schedules each
+    run on its own virtual thread and `pool.size` has no effect).
+  - The consumer logs and dead-letters a rejected record's reason without the database's or parser's text
+    (`constraintReason`: constraint name and SQLState; `unreadableReason`: JSON error type and position):
+    Postgres's `Failing row contains (...)` and Jackson's messages quote the event's content.
+  - At least once: `AuditEventMessage.eventId` (= the row id) is stored in `audit_events.event_id`
+    (incident-service V12), unique per `(tenant_id, event_id)` (V13, partial, `CREATE UNIQUE INDEX
+    CONCURRENTLY` alone in its file so Flyway runs it outside a transaction). CONCURRENTLY needs
+    `spring.flyway.postgresql.transactional-lock: false` (incident-service): with Flyway's default
+    transactional lock the build waits forever on Flyway's own open transaction (seen in the migration test).
+    `AuditEventConsumer` resolves the tenant per record with `TenantKafkaRecordResolver` (header first,
+    payload fallback; it used to take the payload's), sets/clears `TenantContext`, and rejects a header/payload
+    mismatch. It acknowledges as duplicates only violations of `IDEMPOTENCY_KEYS` (V10 offset key, V13), by
+    Hibernate's constraint name; any other violation, unreadable JSON or a tenant mismatch is rejected: ERROR
+    log, `incidents.dead-letter` through `DeadLetterPublisher.publishAndWait` (acknowledged only once Kafka has
+    the copy, else `nack(5 s)`), counter `audit.events.rejected{reason}` and alert `AuditEventsRejected`
+    (critical) — the outbox already counted the event delivered, so nothing else would show the gap. The non-transactional Flyway lock assumes no transaction-pooling proxy.
+    `occurredAt` is the producer's time, not the consume time.
+  - Metrics, read from the table at scrape time (cached 5 s, NaN if unreadable; the age measured by the
+    database's clock, plus the time since the read), on every replica:
+    `audit_outbox_pending`, `audit_outbox_oldest_pending_age_seconds`; counters `audit_outbox_sent_total`,
+    `audit_outbox_send_failed_total`. Alert `AuditOutboxBacklog` (oldest pending > 10 min for 5 min,
+    critical); a down service is `PlatformServiceDown`.
+  - A service without `audit.outbox.table` (notification-, escalation-, postmortem-service until #0-84's
+    second step) still sends fire-and-forget. `@Retryable` on the sender was inert (no `@EnableRetry`
+    anywhere) and is gone. Audit metadata never holds a secret: the outbox keeps it in plain text 7 days.
 - **Auth email outbox = intent to send** (#0-52): a request (`UserService`, `ResendInviteService`,
   `ForgotPasswordService`, `MfaService`, `ApiKeyService`, `IntegrationService`) only INSERTs through `AuthEmailRequestService`; `AuthEmailScheduler` is
   the only writer afterwards. Per attempt it closes entries no longer worth sending (SUPERSEDED: a newer request

@@ -2,6 +2,19 @@ spring:
   application:
     name: auth-service
 
+  # Backlog #0-84: the audit outbox relay is a @Scheduled job; with Spring's
+  # default single scheduling thread (auth-service runs on platform threads) a
+  # slow Kafka, a relay run of up to max-batches-per-run batches each waiting up
+  # to send-timeout, would delay the other jobs behind it: the auth email
+  # outbox, token cleanup, the operator bootstrap, the outbox purge (found in
+  # review). Four threads let them run side by side; each job that changes data
+  # has its own ShedLock lock (the operator gauge refresh only reads), so
+  # running at once is safe.
+  task:
+    scheduling:
+      pool:
+        size: ${SCHEDULING_POOL_SIZE:4}
+
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
     username: ${DB_USER:incident_app}
@@ -47,6 +60,14 @@ spring:
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      properties:
+      # Backlog #0-84: how long KafkaProducer.send() itself may block while
+      # Kafka's metadata is missing (Kafka down or unreachable), before it
+      # fails. The default, 60 s, would hold the audit outbox relay on the
+      # scheduling thread that long per run; the relay waits for
+      # acknowledgements within audit.outbox.send-timeout (5 s) anyway.
+        max.block.ms: ${KAFKA_PRODUCER_MAX_BLOCK_MS:5000}
 
   mail:
     host: ${MAIL_HOST:localhost}
@@ -182,6 +203,15 @@ management:
           include: ping
   server:
     port: ${MANAGEMENT_PORT:8097}
+
+
+# Backlog #0-84: audit events go to this service's outbox table (migration),
+# written with the action they record, and the shared relay sends them to
+# Kafka. Without this property the service would send directly.
+audit:
+  outbox:
+    table: auth_audit_outbox
+    poll-interval-ms: ${AUDIT_OUTBOX_POLL_INTERVAL_MS:2000}
 
 server:
   port: ${SERVER_PORT:8087}

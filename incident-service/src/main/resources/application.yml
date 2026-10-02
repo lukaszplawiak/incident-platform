@@ -14,6 +14,10 @@ spring:
   threads:
     virtual:
       enabled: true
+  # Backlog #0-84: with virtual threads Spring Boot schedules on a
+  # SimpleAsyncTaskScheduler, one virtual thread per run, so a slow audit
+  # outbox relay run holds no other @Scheduled job (spring.task.scheduling.
+  # pool.size has no effect here; found in review: it was set to no avail).
 
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:incidentdb}
@@ -51,6 +55,15 @@ spring:
     baseline-version: 0
     validate-on-migrate: true
     table: flyway_schema_history_incident
+    # Backlog #0-84: V13 builds an index CONCURRENTLY, which waits for every
+    # open transaction, Flyway's own included: with the default transactional
+    # advisory lock (Flyway 10+) Flyway holds a transaction open on its lock
+    # connection and the build waits on it forever (found in the migration
+    # test). A session-level lock instead, released when the connection
+    # closes; this service connects to Postgres directly, not through a
+    # transaction-pooling proxy that would make a session lock unsafe.
+    postgresql:
+      transactional-lock: false
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
@@ -74,6 +87,13 @@ spring:
       properties:
         enable.idempotence: true
         interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor
+        # Backlog #0-84: how long KafkaProducer.send() itself may block while
+        # Kafka's metadata is missing (Kafka down or unreachable), before it
+        # fails. The default, 60 s, would hold the audit outbox relay on the
+        # scheduling thread that long per run; the relay waits for
+        # acknowledgements within audit.outbox.send-timeout (5 s) anyway. The
+        # incident event outbox and the dead-letter publisher fail as fast.
+        max.block.ms: ${KAFKA_PRODUCER_MAX_BLOCK_MS:5000}
     listener:
       ack-mode: MANUAL_IMMEDIATE
       concurrency: 3
@@ -134,6 +154,15 @@ incident:
     # How long sendRawSync blocks waiting for the broker's ack per entry
     # before treating the send as failed (left PENDING, retried next cycle).
     send-timeout: ${INCIDENT_EVENT_OUTBOX_SEND_TIMEOUT:PT5S}
+
+
+# Backlog #0-84: audit events go to this service's outbox table (migration),
+# written with the action they record, and the shared relay sends them to
+# Kafka. Without this property the service would send directly.
+audit:
+  outbox:
+    table: incident_audit_outbox
+    poll-interval-ms: ${AUDIT_OUTBOX_POLL_INTERVAL_MS:2000}
 
 server:
   port: ${SERVER_PORT:8082}

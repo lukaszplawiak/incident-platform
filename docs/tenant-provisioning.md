@@ -188,12 +188,15 @@ the ones made during the compromise with the two calls in step 2 above (backlog 
   (archived ones excluded) with exactly this email (as stored, case-sensitive; spaces around it are
   trimmed); the user is not an admin or has no MFA (each a `409` in the log); actor or reason
   missing, too long, or containing control characters, Unicode line separators or formatting
-  characters; or Kafka did not confirm the audit event within
-  `--break-glass.mfa-reset.audit-timeout`, default `PT30S`: the reset is rolled back rather than
-  done unaudited. That one confirmed event covers the reset and the count of personal API keys it
-  revoked (`personalApiKeysRevoked`); the command publishes nothing else. `2`: a safeguard that should never show, the command found a web server running.
+  characters; or the audit event could not be written: it goes to auth-service's audit outbox
+  (`auth_audit_outbox`) in the reset's transaction, so the reset is rolled back rather than done
+  unaudited (backlog #0-84). After the reset the command sends it to Kafka itself when Kafka is
+  reachable (it logs whether it did); otherwise the running auth-service's relay sends it, and
+  `AuditOutboxBacklog` alerts if it waits over 10 minutes. The exit code does not depend on Kafka. That one event covers the reset and the count of personal API keys it
+  revoked (`personalApiKeysRevoked`); the command audits nothing else. `2`: a safeguard that should never show, the command found a web server running.
 - The one-off process runs no scheduled jobs and serves no requests (the subcommand starts it
-  without a web server). It needs the database and Kafka, as the service does.
+  without a web server). It needs the database; Kafka only to send its audit event at once (one
+  attempt of at most a few seconds, then the event is left for the running service).
 - Never put the subcommand into the args of the auth-service Deployment: its pods would run the
   command, exit and restart in a loop instead of serving (each later run refused with `409`, the
   factor being gone already). It belongs only in a one-off run.

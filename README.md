@@ -91,6 +91,7 @@ Prometheus / Wazuh / Generic
   └─────────────────────┘
 
   All services → Kafka: audit.events → incident-service audit consumer → audit_events table
+  (auth- and incident-service: action's transaction → own audit outbox table → relay → Kafka)
 
   ┌─────────────────────┐
   │    auth-service      │  port 8087
@@ -150,7 +151,7 @@ HS512 with a shared secret is sufficient for a controlled environment where all 
 Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` sends direct messages to the on-call engineer's Slack User ID, and — only if the tenant turns on broadcast for its workspace — also a post to that tenant's own default channel. Each tenant connects its own workspace: an admin pastes the bot token into `POST /api/v1/slack-workspace` (auth-service stores it encrypted; there is no "Add to Slack" OAuth flow yet), and notification-service reads it per notification over a service-token call to auth-service (backlog #0-21/#0-30). A tenant with no workspace simply gets no Slack channel. **No ACK from Slack for now** (backlog #0-35): Slack signs a button click with the signing secret of the App that posted the message, and with a pasted token that App is the tenant's own, while `SlackSignatureVerifier` checks one platform-wide `SLACK_SIGNING_SECRET`. Messages therefore carry no Acknowledge button; incidents are acknowledged in the app. The callback endpoint (`/api/v1/slack/actions` → `IncidentAckClient`) is kept for the OAuth "Add to Slack" install, where every workspace uses the platform's App and the platform secret is correct.
 
 **Why a centralized audit log via Kafka instead of per-service history tables?**
-Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident view. The `audit.events` topic acts as a single audit stream — any service publishes events and the consumer assembles them into a unified chronological view via one API endpoint.
+Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident view. The `audit.events` topic acts as a single audit stream — any service publishes events and the consumer assembles them into a unified chronological view via one API endpoint. A producer does not send to Kafka from inside its database transaction: it writes the event to its own outbox table in that transaction, and a relay sends it afterwards, at least once; the consumer drops a resend by the event's id (backlog #0-84, auth- and incident-service so far).
 
 **Why per-record TenantContext in Kafka listeners instead of the consumer interceptor?**
 `TenantKafkaConsumerInterceptor.onConsume()` receives an entire batch — setting TenantContext from the first record would contaminate subsequent records from different tenants. Reading `X-Tenant-Id` per-record directly in each `@KafkaListener` guarantees correctness regardless of batch composition. The interceptor is kept as a validation layer only.
@@ -262,7 +263,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 
 - **Optimistic locking**: `@Version` on `Incident` entity — concurrent PATCH requests return `HTTP 409 Conflict` instead of silently overwriting
 - **Notification idempotency**: `notification-service` checks `notification_queue` (incident + tenant + event type + escalation level) before enqueueing and `notification_log` (same key + channel) before sending — Kafka at-least-once delivery never causes duplicate Slack messages or emails
-- **Audit event resilience**: `AuditEventPublisher` uses `@Retryable` (3 attempts, exponential backoff) — business flow is never blocked by observability infrastructure
+- **Audit event resilience**: auth-service and incident-service write audit events to a transactional outbox, sent by a relay with backoff (backlog #0-84) — a Kafka outage blocks no request and loses no event; the other services still send fire-and-forget until #0-84's second step
 
 ### Multi-Tenant Kafka — Per-Record Isolation
 
@@ -415,8 +416,23 @@ Summary; details in [Resilience & Security](#security).
   counted only for a reset about to happen (after step-up, user lookup and factor check), fail-closed (503 while Redis cannot be checked); reaching it alerts the operator by
   email (`AdminMfaResetRateLimited`, critical). A single platform operator has no second
   admin: a one-off break-glass command of auth-service does the same reset, audited as `MFA_RESET_BREAK_GLASS` with
-  the operator's name and reason, and rolled back if Kafka does not confirm that event
+  the operator's name and reason, its event written to the audit outbox in the reset's transaction and sent
+  before the command exits when Kafka is reachable
   ([docs/tenant-provisioning.md](docs/tenant-provisioning.md)).
+- **Audit trail through an outbox** (backlog #0-84, auth-service and incident-service): an audit event is a row
+  in the service's own outbox table, written in the transaction of the action it records, so a rolled-back action
+  leaves no event, a committed one cannot lose it, and a Kafka outage stalls no request. A relay (ShedLock, one
+  per service) sends the rows in order, at least once; incident-service drops a resent event by its id
+  (`audit_events.event_id`, unique per tenant, so one tenant's records cannot pre-empt another's), and treats
+  only that and the Kafka-offset key as duplicates. It takes each record's tenant from its `X-Tenant-Id`
+  header (the payload's only as a fallback) and rejects a record whose two disagree or whose payload names
+  none; a record it cannot store
+  is acknowledged only once its dead-letter copy is in Kafka, and alerts (`AuditEventsRejected`, critical).
+  The publisher refuses an event the trail could not store (no tenant, a payload over 256 KiB, a metadata key
+  naming a secret) before it is written. A refusal whose transaction rolls back (a
+  wrong TOTP) is audited after the rollback. The producers of both services fail a send after 5 s without
+  Kafka's metadata (`KAFKA_PRODUCER_MAX_BLOCK_MS`) instead of Kafka's default 60 s. A backlog older than 10 minutes alerts the operator by email
+  (`AuditOutboxBacklog`, critical, read from the table, so a stopped relay shows too).
 - **API keys** (backlog #0-89): in auth-service a key reaches only the team routes, and only with the scope
   `teams:read` / `teams:write` (the role checks kept); every other route refuses it, so a key cannot invite users,
   change roles, create keys or integrations or change tenant settings (`ApiKeyAccess`, deny by default). A
@@ -481,13 +497,9 @@ Open items from the audit and earlier, most important first within each area. Ea
     backlog #0-82.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
-  - Audit events are sent to Kafka inside the database transaction, not through an outbox: an event can record
-    a rolled-back action, a committed action can lose its event silently, and a Kafka outage stalls requests:
-    backlog #0-84. The admin MFA reset's event is one of them; only the break-glass MFA reset waits for Kafka's
-    acknowledgement (#0-88). The API key creation and bulk revocation events go after commit, on a bounded
-    executor (`AfterCommit`, #0-89): no phantom event and no stalled request, but still lost if Kafka is down;
-    the queue is shared, so when a long Kafka outage fills it every tenant's such events are dropped (alerted
-    by `AuditEventsDropped`, critical).
+  - notification-, escalation- and postmortem-service still send audit events to Kafka directly, fire-and-forget:
+    a Kafka outage loses their events silently. auth-service and incident-service write theirs to a
+    transactional outbox (Application, above): backlog #0-84, second step.
   - A customer tenant's only admin has no way back from a factor someone else enrolled with their password, or
     from a lost phone and lost backup codes: break-glass covers only the operator tenant: backlog #0-90.
   - A Kafka record's `X-Tenant-Id` has two writers (explicit senders and the thread-context interceptor, which
@@ -1395,6 +1407,11 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `NotificationServiceTest` | Orchestration, fault isolation between channels, idempotency |
 | `NotificationRouterTest` | Routing for all 5 event types, escalation-target lookup with PRIMARY fallback, UNDELIVERABLE when nobody is on call or no channel has an address, skipped channels |
 | `NotificationChannelPropertiesTest` | Operator alert address validation, `min-interval` default and rejection of zero or negative values |
+| `AuditOutboxTest` (shared, Postgres) | Audit outbox SQL: written in the caller's transaction, due order of its index, batch mark-sent, retry by the database's clock, purge in chunks (backlog #0-84) |
+| `AuditOutboxRelayTest` (shared) | Relay: pipelined batches, per-row tenant, Kafka failures pause it while a refused record does not, mark failures logged, scrape-time gauges, settings (backlog #0-84) |
+| `AuditOutboxConfigurationTest` (shared) | `audit.outbox.table` turns the outbox on (events to the table) or leaves it off (sent directly); a bad table name stops the startup (backlog #0-84) |
+| `DeadLetterPublisherTest` (shared) | `publishAndWait` returns only once Kafka has the dead-letter copy; a failure or timeout is thrown (backlog #0-84) |
+| `AuditPersistenceIntegrationTest` (incident-service, Postgres) | V12–V14: event-id dedup per tenant, the consumer's constraint names, the CONCURRENTLY index valid, the outbox joining the JPA transaction (backlog #0-84) |
 | `AuditEventTypesTest` (shared) | Audit event type values equal their names, are unique and fit the column; `NOTIFICATION_UNDELIVERABLE` is distinct from `NOTIFICATION_FAILED` |
 | `OperatorAlertServiceTest` | Content-free operator email, per tenant and reason rate limit, no email when unconfigured, a send failure never fails the caller |
 | `IncidentEventConsumerTest` (notification-service) | Header-based tenant resolution, TenantContext lifecycle, escalation level/target parsing, dead-lettering of invalid levels |
@@ -1417,7 +1434,7 @@ There is no `make` target for auth-service or oncall-service — start those wit
 incident-platform/
 ├── shared/                        # Shared library (jar, not a runnable service)
 │   └── src/main/java/
-│       ├── audit/                 # AuditEventPublisher, AuditEventKafkaSender, AuditEventTypes
+│       ├── audit/                 # AuditEventPublisher, AuditEventKafkaSender, AuditEventTypes, AuditOutbox + AuditOutboxRelay
 │       ├── domain/                # Severity
 │       ├── dto/                   # Shared DTOs: ErrorResponse, PagedResponse, AuditEventMessage
 │       ├── events/                # Kafka event records: IncidentOpenedEvent, IncidentEscalatedEvent, ...
