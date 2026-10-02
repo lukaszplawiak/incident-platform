@@ -526,11 +526,14 @@ jobs:
           amtool config routes test --config.file=alertmanager.yml \
             --verify.receivers=platform-webhook \
             alertname=AdminMfaResetRateLimitUnavailable scope=platform severity=high
-          # Backlog #0-89: dropped audit events may hide an intruder's actions,
-          # so the operator gets them by email too.
+          # Backlog #0-84: an audit trail behind its actions reaches the
+          # operator by email too.
           amtool config routes test --config.file=alertmanager.yml \
             --verify.receivers=operator-email,platform-webhook \
-            alertname=AuditEventsDropped scope=platform severity=critical
+            alertname=AuditOutboxBacklog scope=platform severity=critical
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email,platform-webhook \
+            alertname=AuditEventsRejected scope=platform severity=critical
 
   # ──────────────────────────────────────────────────────────
   # Job 5: Smoke test — boot the real stack via docker compose and

@@ -13,7 +13,16 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import org.mockito.ArgumentCaptor;
+import org.slf4j.LoggerFactory;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -24,6 +33,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
@@ -38,6 +49,11 @@ class AuditEventConsumerTest {
     @Mock
     private Acknowledgment acknowledgment;
 
+    @Mock
+    private DeadLetterPublisher deadLetterPublisher;
+
+    private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
     private AuditEventConsumer consumer;
     private ObjectMapper objectMapper;
 
@@ -49,7 +65,8 @@ class AuditEventConsumerTest {
     void setUp() {
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
-        consumer = new AuditEventConsumer(auditEventRepository, objectMapper);
+        consumer = new AuditEventConsumer(auditEventRepository, objectMapper, deadLetterPublisher,
+                new TenantKafkaRecordResolver(objectMapper), meters);
     }
 
     // ─── helpers ────────────────────────────────────────────────────────────
@@ -181,6 +198,42 @@ class AuditEventConsumerTest {
             assertThat(captor.getValue().getKafkaPartition()).isEqualTo(3);
             assertThat(captor.getValue().getKafkaOffset()).isEqualTo(42L);
         }
+
+        @Test
+        @DisplayName("stores the producer's event id and the time the event happened, not the consume time "
+                + "(backlog #0-84: the outbox can deliver late)")
+        void storesEventIdAndProducerTime() throws Exception {
+            final AuditEventMessage message = AuditEventMessage.incident(
+                    INCIDENT_ID, TENANT_ID, AuditEventTypes.INCIDENT_CREATED,
+                    "incident-service", "Created", Map.of());
+            final AuditEventMessage late = new AuditEventMessage(message.resourceId(), message.resourceType(),
+                    message.tenantId(), message.eventType(), message.actor(), message.actorType(),
+                    message.sourceService(), message.detail(), message.metadata(),
+                    java.time.Instant.parse("2026-10-03T09:00:00Z"), message.eventId());
+            final ArgumentCaptor<AuditEvent> captor = ArgumentCaptor.forClass(AuditEvent.class);
+
+            consumer.consume(buildRecord(objectMapper.writeValueAsString(late)), acknowledgment);
+
+            then(auditEventRepository).should().save(captor.capture());
+            assertThat(captor.getValue().getEventId()).isEqualTo(message.eventId());
+            assertThat(captor.getValue().getOccurredAt()).isEqualTo(java.time.Instant.parse("2026-10-03T09:00:00Z"));
+        }
+
+        @Test
+        @DisplayName("a record from a producer before the outbox (no event id) is still stored")
+        void storesLegacyRecordWithoutEventId() throws Exception {
+            final String legacy = "{\"resourceId\":\"" + INCIDENT_ID + "\",\"resourceType\":\"INCIDENT\","
+                    + "\"tenantId\":\"" + TENANT_ID + "\",\"eventType\":\"INCIDENT_CREATED\","
+                    + "\"actor\":\"incident-service\",\"actorType\":\"SYSTEM\","
+                    + "\"sourceService\":\"incident-service\",\"detail\":\"x\",\"metadata\":{}}";
+            final ArgumentCaptor<AuditEvent> captor = ArgumentCaptor.forClass(AuditEvent.class);
+
+            consumer.consume(buildRecord(legacy), acknowledgment);
+
+            then(auditEventRepository).should().save(captor.capture());
+            assertThat(captor.getValue().getEventId()).isNull();
+            assertThat(captor.getValue().getOccurredAt()).as("falls back to now").isNotNull();
+        }
     }
 
     // ─── idempotent redelivery (backlog #37) ───────────────────────────────
@@ -210,17 +263,67 @@ class AuditEventConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(buildAuditEventJson());
 
-            willThrow(new DataIntegrityViolationException(
-                    "duplicate key value violates unique constraint " +
-                            "\"uq_audit_events_kafka_partition_offset\""))
+            willThrow(violation("uq_audit_events_kafka_partition_offset"))
                     .given(auditEventRepository).save(any());
 
             // when
-            consumer.consume(record, acknowledgment);
+            final ListAppender<ILoggingEvent> logs = captureLogs();
+            try {
+                consumer.consume(record, acknowledgment);
 
-            // then — acknowledged, exactly as a successful save would be,
-            // NOT treated as a transient error
+                // then — acknowledged, exactly as a successful save would be,
+                // NOT treated as a transient error, and not rejected
+                then(acknowledgment).should().acknowledge();
+                assertThat(logs.list).noneMatch(event -> event.getLevel() == Level.ERROR);
+                then(deadLetterPublisher).shouldHaveNoInteractions();
+            } finally {
+                release(logs);
+            }
+        }
+
+        @Test
+        @DisplayName("acknowledges an outbox resend: the same event id again (backlog #0-84)")
+        void acknowledgesOutboxResend() throws Exception {
+            willThrow(violation("uq_audit_events_tenant_event_id"))
+                    .given(auditEventRepository).save(any());
+
+            consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
+
             then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("any other constraint is a poison pill: skipped, logged at ERROR, not a duplicate (backlog #0-84)")
+        void otherConstraintIsPoisonPill() throws Exception {
+            willThrow(violation("chk_audit_actor_type"))
+                    .given(auditEventRepository).save(any());
+
+            final ListAppender<ILoggingEvent> logs = captureLogs();
+            try {
+                consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
+
+                then(acknowledgment).should().acknowledge();
+                assertThat(logs.list).anySatisfy(event -> {
+                    assertThat(event.getLevel()).isEqualTo(Level.ERROR);
+                    assertThat(event.getFormattedMessage()).contains("chk_audit_actor_type").contains("NOT stored");
+                });
+                then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
+                        org.mockito.ArgumentMatchers.contains("chk_audit_actor_type"),
+                        eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+                assertThat(meters.counter("audit.events.rejected", "reason", "constraint").count()).isEqualTo(1.0);
+            } finally {
+                release(logs);
+            }
+        }
+
+        @Test
+        @DisplayName("a violation that names no constraint is a poison pill too")
+        void unnamedViolation() {
+            assertThat(AuditEventConsumer.violatedConstraint(
+                    new DataIntegrityViolationException("value too long"))).isNull();
+            assertThat(AuditEventConsumer.violatedConstraint(violation("UQ_AUDIT_EVENTS_TENANT_EVENT_ID")))
+                    .as("Postgres folds names to lower case; compared the same way")
+                    .isEqualTo("uq_audit_events_tenant_event_id");
         }
     }
 
@@ -244,6 +347,10 @@ class AuditEventConsumerTest {
             // then — acknowledged so partition is not blocked
             then(acknowledgment).should().acknowledge();
             then(auditEventRepository).should(never()).save(any());
+            // Backlog #0-84: not just a log line — dead-lettered and counted.
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), anyString(),
+                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            assertThat(meters.counter("audit.events.rejected", "reason", "unreadable").count()).isEqualTo(1.0);
         }
 
         @Test
@@ -259,6 +366,126 @@ class AuditEventConsumerTest {
             // then
             then(acknowledgment).should().acknowledge();
             then(auditEventRepository).should(never()).save(any());
+            // Backlog #0-84: not just a log line — dead-lettered and counted.
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), anyString(),
+                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            assertThat(meters.counter("audit.events.rejected", "reason", "unreadable").count()).isEqualTo(1.0);
+        }
+    }
+
+    @Nested
+    @DisplayName("tenant per record and the dead-letter copy (backlog #0-84)")
+    class TenantAndDeadLetter {
+
+        private ConsumerRecord<String, String> withHeader(String payload, String tenant) {
+            final ConsumerRecord<String, String> record = buildRecord(payload);
+            record.headers().add(TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
+                    tenant.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return record;
+        }
+
+        @Test
+        @DisplayName("the header's tenant is stored and set while the record is handled, then cleared")
+        void headerTenant() throws Exception {
+            final java.util.concurrent.atomic.AtomicReference<String> during =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            org.mockito.BDDMockito.given(auditEventRepository.save(any())).willAnswer(i -> {
+                during.set(com.incidentplatform.shared.security.TenantContext.getOrNull());
+                return i.getArgument(0);
+            });
+
+            consumer.consume(withHeader(buildAuditEventJson(), TENANT_ID), acknowledgment);
+
+            final ArgumentCaptor<AuditEvent> saved = ArgumentCaptor.forClass(AuditEvent.class);
+            then(auditEventRepository).should().save(saved.capture());
+            assertThat(saved.getValue().getTenantId()).isEqualTo(TENANT_ID);
+            assertThat(during.get()).isEqualTo(TENANT_ID);
+            assertThat(com.incidentplatform.shared.security.TenantContext.getOrNull()).isNull();
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("a header tenant that differs from the payload's is rejected, not stored under either")
+        void tenantMismatch() throws Exception {
+            consumer.consume(withHeader(buildAuditEventJson(), "globex"), acknowledgment);
+
+            then(auditEventRepository).should(never()).save(any());
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq("globex"),
+                    org.mockito.ArgumentMatchers.startsWith("tenant_mismatch"),
+                    eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            assertThat(meters.counter("audit.events.rejected", "reason", "tenant_mismatch").count()).isEqualTo(1.0);
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("an unreadable record is dead-lettered under its header's tenant, not as unknown")
+        void unreadableKeepsHeaderTenant() {
+            consumer.consume(withHeader("not-json", TENANT_ID), acknowledgment);
+
+            then(deadLetterPublisher).should().publishAndWait(eq("not-json"), eq(TOPIC), eq(TENANT_ID),
+                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+        }
+
+        @Test
+        @DisplayName("a payload naming no tenant is rejected: the header alone does not choose the trail")
+        void payloadWithoutTenant() {
+            final String noTenant = "{\"resourceId\":\"" + INCIDENT_ID + "\",\"resourceType\":\"INCIDENT\","
+                    + "\"eventType\":\"INCIDENT_CREATED\",\"actor\":\"incident-service\",\"actorType\":\"SYSTEM\","
+                    + "\"sourceService\":\"incident-service\",\"occurredAt\":\"2026-10-02T10:00:00Z\"}";
+
+            consumer.consume(withHeader(noTenant, TENANT_ID), acknowledgment);
+
+            then(auditEventRepository).should(never()).save(any());
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
+                    eq("tenant_mismatch: the payload names no tenant"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+        }
+
+        @Test
+        @DisplayName("the reason names the constraint and SQLState, never the database's row text (found in review)")
+        void reasonWithoutRowContent() throws Exception {
+            willThrow(new DataIntegrityViolationException("could not execute statement",
+                    new org.hibernate.exception.ConstraintViolationException("check failed",
+                            new java.sql.SQLException("ERROR: new row violates check constraint "
+                                    + "\"chk_audit_actor_type\" Detail: Failing row contains (acme, top-secret)", "23514"),
+                            "chk_audit_actor_type")))
+                    .given(auditEventRepository).save(any());
+
+            final ListAppender<ILoggingEvent> logs = captureLogs();
+            try {
+                consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
+
+                then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
+                        eq("constraint: violates chk_audit_actor_type (SQLState 23514)"),
+                        eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+                assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("top-secret"));
+            } finally {
+                release(logs);
+            }
+        }
+
+        @Test
+        @DisplayName("an unreadable record's reason gives the JSON error's type and place, not the payload")
+        void unreadableReasonWithoutPayload() {
+            consumer.consume(withHeader("{\"tenantId\": top-secret}", TENANT_ID), acknowledgment);
+
+            final ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
+                    reason.capture(), any());
+            assertThat(reason.getValue()).startsWith("unreadable: invalid JSON (").contains("line 1")
+                    .doesNotContain("top-secret");
+        }
+
+        @Test
+        @DisplayName("a dead-letter copy Kafka did not take: not acknowledged, nacked to come again, not counted")
+        void deadLetterFailureNacks() {
+            org.mockito.BDDMockito.willThrow(new IllegalStateException("broker down")).given(deadLetterPublisher)
+                    .publishAndWait(anyString(), anyString(), anyString(), anyString(), any());
+
+            consumer.consume(buildRecord("not-json"), acknowledgment);
+
+            then(acknowledgment).should().nack(AuditEventConsumer.DEAD_LETTER_RETRY);
+            then(acknowledgment).should(never()).acknowledge();
+            assertThat(meters.find("audit.events.rejected").counter()).isNull();
         }
     }
 
@@ -303,5 +530,24 @@ class AuditEventConsumerTest {
             // then
             then(acknowledgment).should(never()).acknowledge();
         }
+    }
+
+    /** As Spring translates Hibernate's exception for a violated Postgres constraint. */
+    private static DataIntegrityViolationException violation(String constraint) {
+        return new DataIntegrityViolationException("could not execute statement",
+                new org.hibernate.exception.ConstraintViolationException("violates " + constraint,
+                        new java.sql.SQLException("violates " + constraint, "23505"), constraint));
+    }
+
+    private static ListAppender<ILoggingEvent> captureLogs() {
+        final ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(AuditEventConsumer.class)).addAppender(appender);
+        return appender;
+    }
+
+    private static void release(ListAppender<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(AuditEventConsumer.class)).detachAppender(appender);
+        appender.stop();
     }
 }

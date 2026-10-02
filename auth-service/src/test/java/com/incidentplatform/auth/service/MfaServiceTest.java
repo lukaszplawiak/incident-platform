@@ -16,7 +16,6 @@ import com.incidentplatform.auth.repository.TeamMemberRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
-import com.incidentplatform.shared.audit.AuditNotConfirmedException;
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -71,6 +70,12 @@ class MfaServiceTest {
 
     private MfaService service;
 
+    /** The verify methods' own transaction: records whether it was rolled back. */
+    private final org.springframework.transaction.PlatformTransactionManager transactionManager =
+            org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+    private final java.util.List<org.springframework.transaction.support.SimpleTransactionStatus> transactions =
+            new java.util.ArrayList<>();
+
     private static final UUID SESSION_ID = UUID.randomUUID();
     private static final String TENANT_ID = "test-tenant";
     private static final UUID   USER_ID   = UUID.randomUUID();
@@ -83,7 +88,12 @@ class MfaServiceTest {
                 teamMemberRepository, totpService, aesEncryptionService,
                 passwordEncoder, jwtUtils, auditEventPublisher,
                 bruteForceProtectionService, authEmailRequestService, mfaSessionStatusService,
-                mfaResetRateLimiter, apiKeyService);
+                mfaResetRateLimiter, apiKeyService, transactionManager);
+        org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any())).thenAnswer(i -> {
+            final var status = new org.springframework.transaction.support.SimpleTransactionStatus();
+            transactions.add(status);
+            return status;
+        });
         TenantContext.set(TENANT_ID);
         org.mockito.Mockito.lenient().when(authTokenService.isSessionLive(USER_ID, TENANT_ID, SESSION_ID)).thenReturn(true);
     }
@@ -91,6 +101,21 @@ class MfaServiceTest {
     @AfterEach
     void tearDown() {
         TenantContext.clear();
+    }
+
+    /**
+     * Backlog #0-84 (found in review): a wrong code rolls its transaction back
+     * (the consumed token comes back) and is audited after it ended, with one
+     * connection, not in a nested transaction holding a second.
+     */
+    private void assertRefusalAuditedAfterRollback() {
+        assertThat(transactions).hasSize(1);
+        assertThat(transactions.get(0).isRollbackOnly()).as("wrong code rolls back").isTrue();
+        final org.mockito.InOrder order = org.mockito.Mockito.inOrder(transactionManager, auditEventPublisher);
+        order.verify(transactionManager).commit(transactions.get(0));
+        order.verify(auditEventPublisher).publishAuth(eq(USER_ID), eq(TENANT_ID),
+                eq(AuditEventTypes.MFA_VERIFY_FAILED), eq("auth-service"), eq(USER_ID.toString()),
+                anyString(), any());
     }
 
     // ── setupMfa ─────────────────────────────────────────────────────────
@@ -268,6 +293,7 @@ class MfaServiceTest {
 
             then(bruteForceProtectionService).should().recordFailure(
                     BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+            assertRefusalAuditedAfterRollback();
         }
 
         /**
@@ -470,6 +496,7 @@ class MfaServiceTest {
 
             then(bruteForceProtectionService).should().recordFailure(
                     BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+            assertRefusalAuditedAfterRollback();
         }
 
         /**
@@ -1046,7 +1073,6 @@ class MfaServiceTest {
     class ResetMfaBreakGlass {
 
         private static final String OPERATOR = "platform-operator";
-        private static final java.time.Duration TIMEOUT = java.time.Duration.ofSeconds(30);
         private static final String ORIGIN = "ops-laptop-user@host-1";
 
         private User operatorWithMfa() {
@@ -1064,7 +1090,7 @@ class MfaServiceTest {
             given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(user));
             given(apiKeyService.revokeAllPersonalKeysForUser(USER_ID, OPERATOR)).willReturn(1);
 
-            assertThat(service.resetMfaBreakGlass("ops@example.com", " Jane Doe ", " lost phone ", ORIGIN, TIMEOUT))
+            assertThat(service.resetMfaBreakGlass("ops@example.com", " Jane Doe ", " lost phone ", ORIGIN))
                     .isEqualTo(USER_ID);
 
             then(apiKeyService).should().revokeAllPersonalKeysForUser(USER_ID, OPERATOR);
@@ -1074,14 +1100,12 @@ class MfaServiceTest {
             then(authTokenService).should().invalidateLoginContinuationTokens(USER_ID);
             then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
             then(authEmailRequestService).should().requestMfaResetNotification(user);
-            then(auditEventPublisher).should().publishAuthConfirmed(eq(USER_ID), eq(OPERATOR),
+            // Backlog #0-84: to the outbox, in the reset's transaction.
+            then(auditEventPublisher).should().publishAuth(eq(USER_ID), eq(OPERATOR),
                     eq(AuditEventTypes.MFA_RESET_BREAK_GLASS),
                     eq("auth-service"), eq("break-glass:Jane Doe"), anyString(),
                     eq(java.util.Map.of("resetBy", "break-glass:Jane Doe", "reason", "lost phone",
-                            "executedOn", ORIGIN, ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "1")),
-                    eq(TIMEOUT));
-            then(auditEventPublisher).should(org.mockito.Mockito.never())
-                    .publishAuth(any(), any(), any(), any(), any(), any(), any());
+                            "executedOn", ORIGIN, ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "1")));
         }
 
         @Test
@@ -1090,9 +1114,9 @@ class MfaServiceTest {
             final User user = operatorWithMfa();
             given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(user));
 
-            assertThat(service.resetMfaBreakGlass("  ops@example.com ", "Jane", "lost phone", ORIGIN, TIMEOUT))
+            assertThat(service.resetMfaBreakGlass("  ops@example.com ", "Jane", "lost phone", ORIGIN))
                     .isEqualTo(USER_ID);
-            assertThatThrownBy(() -> service.resetMfaBreakGlass("Ops@Example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("Ops@Example.com", "Jane", "lost phone", ORIGIN))
                     .isInstanceOf(ResourceNotFoundException.class)
                     .hasMessageContaining("case-sensitive");
         }
@@ -1101,8 +1125,7 @@ class MfaServiceTest {
         @DisplayName("executedOn is required and checked like actor and reason")
         void requiresExecutedOn() {
             for (final String origin : new String[] {null, " ", "user@host\nINFO forged"}) {
-                assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", origin,
-                        TIMEOUT)).isInstanceOf(IllegalArgumentException.class);
+                assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", origin)).isInstanceOf(IllegalArgumentException.class);
             }
             then(userRepository).shouldHaveNoInteractions();
         }
@@ -1120,7 +1143,7 @@ class MfaServiceTest {
         void operatorTenantOnly() {
             given(userRepository.findByEmailAndTenantId("u@example.com", OPERATOR)).willReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.resetMfaBreakGlass("u@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("u@example.com", "Jane", "lost phone", ORIGIN))
                     .isInstanceOf(ResourceNotFoundException.class);
             then(authTokenService).shouldHaveNoInteractions();
             then(auditEventPublisher).shouldHaveNoInteractions();
@@ -1136,7 +1159,7 @@ class MfaServiceTest {
                     {"Jane\nINFO forged line", "reason"}, {"Jane", "lost\rphone"}, {"Jane", "lost\tphone"},
                     {"Jane\u2028INFO forged", "reason"}, {"Jane", "lost\u2029phone"},
                     {"\u202EenaJ", "reason"}, {"Jane", "lost\u200Bphone"}}) {
-                assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", input[0], input[1], ORIGIN, TIMEOUT))
+                assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", input[0], input[1], ORIGIN))
                         .isInstanceOf(IllegalArgumentException.class);
             }
             then(userRepository).shouldHaveNoInteractions();
@@ -1151,7 +1174,7 @@ class MfaServiceTest {
             responder.enableMfa();
             given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(responder));
 
-            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN))
                     .isInstanceOfSatisfying(BusinessException.class,
                             e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
             assertThat(responder.isMfaEnabled()).isTrue();
@@ -1164,7 +1187,7 @@ class MfaServiceTest {
             final User user = User.forTesting(USER_ID, OPERATOR, "ops@example.com", null, true, List.of("ROLE_ADMIN"));
             given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(user));
 
-            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN))
                     .isInstanceOfSatisfying(BusinessException.class,
                             e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
             then(authTokenService).shouldHaveNoInteractions();
@@ -1172,17 +1195,16 @@ class MfaServiceTest {
         }
 
         @Test
-        @DisplayName("an unconfirmed audit event fails the call, so the transaction rolls back")
-        void auditNotConfirmed() {
+        @DisplayName("a failure to write the audit event fails the call, so the reset rolls back with it "
+                + "(backlog #0-84: the outbox write is in the transaction)")
+        void auditWriteFails() {
             given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR))
                     .willReturn(Optional.of(operatorWithMfa()));
-            org.mockito.BDDMockito.willThrow(new AuditNotConfirmedException(
-                            "not confirmed", null))
-                    .given(auditEventPublisher).publishAuthConfirmed(any(), any(), any(), any(), any(), any(),
-                            any(), any());
+            org.mockito.BDDMockito.willThrow(new IllegalStateException("outbox write failed"))
+                    .given(auditEventPublisher).publishAuth(any(), any(), any(), any(), any(), any(), any());
 
-            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN, TIMEOUT))
-                    .isInstanceOf(AuditNotConfirmedException.class);
+            assertThatThrownBy(() -> service.resetMfaBreakGlass("ops@example.com", "Jane", "lost phone", ORIGIN))
+                    .hasMessage("outbox write failed");
         }
     }
 

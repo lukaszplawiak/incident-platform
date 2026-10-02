@@ -158,27 +158,58 @@ tests:
         alertname: AuthEmailPermanentlyFailed
         exp_alerts: []
 
-  # Audit events dropped (backlog #0-89): fires on any drop, resolves an hour
-  # after the last.
+  # Audit outbox backlog (backlog #0-84): fires after the oldest event has
+  # waited over 10 minutes for 5 minutes, per service; resolves once sent.
   - interval: 1m
     input_series:
-      - series: 'auth_audit_after_commit_rejected_total{job="auth-service",instance="auth-1"}'
-        values: '0x10 3x80'
+      - series: 'audit_outbox_oldest_pending_age_seconds{job="auth-service",instance="auth-1"}'
+        values: '0x5 60+60x30 0x20'
+      - series: 'audit_outbox_oldest_pending_age_seconds{job="incident-service",instance="incident-1"}'
+        values: '0x60'
     alert_rule_test:
-      - eval_time: 5m
-        alertname: AuditEventsDropped
+      - eval_time: 10m
+        alertname: AuditOutboxBacklog
         exp_alerts: []
-      - eval_time: 15m
-        alertname: AuditEventsDropped
+      - eval_time: 18m
+        alertname: AuditOutboxBacklog
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AuditOutboxBacklog
         exp_alerts:
           - exp_labels:
               severity: critical
               scope: platform
+              job: auth-service
             exp_annotations:
-              summary: "auth-service dropped audit events"
-              description: "auth-service dropped at least one audit event in the last hour, before it reached the Kafka client: the after-commit audit queue was full (usually Kafka slow or down) or the publish failed. Those API key creations or revocations are missing from their tenants' audit trail, and more may be lost unseen. Check Kafka and the auth-service ERROR log (\"Audit event dropped\").\n"
+              summary: "auth-service audit events waiting in the outbox for over 10 minutes"
+              description: "The oldest audit event in auth-service's outbox has waited 20m 0s. Nothing is lost, but the audit trail is behind until the relay sends it. Check Kafka and the service's \"Audit event not sent\" WARN lines.\n"
+      - eval_time: 45m
+        alertname: AuditOutboxBacklog
+        exp_alerts: []
+
+  # Rejected audit records (backlog #0-84): fire on the first one, resolve an
+  # hour after the last.
+  - interval: 1m
+    input_series:
+      - series: 'audit_events_rejected_total{job="incident-service",instance="incident-1",reason="constraint"}'
+        values: '0x10 1x90'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AuditEventsRejected
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuditEventsRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: incident-service
+              reason: constraint
+            exp_annotations:
+              summary: "incident-service rejected audit events (constraint)"
+              description: "incident-service could not store at least one audit event in the last hour (constraint); it is in the dead-letter topic (incidents.dead-letter, sourceTopic audit.events) and missing from the tenant's audit trail. The ERROR log \"Audit event rejected\" names it.\n"
       - eval_time: 85m
-        alertname: AuditEventsDropped
+        alertname: AuditEventsRejected
         exp_alerts: []
 
   # Platform API (backlog #0-83): more than 10 tenants in an hour fires the

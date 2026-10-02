@@ -270,6 +270,18 @@ already exists. The next start will **not** run the script again, and you get a 
 and start again. Don't keep the logs of a failed start around: if `CREATE ROLE` itself failed, the
 server log contains that statement, password included.
 
+### A migration that runs outside a transaction (incident-service V13)
+
+`CREATE INDEX CONCURRENTLY` cannot run in a transaction, so Flyway runs such a migration without one
+(backlog #0-84). If it fails or is interrupted (the pod is killed during the build), Postgres keeps an
+INVALID index and Flyway a failed history row, and incident-service refuses to start
+(`validate-on-migrate`) until the row is repaired. As `incident_app`: run `flyway repair` with the
+service's history table (`flyway_schema_history_incident`), or delete that failed row by hand, then
+start the service again. The migration drops a leftover INVALID index itself before it builds again.
+Flyway's lock is session-level in incident-service (`spring.flyway.postgresql.transactional-lock: false`,
+which the concurrent build needs): connect it to Postgres directly, never through a proxy that pools by
+transaction (PgBouncer in transaction mode).
+
 ## Verify
 
 The commands use the default names. Inside the container, the socket and `127.0.0.1` use `trust`

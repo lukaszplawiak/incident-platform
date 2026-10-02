@@ -39,7 +39,15 @@ public record AuditEventMessage(
         String sourceService,
         String detail,
         Map<String, Object> metadata,
-        Instant occurredAt
+        Instant occurredAt,
+        /**
+         * Identifies the event itself (backlog #0-84): generated once, when the
+         * event is raised, and kept by the outbox relay, which may send the same
+         * event more than once (at-least-once). The consumer deduplicates on it;
+         * Kafka's (partition, offset) only catches a redelivery of one record.
+         * Null in records from releases before the outbox.
+         */
+        UUID eventId
 ) {
 
     // ── Incident events ───────────────────────────────────────────────────
@@ -65,7 +73,8 @@ public record AuditEventMessage(
                 sourceService,
                 detail,
                 metadata,
-                Instant.now());
+                Instant.now(),
+                UUID.randomUUID());
     }
 
     /**
@@ -91,7 +100,8 @@ public record AuditEventMessage(
                 sourceService,
                 detail,
                 metadata,
-                Instant.now());
+                Instant.now(),
+                UUID.randomUUID());
     }
 
     // ── Auth events ───────────────────────────────────────────────────────
@@ -124,7 +134,8 @@ public record AuditEventMessage(
                 sourceService,
                 detail,
                 metadata,
-                Instant.now());
+                Instant.now(),
+                UUID.randomUUID());
     }
 
     /**
@@ -148,6 +159,7 @@ public record AuditEventMessage(
                 sourceService,
                 detail,
                 metadata,
-                Instant.now());
+                Instant.now(),
+                UUID.randomUUID());
     }
 }

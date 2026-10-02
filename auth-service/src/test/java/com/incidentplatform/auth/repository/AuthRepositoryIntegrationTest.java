@@ -52,7 +52,6 @@ import com.incidentplatform.shared.security.ReservedTenants;
 import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
-import com.zaxxer.hikari.HikariDataSource;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
@@ -80,7 +79,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import javax.sql.DataSource;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -92,7 +90,6 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -212,7 +209,7 @@ class AuthRepositoryIntegrationTest {
     @Autowired private ApiKeyService apiKeyService;
     @Autowired private ApplicationContext applicationContext;
     @Autowired private PlatformTransactionManager transactionManager;
-    @Autowired private DataSource dataSource;
+    @Autowired private com.incidentplatform.shared.audit.AuditOutbox auditOutbox;
     @Autowired private IntegrationService integrationService;
     @Autowired private TotpService totpService;
     @Autowired @Qualifier("mfaEncryptionService") private AesEncryptionService mfaEncryptionService;
@@ -733,81 +730,8 @@ class AuthRepositoryIntegrationTest {
             return new CreateApiKeyRequest(name, ApiKeyType.TENANT, List.of(ApiKeyScope.TEAMS_READ), null);
         }
 
-        @Test
-        @Transactional(propagation = Propagation.NOT_SUPPORTED)
-        @DisplayName("the creation audit is published after commit, off the request thread: a stalled publish "
-                + "holds neither the request nor a pooled connection (backlog #0-89, review)")
-        void creationAuditOffRequestThread() throws Exception {
-            final String tenant = "audit-tenant";
-            final User admin = committedKeyCreator(tenant, "audit-admin@example.com");
-            final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
-                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
-            final CountDownLatch publishing = new CountDownLatch(1);
-            final CountDownLatch release = new CountDownLatch(1);
-            Mockito.doAnswer(invocation -> {
-                publishing.countDown();
-                release.await(30, TimeUnit.SECONDS); // a Kafka stall
-                return null;
-            }).when(auditEventPublisher).publishAuth(ArgumentMatchers.any(),
-                    ArgumentMatchers.eq(tenant),
-                    ArgumentMatchers.eq(AuditEventTypes.API_KEY_CREATED),
-                    ArgumentMatchers.any(), ArgumentMatchers.any(),
-                    ArgumentMatchers.any(), ArgumentMatchers.any());
-            final var pool = ((HikariDataSource) dataSource).getHikariPoolMXBean();
-            TenantContext.set(tenant);
-            try {
-                final long start = System.nanoTime();
-                apiKeyService.createApiKey(tenantKeyRequest("audited"), asAdmin);
-                assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the request does not wait for Kafka")
-                        .isLessThan(Duration.ofSeconds(5));
 
-                assertThat(publishing.await(10, TimeUnit.SECONDS)).as("published after commit").isTrue();
-                assertThat(pool.getActiveConnections()).as("no connection held while the publish stalls").isZero();
-            } finally {
-                release.countDown();
-                TenantContext.clear();
-                deleteKeyCreator(admin);
-            }
-        }
 
-        @Test
-        @Transactional(propagation = Propagation.NOT_SUPPORTED)
-        @DisplayName("a creation rolled back publishes no audit event (backlog #0-89, review)")
-        void rolledBackCreationPublishesNothing() {
-            final String tenant = "rollback-tenant";
-            final User admin = committedKeyCreator(tenant, "rollback-admin@example.com");
-            final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
-                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
-            TenantContext.set(tenant);
-            try {
-                new TransactionTemplate(transactionManager)
-                        .executeWithoutResult(status -> {
-                            apiKeyService.createApiKey(tenantKeyRequest("rolled back"), asAdmin);
-                            status.setRollbackOnly();
-                        });
-
-                Mockito.verify(auditEventPublisher, Mockito.after(1000).never())
-                        .publishAuth(ArgumentMatchers.any(), ArgumentMatchers.eq(tenant),
-                                ArgumentMatchers.eq(
-                                        AuditEventTypes.API_KEY_CREATED),
-                                ArgumentMatchers.any(), ArgumentMatchers.any(),
-                                ArgumentMatchers.any(), ArgumentMatchers.any());
-                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM api_keys WHERE created_by_user_id = ?",
-                        Integer.class, admin.getId())).isZero();
-            } finally {
-                TenantContext.clear();
-                deleteKeyCreator(admin);
-            }
-        }
-
-        @Test
-        @DisplayName("the audit pool is no Executor bean, so Spring Boot keeps its applicationTaskExecutor "
-                + "(backlog #0-89, review)")
-        void bootTaskExecutorKept() {
-            assertThat(applicationContext.containsBean("applicationTaskExecutor")).isTrue();
-            assertThat(applicationContext.getBeansOfType(Executor.class).keySet())
-                    .noneMatch(name -> name.toLowerCase().contains("audit"));
-        }
 
         @Test
         @DisplayName("the locking lookup finds only an active user of the given tenant, like the entity's "
@@ -1233,7 +1157,7 @@ class AuthRepositoryIntegrationTest {
 
         @Test
         @Transactional(propagation = Propagation.NOT_SUPPORTED)
-        @DisplayName("break-glass reset commits like the admin reset, audited with a confirmed send (backlog #0-88)")
+        @DisplayName("break-glass reset commits like the admin reset, audited through the outbox (backlog #0-88, #0-84)")
         void breakGlassReset() {
             final User operator = committedOperatorWithMfa("break-glass-ok@example.com");
             final String refresh = authTokenService.generateRefreshToken(
@@ -1242,7 +1166,7 @@ class AuthRepositoryIntegrationTest {
                     "platform-operator", "operator key", "b".repeat(64), "bbbbbbbb", List.of("teams:read"),
                     null, operator)).getId();
             try {
-                mfaService.resetMfaBreakGlass(operator.getEmail(), "Jane Doe", "lost phone", "it@test-host", Duration.ofSeconds(30));
+                mfaService.resetMfaBreakGlass(operator.getEmail(), "Jane Doe", "lost phone", "it@test-host");
 
                 assertThat(jdbcTemplate.queryForObject("SELECT revoked_at IS NOT NULL FROM api_keys WHERE id = ?",
                         Boolean.class, key)).as("personal API key (backlog #0-89)").isTrue();
@@ -1255,7 +1179,7 @@ class AuthRepositoryIntegrationTest {
                         String.class, operator.getId())).containsExactly("MFA_RESET");
                 assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh))
                         .isInstanceOf(BusinessException.class);
-                Mockito.verify(auditEventPublisher).publishAuthConfirmed(
+                Mockito.verify(auditEventPublisher).publishAuth(
                         ArgumentMatchers.eq(operator.getId()),
                         ArgumentMatchers.eq("platform-operator"),
                         ArgumentMatchers.eq(
@@ -1263,8 +1187,7 @@ class AuthRepositoryIntegrationTest {
                         ArgumentMatchers.anyString(),
                         ArgumentMatchers.eq("break-glass:Jane Doe"),
                         ArgumentMatchers.anyString(),
-                        ArgumentMatchers.any(),
-                        ArgumentMatchers.eq(Duration.ofSeconds(30)));
+                        ArgumentMatchers.any());
             } finally {
                 deleteCommittedUser(operator.getId());
             }
@@ -1281,7 +1204,7 @@ class AuthRepositoryIntegrationTest {
             startFreshRequest();
 
             assertThatThrownBy(() -> mfaService.resetMfaBreakGlass("same-email@example.com", "Jane Doe",
-                    "lost phone", "it@test-host", Duration.ofSeconds(30)))
+                    "lost phone", "it@test-host"))
                     .isInstanceOf(ResourceNotFoundException.class);
             assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
                     Boolean.class, customerAdmin.getId())).isTrue();
@@ -1289,22 +1212,21 @@ class AuthRepositoryIntegrationTest {
 
         @Test
         @Transactional(propagation = Propagation.NOT_SUPPORTED)
-        @DisplayName("break-glass reset whose audit Kafka does not confirm changes nothing (backlog #0-88)")
+        @DisplayName("break-glass reset whose audit event cannot be written changes nothing (backlog #0-88, #0-84)")
         void breakGlassRollsBackWithoutAudit() {
             final User operator = committedOperatorWithMfa("break-glass-rollback@example.com");
             final String refresh = authTokenService.generateRefreshToken(
                     operator, "platform-operator", UUID.randomUUID(), Instant.now());
-            org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.audit.AuditNotConfirmedException(
-                            "not confirmed", null))
-                    .given(auditEventPublisher).publishAuthConfirmed(
+            org.mockito.BDDMockito.willThrow(new IllegalStateException("outbox write failed"))
+                    .given(auditEventPublisher).publishAuth(
                             ArgumentMatchers.any(), ArgumentMatchers.any(),
                             ArgumentMatchers.any(), ArgumentMatchers.any(),
                             ArgumentMatchers.any(), ArgumentMatchers.any(),
-                            ArgumentMatchers.any(), ArgumentMatchers.any());
+                            ArgumentMatchers.any());
             try {
                 assertThatThrownBy(() -> mfaService.resetMfaBreakGlass(
-                        operator.getEmail(), "Jane Doe", "lost phone", "it@test-host", Duration.ofSeconds(30)))
-                        .isInstanceOf(com.incidentplatform.shared.audit.AuditNotConfirmedException.class);
+                        operator.getEmail(), "Jane Doe", "lost phone", "it@test-host"))
+                        .hasMessage("outbox write failed");
 
                 assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
                         Boolean.class, operator.getId())).as("factor kept").isTrue();
@@ -2380,6 +2302,60 @@ class AuthRepositoryIntegrationTest {
                         """, Integer.class, table);
                 assertThat(count).as("table %s should exist", table).isEqualTo(1);
             }
+        }
+
+        /**
+         * Backlog #0-84: auth-service's audit goes through
+         * {@code auth_audit_outbox} (V27), written in the caller's
+         * transaction — so a rolled-back change leaves no event, and a
+         * committed one leaves a PENDING row for the relay. Through the
+         * service's real JPA transaction manager, which must expose its
+         * connection to the outbox's JdbcTemplate.
+         */
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("audit outbox row commits and rolls back with the caller's transaction (backlog #0-84)")
+        void auditOutboxFollowsTransaction() {
+            final var txTemplate = new TransactionTemplate(transactionManager);
+            final UUID committed = UUID.randomUUID();
+            final UUID rolledBack = UUID.randomUUID();
+            try {
+                txTemplate.executeWithoutResult(status ->
+                        auditOutbox.enqueue(committed, "acme", "USER_LOGIN", "{}"));
+                txTemplate.executeWithoutResult(status -> {
+                    auditOutbox.enqueue(rolledBack, "acme", "USER_LOGIN", "{}");
+                    status.setRollbackOnly();
+                });
+
+                assertThat(jdbcTemplate.queryForObject(
+                        "SELECT status FROM auth_audit_outbox WHERE id = ?", String.class, committed))
+                        .isEqualTo("PENDING");
+                assertThat(jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) FROM auth_audit_outbox WHERE id = ?", Integer.class, rolledBack))
+                        .isZero();
+            } finally {
+                jdbcTemplate.update("DELETE FROM auth_audit_outbox WHERE id IN (?, ?)",
+                        committed, rolledBack);
+            }
+        }
+
+        @Test
+        @DisplayName("V27's table takes the relay's SQL: due, sent, failed, backlog (backlog #0-84)")
+        void auditOutboxTableFitsRelaySql() {
+            final UUID sent = UUID.randomUUID();
+            final UUID failed = UUID.randomUUID();
+            auditOutbox.enqueue(sent, "acme", "USER_LOGIN", "{}");
+            auditOutbox.enqueue(failed, "acme", "USER_LOGIN", "{}");
+
+            assertThat(auditOutbox.due(100)).extracting(com.incidentplatform.shared.audit.AuditOutbox.Pending::id)
+                    .contains(sent, failed);
+            assertThat(auditOutbox.markSent(List.of(sent))).isEqualTo(1);
+            assertThat(auditOutbox.markFailed(failed, Duration.ofSeconds(60), "down")).isTrue();
+            assertThat(auditOutbox.due(100)).extracting(com.incidentplatform.shared.audit.AuditOutbox.Pending::id)
+                    .doesNotContain(sent, failed);
+            assertThat(auditOutbox.backlog().pending()).isPositive();
+            assertThat(jdbcTemplate.queryForObject("SELECT last_error FROM auth_audit_outbox WHERE id = ?",
+                    String.class, failed)).isEqualTo("down");
         }
     }
 

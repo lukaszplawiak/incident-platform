@@ -20,7 +20,6 @@ import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -68,9 +67,7 @@ class ApiKeyServiceTest {
     void setUp() {
         service = new ApiKeyService(
                 apiKeyRepository, userRepository,
-                apiKeyHasher, auditEventPublisher, authEmailRequestService, integrationRepository, creationLimit,
-                // Runs the audit at once: no transaction here, and a direct executor.
-                new AfterCommit(Runnable::run, new SimpleMeterRegistry()));
+                apiKeyHasher, auditEventPublisher, authEmailRequestService, integrationRepository, creationLimit);
         TenantContext.set(TENANT_ID);
         lenient().when(creationLimit.check(any(), any()))
                 .thenReturn(RateLimitDecision.ALLOWED);

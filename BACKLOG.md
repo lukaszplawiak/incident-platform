@@ -1250,7 +1250,10 @@ tenant, and the enforcement points above. Suspension first; offboarding is large
 
 ### 0-84. Audit events are sent to Kafka inside the database transaction, not through an outbox
 
-**Type:** bug · **Priority:** Medium · **Status:** Open (found in the review of #0-80)
+**Type:** bug · **Priority:** Medium · **Status:** Open (found in the review of #0-80); first step done, see *Progress*
+
+*Problem, Approach and First users describe the state before the first step (see Progress): in auth-service
+and incident-service it is fixed; notification-, escalation- and postmortem-service still work as described.*
 
 **Problem.** `AuditEventPublisher.publishAuth` / `publish` (`shared`) call `AuditEventKafkaSender.send`,
 which calls `KafkaTemplate.send` directly. Most callers do this from inside their `@Transactional` method
@@ -1262,17 +1265,18 @@ Inside one, it is a dual write to two systems with no common transaction:
   that never happened, e.g. `TENANT_PROVISIONED` for a tenant that was rolled back.
 - **Change without the event.** `KafkaTemplate.send` is asynchronous and its future is never read, so a
   delivery that fails after the call (broker down longer than `delivery.timeout.ms`) is lost without a log
-  line. `@Retryable` only retries exceptions thrown by the call itself, and the publisher then swallows
-  them by design. The audit trail can silently miss committed actions.
+  line. `@Retryable` was meant to retry exceptions thrown by the call itself (it turned out inert: no
+  module enabled Spring Retry), and the publisher then swallowed them by design. The audit trail could
+  silently miss committed actions.
 - **A broker outage stalls requests.** While the producer has no metadata, `send` blocks up to
-  `max.block.ms` (60 s by Kafka's default; auth-service sets none), and `@Retryable` makes that up to three
-  times, all inside the request's database transaction, holding its connection. Login, user and key
-  management then wait on Kafka. (From the client's documented defaults; not measured on this stack.)
+  `max.block.ms` (60 s by Kafka's default; auth-service set none), all inside the request's database
+  transaction, holding its connection. Login, user and key management then waited on Kafka. (From the client's documented defaults; not measured on this stack.)
 
 **How production systems handle it.** The *transactional outbox*: the audit row is written to an
 `audit_outbox` table in the same transaction as the change, and a relay (a ShedLock'd poller, or CDC such as
-Debezium) publishes it afterwards, at least once, and marks it sent. Consumers deduplicate by event id,
-which `AuditEventConsumer` already does (backlog #37). The platform already uses this pattern for
+Debezium) publishes it afterwards, at least once, and marks it sent. Consumers deduplicate by event id
+(this text first said `AuditEventConsumer` already did, backlog #37; it did not: the message had no event id
+and the consumer caught only a duplicate of its own insert, so the first step added one). The platform already uses this pattern for
 `incidents.lifecycle` (`IncidentEventOutbox`, backlog #36) and for auth emails (#0-52). Alternatives are
 weaker: publishing in `afterCommit` removes phantom events but still loses them on a crash between commit
 and send; Kafka transactions do not span the database.
@@ -1283,20 +1287,64 @@ transaction is active, and the existing Kafka sender used only by the relay. Dec
 outside a transaction (e.g. a failed login, which has no change to commit) keep a direct send. Also set
 `max.block.ms` / `delivery.timeout.ms` for every producer, which is worth doing on its own.
 
-**First users (#0-88).** The admin MFA reset (`MFA_RESET_BY_ADMIN`) is a security-relevant action audited
-through the fire-and-forget path today; it should be among the first to write to the outbox. The break-glass
-MFA reset meanwhile uses `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waits for Kafka's
-acknowledgement inside the transaction (no ack, no reset): acceptable for a one-off process, wrong for a
-request path, so it refuses to run on a request thread (a runtime guard). With the outbox the break-glass
-reset writes its event in the transaction like everything else; then delete `publishAuthConfirmed`,
-`AuditEventKafkaSender.sendConfirmed`, `AuditNotConfirmedException` and the guard, rather than keeping a
-second audit path.
+**First users (#0-88).** The admin MFA reset (`MFA_RESET_BY_ADMIN`) was a security-relevant action audited
+through the fire-and-forget path; it was to be among the first to write to the outbox. The break-glass MFA
+reset used `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waited for Kafka's acknowledgement
+inside the transaction (no ack, no reset): acceptable for a one-off process, wrong for a request path, so it
+refused to run on a request thread (a runtime guard). With the outbox the break-glass reset was to write its
+event in the transaction like everything else, and `publishAuthConfirmed`, `AuditEventKafkaSender.sendConfirmed`,
+`AuditNotConfirmedException` and the guard to go: done in the first step.
 
-**Interim, #0-89.** The API key creation and bulk revocation events are published after commit on a bounded
-executor (`AfterCommit`, auth-service, with a private pool of 2 threads and a queue of 1,000, not an `Executor` bean, so Spring Boot's own task executor stays), because the creation holds the creator's row
-lock until commit, and a measurement in review showed the pooled connection is still checked out inside
-`afterCommit`. That removes phantom events and stalls for those paths only; the events can still be lost.
-A full queue drops events for every tenant, and a publish that throws drops its own, both alerted by `AuditEventsDropped` (critical; a lower bound, as failures later inside the Kafka client are not seen); it stops between the web server and the Kafka producer factory (a `SmartLifecycle` in phase 0), so it drains while the producer works; a bulk revoke that revoked nothing publishes nothing, so it cannot be used to fill the queue. When the outbox exists, they write to it like everything else and `AfterCommit` goes.
+**Progress: first step (PR #449; `shared`, incident-service, auth-service).**
+- `shared`: `AuditOutbox` (JDBC INSERT into the table named by `audit.outbox.table`, joining the caller's
+  transaction; behind the `AuditEventStore` interface, so the publisher in a service without
+  `spring-jdbc` loads no JDBC class), `AuditOutboxRelay` (`@Scheduled`, ShedLock per table; a batch is
+  handed to the producer and its acknowledgements awaited within `send-timeout`, up to
+  `max-batches-per-run` batches a run; a failed row backs off 5 s doubling to 5 min and is never given up,
+  and the relay pauses by the same backoff after a failed run; rows read in the order of the due index;
+  SENT rows purged after 7 days in chunks; gauges read from the table at scrape time; a batch's
+  acknowledged rows marked sent in one statement; a failed row due again by the database's clock; only
+  Kafka's own failures pause the relay, a record Kafka refuses for itself is backed off alone; the backlog
+  age and the purge by the database's clock; `tenant_id NOT NULL` and a `created_at` index for the gauge;
+  a scheduling pool of 4 in auth-service; incident-service runs on virtual threads, one per run),
+  `AuditOutboxConfiguration` (only when `audit.outbox.table` is set). `AuditEventPublisher` writes to the
+  outbox when the service has one, else sends as before, and refuses an event the trail cannot store (no
+  tenant or resource, a field over its column, a metadata key naming a secret, a payload over 256 KiB):
+  with the outbox the action fails, without it the refusal is only logged, as that path never threw; so nothing is marked
+  sent that the consumer then drops or Kafka refuses for ever. `AuditEventMessage.eventId` is new. `@Retryable` on
+  the sender was inert (no `@EnableRetry` in any module) and is removed; `publishAuthConfirmed`,
+  `sendConfirmed`, `AuditNotConfirmedException` and the request-thread guard are deleted, as planned under
+  *First users*.
+- Events raised outside a transaction (a failed login) commit on their own with the same INSERT. A refusal
+  whose transaction rolls back (`MFA_VERIFY_FAILED`) is audited after it ended: `MfaService` runs the
+  verification in a `TransactionTemplate`, rolls back on a wrong code, then publishes and throws. (Review: a
+  nested `REQUIRES_NEW` write held two pooled connections per wrong code, with a pool of 5.) No other audit
+  call in auth- or incident-service is followed by a throw in its transaction.
+- incident-service: `incident_audit_outbox` (V14), its own audit through it too; `audit_events.event_id`
+  (V12) with a unique index on `(tenant_id, event_id)` built `CONCURRENTLY` (V13; Flyway's lock made
+  non-transactional, `spring.flyway.postgresql.transactional-lock: false`, or the build waits on it), so a
+  resent event is a duplicate. `AuditEventConsumer` treats only its two idempotency keys as duplicates;
+  any other constraint violation, like unreadable JSON or a header/payload tenant mismatch (the tenant now
+  comes from `X-Tenant-Id` first, through `TenantKafkaRecordResolver`, and a payload naming no tenant is
+  refused), is a poison pill: logged at ERROR without the database's or parser's text (it quotes the row),
+  sent to `incidents.dead-letter` and acknowledged only once Kafka has that copy (`publishAndWait`, else
+  `nack`), counted (`audit.events.rejected`) and alerted (`AuditEventsRejected`, critical), since the
+  producer's outbox already counts it as delivered (it used to pass as a duplicate).
+  `spring.flyway.postgresql.transactional-lock: false` assumes a direct connection to Postgres: revisit it
+  if a transaction-pooling proxy (PgBouncer in transaction mode) ever sits in between.
+  `occurredAt` is the producer's time (it was the consume time).
+- auth-service: `auth_audit_outbox` (V27). `AfterCommit` (#0-89's interim, above in its PR) is removed. The
+  break-glass reset writes its event like everything else and then runs the relay once
+  (`relayNow`), so the event reaches Kafka before the command exits when Kafka is reachable; otherwise the
+  running service sends it.
+- `max.block.ms` 5 s for the producers of auth- and incident-service, so `send()` itself cannot hold the
+  relay for Kafka's default 60 s.
+- Monitoring: `AuditEventsDropped` is replaced by `AuditOutboxBacklog` (oldest pending event older than
+  10 minutes for 5 minutes, critical, operator email); a service that is down is `PlatformServiceDown`.
+
+**Second step (open).** notification-, escalation- and postmortem-service: an outbox table each and
+`audit.outbox.table`; then `AuditEventKafkaSender.send` (fire-and-forget) and the publisher's fallback go.
+Their producers' `max.block.ms` / `delivery.timeout.ms` come with it.
 
 ---
 

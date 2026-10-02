@@ -46,7 +46,6 @@ public class IntegrationService {
     private final UserRepository userRepository;
     private final AuthEmailRequestService authEmailRequestService;
     private final ApiKeyCreationLimit creationLimit;
-    private final AfterCommit afterCommit;
 
     public IntegrationService(IntegrationRepository integrationRepository,
                               ApiKeyRepository apiKeyRepository,
@@ -55,8 +54,7 @@ public class IntegrationService {
                               AuditEventPublisher auditEventPublisher,
                               UserRepository userRepository,
                               AuthEmailRequestService authEmailRequestService,
-                              ApiKeyCreationLimit creationLimit,
-                              AfterCommit afterCommit) {
+                              ApiKeyCreationLimit creationLimit) {
         this.integrationRepository = integrationRepository;
         this.apiKeyRepository      = apiKeyRepository;
         this.teamRepository        = teamRepository;
@@ -65,7 +63,6 @@ public class IntegrationService {
         this.userRepository        = userRepository;
         this.authEmailRequestService = authEmailRequestService;
         this.creationLimit = creationLimit;
-        this.afterCommit = afterCommit;
     }
 
     // ── Create ────────────────────────────────────────────────────────────
@@ -166,17 +163,16 @@ public class IntegrationService {
 
         authEmailRequestService.requestApiKeyCreatedNotification(creator, savedApiKey.getId());
 
-        // After commit (backlog #0-89, review): not while the creator's row is locked.
         final Map<String, Object> auditMetadata = Map.of("integrationId", saved.getId().toString(),
                 "source", request.source(),
                 "teamId", team != null ? team.getId().toString() : "none");
-        afterCommit.run(() -> auditEventPublisher.publishAuth(
-                    principal.userId(), tenantId,
-                    AuditEventTypes.INTEGRATION_CREATED,
-                    "auth-service",
-                    principal.userId().toString(),
-                    "Integration created: " + request.name(),
-                    auditMetadata));
+        auditEventPublisher.publishAuth(
+                principal.userId(), tenantId,
+                AuditEventTypes.INTEGRATION_CREATED,
+                "auth-service",
+                principal.userId().toString(),
+                "Integration created: " + request.name(),
+                auditMetadata);
 
         log.info("Integration created: id={}, name={}, source={}, teamId={}, tenant={}",
                 saved.getId(), request.name(), request.source(),
@@ -228,15 +224,14 @@ public class IntegrationService {
         integration.revoke();
         integrationRepository.save(integration);
 
-        // After commit, on the audit pool, like the other key audits (backlog #0-89, review).
-        afterCommit.run(() -> auditEventPublisher.publishAuth(
+        auditEventPublisher.publishAuth(
                 principal.userId(), tenantId,
                 AuditEventTypes.INTEGRATION_REVOKED,
                 "auth-service",
                 principal.userId().toString(),
                 "Integration revoked: " + integration.getName(),
                 Map.of("integrationId", integrationId.toString(),
-                        "source", integration.getSource())));
+                    "source", integration.getSource()));
 
         log.info("Integration revoked: id={}, name={}, tenant={}, by={}",
                 integrationId, integration.getName(),

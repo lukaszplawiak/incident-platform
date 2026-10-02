@@ -15,7 +15,6 @@ import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -57,8 +56,7 @@ class IntegrationServiceTest {
     @BeforeEach
     void setUp() {
         service = new IntegrationService(integrationRepository, apiKeyRepository, teamRepository,
-                apiKeyHasher, auditEventPublisher, userRepository, authEmailRequestService, creationLimit,
-                new AfterCommit(Runnable::run, new SimpleMeterRegistry()));
+                apiKeyHasher, auditEventPublisher, userRepository, authEmailRequestService, creationLimit);
         TenantContext.set(TENANT_ID);
         org.mockito.Mockito.lenient().when(creationLimit.check(any(), any()))
                 .thenReturn(RateLimitDecision.ALLOWED);

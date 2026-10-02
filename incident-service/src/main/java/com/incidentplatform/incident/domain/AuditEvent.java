@@ -87,6 +87,16 @@ public class AuditEvent {
     @Column(name = "kafka_offset")
     private Long kafkaOffset;
 
+    /**
+     * The event's own id (backlog #0-84, column V12): the outbox relay
+     * sends at least once, so one event can arrive as two records with
+     * different offsets; the unique index on {@code (tenant_id, event_id)}
+     * (V13) turns the second into a duplicate. Null for events from
+     * producers before the outbox.
+     */
+    @Column(name = "event_id", updatable = false)
+    private UUID eventId;
+
     protected AuditEvent() {}
 
     public static AuditEvent system(UUID incidentId,
@@ -96,10 +106,12 @@ public class AuditEvent {
                                     String detail,
                                     Map<String, Object> metadata,
                                     Integer kafkaPartition,
-                                    Long kafkaOffset) {
+                                    Long kafkaOffset,
+                                    UUID eventId,
+                                    Instant occurredAt) {
         return create(incidentId, tenantId, eventType,
                 sourceService, sourceService, ActorType.SYSTEM,
-                detail, metadata, kafkaPartition, kafkaOffset);
+                detail, metadata, kafkaPartition, kafkaOffset, eventId, occurredAt);
     }
 
     public static AuditEvent user(UUID incidentId,
@@ -110,10 +122,12 @@ public class AuditEvent {
                                   String detail,
                                   Map<String, Object> metadata,
                                   Integer kafkaPartition,
-                                  Long kafkaOffset) {
+                                  Long kafkaOffset,
+                                  UUID eventId,
+                                  Instant occurredAt) {
         return create(incidentId, tenantId, eventType,
                 sourceService, userId, ActorType.USER,
-                detail, metadata, kafkaPartition, kafkaOffset);
+                detail, metadata, kafkaPartition, kafkaOffset, eventId, occurredAt);
     }
 
     private static AuditEvent create(UUID incidentId,
@@ -125,7 +139,9 @@ public class AuditEvent {
                                      String detail,
                                      Map<String, Object> metadata,
                                      Integer kafkaPartition,
-                                     Long kafkaOffset) {
+                                     Long kafkaOffset,
+                                     UUID eventId,
+                                     Instant occurredAt) {
         final AuditEvent event = new AuditEvent();
         event.id = UUID.randomUUID();
         event.incidentId = incidentId;
@@ -136,8 +152,13 @@ public class AuditEvent {
         event.actorType = actorType;
         event.detail = detail;
         event.metadata = metadata;
-        event.occurredAt = Instant.now();
+        // Fixed (backlog #0-84): when the event happened, as its producer
+        // recorded it, not when it was consumed; with the outbox an event can
+        // arrive minutes late while Kafka was down. Now only for an event
+        // without one.
+        event.occurredAt = occurredAt != null ? occurredAt : Instant.now();
         event.createdAt = Instant.now();
+        event.eventId = eventId;
         event.kafkaPartition = kafkaPartition;
         event.kafkaOffset = kafkaOffset;
         return event;
@@ -155,5 +176,6 @@ public class AuditEvent {
     public Instant getOccurredAt()   { return occurredAt; }
     public Instant getCreatedAt()    { return createdAt; }
     public Integer getKafkaPartition() { return kafkaPartition; }
+    public UUID getEventId()          { return eventId; }
     public Long getKafkaOffset()       { return kafkaOffset; }
 }
