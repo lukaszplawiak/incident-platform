@@ -5,6 +5,7 @@ import com.incidentplatform.postmortem.dto.PostmortemDto;
 import com.incidentplatform.postmortem.dto.UpdatePostmortemRequest;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
@@ -22,14 +23,18 @@ import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
@@ -133,6 +138,29 @@ class PostmortemServiceTest {
 
             assertThat(result.content()).isEqualTo("Updated content by engineer");
             then(postmortemRepository).should().save(postmortem);
+            then(auditEventPublisher).should().publishIncident(eq(INCIDENT_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.POSTMORTEM_UPDATED), eq("postmortem-service"), anyString(),
+                    eq(Map.of("status", "DRAFT")));
+        }
+
+        /**
+         * Backlog #0-84: the audit event is written to the outbox in this
+         * method's transaction, so a failure to write it fails the update
+         * (and rolls the content back) instead of leaving it unaudited.
+         */
+        @Test
+        @DisplayName("a failure to record the audit event fails the update")
+        void auditFailureFailsUpdate() {
+            final Postmortem postmortem = buildDraftPostmortem();
+            given(postmortemRepository
+                    .findByIncidentIdAndTenantId(INCIDENT_ID, TENANT_ID))
+                    .willReturn(Optional.of(postmortem));
+            willThrow(new IllegalStateException("outbox write failed")).given(auditEventPublisher)
+                    .publishIncident(any(), any(), any(), any(), any(), any());
+
+            assertThatThrownBy(() -> postmortemService.updateContent(INCIDENT_ID, TENANT_ID,
+                    new UpdatePostmortemRequest("content")))
+                    .hasMessage("outbox write failed");
         }
 
         @Test
@@ -175,6 +203,9 @@ class PostmortemServiceTest {
 
             assertThat(result.status()).isEqualTo("REVIEWED");
             then(postmortemRepository).should().save(postmortem);
+            then(auditEventPublisher).should().publishIncident(eq(INCIDENT_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.POSTMORTEM_REVIEWED), eq("postmortem-service"), anyString(),
+                    eq(Map.of("status", "REVIEWED")));
         }
 
         @Test
@@ -210,6 +241,7 @@ class PostmortemServiceTest {
                     .hasMessageContaining("GENERATING");
 
             then(postmortemRepository).should(never()).save(any());
+            then(auditEventPublisher).shouldHaveNoInteractions();
         }
 
         @Test

@@ -7,6 +7,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
  * A service's audit outbox table (backlog #0-84), through plain JDBC so one
@@ -53,15 +54,59 @@ public class AuditOutbox implements AuditEventStore {
     public record Backlog(long pending, Optional<Duration> oldestAge) {
     }
 
+    /** What one purge did. */
+    public record Purge(int deleted, boolean moreLeft) {
+    }
+
     /** Sent rows deleted per statement, so a purge never holds one huge transaction. */
     static final int PURGE_CHUNK = 5_000;
+
+    /**
+     * The longest table name: the relay's lock names are the table's with a
+     * 19-character prefix ({@code audit-outbox-relay-}), and ShedLock's
+     * {@code shedlock.name} is {@code VARCHAR(64)} in every service (backlog
+     * #0-84, found in review: the earlier limit of 63 let a long name fail
+     * only when the relay first took its lock).
+     */
+    static final int MAX_TABLE_NAME_LENGTH = 64 - AuditOutboxRelay.RELAY_LOCK_PREFIX.length();
+
+    /** The table name is interpolated into SQL, so it is checked, not trusted. */
+    private static final Pattern TABLE_NAME =
+            Pattern.compile("[a-z][a-z0-9_]{0," + (MAX_TABLE_NAME_LENGTH - 1) + "}");
 
     private final JdbcTemplate jdbc;
     private final String table;
 
+    /**
+     * @throws IllegalArgumentException when {@code table} is not a plain
+     *         lower-case name of at most {@link #MAX_TABLE_NAME_LENGTH}
+     *         characters (checked here as well as in
+     *         {@link AuditOutboxProperties}, found in review: this constructor
+     *         is public and interpolates the name into every statement)
+     */
     public AuditOutbox(JdbcTemplate jdbc, String table) {
         this.jdbc = jdbc;
-        this.table = table;
+        this.table = checkedTableName(table);
+    }
+
+    static String checkedTableName(String table) {
+        if (table == null || !TABLE_NAME.matcher(table).matches()) {
+            throw new IllegalArgumentException("audit.outbox.table must be a plain lower-case table name of at most "
+                    + MAX_TABLE_NAME_LENGTH + " characters, was " + table);
+        }
+        return table;
+    }
+
+    /**
+     * Whether any row is due, a cheap read of the {@code idx_..._due} index
+     * the relay makes before it takes its lock (backlog #0-84, found in
+     * review: taking the ShedLock lock is a write to the shared
+     * {@code shedlock} table, and every service's relay used to take it on
+     * every poll, every two seconds, with nothing to send).
+     */
+    public boolean anyDue() {
+        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM " + table
+                + " WHERE status = 'PENDING' AND next_attempt_at <= now())", Boolean.class));
     }
 
     @Override
@@ -135,21 +180,26 @@ public class AuditOutbox implements AuditEventStore {
     /**
      * Deletes rows sent more than {@code retention} ago by the database's
      * clock, the one {@code sent_at} was written with, {@link #PURGE_CHUNK} per
-     * statement, each committed on its own (no surrounding transaction).
+     * statement, each committed on its own (no surrounding transaction), and at
+     * most {@code maxChunks} statements: a run stays well inside its lock
+     * however much is due (backlog #0-84, found in review: the loop had no
+     * bound), and what is left waits for the next run.
      *
-     * @return how many rows were deleted
+     * @return how many rows were deleted, and whether old sent rows may be left
      */
-    public int purgeSentOlderThan(Duration retention) {
+    public Purge purgeSentOlderThan(Duration retention, int maxChunks) {
         int total = 0;
-        int deleted;
-        do {
-            deleted = jdbc.update("DELETE FROM " + table + " WHERE id IN (SELECT id FROM " + table
+        for (int chunk = 0; chunk < maxChunks; chunk++) {
+            final int deleted = jdbc.update("DELETE FROM " + table + " WHERE id IN (SELECT id FROM " + table
                             + " WHERE status = 'SENT' AND sent_at < now() - make_interval(secs => ?) LIMIT "
                             + PURGE_CHUNK + ")",
                     retention.toMillis() / 1000.0);
             total += deleted;
-        } while (deleted == PURGE_CHUNK);
-        return total;
+            if (deleted < PURGE_CHUNK) {
+                return new Purge(total, false);
+            }
+        }
+        return new Purge(total, true);
     }
 
     private static String truncate(String error) {

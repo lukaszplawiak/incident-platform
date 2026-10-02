@@ -3,6 +3,8 @@ package com.incidentplatform.escalation.service;
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.domain.EscalationTaskStatus;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.domain.Severity;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -16,11 +18,14 @@ import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
@@ -33,6 +38,9 @@ class EscalationServiceTest {
     @Mock
     private EscalationTaskRepository taskRepository;
 
+    @Mock
+    private AuditEventPublisher auditEventPublisher;
+
     private EscalationService escalationService;
 
     private static final UUID INCIDENT_ID = UUID.randomUUID();
@@ -41,7 +49,7 @@ class EscalationServiceTest {
 
     @BeforeEach
     void setUp() {
-        escalationService = new EscalationService(taskRepository);
+        escalationService = new EscalationService(taskRepository, auditEventPublisher);
     }
 
     @Nested
@@ -180,6 +188,27 @@ class EscalationServiceTest {
 
             assertThat(captor.getValue().getEscalationLevel()).isEqualTo(2);
             assertThat(captor.getValue().getStatus()).isEqualTo(EscalationTaskStatus.PENDING);
+            then(auditEventPublisher).should().publishIncident(eq(INCIDENT_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.ESCALATION_SCHEDULED), eq("escalation-service"), anyString(),
+                    eq(Map.of("escalationLevel", 2, "timeoutMinutes", 5)));
+        }
+
+        /**
+         * Backlog #0-84: the task and its ESCALATION_SCHEDULED event are
+         * written in this method's transaction, so a failure to write the
+         * event fails the method (and rolls the task back), for the
+         * scheduler to record as ESCALATION_NOTIFICATION_FAILED.
+         */
+        @Test
+        @DisplayName("a failure to record ESCALATION_SCHEDULED fails the scheduling")
+        void auditFailureFailsScheduling() {
+            given(taskRepository.existsByIncidentIdAndEscalationLevel(INCIDENT_ID, 2)).willReturn(false);
+            willThrow(new IllegalStateException("outbox write failed")).given(auditEventPublisher)
+                    .publishIncident(any(), any(), any(), any(), any(), any());
+
+            assertThatThrownBy(() -> escalationService.scheduleLevel2Escalation(
+                    INCIDENT_ID, TENANT_ID, TEAM_ID, Severity.CRITICAL, "High CPU"))
+                    .hasMessage("outbox write failed");
         }
 
         @Test
@@ -195,6 +224,7 @@ class EscalationServiceTest {
 
             // then
             then(taskRepository).should(never()).save(any());
+            then(auditEventPublisher).shouldHaveNoInteractions();
         }
     }
 

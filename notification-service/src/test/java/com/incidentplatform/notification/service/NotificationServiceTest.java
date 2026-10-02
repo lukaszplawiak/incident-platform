@@ -9,8 +9,6 @@ import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
-import com.incidentplatform.shared.audit.AuditEventPublisher;
-import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.domain.Severity;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -26,6 +24,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -55,7 +54,6 @@ class NotificationServiceTest {
     @Mock private NotificationPersistenceService persistenceService;
     @Mock private NotificationChannel emailChannel;
     @Mock private NotificationChannel slackChannel;
-    @Mock private AuditEventPublisher auditEventPublisher;
     @Mock private OperatorAlertService operatorAlertService;
 
     private SimpleMeterRegistry meterRegistry;
@@ -71,7 +69,7 @@ class NotificationServiceTest {
         meterRegistry = new SimpleMeterRegistry();
         notificationService = new NotificationService(
                 router, logRepository, queueRepository, persistenceService,
-                auditEventPublisher, operatorAlertService, meterRegistry);
+                operatorAlertService, meterRegistry);
     }
 
     // ── enqueue ───────────────────────────────────────────────────────────
@@ -265,6 +263,93 @@ class NotificationServiceTest {
             then(persistenceService).should().markSent(entry);
         }
 
+        /**
+         * Backlog #0-84: the delivered notification's log row and audit event
+         * are one write now, made after the send. Its failure is not a failed
+         * send (it used to land in the send's catch and record one), and does
+         * not fail the entry: the other channels are still tried.
+         */
+        @Test
+        @DisplayName("a delivered notification that cannot be recorded is counted, not recorded as failed")
+        void deliveredButUnrecorded() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            final NotificationRequest emailRequest = buildRequest("EMAIL");
+            final NotificationRequest slackRequest = buildRequest("SLACK");
+            given(emailChannel.channelName()).willReturn("EMAIL");
+            given(slackChannel.channelName()).willReturn("SLACK");
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
+                    .willReturn(NotificationRouter.Routing.send(List.of(
+                            new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
+                            new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
+                    )));
+            willThrow(new IllegalStateException("database down")).given(persistenceService)
+                    .recordChannelSent(any(), any(), any(), anyInt(), eq("EMAIL"), any(), any(), any());
+
+            notificationService.processEntry(entry);
+
+            then(persistenceService).should(never())
+                    .recordChannelFailed(any(), any(), any(), anyInt(), any(), any(), any());
+            then(slackChannel).should().send(slackRequest);
+            then(persistenceService).should().recordChannelSent(
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("SLACK"),
+                    eq(slackRequest.recipient()), any(), any());
+            then(persistenceService).should().markSent(entry);
+            assertThat(meterRegistry.counter("audit.event.unrecorded", "event_type", "NOTIFICATION_SENT").count())
+                    .isEqualTo(1.0);
+        }
+
+        /**
+         * Found in review: a failure to record a failed send left the loop,
+         * so the remaining channels were never tried.
+         */
+        @Test
+        @DisplayName("a failed send that cannot be recorded is counted, and the other channels are still tried")
+        void failedButUnrecorded() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            final NotificationRequest emailRequest = buildRequest("EMAIL");
+            final NotificationRequest slackRequest = buildRequest("SLACK");
+            given(emailChannel.channelName()).willReturn("EMAIL");
+            given(slackChannel.channelName()).willReturn("SLACK");
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
+                    .willReturn(NotificationRouter.Routing.send(List.of(
+                            new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
+                            new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
+                    )));
+            willThrow(new NotificationException("EMAIL", "test@test.com", "SMTP down"))
+                    .given(emailChannel).send(emailRequest);
+            willThrow(new IllegalStateException("database down")).given(persistenceService)
+                    .recordChannelFailed(any(), any(), any(), anyInt(), eq("EMAIL"), any(), any());
+
+            notificationService.processEntry(entry);
+
+            then(slackChannel).should().send(slackRequest);
+            then(persistenceService).should().markSent(entry);
+            assertThat(meterRegistry.counter("audit.event.unrecorded", "event_type", "NOTIFICATION_FAILED").count())
+                    .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("an unexpected send error is recorded as a failed send, by its type only (found in review)")
+        void unexpectedSendError() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            final NotificationRequest emailRequest = buildRequest("EMAIL");
+            given(emailChannel.channelName()).willReturn("EMAIL");
+            given(router.route(any(), any(), any(), any(), any(), any(), any()))
+                    .willReturn(NotificationRouter.Routing.send(List.of(
+                            new NotificationRouter.ChannelRequest(emailChannel, emailRequest))));
+            willThrow(new IllegalStateException("GET https://hooks.example/T0/secret-path failed"))
+                    .given(emailChannel).send(emailRequest);
+
+            notificationService.processEntry(entry);
+
+            then(persistenceService).should().recordChannelFailed(
+                    eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("EMAIL"),
+                    eq(emailRequest.recipient()), eq("Unexpected error: IllegalStateException"));
+            then(persistenceService).should(never())
+                    .recordChannelSent(any(), any(), any(), anyInt(), any(), any(), any(), any());
+            then(persistenceService).should().markSent(entry);
+        }
+
         @Test
         @DisplayName("should record a FAILED log and continue when channel throws")
         void shouldRecordFailedLogOnChannelException() {
@@ -430,7 +515,7 @@ class NotificationServiceTest {
         }
 
         @Test
-        @DisplayName("parks the entry, counts it, audits it and tells the operator, and sends nothing")
+        @DisplayName("parks the entry (its audit event written with it), counts it, tells the operator, sends nothing")
         void parksAndAlertsForAnOpenedIncident() {
             final NotificationQueueEntry entry = buildPendingEntry();
             given(router.route(any(), any(), any(), any(), any(), any(), any()))
@@ -446,9 +531,6 @@ class NotificationServiceTest {
                     .recordChannelSent(any(), any(), any(), anyInt(), any(), any(), any(), any());
             then(operatorAlertService).should().undeliverable(
                     INCIDENT_ID, TENANT_ID, EVENT_TYPE, UndeliverableReason.NO_ONCALL);
-            then(auditEventPublisher).should().publishIncident(
-                    eq(INCIDENT_ID), eq(TENANT_ID),
-                    eq(AuditEventTypes.NOTIFICATION_UNDELIVERABLE), any(), any(), any());
             assertThat(count(EVENT_TYPE, UndeliverableReason.NO_ONCALL)).isEqualTo(1.0);
         }
 
@@ -514,6 +596,43 @@ class NotificationServiceTest {
             then(persistenceService).should().markSent(entry);
             then(persistenceService).should(never()).markUndeliverable(any(), any());
             then(operatorAlertService).shouldHaveNoInteractions();
+        }
+
+        /**
+         * Found in review: a failed write of the UNDELIVERABLE status (and its
+         * audit event) used to skip the operator alert, though nobody had been
+         * notified either way. The failure still reaches the caller.
+         */
+        @Test
+        @DisplayName("the operator is alerted even when the UNDELIVERABLE write fails, which is rethrown")
+        void alertsWhenUndeliverableWriteFails() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            willThrow(new IllegalStateException("database down")).given(persistenceService)
+                    .markUndeliverable(entry, UndeliverableReason.NO_ONCALL);
+
+            assertThatThrownBy(() ->
+                    notificationService.markUndeliverable(entry, UndeliverableReason.NO_ONCALL))
+                    .hasMessage("database down");
+
+            then(operatorAlertService).should().undeliverable(
+                    INCIDENT_ID, TENANT_ID, EVENT_TYPE, UndeliverableReason.NO_ONCALL);
+            assertThat(count(EVENT_TYPE, UndeliverableReason.NO_ONCALL)).isZero();
+        }
+
+        @Test
+        @DisplayName("an alert failure never hides the failed UNDELIVERABLE write (found in review)")
+        void writeFailureNotMaskedByAlertFailure() {
+            final NotificationQueueEntry entry = buildPendingEntry();
+            final IllegalStateException writeFailure = new IllegalStateException("database down");
+            willThrow(writeFailure).given(persistenceService)
+                    .markUndeliverable(entry, UndeliverableReason.NO_ONCALL);
+            willThrow(new IllegalStateException("smtp down")).given(operatorAlertService)
+                    .undeliverable(any(), any(), any(), any());
+
+            assertThatThrownBy(() -> notificationService.markUndeliverable(entry, UndeliverableReason.NO_ONCALL))
+                    .isSameAs(writeFailure)
+                    .satisfies(e -> assertThat(e.getSuppressed()).extracting(Throwable::getMessage)
+                            .containsExactly("smtp down"));
         }
 
         @Test

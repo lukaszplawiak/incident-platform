@@ -39,7 +39,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <ul>
  *   <li>One instance at a time: a ShedLock lock named after the table, as
  *       every service shares the {@code shedlock} table and each relays its
- *       own outbox.</li>
+ *       own outbox. A poll first asks whether any row is due, without a lock,
+ *       and takes the lock only when one is (found in review: the lock is a
+ *       write to that shared table, and it was taken on every poll).</li>
  *   <li>A batch is handed to the producer first and its acknowledgements
  *       awaited afterwards, all within one {@code send-timeout}: one round
  *       trip per batch, not per event (found in review: waiting per event
@@ -82,6 +84,18 @@ public class AuditOutboxRelay {
     static final Duration MAX_RETRY = Duration.ofMinutes(5);
     static final Duration BACKLOG_CACHE = Duration.ofSeconds(5);
 
+    /** The relay's lock name is this plus the table (see {@link AuditOutbox#MAX_TABLE_NAME_LENGTH}). */
+    static final String RELAY_LOCK_PREFIX = "audit-outbox-relay-";
+    /** As long as {@link #RELAY_LOCK_PREFIX}, so one table-name limit serves both. */
+    static final String PURGE_LOCK_PREFIX = "audit-outbox-purge-";
+
+    /**
+     * Statements one purge run makes at most, {@link AuditOutbox#PURGE_CHUNK}
+     * rows each: 500,000 rows, far more than a service sends in the hour
+     * between runs, and well inside the run's ten-minute lock.
+     */
+    static final int MAX_PURGE_CHUNKS = 100;
+
     /** What one run did. */
     public record RunResult(int sent, int failed) {
     }
@@ -99,8 +113,11 @@ public class AuditOutboxRelay {
     private volatile Instant pausedUntil = Instant.MIN;
     private final AtomicInteger consecutiveFailedRuns = new AtomicInteger();
 
-    private volatile AuditOutbox.Backlog cachedBacklog;
-    private volatile Instant cachedBacklogAt = Instant.MIN;
+    /** The backlog and when it was read, together (found in review: two fields could be read mismatched). */
+    private record CachedBacklog(AuditOutbox.Backlog backlog, Instant readAt) {
+    }
+
+    private volatile CachedBacklog cachedBacklog;
 
     public AuditOutboxRelay(AuditOutbox outbox,
                             AuditEventKafkaSender sender,
@@ -113,15 +130,16 @@ public class AuditOutboxRelay {
         this.properties = properties;
         this.lockingTaskExecutor = new DefaultLockingTaskExecutor(lockProvider);
         this.clock = clock;
-        this.relayLockName = "audit-outbox-relay-" + properties.table();
-        this.purgeLockName = "audit-outbox-purge-" + properties.table();
+        this.relayLockName = RELAY_LOCK_PREFIX + properties.table();
+        this.purgeLockName = PURGE_LOCK_PREFIX + properties.table();
         this.sent = Counter.builder("audit.outbox.sent")
                 .description("Audit events sent from the outbox and acknowledged by Kafka (backlog #0-84)")
                 .register(meterRegistry);
         this.failed = Counter.builder("audit.outbox.send.failed")
                 .description("Audit outbox send attempts that failed and will be retried (backlog #0-84)")
                 .register(meterRegistry);
-        Gauge.builder("audit.outbox.pending", this, relay -> relay.backlog().map(b -> (double) b.pending())
+        Gauge.builder("audit.outbox.pending", this, relay -> relay.backlog()
+                        .map(cached -> (double) cached.backlog().pending())
                         .orElse(Double.NaN))
                 .description("Audit events waiting in the outbox (backlog #0-84)")
                 .register(meterRegistry);
@@ -143,11 +161,17 @@ public class AuditOutboxRelay {
     /**
      * One run now, under the relay's lock, ignoring a pause: for the
      * break-glass command, which has no scheduler and sends the event it just
-     * wrote before it exits when Kafka is reachable (backlog #0-84).
+     * wrote before it exits when Kafka is reachable (backlog #0-84). Takes the
+     * lock only when a row is due; a run with nothing due neither takes it nor
+     * ends a pause's count of failed runs, as it tells nothing about Kafka.
      *
-     * @return what the run did; nothing when another instance holds the lock
+     * @return what the run did; nothing when no row is due or another
+     *         instance holds the lock
      */
     public RunResult relayNow() {
+        if (!outbox.anyDue()) {
+            return new RunResult(0, 0);
+        }
         try {
             final RunResult result = lockingTaskExecutor.executeWithLock(this::relayDue, new LockConfiguration(
                     clock.instant(), relayLockName, lockAtMostFor(), Duration.ZERO)).getResult();
@@ -200,9 +224,12 @@ public class AuditOutboxRelay {
     }
 
     void purgeSent() {
-        final int purged = outbox.purgeSentOlderThan(properties.retention());
-        if (purged > 0) {
-            log.info("Audit outbox purged {} sent events older than {}", purged, properties.retention());
+        final AuditOutbox.Purge purge = outbox.purgeSentOlderThan(properties.retention(), MAX_PURGE_CHUNKS);
+        if (purge.moreLeft()) {
+            log.warn("Audit outbox purged {} sent events older than {}, the most one run deletes; "
+                    + "the rest waits for the next run", purge.deleted(), properties.retention());
+        } else if (purge.deleted() > 0) {
+            log.info("Audit outbox purged {} sent events older than {}", purge.deleted(), properties.retention());
         }
     }
 
@@ -377,15 +404,16 @@ public class AuditOutboxRelay {
     }
 
     /** The table's backlog, read at most every {@link #BACKLOG_CACHE}; empty when it cannot be read. */
-    Optional<AuditOutbox.Backlog> backlog() {
+    private Optional<CachedBacklog> backlog() {
         final Instant now = clock.instant();
-        if (cachedBacklog != null && now.isBefore(cachedBacklogAt.plus(BACKLOG_CACHE))) {
-            return Optional.of(cachedBacklog);
+        final CachedBacklog cached = cachedBacklog;
+        if (cached != null && now.isBefore(cached.readAt().plus(BACKLOG_CACHE))) {
+            return Optional.of(cached);
         }
         try {
-            cachedBacklog = outbox.backlog();
-            cachedBacklogAt = now;
-            return Optional.of(cachedBacklog);
+            final CachedBacklog read = new CachedBacklog(outbox.backlog(), now);
+            cachedBacklog = read;
+            return Optional.of(read);
         } catch (RuntimeException e) {
             // NaN in the gauges; the database being unreachable has its own
             // signals (health, the service's errors).
@@ -401,15 +429,20 @@ public class AuditOutboxRelay {
      */
     private double oldestPendingAgeSeconds() {
         return backlog()
-                .map(b -> b.oldestAge()
-                        .map(age -> (double) age.plus(Duration.between(cachedBacklogAt, clock.instant())).toSeconds())
+                .map(cached -> cached.backlog().oldestAge()
+                        .map(age -> (double) age.plus(Duration.between(cached.readAt(), clock.instant())).toSeconds())
                         .orElse(0.0))
                 .orElse(Double.NaN);
     }
 
     /**
      * Long enough for a full run: each batch waits at most the send timeout,
-     * plus the producer's own blocking and the database work.
+     * plus the producer's own blocking and the database work. The producer
+     * blocks at most {@code max.block.ms} once per run (a run stops at the
+     * first send Kafka fails), so the lock must also outlast that block plus
+     * one send timeout: 5 s in every service but escalation-service, which
+     * keeps Kafka's 60 s and relies on the default 80 s (see its
+     * application.yml).
      */
     private Duration lockAtMostFor() {
         return properties.sendTimeout().multipliedBy(properties.maxBatchesPerRun()).plusSeconds(30);

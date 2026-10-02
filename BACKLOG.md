@@ -81,12 +81,13 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
 | [0-81](#0-81-test-profiles-with-hard-coded-keys-ship-inside-the-service-jars) | Test profiles with hard-coded keys ship inside the service jars | tech-debt | Low | Open |
 | [0-82](#0-82-suspend-and-offboard-a-tenant) | Suspend and offboard a tenant | design | Medium | Open |
-| [0-84](#0-84-audit-events-are-sent-to-kafka-inside-the-database-transaction-not-through-an-outbox) | Audit events are sent to Kafka inside the database transaction, not through an outbox | bug | Medium | Open |
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
 | [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
 | [0-90](#0-90-a-customer-tenants-only-admin-has-no-way-back-from-a-factor-they-did-not-enrol) | A customer tenant's only admin has no way back from a factor they did not enrol | design | Medium | Open |
 | [0-91](#0-91-one-writer-for-the-x-tenant-id-header-of-every-kafka-record) | One writer for the X-Tenant-Id header of every Kafka record | design | Low | Open |
+| [0-92](#0-92-a-kafka-records-x-tenant-id-header-reaches-the-logs-unchecked) | A Kafka record's `X-Tenant-Id` header reaches the logs unchecked | bug | Low | Open |
+| [0-93](#0-93-notification-channel-errors-carry-third-party-text-into-notification_log-and-the-audit-trail) | Notification channel errors carry third-party text into `notification_log` and the audit trail | tech-debt | Low | Open |
 
 ---
 
@@ -1248,106 +1249,6 @@ tenant, and the enforcement points above. Suspension first; offboarding is large
 
 ---
 
-### 0-84. Audit events are sent to Kafka inside the database transaction, not through an outbox
-
-**Type:** bug · **Priority:** Medium · **Status:** Open (found in the review of #0-80); first step done, see *Progress*
-
-*Problem, Approach and First users describe the state before the first step (see Progress): in auth-service
-and incident-service it is fixed; notification-, escalation- and postmortem-service still work as described.*
-
-**Problem.** `AuditEventPublisher.publishAuth` / `publish` (`shared`) call `AuditEventKafkaSender.send`,
-which calls `KafkaTemplate.send` directly. Most callers do this from inside their `@Transactional` method
-(15 classes in auth-service, and incident-, notification-, postmortem- and escalation-service; some calls,
-such as a failed login or `TenantProvisioningService.reissueFirstAdminInvite`, run outside a transaction).
-Inside one, it is a dual write to two systems with no common transaction:
-- **Event without the change.** The event is handed to the producer before the database commits. If the
-  commit then fails (a constraint checked at flush, a lost connection), `audit.events` records an action
-  that never happened, e.g. `TENANT_PROVISIONED` for a tenant that was rolled back.
-- **Change without the event.** `KafkaTemplate.send` is asynchronous and its future is never read, so a
-  delivery that fails after the call (broker down longer than `delivery.timeout.ms`) is lost without a log
-  line. `@Retryable` was meant to retry exceptions thrown by the call itself (it turned out inert: no
-  module enabled Spring Retry), and the publisher then swallowed them by design. The audit trail could
-  silently miss committed actions.
-- **A broker outage stalls requests.** While the producer has no metadata, `send` blocks up to
-  `max.block.ms` (60 s by Kafka's default; auth-service set none), all inside the request's database
-  transaction, holding its connection. Login, user and key management then waited on Kafka. (From the client's documented defaults; not measured on this stack.)
-
-**How production systems handle it.** The *transactional outbox*: the audit row is written to an
-`audit_outbox` table in the same transaction as the change, and a relay (a ShedLock'd poller, or CDC such as
-Debezium) publishes it afterwards, at least once, and marks it sent. Consumers deduplicate by event id
-(this text first said `AuditEventConsumer` already did, backlog #37; it did not: the message had no event id
-and the consumer caught only a duplicate of its own insert, so the first step added one). The platform already uses this pattern for
-`incidents.lifecycle` (`IncidentEventOutbox`, backlog #36) and for auth emails (#0-52). Alternatives are
-weaker: publishing in `afterCommit` removes phantom events but still loses them on a crash between commit
-and send; Kafka transactions do not span the database.
-
-**Approach.** An audit outbox per service that audits inside transactions, with a shared relay component
-in `shared` (table per service, same Flyway-per-service rule), `AuditEventPublisher` writing to it when a
-transaction is active, and the existing Kafka sender used only by the relay. Decide whether events raised
-outside a transaction (e.g. a failed login, which has no change to commit) keep a direct send. Also set
-`max.block.ms` / `delivery.timeout.ms` for every producer, which is worth doing on its own.
-
-**First users (#0-88).** The admin MFA reset (`MFA_RESET_BY_ADMIN`) was a security-relevant action audited
-through the fire-and-forget path; it was to be among the first to write to the outbox. The break-glass MFA
-reset used `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waited for Kafka's acknowledgement
-inside the transaction (no ack, no reset): acceptable for a one-off process, wrong for a request path, so it
-refused to run on a request thread (a runtime guard). With the outbox the break-glass reset was to write its
-event in the transaction like everything else, and `publishAuthConfirmed`, `AuditEventKafkaSender.sendConfirmed`,
-`AuditNotConfirmedException` and the guard to go: done in the first step.
-
-**Progress: first step (PR #449; `shared`, incident-service, auth-service).**
-- `shared`: `AuditOutbox` (JDBC INSERT into the table named by `audit.outbox.table`, joining the caller's
-  transaction; behind the `AuditEventStore` interface, so the publisher in a service without
-  `spring-jdbc` loads no JDBC class), `AuditOutboxRelay` (`@Scheduled`, ShedLock per table; a batch is
-  handed to the producer and its acknowledgements awaited within `send-timeout`, up to
-  `max-batches-per-run` batches a run; a failed row backs off 5 s doubling to 5 min and is never given up,
-  and the relay pauses by the same backoff after a failed run; rows read in the order of the due index;
-  SENT rows purged after 7 days in chunks; gauges read from the table at scrape time; a batch's
-  acknowledged rows marked sent in one statement; a failed row due again by the database's clock; only
-  Kafka's own failures pause the relay, a record Kafka refuses for itself is backed off alone; the backlog
-  age and the purge by the database's clock; `tenant_id NOT NULL` and a `created_at` index for the gauge;
-  a scheduling pool of 4 in auth-service; incident-service runs on virtual threads, one per run),
-  `AuditOutboxConfiguration` (only when `audit.outbox.table` is set). `AuditEventPublisher` writes to the
-  outbox when the service has one, else sends as before, and refuses an event the trail cannot store (no
-  tenant or resource, a field over its column, a metadata key naming a secret, a payload over 256 KiB):
-  with the outbox the action fails, without it the refusal is only logged, as that path never threw; so nothing is marked
-  sent that the consumer then drops or Kafka refuses for ever. `AuditEventMessage.eventId` is new. `@Retryable` on
-  the sender was inert (no `@EnableRetry` in any module) and is removed; `publishAuthConfirmed`,
-  `sendConfirmed`, `AuditNotConfirmedException` and the request-thread guard are deleted, as planned under
-  *First users*.
-- Events raised outside a transaction (a failed login) commit on their own with the same INSERT. A refusal
-  whose transaction rolls back (`MFA_VERIFY_FAILED`) is audited after it ended: `MfaService` runs the
-  verification in a `TransactionTemplate`, rolls back on a wrong code, then publishes and throws. (Review: a
-  nested `REQUIRES_NEW` write held two pooled connections per wrong code, with a pool of 5.) No other audit
-  call in auth- or incident-service is followed by a throw in its transaction.
-- incident-service: `incident_audit_outbox` (V14), its own audit through it too; `audit_events.event_id`
-  (V12) with a unique index on `(tenant_id, event_id)` built `CONCURRENTLY` (V13; Flyway's lock made
-  non-transactional, `spring.flyway.postgresql.transactional-lock: false`, or the build waits on it), so a
-  resent event is a duplicate. `AuditEventConsumer` treats only its two idempotency keys as duplicates;
-  any other constraint violation, like unreadable JSON or a header/payload tenant mismatch (the tenant now
-  comes from `X-Tenant-Id` first, through `TenantKafkaRecordResolver`, and a payload naming no tenant is
-  refused), is a poison pill: logged at ERROR without the database's or parser's text (it quotes the row),
-  sent to `incidents.dead-letter` and acknowledged only once Kafka has that copy (`publishAndWait`, else
-  `nack`), counted (`audit.events.rejected`) and alerted (`AuditEventsRejected`, critical), since the
-  producer's outbox already counts it as delivered (it used to pass as a duplicate).
-  `spring.flyway.postgresql.transactional-lock: false` assumes a direct connection to Postgres: revisit it
-  if a transaction-pooling proxy (PgBouncer in transaction mode) ever sits in between.
-  `occurredAt` is the producer's time (it was the consume time).
-- auth-service: `auth_audit_outbox` (V27). `AfterCommit` (#0-89's interim, above in its PR) is removed. The
-  break-glass reset writes its event like everything else and then runs the relay once
-  (`relayNow`), so the event reaches Kafka before the command exits when Kafka is reachable; otherwise the
-  running service sends it.
-- `max.block.ms` 5 s for the producers of auth- and incident-service, so `send()` itself cannot hold the
-  relay for Kafka's default 60 s.
-- Monitoring: `AuditEventsDropped` is replaced by `AuditOutboxBacklog` (oldest pending event older than
-  10 minutes for 5 minutes, critical, operator email); a service that is down is `PlatformServiceDown`.
-
-**Second step (open).** notification-, escalation- and postmortem-service: an outbox table each and
-`audit.outbox.table`; then `AuditEventKafkaSender.send` (fire-and-forget) and the publisher's fallback go.
-Their producers' `max.block.ms` / `delivery.timeout.ms` come with it.
-
----
-
 ### 0-85. A tenant id with data in other services but no user can be provisioned
 
 **Type:** design · **Priority:** Low · **Status:** Open (found in the review of #0-80; needs verification)
@@ -1487,6 +1388,50 @@ envelope idea in `AlertKafkaProducer`'s TODO.
 
 ---
 
+### 0-92. A Kafka record's `X-Tenant-Id` header reaches the logs unchecked
+
+**Type:** bug · **Priority:** Low · **Status:** Open (found in the review of #0-84)
+
+**Problem.** `TenantKafkaRecordResolver.extractTenantId` (`shared`) returns the raw `X-Tenant-Id` header,
+checked only for being blank, and consumers put it into `TenantContext`, hence into the MDC of every log
+line (`[%X{tenantId}]` in the plain-text log pattern) and into their own ERROR lines and dead-letter
+reasons (`AuditEventConsumer`'s header/payload mismatch reason quotes both values). A header with CR/LF
+or other control characters forges or splits log lines. Anyone who can produce to a topic can set it,
+which today is any service (Kafka has no ACLs: #0-66). Not audit-specific: every consumer resolves its
+tenant the same way. The payload fallback (`tenantId` in the JSON) has the same shape.
+
+**How production systems handle it.** Validate identifiers at the trust boundary against their known
+format, and reject (dead-letter) a record that does not match, rather than escape it per log call; plus,
+as defence in depth, a structured (JSON) log encoder that escapes values.
+
+**Approach.** Decide the tenant-id format the platform guarantees (new tenants are slugs, `TenantIds.SLUG`,
+since #0-80, while ids that existed before are kept as they are; `ReservedTenants`; HTTP tenant ids come
+from signed tokens), then check it in
+`TenantKafkaRecordResolver` (header and payload alike): a record that does not match goes to the
+dead-letter topic with a reason that does not quote the value. Relates to #0-91 (one writer for the header).
+
+---
+
+### 0-93. Notification channel errors carry third-party text into `notification_log` and the audit trail
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-84)
+
+**Problem.** A channel's own failure (`NotificationException`) is recorded with its message, as the
+platform's own text: in `notification_log` whole, and in the `NOTIFICATION_FAILED` audit event cut to 500
+characters on one line (`AuditText.error`, #0-84). But the email and Slack channels build that message by
+appending the underlying library's (`EmailNotificationChannel`: the mail exception's; `SlackNotificationChannel`:
+the Slack client's or HTTP error's), so an SMTP server's reply or a Slack error body reaches rows the tenant
+reads. Same-tenant only, and older than #0-84; unexpected exceptions are already recorded by type only.
+
+**How production systems handle it.** The adapter maps a provider failure to the platform's own reason (a
+status, an error code) for anything persisted or shown; the provider's raw text goes to logs only.
+
+**Approach.** Give `NotificationException` a platform-authored reason (e.g. `SMTP_REJECTED`, `SLACK_HTTP_429`)
+used for `notification_log.error_message` (which today stores the whole message) and the audit event, and log
+the cause with its message where it is caught. postmortem-service already does this for Gemini (#0-84).
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -1520,6 +1465,7 @@ envelope idea in `AlertKafkaProducer`'s TODO.
 | 0-83 | The platform API (#0-80) accepted an operator admin's password alone and had no rate limit. `PlatformAccess` now also requires that the access token's session completed MFA within 12 h (`platform.mfa.max-session-age`) with a factor whose MFA_ENABLED notice was sent at least 24 h ago (`platform.mfa.enrolment-grace`): recorded on the session (`auth_tokens.mfa_verified_at`, V22) when a login finishes with a TOTP or backup code, carried unchanged by refresh rotation, cleared when the user disables MFA, and checked server-side per request (a live session only, so logout ends access at once). The grace period, plus an email to the account on every MFA enable/disable (outbox types `MFA_ENABLED` / `MFA_DISABLED`, V23) with the grace period counted from when that notice was sent (`users.mfa_enabled_notice_sent_at`, kept on the user because the outbox purges sent rows after 30 days), a password reset by email that removes a factor still within the grace period (interim, replaced by an admin reset in #0-88) and kills unfinished logins (MFA session / setup tokens), enrolment only from a live session, and existing factors enabled at least 24 h before the deploy backfilled as established by V23 (a newer one gets the grace period like any other, and an operator admin's factor never: operators re-enrol once), answers a review finding: enabling MFA needs only a password, so a password thief could enrol their own factor. Also fixed on the way: bulk UPDATEs in `AuthTokenRepository`, `ApiKeyRepository` and `MfaBackupCodeRepository` (and the new one in `UserRepository`) cleared the persistence context without flushing it, silently dropping earlier changes to other tables in the transaction. Decided against an `amr` JWT claim: only auth-service needs it, so `shared` and the token format stay unchanged; `amr` remains the path if another service needs step-up. A refusal names the failed MFA condition (`PlatformAccessDeniedHandler`). Writes are limited per operator and in total (`PlatformRateLimiter`, bucket4j + Redis, default 20/h per operator and 50/h for the platform, `@CircuitBreaker` opened by any failure), fail-closed (503) unlike ingestion's fail-open #67, with a lazy Redis connection so auth-service starts without Redis. Critical alerts `PlatformTenantProvisioningSpike` and `PlatformApiRateLimited`, high `PlatformApiRateLimitUnavailable`, with promtool tests | PR #446 |
 | 0-88 | Since #0-83 a password reset by email removed a second factor still within the grace period, the only way then to undo a factor someone else enrolled with the owner's password, but one that let a mailbox alone undo MFA. A password reset now never touches MFA (NIST SP 800-63B; Okta, Entra ID, Google keep MFA on reset); `MfaService.removeFactorEnrolledWithinGrace` is gone. Instead an admin of the tenant resets another user's MFA (`POST /api/v1/users/{id}/mfa-reset`, `MfaService.resetMfaByAdmin`): factor, pending setup, backup codes and the sessions' MFA marks cleared, every session and unfinished login ended, audited as `MFA_RESET_BY_ADMIN` (`shared`, distinct from the self-service `MFA_DISABLED`). Any other user of the tenant that is not archived (deactivated ones too, so a stranger's factor goes before reactivation), admins included, never one's own account; only from the admin's own session passing the platform API's MFA rule (`MfaSessionStatusService.check`: MFA within 12 h, a factor whose MFA_ENABLED notice went out at least 24 h ago; a weaker "completed MFA" rule was found in review to let a password thief enrol a factor and reset everyone at once, or a 30-day refresh chain act weeks later), so an admin's password, a fresh factor or an API key gets 403. Resets are limited per admin and per tenant (`MfaResetRateLimiter`, fail-closed like the platform API's limiter, counted only for a reset about to happen, 429/503 with Retry-After, alerts `AdminMfaResetRateLimited` / `AdminMfaResetRateLimitUnavailable`; shared `RateLimitDecision` / `RedisTokenBuckets` with `PlatformRateLimiter`). Audit records now carry `X-Tenant-Id` from the event's tenant (`AuditEventKafkaSender`; most had none, the rest is #0-91), and the producer interceptor no longer appends a second, context-derived one. `publishAuthConfirmed` refuses to run on a request thread. The user is emailed with a notice of its own (`MFA_RESET`, V24), so a reset they did not ask for stands out from disabling MFA themselves. The MFA_ENABLED email now says: reset the password, then ask an administrator to reset MFA (in that order, or the old password's holder could enrol again). A single platform operator has no second admin: a one-off break-glass command of auth-service (`BreakGlassMfaResetRunner`, `--break-glass.mfa-reset.*`, started only by the subcommand `break-glass-mfa-reset` as the first argument (the options alone, or an environment variable left in a deployment, start nothing), no web server, no scheduled jobs (runner and scheduling share one marker condition, `BreakGlassCommand`), admins of `platform-operator` only, actor and reason without control, line-separator or formatting characters) runs the same reset, emailed, and audited as `MFA_RESET_BREAK_GLASS` with the operator's name, reason and `executedOn` (OS user and host of the process) through `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waits for Kafka's acknowledgement inside the transaction, so a break-glass reset never happens unaudited; chosen over a SQL procedure, which could neither email nor audit. The platform API's grace period (#0-83) stays. A customer tenant's only admin has no remedy yet: #0-90; the admin reset's audit moves to #0-84's outbox. Testcontainers tests of the reset, the break-glass reset and its rollback without an audit acknowledgement, and a password reset that keeps a fresh factor | PR #447 |
 | 0-89 | A personal API key created with a stolen password outlived the owner's recovery, and in auth-service any API key was a full session of its owner: no route checked a scope, so an admin's personal key could invite a second admin, create a tenant key or an integration, change roles or the tenant's MFA policy, each a foothold that no reset takes back. Now an API key reaches only the routes `SecurityConfig` lists for keys, with the scope each names (`/api/v1/teams` with `teams:read` / `teams:write`, the role checks kept), and every other route refuses it (`ApiKeyAccess`, deny by default like the purpose token of #0-16; MFA setup already needed a live session). A password reset, an admin MFA reset and the break-glass reset revoke the user's personal keys in the same transaction (OWASP: recovering a compromised account ends every session and credential), the count in the action's audit event (`personalApiKeysRevoked`, also on archive) and the MFA_RESET email says so; a password change does it only on request (`revokePersonalApiKeys`, OWASP ASVS 3.3.3 "gives the option"; a routine change keeps them). Creating a key emails the account through the auth email outbox (`API_KEY_CREATED`, V25): a personal key its owner, a tenant key (an integration's too) the admin who created it, one email per key showing its id (the row names the key, `api_key_id`; not the prefix, part of the secret), never merged or superseded (OWASP ASVS 2.2.3; review: a 15-minute merge let a key made right after the owner's own hide behind its notice); the name, typed by the creator, is not shown. A user may create at most 20 keys per hour, revoked and integration keys included (`ApiKeyCreationLimit`, counted in Postgres on V26's index, 429 with Retry-After; review: the creator's user row is locked first, `FOR NO KEY UPDATE NOWAIT` (not `FOR UPDATE`, which the foreign-key locks of a login or a reset in flight would have turned into spurious 429s), so one user's parallel requests cannot all pass this limit and the active-key caps with a read-then-insert check, and one finding the row busy gets a 429 at once rather than waiting on a pooled connection; the creation and bulk revocation audit events are sent after commit on a bounded executor private to `AfterCommit` (alerted by `AuditEventsDropped` when its queue drops events; a bulk revoke that revoked nothing publishes nothing), as the connection was measured to be still held inside `afterCommit`, so neither the lock nor a connection waits on Kafka), which bounds those emails against a create-and-revoke loop. Tenant and integration keys are meant to outlive their creator, so a reset keeps them (found in review: one an intruder made would survive); instead every key records who created it and from which login session (V26, personal keys backfilled from their owner), the key list filters by creator (`GET /api/v1/api-keys?createdBy=`), an admin revokes every key a user created since a given time (`POST /api/v1/api-keys/revoke-created-by`, integrations with their keys, one audit event listing them; same rights as revoking one key, so no step-up or limit: revoking is the safe direction, and a tenant without MFA must be able to clean up), the admin MFA reset can do the same in its transaction (`revokeKeysCreatedSince`), and its email counts all the tenant keys the account created that still work (an archive records the same count, `unownedApiKeysKept`; both only count keys with a recorded creator). Tenant and integration keys from before V26 have no recorded creator and are revoked one by one; V26's backfill of personal keys is not covered by a test (the test database migrates from empty). An integration revoked in bulk, through the endpoint or the MFA reset, is also audited as `INTEGRATION_REVOKED`, and the MFA reset lists the revoked key and integration ids. Not done, on purpose: a step-up (MFA) to create a key, of little use once a key cannot create anything and the creator is told. Testcontainers tests that a creation is refused at once while the creator's row is locked, that parallel creations never exceed the limit, that the creation audit is published after commit off the request thread (a stalled publish holds no connection) and not at all on rollback; MockMvc test of every route with an admin's key holding every scope (HEAD, trailing slash and dot segments included), Testcontainers tests of the revocations, the creator columns and the outbox rows | PR #448 |
+| 0-84 | Audit events no longer go to Kafka from inside the action's transaction, fire-and-forget. Every service that records them (auth-, incident-, notification-, escalation-, postmortem-service) writes each event to its own outbox table (`<service>_audit_outbox`; auth V27, incident V14, notification V8, escalation V7, postmortem V5) in the transaction of the change it records, and `AuditOutboxRelay` (`shared`, ShedLock per table) sends committed rows, waiting for Kafka's acknowledgements batch by batch, retrying a failed row with backoff (5 s doubling to 5 min) and never giving it up; the relay pauses after Kafka itself failed, asks without a lock whether anything is due before taking its ShedLock lock (taking it is a write to the shared `shedlock` table), purges SENT rows after 7 days in chunks, at most 100 chunks a run. `AuditEventMessage.eventId` is new; incident-service's consumer deduplicates on `(tenant_id, event_id)` (V12, V13 built `CONCURRENTLY`), resolves the tenant header first, and sends any other unstorable record to `incidents.dead-letter` (`audit.events.rejected`, alert `AuditEventsRejected`). `AuditEventPublisher` exists only where `audit.outbox.table` is set (a bean of `AuditOutboxConfiguration`), so a service that injects it without an outbox does not start; the direct send (`AuditEventKafkaSender.send`, which lost an event whenever Kafka was slow or down) is gone, with `publishAuthConfirmed`, `AfterCommit` (#0-89's interim) and the inert `@Retryable`. The publisher refuses an event the trail cannot store (no tenant or resource, a field over its column, a metadata key naming a secret, a payload over 256 KiB), failing the action. A refusal whose transaction rolls back (`MFA_VERIFY_FAILED`) is audited after the rollback. In notification-service the `notification_log` row (or the UNDELIVERABLE status) and its audit event are one transaction; every failed send is now audited, not only a channel's own failure, and a delivered notification whose record cannot be written is no longer recorded as a failed send. In escalation-service `ESCALATION_SCHEDULED` is written with the level-2 task; `ESCALATION_FIRED` and `ESCALATION_NOTIFICATION_FAILED` follow a change already committed (or none), so a failure to write them, like a delivered notification's, is logged and counted (`audit.event.unrecorded`, alert `AuditEventUnrecorded`) rather than thrown. `max.block.ms` is 5 s in the producers of auth-, incident-, notification- and postmortem-service, so `send()` cannot hold the relay for Kafka's default 60 s; escalation-service keeps the default on purpose, as its escalation event is sent once and not retried (#0-4) and a shorter block would turn a brief outage into a lost escalation; its relay runs on its own virtual thread. `delivery.timeout.ms` is left at its default: the relay waits `send-timeout` for an acknowledgement, and a record delivered after that is resent and deduplicated by `eventId`. Table names are checked (plain lower-case, at most 45 characters, so the relay's lock name fits `shedlock.name`) in `AuditOutbox` itself as well as in its properties. Alerts `AuditOutboxBacklog` (oldest pending event over 10 min), `AuditEventsRejected`, `AuditEventUnrecorded`, all critical and emailed to the operator. An error goes into an event cut to 500 characters on one line, an unexpected exception by its type only (`AuditText`), a failed Gemini call as a fixed text: the trail is the tenant's to read, and a client library's message can quote a token-bearing URL or a response body. A failed send whose record cannot be written no longer stops the remaining channels, and an undeliverable notification alerts the operator even when its status write fails. The counters behind `AuditEventUnrecorded` and `AuditEventsRejected` exist at zero from startup (`UnrecordedAuditEvents`), so each alert fires on the first failure, not the second. Testcontainers tests per service (the migration takes the shared SQL; through the real service, the change and its audit event commit or roll back together, under the action's tenant) and a wiring test with Spring Boot's own Kafka beans. Log injection through the tenant header found in review: #0-92 | PRs #449, #450 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

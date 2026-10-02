@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -247,6 +248,31 @@ class PostmortemPersistenceServiceTest {
                     eq(AuditEventTypes.POSTMORTEM_FAILED), anyString(),
                     anyString(), any());
         }
+
+        /**
+         * Backlog #0-84, found in review: the event is written in this
+         * transaction, so a Gemini error too large to store would roll the
+         * FAILED mark back with it. The entity keeps the whole message.
+         */
+        @Test
+        @DisplayName("the error goes into the audit event cut to 500 characters, on one line")
+        void auditErrorCut() {
+            final Postmortem postmortem = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            given(postmortemRepository.getReferenceById(POSTMORTEM_ID)).willReturn(postmortem);
+            final String error = "Gemini 500:\n" + "b".repeat(300_000);
+
+            persistenceService.markFailedAndPublish(POSTMORTEM_ID, INCIDENT_ID, TENANT_ID, error);
+
+            @SuppressWarnings("unchecked")
+            final ArgumentCaptor<Map<String, Object>> metadata = ArgumentCaptor.forClass(Map.class);
+            then(auditEventPublisher).should().publishIncident(eq(INCIDENT_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.POSTMORTEM_FAILED), anyString(), anyString(), metadata.capture());
+            assertThat((String) metadata.getValue().get("error"))
+                    .hasSize(500).startsWith("Gemini 500: b").doesNotContain("\n");
+            assertThat(postmortem.getErrorMessage()).isEqualTo(error);
+        }
     }
 
     @Nested
@@ -301,6 +327,26 @@ class PostmortemPersistenceServiceTest {
     @Nested
     @DisplayName("markPermanentlyFailedAndPublish")
     class MarkPermanentlyFailedAndPublish {
+
+        @Test
+        @DisplayName("the error goes into the audit event cut to 500 characters, on one line (found in review)")
+        void auditErrorCut() {
+            final Postmortem postmortem = Postmortem.createGenerating(
+                    INCIDENT_ID, TENANT_ID, TITLE, Severity.CRITICAL,
+                    OPENED_AT, RESOLVED_AT, DURATION);
+            given(postmortemRepository.getReferenceById(POSTMORTEM_ID)).willReturn(postmortem);
+            final String error = "Gemini 429:\r\n" + "q".repeat(300_000);
+
+            persistenceService.markPermanentlyFailedAndPublish(POSTMORTEM_ID, INCIDENT_ID, TENANT_ID, error, 3);
+
+            @SuppressWarnings("unchecked")
+            final ArgumentCaptor<Map<String, Object>> metadata = ArgumentCaptor.forClass(Map.class);
+            then(auditEventPublisher).should().publishIncident(eq(INCIDENT_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.POSTMORTEM_PERMANENTLY_FAILED), anyString(), anyString(), metadata.capture());
+            assertThat((String) metadata.getValue().get("error"))
+                    .hasSize(500).startsWith("Gemini 429:  q").doesNotContain("\n");
+            assertThat(postmortem.getErrorMessage()).isEqualTo(error);
+        }
 
         @Test
         @DisplayName("should mark the postmortem PERMANENTLY_FAILED with the error message")

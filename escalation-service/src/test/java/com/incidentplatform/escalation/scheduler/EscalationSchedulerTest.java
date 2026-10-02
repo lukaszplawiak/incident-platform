@@ -12,6 +12,7 @@ import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,6 +32,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.willAnswer;
@@ -73,6 +75,8 @@ class EscalationSchedulerTest {
     @Mock
     private OncallServiceClient oncallServiceClient;
 
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+
     private EscalationScheduler scheduler;
 
     private static final String TENANT_ID = "test-tenant";
@@ -87,6 +91,7 @@ class EscalationSchedulerTest {
                 escalationService,
                 auditEventPublisher,
                 oncallServiceClient,
+                meterRegistry,
                 BATCH_SIZE);
     }
 
@@ -261,6 +266,84 @@ class EscalationSchedulerTest {
         }
 
         /**
+         * Found in review (backlog #0-84): the exception's message may quote
+         * what the Kafka or JDBC client saw, and the audit trail is the
+         * tenant's to read, so only its type is recorded.
+         */
+        @Test
+        @DisplayName("a failed send is recorded in the audit event by the exception's type only")
+        void failureRecordedByTypeOnly() {
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+            willThrow(new IllegalStateException("broker kafka-internal-7:9092 refused"))
+                    .given(kafkaSender).send(any(), any());
+
+            scheduler.checkAndEscalate();
+
+            then(auditEventPublisher).should().publishIncident(
+                    eq(task.getIncidentId()), eq(TENANT_ID),
+                    eq(AuditEventTypes.ESCALATION_NOTIFICATION_FAILED), any(), any(),
+                    argThat(metadata -> "Unexpected error: IllegalStateException".equals(metadata.get("error"))));
+        }
+
+        /**
+         * Backlog #0-84: ESCALATION_FIRED is written after the escalation
+         * committed. A failure to write it is counted and logged, not
+         * thrown: thrown, it reached the batch's catch, counted a failed
+         * attempt against a task that did escalate, and skipped level 2.
+         */
+        @Test
+        @DisplayName("a failure to record ESCALATION_FIRED is counted, and level 2 is still scheduled")
+        void firedAuditFailureCounted() {
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+            willThrow(new IllegalStateException("outbox write failed")).given(auditEventPublisher)
+                    .publishIncident(any(), any(), eq(AuditEventTypes.ESCALATION_FIRED), any(), any(), any());
+
+            scheduler.checkAndEscalate();
+
+            then(escalationService).should().scheduleLevel2Escalation(
+                    task.getIncidentId(), TENANT_ID, task.getTeamId(),
+                    task.getSeverity(), task.getTitle());
+            then(persistenceService).should(never()).recordFailedAttempt(any(), any());
+            assertThat(meterRegistry.counter("audit.event.unrecorded",
+                    "event_type", AuditEventTypes.ESCALATION_FIRED).count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("a failure to record ESCALATION_NOTIFICATION_FAILED is counted, not thrown (found in review)")
+        void notificationFailedAuditFailureCounted() {
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+            willThrow(new RuntimeException("Kafka unavailable")).given(kafkaSender).send(any(), any());
+            willThrow(new IllegalStateException("outbox write failed")).given(auditEventPublisher)
+                    .publishIncident(any(), any(), eq(AuditEventTypes.ESCALATION_NOTIFICATION_FAILED),
+                            any(), any(), any());
+
+            scheduler.checkAndEscalate();
+
+            then(persistenceService).should(never()).recordFailedAttempt(any(), any());
+            assertThat(meterRegistry.counter("audit.event.unrecorded",
+                    "event_type", AuditEventTypes.ESCALATION_NOTIFICATION_FAILED).count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("ESCALATION_SCHEDULED is no longer the scheduler's to write (it goes with the task)")
+        void scheduledAuditNotWrittenByScheduler() {
+            final EscalationTask task = buildOverdueTask(1);
+            given(taskRepository.findDueForEscalation(any(), any()))
+                    .willReturn(List.of(task));
+
+            scheduler.checkAndEscalate();
+
+            then(auditEventPublisher).should(never()).publishIncident(
+                    any(), any(), eq(AuditEventTypes.ESCALATION_SCHEDULED), any(), any(), any());
+        }
+
+        /**
          * The actual regression test for backlog #77's
          * scheduleLevel2Escalation() half — the narrower failure mode
          * where the level-1 notification already succeeded, but level 2
@@ -294,7 +377,10 @@ class EscalationSchedulerTest {
             then(auditEventPublisher).should().publishIncident(
                     eq(task.getIncidentId()), eq(TENANT_ID),
                     eq(AuditEventTypes.ESCALATION_NOTIFICATION_FAILED),
-                    any(), any(), any());
+                    any(), any(),
+                    // by the exception's type only (backlog #0-84, found in review)
+                    argThat(metadata -> "schedule-level-2".equals(metadata.get("failurePhase"))
+                            && "Unexpected error: RuntimeException".equals(metadata.get("error"))));
             then(persistenceService).should(never())
                     .recordFailedAttempt(any(), any());
         }

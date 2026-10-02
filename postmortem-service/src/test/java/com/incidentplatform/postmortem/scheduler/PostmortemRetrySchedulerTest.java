@@ -142,7 +142,7 @@ class PostmortemRetrySchedulerTest {
 
             then(persistenceService).should().markFailedAndPublish(
                     postmortem.getId(), postmortem.getIncidentId(),
-                    postmortem.getTenantId(), "Timeout");
+                    postmortem.getTenantId(), PostmortemRetryScheduler.GEMINI_FAILED);
             then(persistenceService).should(never())
                     .markPermanentlyFailedAndPublish(any(), any(), any(), any(), anyInt());
             // retryCount not incremented on first attempt —
@@ -163,7 +163,7 @@ class PostmortemRetrySchedulerTest {
  */
 @Test
 @DisplayName("should mark FAILED when a non-GeminiException failure occurs " +
-        "on first attempt (backlog #80)")
+        "on first attempt (backlog #80), recorded by its type only (backlog #0-84)")
 void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
     final Postmortem postmortem = buildGeneratingPostmortem();
     given(postmortemRepository.findStuckGenerating(any(), any()))
@@ -175,7 +175,7 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
 
     then(persistenceService).should().markFailedAndPublish(
             postmortem.getId(), postmortem.getIncidentId(),
-            postmortem.getTenantId(), "Unexpected null field");
+            postmortem.getTenantId(), "Unexpected error: RuntimeException");
     then(persistenceService).should(never())
             .markPermanentlyFailedAndPublish(any(), any(), any(), any(), anyInt());
 }
@@ -345,7 +345,7 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
 
             then(persistenceService).should().markFailedAndPublish(
                     postmortem.getId(), postmortem.getIncidentId(),
-                    postmortem.getTenantId(), "Timeout");
+                    postmortem.getTenantId(), PostmortemRetryScheduler.GEMINI_FAILED);
             then(persistenceService).should(never())
                     .markPermanentlyFailedAndPublish(any(), any(), any(), any(), anyInt());
         }
@@ -365,7 +365,7 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
 
             then(persistenceService).should().markPermanentlyFailedAndPublish(
                     postmortem.getId(), postmortem.getIncidentId(),
-                    postmortem.getTenantId(), "API down", MAX_RETRY_ATTEMPTS);
+                    postmortem.getTenantId(), PostmortemRetryScheduler.GEMINI_FAILED, MAX_RETRY_ATTEMPTS);
             then(persistenceService).should(never())
                     .markFailedAndPublish(any(), any(), any(), any());
         }
@@ -400,7 +400,7 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
 
             then(persistenceService).should().markPermanentlyFailedAndPublish(
                     postmortem.getId(), postmortem.getIncidentId(),
-                    postmortem.getTenantId(), "Unexpected null field", MAX_RETRY_ATTEMPTS);
+                    postmortem.getTenantId(), "Unexpected error: RuntimeException", MAX_RETRY_ATTEMPTS);
             then(persistenceService).should(never())
                     .markFailedAndPublish(any(), any(), any(), any());
         }
@@ -617,5 +617,31 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
                 Severity.CRITICAL, openedAt, resolvedAt, 30);
         postmortem.markFailed("Gemini API quota exceeded");
         return postmortem;
+    }
+
+    /**
+     * Backlog #0-84, found in review: what a failed attempt records on the
+     * postmortem and in its audit event is platform-written text only.
+     */
+    @Nested
+    @DisplayName("failureText")
+    class FailureText {
+
+        @Test
+        @DisplayName("a Gemini failure is a fixed text, whatever its message quotes")
+        void geminiFixedText() {
+            assertThat(PostmortemRetryScheduler.failureText(
+                    new GeminiException("400 Bad Request: {\"error\": \"prompt: incident payroll-db ...\"}")))
+                    .isEqualTo(PostmortemRetryScheduler.GEMINI_FAILED);
+            assertThat(PostmortemRetryScheduler.failureText(new GeminiException(null)))
+                    .isEqualTo(PostmortemRetryScheduler.GEMINI_FAILED);
+        }
+
+        @Test
+        @DisplayName("any other exception by its type only")
+        void otherByType() {
+            assertThat(PostmortemRetryScheduler.failureText(new IllegalStateException("SELECT * FROM postmortems")))
+                    .isEqualTo("Unexpected error: IllegalStateException");
+        }
     }
 }

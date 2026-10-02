@@ -9,13 +9,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -23,7 +21,6 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
-import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
@@ -36,11 +33,8 @@ class AuditEventPublisherTest {
     @Mock private AuditEventKafkaSender sender;
     @Mock private AuditEventStore outbox;
 
-    @SuppressWarnings("unchecked")
-    private AuditEventPublisher publisher(AuditEventStore outboxOrNull) {
-        final ObjectProvider<AuditEventStore> provider = mock(ObjectProvider.class);
-        given(provider.getIfAvailable()).willReturn(outboxOrNull);
-        return new AuditEventPublisher(sender, provider);
+    private AuditEventPublisher publisher(AuditEventStore outbox) {
+        return new AuditEventPublisher(sender, outbox);
     }
 
     @Nested
@@ -59,7 +53,7 @@ class AuditEventPublisherTest {
             then(sender).should().serialize(message.capture());
             then(outbox).should().enqueue(message.getValue().eventId(), TENANT_ID,
                     AuditEventTypes.INCIDENT_CREATED, "{json}");
-            then(sender).should(never()).send(any());
+            then(sender).should(never()).sendForRelay(any(), any());
         }
 
         @Test
@@ -92,7 +86,7 @@ class AuditEventPublisherTest {
     class Refused {
 
         @Test
-        @DisplayName("with the outbox: no tenant, no resource, no source, or a field over its column fails the action")
+        @DisplayName("no tenant, no resource, no source, or a field over its column fails the action")
         void unstorable() {
             final AuditEventPublisher publisher = publisher(outbox);
             assertThatThrownBy(() -> publisher.publishAuth(UUID.randomUUID(), null,
@@ -114,20 +108,6 @@ class AuditEventPublisherTest {
                     AuditEventTypes.USER_LOGIN, "auth-service", "a".repeat(256), "Login", Map.of()))
                     .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("actor");
             then(outbox).shouldHaveNoInteractions();
-        }
-
-        @Test
-        @DisplayName("without the outbox: the same event is logged as refused and not sent, never thrown (found in review)")
-        void unstorableOnOldPath() {
-            final AuditEventPublisher publisher = publisher(null);
-
-            assertThatCode(() -> publisher.publishAuth(UUID.randomUUID(), null,
-                    AuditEventTypes.USER_LOGIN, "notification-service", "u", "Login", Map.of("password", "x")))
-                    .doesNotThrowAnyException();
-            assertThatCode(() -> publisher.publishIncident(null, TENANT_ID,
-                    AuditEventTypes.INCIDENT_CREATED, "escalation-service", "Created", Map.of()))
-                    .doesNotThrowAnyException();
-            then(sender).shouldHaveNoInteractions();
         }
 
         @Test
@@ -167,34 +147,5 @@ class AuditEventPublisherTest {
 
             then(outbox).should().enqueue(any(), eq(TENANT_ID), eq(AuditEventTypes.USER_LOGIN), anyString());
         }
-    }
-
-    @Nested
-    @DisplayName("without an outbox (services not moved yet)")
-    class WithoutOutbox {
-
-        @Test
-        @DisplayName("sends directly, each event with its own id")
-        void sendsDirectly() throws Exception {
-            final ArgumentCaptor<AuditEventMessage> message = ArgumentCaptor.forClass(AuditEventMessage.class);
-
-            publisher(null).publishIncidentUser(INCIDENT_ID, TENANT_ID, AuditEventTypes.INCIDENT_ACKNOWLEDGED,
-                    "incident-service", "user-1", "Acknowledged", Map.of());
-
-            then(sender).should().send(message.capture());
-            assertThat(message.getValue().eventId()).isNotNull();
-            assertThat(message.getValue().actor()).isEqualTo("user-1");
-        }
-
-        @Test
-        @DisplayName("a send failure is logged, not thrown, as before the outbox")
-        void sendFailureLogged() throws Exception {
-            willThrow(new RuntimeException("kafka down")).given(sender).send(any());
-
-            assertThatCode(() -> publisher(null).publishAuthSystem(UUID.randomUUID(), TENANT_ID,
-                    AuditEventTypes.USER_LOGIN, "auth-service", "System", Map.of()))
-                    .doesNotThrowAnyException();
-        }
-
     }
 }

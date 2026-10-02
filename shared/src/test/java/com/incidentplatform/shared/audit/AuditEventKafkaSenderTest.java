@@ -76,22 +76,11 @@ class AuditEventKafkaSenderTest {
     }
 
     @Test
-    @DisplayName("the direct send (services without an outbox) carries the tenant header too")
-    void directSendHasTenantHeader() throws Exception {
+    @DisplayName("a record without a tenant goes without the header rather than failing")
+    void noTenantNoHeader() {
         kafkaAnswers(CompletableFuture.completedFuture(null));
 
-        sender.send(message);
-
-        assertThat(tenantHeader(sentRecord())).isEqualTo("acme");
-    }
-
-    @Test
-    @DisplayName("an event without a tenant is sent without the header rather than failing")
-    void noTenantNoHeader() throws Exception {
-        kafkaAnswers(CompletableFuture.completedFuture(null));
-
-        sender.send(AuditEventMessage.auth(UUID.randomUUID(), null, AuditEventTypes.USER_LOGIN,
-                "auth-service", "user-1", "Login", Map.of()));
+        sender.sendForRelay(null, "{}");
 
         assertThat(tenantHeader(sentRecord())).isNull();
     }

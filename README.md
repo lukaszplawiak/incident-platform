@@ -91,7 +91,7 @@ Prometheus / Wazuh / Generic
   └─────────────────────┘
 
   All services → Kafka: audit.events → incident-service audit consumer → audit_events table
-  (auth- and incident-service: action's transaction → own audit outbox table → relay → Kafka)
+  (each service: action's transaction → own audit outbox table → relay → Kafka)
 
   ┌─────────────────────┐
   │    auth-service      │  port 8087
@@ -151,7 +151,7 @@ HS512 with a shared secret is sufficient for a controlled environment where all 
 Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `chat.postMessage` sends direct messages to the on-call engineer's Slack User ID, and — only if the tenant turns on broadcast for its workspace — also a post to that tenant's own default channel. Each tenant connects its own workspace: an admin pastes the bot token into `POST /api/v1/slack-workspace` (auth-service stores it encrypted; there is no "Add to Slack" OAuth flow yet), and notification-service reads it per notification over a service-token call to auth-service (backlog #0-21/#0-30). A tenant with no workspace simply gets no Slack channel. **No ACK from Slack for now** (backlog #0-35): Slack signs a button click with the signing secret of the App that posted the message, and with a pasted token that App is the tenant's own, while `SlackSignatureVerifier` checks one platform-wide `SLACK_SIGNING_SECRET`. Messages therefore carry no Acknowledge button; incidents are acknowledged in the app. The callback endpoint (`/api/v1/slack/actions` → `IncidentAckClient`) is kept for the OAuth "Add to Slack" install, where every workspace uses the platform's App and the platform secret is correct.
 
 **Why a centralized audit log via Kafka instead of per-service history tables?**
-Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident view. The `audit.events` topic acts as a single audit stream — any service publishes events and the consumer assembles them into a unified chronological view via one API endpoint. A producer does not send to Kafka from inside its database transaction: it writes the event to its own outbox table in that transaction, and a relay sends it afterwards, at least once; the consumer drops a resend by the event's id (backlog #0-84, auth- and incident-service so far).
+Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident view. The `audit.events` topic acts as a single audit stream — any service publishes events and the consumer assembles them into a unified chronological view via one API endpoint. A producer does not send to Kafka from inside its database transaction: it writes the event to its own outbox table in that transaction, and a relay sends it afterwards, at least once; the consumer drops a resend by the event's id (backlog #0-84, every service that records audit events).
 
 **Why per-record TenantContext in Kafka listeners instead of the consumer interceptor?**
 `TenantKafkaConsumerInterceptor.onConsume()` receives an entire batch — setting TenantContext from the first record would contaminate subsequent records from different tenants. Reading `X-Tenant-Id` per-record directly in each `@KafkaListener` guarantees correctness regardless of batch composition. The interceptor is kept as a validation layer only.
@@ -263,7 +263,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 
 - **Optimistic locking**: `@Version` on `Incident` entity — concurrent PATCH requests return `HTTP 409 Conflict` instead of silently overwriting
 - **Notification idempotency**: `notification-service` checks `notification_queue` (incident + tenant + event type + escalation level) before enqueueing and `notification_log` (same key + channel) before sending — Kafka at-least-once delivery never causes duplicate Slack messages or emails
-- **Audit event resilience**: auth-service and incident-service write audit events to a transactional outbox, sent by a relay with backoff (backlog #0-84) — a Kafka outage blocks no request and loses no event; the other services still send fire-and-forget until #0-84's second step
+- **Audit event resilience**: every service that records audit events (auth-, incident-, notification-, escalation-, postmortem-service) writes them to a transactional outbox, sent by a relay with backoff (backlog #0-84) — a Kafka outage blocks no request and loses no event
 
 ### Multi-Tenant Kafka — Per-Record Isolation
 
@@ -419,10 +419,12 @@ Summary; details in [Resilience & Security](#security).
   the operator's name and reason, its event written to the audit outbox in the reset's transaction and sent
   before the command exits when Kafka is reachable
   ([docs/tenant-provisioning.md](docs/tenant-provisioning.md)).
-- **Audit trail through an outbox** (backlog #0-84, auth-service and incident-service): an audit event is a row
-  in the service's own outbox table, written in the transaction of the action it records, so a rolled-back action
-  leaves no event, a committed one cannot lose it, and a Kafka outage stalls no request. A relay (ShedLock, one
-  per service) sends the rows in order, at least once; incident-service drops a resent event by its id
+- **Audit trail through an outbox** (backlog #0-84, every service with audit events: auth-, incident-,
+  notification-, escalation-, postmortem-service): an audit event is a row in the service's own outbox table,
+  written in the transaction of the action it records, so a rolled-back action leaves no event, a committed one
+  cannot lose it, and a Kafka outage stalls no request. There is no other path: `AuditEventPublisher` exists only
+  in a service with an outbox table. A relay (ShedLock, one per service, taken only when a row is due) sends the
+  rows in order, at least once; incident-service drops a resent event by its id
   (`audit_events.event_id`, unique per tenant, so one tenant's records cannot pre-empt another's), and treats
   only that and the Kafka-offset key as duplicates. It takes each record's tenant from its `X-Tenant-Id`
   header (the payload's only as a fallback) and rejects a record whose two disagree or whose payload names
@@ -430,9 +432,14 @@ Summary; details in [Resilience & Security](#security).
   is acknowledged only once its dead-letter copy is in Kafka, and alerts (`AuditEventsRejected`, critical).
   The publisher refuses an event the trail could not store (no tenant, a payload over 256 KiB, a metadata key
   naming a secret) before it is written. A refusal whose transaction rolls back (a
-  wrong TOTP) is audited after the rollback. The producers of both services fail a send after 5 s without
-  Kafka's metadata (`KAFKA_PRODUCER_MAX_BLOCK_MS`) instead of Kafka's default 60 s. A backlog older than 10 minutes alerts the operator by email
-  (`AuditOutboxBacklog`, critical, read from the table, so a stopped relay shows too).
+  wrong TOTP) is audited after the rollback. An event about an action that cannot be undone and is already
+  committed (a delivered notification, a fired escalation) is written after it; a failure to write one is logged
+  and alerts (`AuditEventUnrecorded`, critical) rather than undoing nothing. An error goes into an event cut to
+  500 characters on one line, and an unexpected exception by its type only, never its message (`AuditText`): the
+  trail is the tenant's to read, and a client library's message can quote a URL with a token or a response body. The producers fail a send after 5 s
+  without Kafka's metadata (`KAFKA_PRODUCER_MAX_BLOCK_MS`) instead of Kafka's default 60 s, except
+  escalation-service's, whose escalation event is sent once (#0-4). A backlog older than 10 minutes alerts the
+  operator by email (`AuditOutboxBacklog`, critical, read from the table, so a stopped relay shows too).
 - **API keys** (backlog #0-89): in auth-service a key reaches only the team routes, and only with the scope
   `teams:read` / `teams:write` (the role checks kept); every other route refuses it, so a key cannot invite users,
   change roles, create keys or integrations or change tenant settings (`ApiKeyAccess`, deny by default). A
@@ -497,9 +504,10 @@ Open items from the audit and earlier, most important first within each area. Ea
     backlog #0-82.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
-  - notification-, escalation- and postmortem-service still send audit events to Kafka directly, fire-and-forget:
-    a Kafka outage loses their events silently. auth-service and incident-service write theirs to a
-    transactional outbox (Application, above): backlog #0-84, second step.
+  - A Kafka record's `X-Tenant-Id` header reaches `TenantContext`, the MDC and ERROR lines unchecked, so a
+    producer can forge log lines with CR/LF in it: backlog #0-92.
+  - A notification channel's own error message quotes the mail or Slack library's text (an SMTP reply, a Slack
+    error body), and reaches `notification_log` whole and the audit trail cut to 500 characters: backlog #0-93.
   - A customer tenant's only admin has no way back from a factor someone else enrolled with their password, or
     from a lost phone and lost backup codes: break-glass covers only the operator tenant: backlog #0-90.
   - A Kafka record's `X-Tenant-Id` has two writers (explicit senders and the thread-context interceptor, which
@@ -1407,9 +1415,12 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `NotificationServiceTest` | Orchestration, fault isolation between channels, idempotency |
 | `NotificationRouterTest` | Routing for all 5 event types, escalation-target lookup with PRIMARY fallback, UNDELIVERABLE when nobody is on call or no channel has an address, skipped channels |
 | `NotificationChannelPropertiesTest` | Operator alert address validation, `min-interval` default and rejection of zero or negative values |
-| `AuditOutboxTest` (shared, Postgres) | Audit outbox SQL: written in the caller's transaction, due order of its index, batch mark-sent, retry by the database's clock, purge in chunks (backlog #0-84) |
-| `AuditOutboxRelayTest` (shared) | Relay: pipelined batches, per-row tenant, Kafka failures pause it while a refused record does not, mark failures logged, scrape-time gauges, settings (backlog #0-84) |
-| `AuditOutboxConfigurationTest` (shared) | `audit.outbox.table` turns the outbox on (events to the table) or leaves it off (sent directly); a bad table name stops the startup (backlog #0-84) |
+| `AuditOutboxTest` (shared, Postgres) | Audit outbox SQL: written in the caller's transaction, due order of its index, the lock-free due check, batch mark-sent, retry by the database's clock, purge in chunks up to a cap, table name checked by the constructor (backlog #0-84) |
+| `AuditOutboxRelayTest` (shared) | Relay: no lock without a due row, pipelined batches, per-row tenant, Kafka failures pause it while a refused record does not, mark failures logged, scrape-time gauges, capped purge, settings incl. the 45-character table name (backlog #0-84) |
+| `AuditOutboxConfigurationTest` (shared) | `audit.outbox.table` turns the outbox and the publisher on (events to the table); without it there is no publisher, and a service injecting one does not start; it wires with Spring Boot's own Kafka and Jackson beans; a bad table name stops the startup (backlog #0-84) |
+| `UnrecordedAuditEventsTest` (shared) | `audit.event.unrecorded` registered at zero for every declared event type, so `AuditEventUnrecorded` sees the first failure (backlog #0-84) |
+| `AuditOutboxPersistenceIntegrationTest` (notification-, escalation-, postmortem-service, Postgres) | The service's outbox migration takes the shared SQL and joins the JPA transaction; through the real service: the `notification_log` row, the level-2 escalation task, the postmortem's FAILED mark each commit or roll back with its audit event, under the action's tenant (backlog #0-84) |
+| `AuditTextTest` (shared) | Error text for an audit event: cut to 500 characters on one line (control characters and U+2028/U+2029 too), never inside a surrogate pair; an unexpected exception by its type only (backlog #0-84) |
 | `DeadLetterPublisherTest` (shared) | `publishAndWait` returns only once Kafka has the dead-letter copy; a failure or timeout is thrown (backlog #0-84) |
 | `AuditPersistenceIntegrationTest` (incident-service, Postgres) | V12–V14: event-id dedup per tenant, the consumer's constraint names, the CONCURRENTLY index valid, the outbox joining the JPA transaction (backlog #0-84) |
 | `AuditEventTypesTest` (shared) | Audit event type values equal their names, are unique and fit the column; `NOTIFICATION_UNDELIVERABLE` is distinct from `NOTIFICATION_FAILED` |
@@ -1420,7 +1431,8 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `EscalationSchedulerTest` | Timer logic, level 2 scheduling after level 1, fault isolation |
 | `IncidentEventConsumerTest` (escalation-service) | Per-record tenant isolation, sequential records without leaks |
 | `PostmortemServiceTest` | Generation, Gemini failure handling, CRUD, audit event publishing |
-| `PostmortemRetrySchedulerTest` | Retry logic for FAILED postmortems, max retry limit |
+| `PostmortemRetrySchedulerTest` | Retry logic for FAILED postmortems, max retry limit; what a failure records: a fixed text for Gemini, the type for anything else, never a message (backlog #0-84) |
+| `AuditEventConsumerTest` (incident-service) | Audit events stored per record's tenant; duplicates by event id or offset; unstorable records dead-lettered, counted (counters registered at zero) and acknowledged only once Kafka has the copy (backlog #0-84) |
 | `IncidentEventConsumerTest` (postmortem-service) | Header tenant wins over payload tenant, ignored event types |
 | `JwtUtilsTest` | Token generation, validation, expiry, secret length validation |
 | `TenantContextTest` | ThreadLocal isolation between threads, TenantAwareTaskDecorator propagation |

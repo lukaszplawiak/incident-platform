@@ -2,6 +2,8 @@ package com.incidentplatform.escalation.service;
 
 import com.incidentplatform.escalation.domain.EscalationTask;
 import com.incidentplatform.escalation.repository.EscalationTaskRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -9,6 +11,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -17,10 +20,15 @@ public class EscalationService {
     private static final Logger log =
             LoggerFactory.getLogger(EscalationService.class);
 
-    private final EscalationTaskRepository taskRepository;
+    private static final String SERVICE_NAME = "escalation-service";
 
-    public EscalationService(EscalationTaskRepository taskRepository) {
+    private final EscalationTaskRepository taskRepository;
+    private final AuditEventPublisher auditEventPublisher;
+
+    public EscalationService(EscalationTaskRepository taskRepository,
+                             AuditEventPublisher auditEventPublisher) {
         this.taskRepository = taskRepository;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     @Transactional
@@ -50,6 +58,13 @@ public class EscalationService {
                 EscalationTask.resolveTimeout(severity));
     }
 
+    /**
+     * Schedules the level-2 (MANAGER) escalation, with its
+     * {@code ESCALATION_SCHEDULED} audit event written to the audit outbox in
+     * the same transaction (backlog #0-84): the task and the event commit
+     * together or not at all. Before, the scheduler sent the event after this
+     * method returned, also when it had only found an existing task.
+     */
     @Transactional
     public void scheduleLevel2Escalation(UUID incidentId,
                                          String tenantId,
@@ -68,6 +83,15 @@ public class EscalationService {
                 incidentId, tenantId, teamId, Instant.now(), severity, title);
 
         taskRepository.save(task);
+
+        final int timeoutMinutes = EscalationTask.resolveTimeout(severity);
+        auditEventPublisher.publishIncident(
+                incidentId, tenantId,
+                AuditEventTypes.ESCALATION_SCHEDULED, SERVICE_NAME,
+                String.format("Level 2 escalation scheduled — MANAGER " +
+                        "will be notified if no ACK within %d minutes.", timeoutMinutes),
+                Map.of("escalationLevel", 2,
+                        "timeoutMinutes", timeoutMinutes));
 
         log.info("Escalation level 2 scheduled: incidentId={}, tenant={}, " +
                         "severity={}, scheduledAt={}",
