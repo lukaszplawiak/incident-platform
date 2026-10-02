@@ -787,7 +787,19 @@ class UserControllerSecurityTest {
             mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
                             .with(principal("ROLE_ADMIN")))
                     .andExpect(status().isNoContent());
-            then(mfaService).should().resetMfaByAdmin(USER_ID, buildPrincipal("ROLE_ADMIN"));
+            then(mfaService).should().resetMfaByAdmin(USER_ID, buildPrincipal("ROLE_ADMIN"), null);
+        }
+
+        @Test
+        @DisplayName("an optional body passes the time from which the user's created keys are revoked (backlog #0-89)")
+        void admin_withRevokeKeysCreatedSince() throws Exception {
+            mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
+                            .with(principal("ROLE_ADMIN"))
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content("{\"revokeKeysCreatedSince\":\"2026-10-01T00:00:00Z\"}"))
+                    .andExpect(status().isNoContent());
+            then(mfaService).should().resetMfaByAdmin(USER_ID, buildPrincipal("ROLE_ADMIN"),
+                    java.time.Instant.parse("2026-10-01T00:00:00Z"));
         }
 
         @Test
@@ -796,7 +808,7 @@ class UserControllerSecurityTest {
             org.mockito.BDDMockito.willThrow(new BusinessException(
                             ErrorCodes.FORBIDDEN, "requires a login session that completed MFA",
                             HttpStatus.FORBIDDEN))
-                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any(), any());
 
             mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
                             .with(principal("ROLE_ADMIN")))
@@ -807,7 +819,7 @@ class UserControllerSecurityTest {
         @DisplayName("404 when the user is not in the tenant")
         void userNotFound_returns404() throws Exception {
             org.mockito.BDDMockito.willThrow(new ResourceNotFoundException("User", USER_ID))
-                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any(), any());
 
             mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
                             .with(principal("ROLE_ADMIN")))
@@ -820,7 +832,7 @@ class UserControllerSecurityTest {
             org.mockito.BDDMockito.willThrow(new com.incidentplatform.auth.ratelimit.RateLimitRefusedException(
                             new com.incidentplatform.auth.ratelimit.RateLimitDecision(
                                     com.incidentplatform.auth.ratelimit.RateLimitDecision.Outcome.LIMITED, 120)))
-                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any(), any());
             mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID).with(principal("ROLE_ADMIN")))
                     .andExpect(status().isTooManyRequests())
                     .andExpect(header().string("Retry-After", "120"));
@@ -828,7 +840,7 @@ class UserControllerSecurityTest {
             org.mockito.BDDMockito.willThrow(new com.incidentplatform.auth.ratelimit.RateLimitRefusedException(
                             new com.incidentplatform.auth.ratelimit.RateLimitDecision(
                                     com.incidentplatform.auth.ratelimit.RateLimitDecision.Outcome.UNAVAILABLE, 30)))
-                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any(), any());
             mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID).with(principal("ROLE_ADMIN")))
                     .andExpect(status().isServiceUnavailable())
                     .andExpect(header().string("Retry-After", "30"));
@@ -839,7 +851,7 @@ class UserControllerSecurityTest {
         void noMfa_returns409() throws Exception {
             org.mockito.BDDMockito.willThrow(new BusinessException(
                             ErrorCodes.BUSINESS_RULE_VIOLATION, "MFA is not enabled", HttpStatus.CONFLICT))
-                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any());
+                    .given(mfaService).resetMfaByAdmin(eq(USER_ID), any(), any());
 
             mockMvc.perform(post("/api/v1/users/{id}/mfa-reset", USER_ID)
                             .with(principal("ROLE_ADMIN")))

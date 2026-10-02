@@ -16,6 +16,7 @@ import jakarta.persistence.Table;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -125,6 +126,18 @@ public class ApiKey {
     @Column(name = "integration_id")
     private UUID integrationId;
 
+    /**
+     * Who created the key, and from which login session (backlog #0-89):
+     * a tenant key has no owner, so without this nobody could tell which
+     * keys an intruder made with a taken-over admin account. Null for keys
+     * created before V26 (a personal key's was filled from its owner).
+     */
+    @Column(name = "created_by_user_id", updatable = false)
+    private UUID createdByUserId;
+
+    @Column(name = "created_in_session_id", updatable = false)
+    private UUID createdInSessionId;
+
     protected ApiKey() {}
 
     public static ApiKey createTenant(String tenantId, String name,
@@ -154,9 +167,20 @@ public class ApiKey {
         key.keyPrefix = keyPrefix;
         key.scopes    = List.copyOf(scopes);
         key.expiresAt = expiresAt;
-        key.ownerUser = ownerUser;
+        // chk_personal_key_has_owner says the same; fail here, not at flush.
+        key.ownerUser = Objects.requireNonNull(ownerUser, "a personal key needs its owner");
+        key.createdByUserId = ownerUser.getId();
         key.createdAt = Instant.now();
         return key;
+    }
+
+    /**
+     * Records who created the key and from which login session (backlog
+     * #0-89). Called by the services that create keys, before the first save.
+     */
+    public void recordCreator(UUID userId, UUID sessionId) {
+        this.createdByUserId = userId;
+        this.createdInSessionId = sessionId;
     }
 
     // ── lifecycle ─────────────────────────────────────────────────────────
@@ -205,6 +229,8 @@ public class ApiKey {
     public boolean isTenant()      { return keyType == ApiKeyType.TENANT; }
     public boolean isPersonal()    { return keyType == ApiKeyType.PERSONAL; }
     public UUID getIntegrationId() { return integrationId; }
+    public UUID getCreatedByUserId() { return createdByUserId; }
+    public UUID getCreatedInSessionId() { return createdInSessionId; }
 
     /** Called by {@code IntegrationService} after integration is persisted. */
     public void setIntegrationId(UUID integrationId) {

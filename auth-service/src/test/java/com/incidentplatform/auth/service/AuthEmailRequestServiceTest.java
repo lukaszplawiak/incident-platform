@@ -63,4 +63,25 @@ class AuthEmailRequestServiceTest {
         assertThat(Duration.between(saved.getValue().getCreatedAt(), saved.getValue().getDeadline()))
                 .isEqualTo(Duration.ofHours(72));
     }
+
+    @Test
+    @DisplayName("every new API key queues its own notice naming the key, never merged (backlog #0-89, review)")
+    void apiKeyCreatedNotice() {
+        when(repository.save(any())).thenAnswer(i -> i.getArgument(0));
+        final ArgumentCaptor<AuthEmailOutbox> saved = ArgumentCaptor.forClass(AuthEmailOutbox.class);
+        final UUID first = UUID.randomUUID();
+        final UUID second = UUID.randomUUID();
+        final AuthEmailRequestService service = new AuthEmailRequestService(repository, Duration.ofHours(72));
+
+        service.requestApiKeyCreatedNotification(user, first);
+        service.requestApiKeyCreatedNotification(user, second);
+
+        verify(repository, org.mockito.Mockito.times(2)).save(saved.capture());
+        assertThat(saved.getAllValues()).extracting(AuthEmailOutbox::getApiKeyId).containsExactly(first, second);
+        assertThat(saved.getAllValues()).allSatisfy(entry -> {
+            assertThat(entry.getEmailType()).isEqualTo(AuthEmailType.API_KEY_CREATED);
+            assertThat(entry.getEmail()).isEqualTo(user.getEmail());
+            assertThat(Duration.between(entry.getCreatedAt(), entry.getDeadline())).isEqualTo(Duration.ofHours(72));
+        });
+    }
 }

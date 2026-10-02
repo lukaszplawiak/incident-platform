@@ -113,8 +113,8 @@ MFA, ends the session's access to the platform API at once.
 **An unexpected "Two-factor authentication was enabled" email** means someone used the account's
 password and enrolled a factor of their own. In this order:
 
-1. Reset the password with "Forgot password". It ends every session and every unfinished login, so
-   whoever had the old password is out. It does not remove the factor (backlog #0-88): a mailbox alone
+1. Reset the password with "Forgot password". It ends every session and every unfinished login and
+   revokes the account's personal API keys (backlog #0-89), so whoever had the old password is out. It does not remove the factor (backlog #0-88): a mailbox alone
    must not undo MFA.
 2. Another admin of `platform-operator` resets the account's MFA, from a session that meets the
    same conditions as the platform API (MFA within 12 h, a factor announced at least 24 h ago):
@@ -124,9 +124,10 @@ password and enrolled a factor of their own. In this order:
      -H "Authorization: Bearer $OP_TOKEN" -o /dev/null -w '%{http_code}\n'   # 204
    ```
 
-   It removes the factor, the backup codes and every session of the account, emails it ("An
-   administrator reset two-factor authentication on your account"), and is audited as
-   `MFA_RESET_BY_ADMIN`. Not on your own account (`403`); a password-only session, a factor enrolled
+   It removes the factor, the backup codes and every session of the account, revokes its personal
+   API keys (backlog #0-89), emails it ("An administrator reset two-factor authentication on your
+   Incident Platform account"), and is audited as `MFA_RESET_BY_ADMIN` (the metadata's `personalApiKeysRevoked`
+   says how many keys went). Not on your own account (`403`); a password-only session, a factor enrolled
    less than the grace period ago or an API key also gets `403`, naming the condition. Resets are
    limited: `mfa-reset.rate-limit.per-admin-per-hour` (default 10,
    `MFA_RESET_RATE_LIMIT_PER_ADMIN_PER_HOUR`) and `mfa-reset.rate-limit.per-tenant-per-hour` for
@@ -135,8 +136,17 @@ password and enrolled a factor of their own. In this order:
    `403`, `404` or `409`). Over either: `429`; while the limit cannot be checked in Redis: `503`
    (fail-closed); both with `Retry-After`. Reaching the limit alerts the operator by email
    (`AdminMfaResetRateLimited`); Redis unavailable raises `AdminMfaResetRateLimitUnavailable`.
+   To also revoke the tenant and integration keys the account created since the suspected
+   compromise (the reset keeps them, as integrations must not stop with their creator; the email
+   counts all of them still active, whatever their age, but only those with a recorded creator), send
+   `{"revokeKeysCreatedSince": "<instant>"}` as the body; the reset's audit event then lists the revoked
+   `keyIds` and `integrationIds`, and each integration is audited as `INTEGRATION_REVOKED`. Later,
+   any admin can do it on its own: list them with `GET /api/v1/api-keys?createdBy=<userId>`, revoke
+   with `POST /api/v1/api-keys/revoke-created-by` and `{"userId": "...", "since": "<instant>"}`
+   (backlog #0-89; tenant and integration keys created before V26 have no recorded creator, revoke
+   those one by one).
 3. Log in with the new password, enable MFA with your own authenticator, and check the operator
-   tenant's audit log (`MFA_ENABLED`, `MFA_DISABLED`, `MFA_RESET_BY_ADMIN`, `TENANT_*`). The new factor
+   tenant's audit log (`MFA_ENABLED`, `MFA_DISABLED`, `MFA_RESET_BY_ADMIN`, `API_KEY_*`, `INTEGRATION_REVOKED`, `TENANT_*`). The new factor
    waits out the grace period like any other before the platform API accepts it.
 
 Resetting the factor before the password lets the holder of the old password log in and enrol again.
@@ -158,8 +168,9 @@ docker compose run --rm auth-service break-glass-mfa-reset \
 echo "exit code: $?"
 ```
 
-It does what the endpoint does, through the same code: factor, backup codes and every session of
-the account removed, the account emailed (by the running auth-service, within a minute), and the
+It does what the endpoint does, through the same code: factor, backup codes, every session and the
+personal API keys of the account removed (`personalApiKeysRevoked` in the audit metadata), the
+account emailed (by the running auth-service, within a minute), and the
 action audited in the operator tenant as `MFA_RESET_BREAK_GLASS`, with `break-glass:<your name>` as
 the actor, the reason and where it ran (`executedOn`: the OS user and host of the process, which
 you do not type) in the metadata (so no secrets in the reason). Only admins of
@@ -168,6 +179,10 @@ you do not type) in the metadata (so no secrets in the reason). Only admins of
 alone, as arguments or environment variables, do nothing, so a variable left in a deployment by
 mistake cannot turn the service into the command.
 
+The command keeps the tenant and integration keys the account created (it has no
+`revokeKeysCreatedSince`; the email counts those still active). Once logged in again, list and revoke
+the ones made during the compromise with the two calls in step 2 above (backlog #0-89).
+
 - Exit code `0`: done. `1`: refused or failed, nothing changed; the log says why: no
   `user-email` given; no operator user
   (archived ones excluded) with exactly this email (as stored, case-sensitive; spaces around it are
@@ -175,7 +190,8 @@ mistake cannot turn the service into the command.
   missing, too long, or containing control characters, Unicode line separators or formatting
   characters; or Kafka did not confirm the audit event within
   `--break-glass.mfa-reset.audit-timeout`, default `PT30S`: the reset is rolled back rather than
-  done unaudited. `2`: a safeguard that should never show, the command found a web server running.
+  done unaudited. That one confirmed event covers the reset and the count of personal API keys it
+  revoked (`personalApiKeysRevoked`); the command publishes nothing else. `2`: a safeguard that should never show, the command found a web server running.
 - The one-off process runs no scheduled jobs and serves no requests (the subcommand starts it
   without a web server). It needs the database and Kafka, as the service does.
 - Never put the subcommand into the args of the auth-service Deployment: its pods would run the

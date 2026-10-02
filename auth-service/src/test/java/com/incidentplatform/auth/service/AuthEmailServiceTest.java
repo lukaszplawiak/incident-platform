@@ -203,15 +203,95 @@ class AuthEmailServiceTest {
                     new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
             given(mailSender.createMimeMessage()).willReturn(message);
 
-            emailService.sendMfaResetNotification(RECIPIENT, java.time.Instant.parse("2026-10-01T12:34:56.789Z"));
+            emailService.sendMfaResetNotification(RECIPIENT, java.time.Instant.parse("2026-10-01T12:34:56.789Z"), 0);
 
             then(mailSender).should().send(message);
             assertThat(message.getSubject())
                     .isEqualTo("An administrator reset two-factor authentication on your Incident Platform account");
             assertThat((String) message.getContent())
                     .contains("An administrator reset", "2026-10-01T12:34:56Z", "you were signed out everywhere", "up to 15 minutes",
-                            "If you did not ask for this", "Forgot password")
+                            "If you did not ask for this", "Forgot password",
+                            // Backlog #0-89
+                            "your personal API keys were revoked")
+                    .doesNotContain("organisation API key")
                     .doesNotContain("href").doesNotContain("token");
         }
+
+        @Test
+        @DisplayName("names the tenant keys the account created, which the reset keeps (backlog #0-89)")
+        void resetWithKeysToReview() throws Exception {
+            final jakarta.mail.internet.MimeMessage message =
+                    new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+            given(mailSender.createMimeMessage()).willReturn(message);
+
+            emailService.sendMfaResetNotification(RECIPIENT, java.time.Instant.parse("2026-10-01T12:34:56.789Z"), 3);
+
+            assertThat((String) message.getContent())
+                    .contains("3 organisation API key(s) created with your account still work",
+                            "review and revoke them");
+        }
+
+        @Test
+        @DisplayName("a new API key is announced, when, and what to do if it was not them; no key name, no link (backlog #0-89)")
+        void apiKeyCreated() throws Exception {
+            final jakarta.mail.internet.MimeMessage message =
+                    new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+            given(mailSender.createMimeMessage()).willReturn(message);
+
+            final java.util.UUID keyId = java.util.UUID.fromString("0f8e2a8c-5a1b-4c3d-9e7f-1a2b3c4d5e6f");
+            emailService.sendApiKeyCreatedNotification(RECIPIENT, java.time.Instant.parse("2026-10-01T12:34:56.789Z"),
+                    keyId);
+
+            then(mailSender).should().send(message);
+            assertThat(message.getSubject())
+                    .isEqualTo("An API key was created with your Incident Platform account");
+            assertThat(message.getAllRecipients()[0].toString()).isEqualTo(RECIPIENT);
+            assertThat((String) message.getContent())
+                    .contains("An API key with id <b>" + keyId + "</b> was created", "2026-10-01T12:34:56Z",
+                            "same id", "If this was not you", "Forgot password", "revokes your personal API keys")
+                    .doesNotContain("href").doesNotContain("token");
+        }
+
+        @Test
+        @DisplayName("a row without a key id still sends; the recipient address is escaped in the body (review)")
+        void apiKeyCreatedWithoutIdEscapesRecipient() throws Exception {
+            final jakarta.mail.internet.MimeMessage message =
+                    new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+            given(mailSender.createMimeMessage()).willReturn(message);
+
+            emailService.sendApiKeyCreatedNotification("\"<b>x</b>\"@example.com",
+                    java.time.Instant.parse("2026-10-01T12:34:56Z"), null);
+
+            assertThat((String) message.getContent())
+                    .contains("An API key was created").doesNotContain("with id")
+                    .contains("&quot;&lt;b&gt;x&lt;/b&gt;&quot;@example.com").doesNotContain("<b>x</b>");
+        }
+    }
+
+    /** Backlog #0-89 (review): the escaped footer, in every template, not only the newest. */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "invite", "password reset", "MFA enabled", "MFA disabled", "MFA reset", "API key created"})
+    @DisplayName("every auth email escapes the recipient address it shows")
+    void everyTemplateEscapesRecipient(String template) throws Exception {
+        final jakarta.mail.internet.MimeMessage message =
+                new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+        given(mailSender.createMimeMessage()).willReturn(message);
+        final String hostile = "\"<b>x</b>\"@example.com";
+        final java.time.Instant at = java.time.Instant.parse("2026-10-01T12:00:00Z");
+
+        switch (template) {
+            case "invite" -> emailService.sendInviteEmail(hostile, RAW_TOKEN);
+            case "password reset" -> emailService.sendPasswordResetEmail(hostile, RAW_TOKEN);
+            case "MFA enabled" -> emailService.sendMfaChangeNotification(hostile, true, at);
+            case "MFA disabled" -> emailService.sendMfaChangeNotification(hostile, false, at);
+            case "MFA reset" -> emailService.sendMfaResetNotification(hostile, at, 0);
+            case "API key created" -> emailService.sendApiKeyCreatedNotification(hostile, at, null);
+            default -> throw new IllegalArgumentException(template);
+        }
+
+        assertThat((String) message.getContent())
+                .contains("&quot;&lt;b&gt;x&lt;/b&gt;&quot;@example.com")
+                .doesNotContain("<b>x</b>");
     }
 }

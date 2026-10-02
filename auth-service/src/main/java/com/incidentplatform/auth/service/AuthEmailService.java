@@ -8,10 +8,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
+import org.springframework.web.util.HtmlUtils;
 
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.UUID;
 
 /**
  * Sends auth-domain transactional emails: invite, password reset, and the
@@ -124,12 +126,35 @@ public class AuthEmailService {
      * Tells the account an administrator reset its MFA (backlog #0-88): its
      * own text, so a reset the owner did not ask for stands out from them
      * disabling MFA themselves.
+     *
+     * @param unownedKeysToReview backlog #0-89: active tenant and integration
+     *        keys this account created; the reset keeps them, so the email
+     *        asks for a review when there are any
      */
-    public void sendMfaResetNotification(String recipientEmail, Instant resetAt) {
+    public void sendMfaResetNotification(String recipientEmail, Instant resetAt, long unownedKeysToReview) {
         send(recipientEmail,
                 "An administrator reset two-factor authentication on your Incident Platform account",
-                buildMfaResetBody(recipientEmail, resetAt));
+                buildMfaResetBody(recipientEmail, resetAt, unownedKeysToReview));
         log.info("MFA reset notification sent: to={}", recipientEmail);
+    }
+
+    /**
+     * Tells the account an API key was created with it (backlog #0-89): a
+     * personal key to its owner, a tenant key to the admin who created it, one
+     * email per key. Shows the key's id, which the key list shows too, so the
+     * owner can tell their own key from one they did not make. Not the key's
+     * prefix (review: eight characters of the secret itself), nor its name
+     * (text the creator typed).
+     *
+     * @param createdAt when the key was created (the outbox entry's creation)
+     * @param keyId     the key's id, or null for a row without one
+     * @throws InviteEmailException if SMTP send fails
+     */
+    public void sendApiKeyCreatedNotification(String recipientEmail, Instant createdAt, UUID keyId) {
+        send(recipientEmail,
+                "An API key was created with your Incident Platform account",
+                buildApiKeyCreatedBody(recipientEmail, createdAt, keyId));
+        log.info("API key created notification sent: to={}", recipientEmail);
     }
 
     // ── private ───────────────────────────────────────────────────────────
@@ -153,6 +178,15 @@ public class AuthEmailService {
                     "Failed to send email (" + subject + "): " + e.getMessage(),
                     e);
         }
+    }
+
+    /**
+     * The recipient's address as shown in the footer, HTML-escaped (backlog
+     * #0-89, found in review): it is interpolated into the HTML body, and the
+     * body must not depend on what the address validation lets through.
+     */
+    private static String footer(String recipientEmail) {
+        return HtmlUtils.htmlEscape(recipientEmail);
     }
 
     private String buildLink(String path, String rawToken) {
@@ -191,7 +225,7 @@ public class AuthEmailService {
                 </body>
                 </html>
                 """,
-                inviteLink, inviteLink, inviteLink, recipientEmail);
+                inviteLink, inviteLink, inviteLink, footer(recipientEmail));
     }
 
     private String buildPasswordResetBody(String recipientEmail,
@@ -230,7 +264,7 @@ public class AuthEmailService {
                 </body>
                 </html>
                 """,
-                resetLink, resetLink, resetLink, recipientEmail);
+                resetLink, resetLink, resetLink, footer(recipientEmail));
     }
 
     private String buildMfaChangeBody(String recipientEmail, String what, Instant changedAt,
@@ -256,24 +290,33 @@ public class AuthEmailService {
                 """,
                 what, what, DateTimeFormatter.ISO_INSTANT.format(changedAt.truncatedTo(ChronoUnit.SECONDS)),
                 warning,
-                recipientEmail);
+                footer(recipientEmail));
     }
 
-    private String buildMfaResetBody(String recipientEmail, Instant resetAt) {
+    private String buildMfaResetBody(String recipientEmail, Instant resetAt, long unownedKeysToReview) {
+        final String keysToReview = unownedKeysToReview == 0 ? "" : String.format("""
+                    <p style="color: #c0392b;">
+                        %d organisation API key(s) created with your account still work: the reset
+                        keeps tenant and integration keys. If someone else used your account, ask an
+                        administrator to review and revoke them.
+                    </p>
+                """, unownedKeysToReview);
         return String.format("""
                 <html>
                 <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
                     <h2 style="color: #2c3e50;">Two-factor authentication reset</h2>
                     <p>An administrator reset two-factor authentication (MFA) on your Incident
                        Platform account at %s (UTC). Your second factor and backup codes were
-                       removed and you were signed out everywhere (a page already open may keep
-                       working for up to 15 minutes).</p>
+                       removed, your personal API keys were revoked, and
+                       you were signed out everywhere (a page already open may keep working for
+                       up to 15 minutes).</p>
                     <p>Log in with your password and set up MFA again with your own
                        authenticator app.</p>
                     <p style="color: #c0392b; font-weight: bold;">
                         If you did not ask for this, tell your administrator now, and reset your
                         password with "Forgot password" before you set up MFA again.
                     </p>
+                    %s
                     <hr style="border: none; border-top: 1px solid #ecf0f1; margin: 30px 0;"/>
                     <p style="color: #bdc3c7; font-size: 11px;">
                         Incident Platform — sent to %s
@@ -282,6 +325,36 @@ public class AuthEmailService {
                 </html>
                 """,
                 DateTimeFormatter.ISO_INSTANT.format(resetAt.truncatedTo(ChronoUnit.SECONDS)),
-                recipientEmail);
+                keysToReview,
+                footer(recipientEmail));
+    }
+
+    private String buildApiKeyCreatedBody(String recipientEmail, Instant createdAt, UUID keyId) {
+        final String which = keyId == null ? "An API key" : "An API key with id <b>" + keyId + "</b>";
+        return String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #2c3e50;">New API key</h2>
+                    <p>%s was created with your Incident Platform account at %s (UTC).
+                       Your list of API keys shows it with the same id; an administrator sees
+                       every key of the organisation, who created it and when it was last used.</p>
+                    <p style="color: #c0392b; font-weight: bold;">
+                        If this was not you, someone else knows your password: reset it now
+                        with "Forgot password", which also revokes your personal API keys, and
+                        tell your administrator, who can revoke any other key.
+                    </p>
+                    <p style="color: #7f8c8d; font-size: 12px;">
+                        If you created this key, no action is needed.
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #ecf0f1; margin: 30px 0;"/>
+                    <p style="color: #bdc3c7; font-size: 11px;">
+                        Incident Platform — sent to %s
+                    </p>
+                </body>
+                </html>
+                """,
+                which,
+                DateTimeFormatter.ISO_INSTANT.format(createdAt.truncatedTo(ChronoUnit.SECONDS)),
+                footer(recipientEmail));
     }
 }

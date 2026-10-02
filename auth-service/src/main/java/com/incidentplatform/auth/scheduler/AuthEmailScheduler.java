@@ -5,6 +5,7 @@ import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.exception.InviteEmailException;
+import com.incidentplatform.auth.repository.ApiKeyRepository;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.service.AuthEmailPersistenceService;
 import com.incidentplatform.auth.service.AuthEmailPersistenceService.Attempt;
@@ -132,6 +133,7 @@ public class AuthEmailScheduler {
     private final AuthEmailService emailService;
     private final AuthEmailPersistenceService persistenceService;
     private final AuthEmailRetryPolicy retryPolicy;
+    private final ApiKeyRepository apiKeyRepository;
     private final int batchSize;
     private final Duration processingBudget;
     private final Duration retention;
@@ -145,8 +147,10 @@ public class AuthEmailScheduler {
                               AuthEmailService emailService,
                               AuthEmailPersistenceService persistenceService,
                               InviteEmailProperties properties,
-                              MeterRegistry meterRegistry) {
+                              MeterRegistry meterRegistry,
+                              ApiKeyRepository apiKeyRepository) {
         this.outboxRepository   = outboxRepository;
+        this.apiKeyRepository   = apiKeyRepository;
         this.emailService       = emailService;
         this.persistenceService = persistenceService;
         this.retryPolicy        = new AuthEmailRetryPolicy(properties);
@@ -325,7 +329,12 @@ public class AuthEmailScheduler {
                         entry.getEmail(), true, entry.getCreatedAt());
                 case MFA_DISABLED -> emailService.sendMfaChangeNotification(
                         entry.getEmail(), false, entry.getCreatedAt());
-                case MFA_RESET -> emailService.sendMfaResetNotification(entry.getEmail(), entry.getCreatedAt());
+                // Backlog #0-89: counted when sent, so the email names the keys
+                // still to review, not those of the moment of the reset.
+                case MFA_RESET -> emailService.sendMfaResetNotification(entry.getEmail(), entry.getCreatedAt(),
+                        apiKeyRepository.countActiveUnownedCreatedBy(entry.getTenantId(), entry.getUserId()));
+                case API_KEY_CREATED -> emailService.sendApiKeyCreatedNotification(
+                        entry.getEmail(), entry.getCreatedAt(), entry.getApiKeyId());
             }
         } catch (Exception e) {
             failedCounters.get(type).increment();

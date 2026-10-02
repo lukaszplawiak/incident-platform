@@ -43,15 +43,18 @@ public class PasswordService {
     private final AuthTokenService authTokenService;
     private final PasswordEncoder passwordEncoder;
     private final AuditEventPublisher auditEventPublisher;
+    private final ApiKeyService apiKeyService;
 
     public PasswordService(UserRepository userRepository,
                            AuthTokenService authTokenService,
                            PasswordEncoder passwordEncoder,
-                           AuditEventPublisher auditEventPublisher) {
+                           AuditEventPublisher auditEventPublisher,
+                           ApiKeyService apiKeyService) {
         this.userRepository  = userRepository;
         this.authTokenService = authTokenService;
         this.passwordEncoder = passwordEncoder;
         this.auditEventPublisher = auditEventPublisher;
+        this.apiKeyService = apiKeyService;
     }
 
 
@@ -66,6 +69,12 @@ public class PasswordService {
      *       compromised account, they are terminated immediately.</li>
      *   <li>Backlog #0-83: invalidates unfinished logins (MFA session and MFA
      *       setup tokens) and discards an MFA setup begun but not enabled.</li>
+     *   <li>Backlog #0-89: revokes the user's personal API keys. A reset is
+     *       how an owner recovers an account whose password someone else
+     *       may know (OWASP: recovery of a compromised account ends every
+     *       session and credential), and a key that person created would
+     *       otherwise keep the owner's roles in auth-service. Always, unlike
+     *       {@link #changePassword}, where the caller chooses.</li>
      * </ol>
      *
      * <h2>Never touches the second factor (backlog #0-88)</h2>
@@ -103,13 +112,17 @@ public class PasswordService {
         // An attacker who had access to the account is now logged out.
         authTokenService.invalidateAllRefreshTokens(user.getId());
 
+        // Backlog #0-89: last, as the bulk update detaches the user.
+        final int keysRevoked = apiKeyService.revokeAllPersonalKeysForUser(
+                user.getId(), token.getTenantId());
+
         auditEventPublisher.publishAuth(
                 user.getId(), token.getTenantId(),
                 AuditEventTypes.USER_PASSWORD_RESET,
                 "auth-service",
                 user.getId().toString(),
                 "Password reset via email token",
-                java.util.Map.of());
+                java.util.Map.of(ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked)));
 
         log.info("Password reset completed: userId={}, tenant={}",
                 user.getId(), token.getTenantId());
@@ -155,13 +168,20 @@ public class PasswordService {
         authTokenService.invalidateAllRefreshTokensExceptSession(
                 principal.userId(), principal.sessionId());
 
+        // Backlog #0-89: only when asked (OWASP ASVS 3.3.3 "gives the
+        // option"). A routine change keeps the keys; one made because the
+        // password may be known to someone else ends them too.
+        final int keysRevoked = request.revokesPersonalApiKeys()
+                ? apiKeyService.revokeAllPersonalKeysForUser(principal.userId(), principal.tenantId())
+                : 0;
+
         auditEventPublisher.publishAuth(
                 principal.userId(), principal.tenantId(),
                 AuditEventTypes.USER_PASSWORD_CHANGED,
                 "auth-service",
                 principal.userId().toString(),
                 "Password changed",
-                java.util.Map.of());
+                java.util.Map.of(ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked)));
 
         log.info("Password changed: userId={}, tenant={}",
                 principal.userId(), principal.tenantId());

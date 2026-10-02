@@ -340,15 +340,58 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   for an admin who can log in, re-invites through `ResendInviteService` when the invite permanently
   failed or expired, never creates a second admin or deletes a user (an unexpected state is an ERROR
   for a human), and exports `platform.operator.admin.pending`, alerted by `OperatorAdminNotActivated`.
+- **API keys in auth-service: deny by default (#0-89)**. A key gets its owner's roles
+  (`ApiKeyLookupServiceImpl`), so without a scope rule an admin's personal key could create footholds no reset
+  takes back (invite an admin, tenant keys, integrations). Rules: a key reaches only routes `SecurityConfig`
+  lists with `ApiKeyAccess.scopeOrElse` (today GET/HEAD `/api/v1/teams…` with `teams:read`, other team routes
+  with `teams:write`), and the method's role check still applies (scope AND role); `anyRequest` refuses keys.
+  `ApiKeyDenyByDefaultTest` walks every handler mapping with an all-scope admin key, so a new route is closed
+  to keys until listed. Recovery (password reset, admin/break-glass MFA reset) and archive revoke personal keys
+  through `ApiKeyService.revokeAllPersonalKeysForUser`: a bulk update that clears the persistence context, so
+  callers run it last; the count goes into the action's own audit event (`personalApiKeysRevoked`). A password
+  change revokes only with `revokePersonalApiKeys: true` (ASVS 3.3.3: an option, not forced). Creating a key
+  (`ApiKeyService`, `IntegrationService`) queues `API_KEY_CREATED` (V25) to the owner or creating admin. No
+  step-up to create a key: little gain once a key cannot create anything.
+  - Tenant/integration keys survive their creator's reset on purpose (integrations must not stop). For a
+    taken-over admin: `api_keys.created_by_user_id` / `created_in_session_id` (V26, set via
+    `ApiKey.recordCreator`; a personal key's creator is its owner), `GET /api-keys?createdBy=`,
+    `POST /api-keys/revoke-created-by {userId, since}` (`ApiKeyService.revokeKeysCreatedBy`: loads the keys,
+    revokes an integration with its key, one `API_KEY_REVOKED` event), and `revokeKeysCreatedSince` on the admin
+    MFA reset. Same rights as `DELETE /api-keys/{id}` (ADMIN from a login, no step-up, no limit; user's choice:
+    an admin can already revoke one by one, and tenants without MFA must be able to clean up). The MFA_RESET
+    email counts the account's still-active unowned keys, at send time (`AuthEmailScheduler`); an archive
+    records the same count (`unownedApiKeysKept`); both count only keys with a recorded creator (V26 on), so
+    "0" says nothing about older tenant keys. `API_KEY_CREATED` is one email per key, never merged and never
+    superseded (`AuthEmailType.supersededByNewer`; the outbox row names the key, `api_key_id` in V25, and the
+    email shows its id, not its prefix, which is part of the secret): a merged notice would let a key made
+    right after another go unannounced. The number of emails is bounded by `ApiKeyCreationLimit` instead:
+    20 keys per user per hour, revoked and integration keys included, counted in Postgres on V26's index
+    (no Redis) after the creator's row is locked (`UserRepository.findByIdAndTenantIdForUpdate`, native
+    `FOR NO KEY UPDATE NOWAIT`, so foreign-key `KEY SHARE` locks of a login or reset in flight do not
+    conflict; through `ApiKeyCreationLimit.lockingCreator`: a second parallel request of the same user gets
+    429 at once instead of waiting on a pooled connection; the active-key caps rely on the lock too). The
+    creation and bulk revocation audit events go through `AfterCommit` (a bean): at commit they are handed
+    to its private pool (2 threads, queue 1,000, `TenantAwareTaskDecorator`; deliberately not an `Executor`
+    bean, which would make Boot drop `applicationTaskExecutor`), because inside `afterCommit` the pooled
+    connection is still checked out (measured in `AuthRepositoryIntegrationTest`). A full queue or a publish
+    that throws drops and counts (`auth.audit.after_commit.rejected`, tag `reason` = `queue_full` / `failed`;
+    alert `AuditEventsDropped`, critical, with a promtool test and an amtool route line in CI; a lower bound,
+    as later failures inside the Kafka client are not seen). `AfterCommit` is a `SmartLifecycle` in phase 0:
+    stopped after the web server and before the Kafka producer factory (phase `Integer.MIN_VALUE`, whose
+    `stop()` closes the producer), so the queue drains (up to 10 s) while the producer works; daemon threads.
+    The single key and integration revocations also publish through it; a bulk revoke that revoked nothing publishes nothing, so it cannot
+    flood the shared queue. Interim until #0-84's outbox. 429 + Retry-After
+    (`RateLimitResponses`). `revokeCreatedBy` audits each integration as `INTEGRATION_REVOKED`, so the endpoint
+    and the MFA reset (which also lists `keyIds` / `integrationIds`) leave the same trace.
 - **Auth email outbox = intent to send** (#0-52): a request (`UserService`, `ResendInviteService`,
-  `ForgotPasswordService`, `MfaService`) only INSERTs through `AuthEmailRequestService`; `AuthEmailScheduler` is
+  `ForgotPasswordService`, `MfaService`, `ApiKeyService`, `IntegrationService`) only INSERTs through `AuthEmailRequestService`; `AuthEmailScheduler` is
   the only writer afterwards. Per attempt it closes entries no longer worth sending (SUPERSEDED: a newer request
   of the type, an accepted invite, a missing user; PERMANENTLY_FAILED: deadline passed), otherwise, for the
   token-carrying types (invite, reset), invalidates the user's earlier tokens of the type and creates the token
   it sends — no raw token is stored anywhere, and the link is valid for its full lifetime from sending. The MFA
-  notices (MFA_ENABLED / MFA_DISABLED, #0-83; MFA_RESET, #0-88, V24) carry no token (`AuthEmailType.carriesToken()`). Failed sends are
+  notices (MFA_ENABLED / MFA_DISABLED, #0-83; MFA_RESET, #0-88, V24) and API_KEY_CREATED (#0-89, V25) carry no token (`AuthEmailType.carriesToken()`). Failed sends are
   retried on `AuthEmailRetryPolicy`'s backoff until the entry's deadline (invite 7 days, reset 15 minutes, MFA
-  notice max(24 h, grace period)), in two lanes (`processPending`, `retryFailed`) with their own
+  notice and API key notice max(24 h, grace period)), in two lanes (`processPending`, `retryFailed`) with their own
   batches and a processing budget validated against the ShedLock. State changes are conditional UPDATEs, not
   `@Version`. Counters `auth.email.send`, `auth.email.permanently_failed`; alerts `AuthEmailDeliveryFailing`,
   `AuthEmailPermanentlyFailed`; terminal rows are purged after `invite.email.retention`. V19 dropped and

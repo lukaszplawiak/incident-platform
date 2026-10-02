@@ -3,6 +3,7 @@ package com.incidentplatform.auth.api;
 import com.incidentplatform.auth.dto.CreateIntegrationRequest;
 import com.incidentplatform.auth.dto.IntegrationCreatedResponse;
 import com.incidentplatform.auth.dto.IntegrationDto;
+import com.incidentplatform.auth.ratelimit.RateLimitRefusedException;
 import com.incidentplatform.auth.service.IntegrationService;
 import com.incidentplatform.shared.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
@@ -16,6 +17,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -65,6 +67,10 @@ public class IntegrationController {
 
                     Alert routing chain:
                       ApiKey → Integration → Team → OncallSchedule → Notification
+
+                    The admin who creates it is emailed (one email per key, showing the
+                    key's id), and the key counts toward the 20 keys per user per hour
+                    limit (backlog #0-89): 429 with Retry-After beyond it.
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "201",
@@ -72,7 +78,9 @@ public class IntegrationController {
             @ApiResponse(responseCode = "400", description = "Validation error"),
             @ApiResponse(responseCode = "403", description = "ADMIN role required"),
             @ApiResponse(responseCode = "404", description = "Team not found"),
-            @ApiResponse(responseCode = "409", description = "Integration name already exists")
+            @ApiResponse(responseCode = "409", description = "Integration name already exists"),
+            @ApiResponse(responseCode = "429", description = "Hourly API key creation limit reached "
+                    + "(an integration's key counts, backlog #0-89); see Retry-After")
     })
     public ResponseEntity<IntegrationCreatedResponse> createIntegration(
             @Valid @RequestBody CreateIntegrationRequest request,
@@ -117,5 +125,11 @@ public class IntegrationController {
             @AuthenticationPrincipal UserPrincipal principal) {
         integrationService.revokeIntegration(id, principal);
         return ResponseEntity.noContent().build();
+    }
+
+    /** Backlog #0-89: the hourly key creation limit (ApiKeyCreationLimit): 429 with Retry-After. */
+    @ExceptionHandler(RateLimitRefusedException.class)
+    ResponseEntity<Void> rateLimited(RateLimitRefusedException refused) {
+        return RateLimitResponses.refused(refused);
     }
 }

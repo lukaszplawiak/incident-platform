@@ -1,6 +1,7 @@
 package com.incidentplatform.auth.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.auth.domain.ApiKeyScope;
 import com.incidentplatform.auth.service.MfaSessionStatusService;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.JwtAuthFilter;
@@ -182,10 +183,27 @@ public class SecurityConfig {
                         // a session that completed MFA (#0-83); the controller repeats
                         // the rule with @PreAuthorize.
                         .requestMatchers("/api/v1/platform/**").access(platformAccess.forRequests())
+                        // Backlog #0-89: an API key reaches only the routes listed
+                        // here, with the scope named; every other route refuses it
+                        // (ApiKeyAccess has why). The role checks stay on the methods.
+                        .requestMatchers(HttpMethod.GET,
+                                "/api/v1/teams", "/api/v1/teams/*", "/api/v1/teams/*/members")
+                        .access(ApiKeyAccess.scopeOrElse(ApiKeyScope.TEAMS_READ,
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens()))
+                        // HEAD is a read too (review): without this it fell to the
+                        // write rule below, needing teams:write.
+                        .requestMatchers(HttpMethod.HEAD,
+                                "/api/v1/teams", "/api/v1/teams/*", "/api/v1/teams/*/members")
+                        .access(ApiKeyAccess.scopeOrElse(ApiKeyScope.TEAMS_READ,
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens()))
+                        .requestMatchers("/api/v1/teams", "/api/v1/teams/**")
+                        .access(ApiKeyAccess.scopeOrElse(ApiKeyScope.TEAMS_WRITE,
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens()))
                         // Deny by default for purpose tokens (backlog #0-16, #0-14):
-                        // authenticated() would let one reach every route below.
-                        .anyRequest().access(
-                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens())
+                        // authenticated() would let one reach every route below;
+                        // and for API keys (#0-89).
+                        .anyRequest().access(ApiKeyAccess.deniedOrElse(
+                                SharedSecurityAutoConfiguration.authenticatedExceptPurposeTokens()))
                 )
                 .build();
     }

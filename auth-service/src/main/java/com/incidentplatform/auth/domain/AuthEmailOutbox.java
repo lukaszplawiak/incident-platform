@@ -13,8 +13,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * The intent to send an auth email — an invite or a password reset — to one
- * user (backlog #0-52).
+ * The intent to send an auth email to one user (backlog #0-52): an invite or a
+ * password reset with a token, or a security notice without one.
  *
  * <h2>Supported email types</h2>
  * <ul>
@@ -22,6 +22,9 @@ import java.util.UUID;
  *       and {@code ResendInviteService}. Link: /accept-invite?token=xxx</li>
  *   <li>{@link AuthEmailType#PASSWORD_RESET} — requested by
  *       {@code ForgotPasswordService.initiateReset()}. Link: /reset-password?token=xxx</li>
+ *   <li>{@link AuthEmailType#MFA_ENABLED}, {@link AuthEmailType#MFA_DISABLED} (#0-83),
+ *       {@link AuthEmailType#MFA_RESET} (#0-88) and {@link AuthEmailType#API_KEY_CREATED}
+ *       (#0-89, one per key, naming it in {@code api_key_id}) — notices, no token, no link.</li>
  * </ul>
  *
  * <h2>Outbox Pattern</h2>
@@ -106,6 +109,10 @@ public class AuthEmailOutbox {
     @Column(name = "sent_at")
     private Instant sentAt;
 
+    /** Backlog #0-89: the key an API_KEY_CREATED notice is about; null for other types. */
+    @Column(name = "api_key_id", updatable = false)
+    private UUID apiKeyId;
+
     protected AuthEmailOutbox() {}
 
     /**
@@ -129,6 +136,18 @@ public class AuthEmailOutbox {
         return entry;
     }
 
+    /**
+     * The same, for the notice about one API key (backlog #0-89): the row
+     * names the key, so the email can show its id. Not its prefix, which is
+     * part of the secret.
+     */
+    public static AuthEmailOutbox requestAboutApiKey(User user, UUID apiKeyId, Duration lifetime) {
+        final AuthEmailOutbox entry = request(user, AuthEmailType.API_KEY_CREATED, lifetime);
+        entry.apiKeyId = Objects.requireNonNull(apiKeyId, "apiKeyId");
+        return entry;
+    }
+
+    public UUID getApiKeyId()            { return apiKeyId; }
     public UUID getId()                  { return id; }
     public UUID getUserId()              { return userId; }
     public String getTenantId()          { return tenantId; }

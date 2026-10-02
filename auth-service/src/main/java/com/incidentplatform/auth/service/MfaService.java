@@ -51,6 +51,10 @@ public class MfaService {
     /** {@code user@host} of the break-glass process; the runner cuts it to fit. */
     public static final int BREAK_GLASS_EXECUTED_ON_MAX = 200;
 
+    /** Audit metadata of an admin reset that also revoked the keys the user created (backlog #0-89). */
+    static final String AUDIT_KEYS_CREATED_SINCE = "revokeKeysCreatedSince";
+    static final String AUDIT_CREATED_KEYS_REVOKED = "createdApiKeysRevoked";
+
     private final UserRepository userRepository;
     private final MfaBackupCodeRepository backupCodeRepository;
     private final AuthTokenService authTokenService;
@@ -64,6 +68,7 @@ public class MfaService {
     private final AuthEmailRequestService authEmailRequestService;
     private final MfaSessionStatusService mfaSessionStatusService;
     private final MfaResetRateLimiter mfaResetRateLimiter;
+    private final ApiKeyService apiKeyService;
 
     public MfaService(UserRepository userRepository,
                       MfaBackupCodeRepository backupCodeRepository,
@@ -77,7 +82,8 @@ public class MfaService {
                       BruteForceProtectionService bruteForceProtectionService,
                       AuthEmailRequestService authEmailRequestService,
                       MfaSessionStatusService mfaSessionStatusService,
-                      MfaResetRateLimiter mfaResetRateLimiter) {
+                      MfaResetRateLimiter mfaResetRateLimiter,
+                      ApiKeyService apiKeyService) {
         this.userRepository       = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.authTokenService     = authTokenService;
@@ -91,6 +97,7 @@ public class MfaService {
         this.authEmailRequestService = authEmailRequestService;
         this.mfaSessionStatusService = mfaSessionStatusService;
         this.mfaResetRateLimiter = mfaResetRateLimiter;
+        this.apiKeyService = apiKeyService;
     }
 
     // ── Setup (step 1) ────────────────────────────────────────────────────
@@ -233,6 +240,9 @@ public class MfaService {
      *       factor of their own again. Access tokens already issued live out
      *       their 15 minutes, as after a password reset; the platform API
      *       stops accepting them at once (no live session).</li>
+     *   <li>The user's personal API keys are revoked (backlog #0-89), for
+     *       the same reason: one created with the stolen password would
+     *       otherwise keep working after the recovery.</li>
      * </ul>
      *
      * @throws BusinessException 403 on one's own account or when the admin's session
@@ -243,6 +253,19 @@ public class MfaService {
      */
     @Transactional
     public void resetMfaByAdmin(UUID targetUserId, UserPrincipal admin) {
+        resetMfaByAdmin(targetUserId, admin, null);
+    }
+
+    /**
+     * {@link #resetMfaByAdmin(UUID, UserPrincipal)}, and when
+     * {@code revokeKeysCreatedSince} is given, also every API key the user
+     * created at or after it (backlog #0-89): the tenant and integration keys
+     * an intruder made with the account survive the reset otherwise, which
+     * revokes only personal keys. Same step-up and limit as the reset, one
+     * transaction, the count in the reset's audit event.
+     */
+    @Transactional
+    public void resetMfaByAdmin(UUID targetUserId, UserPrincipal admin, Instant revokeKeysCreatedSince) {
         final String tenantId = TenantContext.get();
 
         if (targetUserId.equals(admin.userId())) {
@@ -272,7 +295,19 @@ public class MfaService {
             throw new RateLimitRefusedException(limit);
         }
 
-        resetFactorAndSessions(user, tenantId);
+        final int keysRevoked = resetFactorAndSessions(user, tenantId);
+        final Map<String, Object> metadata = new java.util.HashMap<>(Map.of(
+                "resetBy", admin.userId().toString(),
+                ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked)));
+        if (revokeKeysCreatedSince != null) {
+            final var created = apiKeyService.revokeCreatedBy(
+                    targetUserId, tenantId, revokeKeysCreatedSince, admin.userId());
+            metadata.put(AUDIT_KEYS_CREATED_SINCE, revokeKeysCreatedSince.toString());
+            metadata.put(AUDIT_CREATED_KEYS_REVOKED, String.valueOf(created.count()));
+            // Review: the ids too, as the revoke-created-by endpoint records them.
+            metadata.put("keyIds", ApiKeyService.joinedIds(created.revokedKeyIds()));
+            metadata.put("integrationIds", ApiKeyService.joinedIds(created.revokedIntegrationIds()));
+        }
 
         auditEventPublisher.publishAuth(
                 targetUserId, tenantId,
@@ -280,7 +315,7 @@ public class MfaService {
                 "auth-service",
                 admin.userId().toString(),
                 "MFA reset by an administrator",
-                Map.of("resetBy", admin.userId().toString()));
+                Map.copyOf(metadata));
 
         log.warn("MFA reset by an administrator: userId={}, tenant={}, by={}",
                 targetUserId, tenantId, admin.userId());
@@ -344,7 +379,7 @@ public class MfaService {
                     HttpStatus.CONFLICT);
         }
 
-        resetFactorAndSessions(user, tenantId);
+        final int keysRevoked = resetFactorAndSessions(user, tenantId);
 
         final String auditActor = "break-glass:" + actor.strip();
         auditEventPublisher.publishAuthConfirmed(
@@ -353,7 +388,8 @@ public class MfaService {
                 "auth-service",
                 auditActor,
                 "MFA reset by break-glass (no other operator admin)",
-                Map.of("resetBy", auditActor, "reason", reason.strip(), "executedOn", executedOn.strip()),
+                Map.of("resetBy", auditActor, "reason", reason.strip(), "executedOn", executedOn.strip(),
+                        ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked)),
                 auditTimeout);
 
         log.warn("MFA reset by break-glass: userId={}, tenant={}, by={}, executedOn={}",
@@ -885,12 +921,20 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
      * the factor goes, and so does every session and unfinished login of the
      * user (the usual reason is a compromised account), and the user gets
      * the "an administrator reset your MFA" email.
+     *
+     * <p>Backlog #0-89: the user's personal API keys are revoked too. A key
+     * created by whoever had the password would otherwise outlive the
+     * recovery; the email says so. Last, because the bulk revocation clears
+     * the persistence context.
+     *
+     * @return the number of personal API keys revoked, for the audit event
      */
-    private void resetFactorAndSessions(User user, String tenantId) {
+    private int resetFactorAndSessions(User user, String tenantId) {
         clearFactor(user, tenantId);
         authEmailRequestService.requestMfaResetNotification(user);
         authTokenService.invalidateLoginContinuationTokens(user.getId());
         authTokenService.invalidateAllRefreshTokens(user.getId());
+        return apiKeyService.revokeAllPersonalKeysForUser(user.getId(), tenantId);
     }
 
     private void saveBackupCodes(User user, List<String> plainCodes) {

@@ -2,6 +2,7 @@ package com.incidentplatform.auth.repository;
 
 import com.incidentplatform.auth.domain.ApiKey;
 import com.incidentplatform.auth.domain.ApiKeyType;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -62,6 +63,43 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
     List<ApiKey> findActiveByOwnerId(@Param("userId") UUID userId);
 
     /**
+     * Active keys of the tenant that a user created at or after {@code since}
+     * (backlog #0-89), of every type. A key with no recorded creator (made
+     * before V26) never matches.
+     */
+    @Query("SELECT k FROM ApiKey k " +
+            "WHERE k.tenantId = :tenantId AND k.createdByUserId = :userId " +
+            "AND k.revokedAt IS NULL AND k.createdAt >= :since " +
+            "ORDER BY k.createdAt DESC")
+    List<ApiKey> findActiveCreatedBy(@Param("tenantId") String tenantId,
+                                     @Param("userId") UUID userId,
+                                     @Param("since") Instant since);
+
+    /**
+     * Keys of every state, revoked ones included, that a user created at or
+     * after {@code since} (backlog #0-89): the creation limit, which a
+     * create-and-revoke loop must not escape. Newest first, as many as the
+     * page asks for (the limit), so the load stays bounded (review).
+     */
+    @Query("SELECT k.createdAt FROM ApiKey k " +
+            "WHERE k.tenantId = :tenantId AND k.createdByUserId = :userId AND k.createdAt >= :since " +
+            "ORDER BY k.createdAt DESC")
+    List<Instant> findCreationTimesSince(@Param("tenantId") String tenantId,
+                                         @Param("userId") UUID userId,
+                                         @Param("since") Instant since,
+                                         Pageable page);
+
+    /**
+     * How many active keys without an owner (tenant and integration keys) a
+     * user created (backlog #0-89): told to the user in the MFA reset email,
+     * as they survive the reset and need a review.
+     */
+    @Query("SELECT count(k) FROM ApiKey k " +
+            "WHERE k.tenantId = :tenantId AND k.createdByUserId = :userId " +
+            "AND k.ownerUser IS NULL AND k.revokedAt IS NULL")
+    long countActiveUnownedCreatedBy(@Param("tenantId") String tenantId, @Param("userId") UUID userId);
+
+    /**
      * Bulk-revokes all PERSONAL keys belonging to a user.
      * Called when a user is archived or anonymized.
      *
@@ -81,18 +119,20 @@ public interface ApiKeyRepository extends JpaRepository<ApiKey, UUID> {
      * test — a mocked-repository test cannot catch this, since Mockito
      * has no persistence context to get out of sync in the first place.
      *
-     * <p>Currently benign in production — both callers
-     * ({@code UserManagementService.archiveUser}/{@code anonymizeUser})
-     * only call this bulk update and never subsequently read an
-     * {@code ApiKey} in the same transaction — but
-     * {@code clearAutomatically = true} is the standard, defensive
-     * default for this exact class of query regardless, protecting any
-     * future code added to that same transactional scope.
+     * <p>Currently benign in production — no caller (archive, anonymize,
+     * and since backlog #0-89 the password reset, the password change on
+     * request and the MFA resets) reads an {@code ApiKey} afterwards in the
+     * same transaction — but {@code clearAutomatically = true} is the
+     * standard, defensive default for this exact class of query regardless,
+     * protecting any future code added to that same transactional scope.
+     * The callers run it last, as it also detaches the {@code User} they hold.
+     *
+     * @return the number of keys revoked by this call
      */
     @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("UPDATE ApiKey k SET k.revokedAt = :now " +
             "WHERE k.ownerUser.id = :userId AND k.revokedAt IS NULL")
-    void revokeAllPersonalKeysForUser(
+    int revokeAllPersonalKeysForUser(
             @Param("userId") UUID userId,
             @Param("now") Instant now);
 

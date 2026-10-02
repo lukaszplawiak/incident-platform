@@ -37,7 +37,25 @@ public enum AuthEmailType {
      * type, so the user can tell it from disabling MFA themselves and notice
      * a reset they did not ask for. No token.
      */
-    MFA_RESET;
+    MFA_RESET,
+
+    /**
+     * Security notification (backlog #0-89): an API key was created with the
+     * account (a personal key to its owner, a tenant key to the admin who
+     * created it), so a key the owner did not create is noticed. No token.
+     */
+    API_KEY_CREATED;
+
+    /**
+     * Whether a newer request of this type makes an unsent older one
+     * pointless, so the scheduler closes the older one as SUPERSEDED. True for
+     * every type but {@link #API_KEY_CREATED} (backlog #0-89, review): each of
+     * those is about a different key, and dropping one would let a key made
+     * right after another go unannounced.
+     */
+    public boolean supersededByNewer() {
+        return this != API_KEY_CREATED;
+    }
 
     /** Whether an email of this type carries a token (a link to act on). */
     public boolean carriesToken() {
@@ -53,7 +71,7 @@ public enum AuthEmailType {
         return switch (this) {
             case INVITE -> AuthToken.Type.INVITE;
             case PASSWORD_RESET -> AuthToken.Type.PASSWORD_RESET;
-            case MFA_ENABLED, MFA_DISABLED, MFA_RESET ->
+            case MFA_ENABLED, MFA_DISABLED, MFA_RESET, API_KEY_CREATED ->
                     throw new IllegalStateException(this + " is a notification and carries no token");
         };
     }

@@ -13,6 +13,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AuthEmailTypeTest {
 
     @Test
+    @DisplayName("only API_KEY_CREATED is never superseded by a newer request (backlog #0-89)")
+    void supersededByNewer() {
+        for (final AuthEmailType type : AuthEmailType.values()) {
+            assertThat(type.supersededByNewer()).as(type.name()).isEqualTo(type != AuthEmailType.API_KEY_CREATED);
+        }
+    }
+
+    @Test
     @DisplayName("invite and password reset carry their own token type")
     void tokenCarryingTypes() {
         assertThat(AuthEmailType.INVITE.carriesToken()).isTrue();
@@ -22,8 +30,8 @@ class AuthEmailTypeTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = AuthEmailType.class, names = {"MFA_ENABLED", "MFA_DISABLED", "MFA_RESET"})
-    @DisplayName("an MFA notice carries no token, and asking for its token type is a bug")
+    @EnumSource(value = AuthEmailType.class, names = {"MFA_ENABLED", "MFA_DISABLED", "MFA_RESET", "API_KEY_CREATED"})
+    @DisplayName("a security notice carries no token, and asking for its token type is a bug")
     void notificationsCarryNoToken(AuthEmailType type) {
         assertThat(type.carriesToken()).isFalse();
         assertThatThrownBy(type::tokenType)

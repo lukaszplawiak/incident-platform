@@ -83,6 +83,35 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     Optional<User> findByIdAndTenantId(UUID id, String tenantId);
 
     /**
+     * The same user, row-locked until the transaction ends (backlog #0-89,
+     * found in review): the API key creation checks (active-key caps and the
+     * hourly limit) read counts and then insert, so parallel requests of one
+     * user would all pass them. With the creator locked first, only one of a
+     * user's parallel creations proceeds; other users are not affected.
+     *
+     * <p>NOWAIT (found in review): a second request finding the row locked
+     * fails at once instead of waiting, as each waiter would hold one of the
+     * few pooled connections and a burst of them could starve the whole
+     * service. Callers turn the failure into a 429
+     * ({@code ApiKeyCreationLimit.lockingCreator}).
+     *
+     * <p>{@code FOR NO KEY UPDATE}, not {@code FOR UPDATE} (found in review):
+     * every uncommitted row referencing the user through a foreign key (a
+     * login's token, a reset's outbox row, a team membership) holds
+     * {@code FOR KEY SHARE} on it, which conflicts with {@code FOR UPDATE}, so
+     * those would have turned a creation into a spurious 429. {@code FOR NO KEY
+     * UPDATE} conflicts only with itself and with writes to the row (an
+     * {@code UPDATE users} in flight, rare and short), which still yield a 429.
+     *
+     * <p>Native, so it repeats the entity's {@code @SQLRestriction} (archived
+     * and anonymized users are not found).
+     */
+    @Query(value = "SELECT * FROM users WHERE id = :id AND tenant_id = :tenantId "
+            + "AND archived_at IS NULL AND anonymized_at IS NULL FOR NO KEY UPDATE NOWAIT",
+            nativeQuery = true)
+    Optional<User> findByIdAndTenantIdForUpdate(@Param("id") UUID id, @Param("tenantId") String tenantId);
+
+    /**
      * Finds any user by id and tenant regardless of archived/anonymized state.
      *
      * <p>Used by:

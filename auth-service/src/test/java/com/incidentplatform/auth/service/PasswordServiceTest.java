@@ -11,6 +11,7 @@ import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.junit.jupiter.api.AfterEach;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,12 +26,14 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
@@ -44,6 +47,7 @@ class PasswordServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private AuthTokenService authTokenService;
     @Mock private AuditEventPublisher auditEventPublisher;
+    @Mock private ApiKeyService apiKeyService;
 
     private PasswordService service;
 
@@ -59,7 +63,7 @@ class PasswordServiceTest {
     void setUp() {
         service = new PasswordService(
                 userRepository, authTokenService,
-                ENCODER, auditEventPublisher);
+                ENCODER, auditEventPublisher, apiKeyService);
     }
 
     @AfterEach
@@ -137,6 +141,51 @@ class PasswordServiceTest {
             then(userRepository).should().save(captor.capture());
             assertThat(ENCODER.matches(CURRENT_PASSWORD,
                     captor.getValue().getPasswordHash())).isFalse();
+        }
+
+        @Test
+        @DisplayName("keeps personal API keys unless asked (backlog #0-89)")
+        void keepsApiKeysByDefault() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+
+            service.changePassword(buildPrincipal(),
+                    new ChangePasswordRequest(CURRENT_PASSWORD, NEW_PASSWORD, false));
+
+            then(apiKeyService).shouldHaveNoInteractions();
+            assertThat(auditMetadata(AuditEventTypes.USER_PASSWORD_CHANGED))
+                    .containsEntry(ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "0");
+        }
+
+        @Test
+        @DisplayName("revokes personal API keys when asked, and audits the count (backlog #0-89)")
+        void revokesApiKeysWhenAsked() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+            given(apiKeyService.revokeAllPersonalKeysForUser(USER_ID, TENANT_ID)).willReturn(2);
+
+            service.changePassword(buildPrincipal(),
+                    new ChangePasswordRequest(CURRENT_PASSWORD, NEW_PASSWORD, true));
+
+            then(apiKeyService).should().revokeAllPersonalKeysForUser(USER_ID, TENANT_ID);
+            assertThat(auditMetadata(AuditEventTypes.USER_PASSWORD_CHANGED))
+                    .containsEntry(ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "2");
+        }
+
+        @Test
+        @DisplayName("revokes nothing on a wrong current password, even when asked")
+        void wrongPasswordRevokesNothing() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(user));
+
+            assertThatThrownBy(() -> service.changePassword(buildPrincipal(),
+                    new ChangePasswordRequest("WrongPassword!", NEW_PASSWORD, true)))
+                    .isInstanceOf(BusinessException.class);
+
+            then(apiKeyService).shouldHaveNoInteractions();
         }
     }
 
@@ -237,6 +286,22 @@ class PasswordServiceTest {
             service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
 
             then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
+        }
+
+        @Test
+        @DisplayName("revokes the user's personal API keys and audits the count (backlog #0-89)")
+        void revokesPersonalApiKeys() {
+            final User user = buildUserWithPassword(CURRENT_PASSWORD);
+            final AuthToken token = buildResetToken(user);
+            given(authTokenService.consumeToken("valid-token",
+                    AuthToken.Type.PASSWORD_RESET)).willReturn(token);
+            given(apiKeyService.revokeAllPersonalKeysForUser(USER_ID, TENANT_ID)).willReturn(1);
+
+            service.resetPassword(new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID);
+
+            then(apiKeyService).should().revokeAllPersonalKeysForUser(USER_ID, TENANT_ID);
+            assertThat(auditMetadata(AuditEventTypes.USER_PASSWORD_RESET))
+                    .containsEntry(ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "1");
         }
 
         @Test
@@ -348,10 +413,20 @@ class PasswordServiceTest {
             then(authTokenService).should()
                     .consumeToken("bad-token", AuthToken.Type.PASSWORD_RESET);
             then(authTokenService).shouldHaveNoMoreInteractions();
+            then(apiKeyService).shouldHaveNoInteractions();
         }
     }
 
     // ── helpers ───────────────────────────────────────────────────────────
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> auditMetadata(String eventType) {
+        final ArgumentCaptor<Map<String, Object>> metadata = ArgumentCaptor.forClass(Map.class);
+        then(auditEventPublisher).should().publishAuth(
+                any(), anyString(), eq(eventType),
+                anyString(), anyString(), anyString(), metadata.capture());
+        return metadata.getValue();
+    }
 
     private User buildUserWithPassword(String rawPassword) {
         return User.forTesting(USER_ID, TENANT_ID, "u@example.com",

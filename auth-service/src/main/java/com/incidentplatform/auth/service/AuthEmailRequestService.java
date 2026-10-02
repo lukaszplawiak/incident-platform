@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.util.UUID;
 
 /**
  * Records the intent to send an invite or password-reset email (backlog #0-52),
@@ -81,6 +82,21 @@ public class AuthEmailRequestService {
     public AuthEmailOutbox requestMfaResetNotification(User user) {
         return outboxRepository.save(AuthEmailOutbox.request(
                 user, AuthEmailType.MFA_RESET, securityNotificationDeadline));
+    }
+
+    /**
+     * Queues the notice that an API key was created with the user's account
+     * (backlog #0-89); part of the caller's transaction, same deadline as the
+     * other security notifications. One per key, never merged or superseded
+     * (review: OWASP ASVS 2.2.3 asks for a notice per change, and a merged one
+     * would let a key made right after the owner's own hide behind its notice);
+     * the number of emails is bounded by the creation limit instead
+     * ({@code ApiKeyCreationLimit}).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthEmailOutbox requestApiKeyCreatedNotification(User user, UUID apiKeyId) {
+        return outboxRepository.save(AuthEmailOutbox.requestAboutApiKey(
+                user, apiKeyId, securityNotificationDeadline));
     }
 
     private AuthEmailOutbox request(User user, AuthEmailType type) {

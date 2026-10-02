@@ -2,10 +2,13 @@ package com.incidentplatform.auth.repository;
 
 import com.incidentplatform.auth.bootstrap.OperatorTenantBootstrap;
 import com.incidentplatform.auth.domain.ApiKey;
+import com.incidentplatform.auth.domain.ApiKeyScope;
+import com.incidentplatform.auth.domain.ApiKeyType;
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.AuthToken;
+import com.incidentplatform.auth.domain.MfaBackupCode;
 import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.SlackWorkspace;
 import com.incidentplatform.auth.domain.Team;
@@ -14,61 +17,87 @@ import com.incidentplatform.auth.domain.TeamRole;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.domain.UserRole;
 import com.incidentplatform.auth.dto.AcceptInviteRequest;
+import com.incidentplatform.auth.dto.ApiKeyCreatedResponse;
+import com.incidentplatform.auth.dto.ApiKeyDto;
+import com.incidentplatform.auth.dto.ChangePasswordRequest;
+import com.incidentplatform.auth.dto.CreateApiKeyRequest;
+import com.incidentplatform.auth.dto.CreateIntegrationRequest;
 import com.incidentplatform.auth.dto.LoginResponse;
-import com.incidentplatform.auth.dto.ResetPasswordRequest;
-import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
-import com.incidentplatform.auth.service.AesEncryptionService;
-import com.incidentplatform.auth.service.AuthTokenService;
-import com.incidentplatform.auth.service.InviteService;
-import com.incidentplatform.auth.service.MfaService;
-import com.incidentplatform.auth.service.PasswordService;
-import com.incidentplatform.auth.service.AuthEmailPersistenceService;
-import com.incidentplatform.auth.service.ForgotPasswordService;
-import com.incidentplatform.auth.service.ResendInviteService;
-import com.incidentplatform.shared.security.TenantContext;
-import com.incidentplatform.auth.service.UserService;
-import com.incidentplatform.auth.service.MfaSessionStatusService;
-import com.incidentplatform.auth.service.TenantProvisioningService;
 import com.incidentplatform.auth.dto.ProvisionTenantRequest;
 import com.incidentplatform.auth.dto.ProvisionTenantResponse;
+import com.incidentplatform.auth.dto.ResetPasswordRequest;
+import com.incidentplatform.auth.dto.RevokedApiKeysResponse;
 import com.incidentplatform.auth.dto.TenantDto;
-import com.incidentplatform.shared.security.UserPrincipal;
-import com.incidentplatform.shared.security.SecurityRoles;
-import com.incidentplatform.shared.security.ReservedTenants;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.incidentplatform.auth.ratelimit.BruteForceProtectionService;
+import com.incidentplatform.auth.ratelimit.RateLimitRefusedException;
+import com.incidentplatform.auth.service.AesEncryptionService;
+import com.incidentplatform.auth.service.ApiKeyService;
+import com.incidentplatform.auth.service.AuthEmailPersistenceService;
+import com.incidentplatform.auth.service.AuthTokenService;
+import com.incidentplatform.auth.service.IntegrationService;
+import com.incidentplatform.auth.service.ForgotPasswordService;
+import com.incidentplatform.auth.service.InviteService;
+import com.incidentplatform.auth.service.MfaService;
+import com.incidentplatform.auth.service.MfaSessionStatusService;
+import com.incidentplatform.auth.service.PasswordService;
+import com.incidentplatform.auth.service.ResendInviteService;
+import com.incidentplatform.auth.service.TenantProvisioningService;
 import com.incidentplatform.auth.service.TotpService;
+import com.incidentplatform.auth.service.UserService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
-import com.incidentplatform.auth.domain.MfaBackupCode;
-import org.springframework.http.HttpStatus;
+import com.incidentplatform.shared.security.ReservedTenants;
+import com.incidentplatform.shared.security.SecurityRoles;
+import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.UserPrincipal;
+import com.zaxxer.hikari.HikariDataSource;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import javax.sql.DataSource;
 import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -126,6 +155,7 @@ import static org.assertj.core.api.Assertions.within;
  * are lower-risk (simpler queries, or none) and left for a follow-up if
  * ever needed.
  */
+
 @SpringBootTest
 @Testcontainers
 @Transactional
@@ -179,6 +209,11 @@ class AuthRepositoryIntegrationTest {
     @Autowired private ForgotPasswordService forgotPasswordService;
     @Autowired private AuthEmailPersistenceService authEmailPersistenceService;
     @Autowired private MfaService mfaService;
+    @Autowired private ApiKeyService apiKeyService;
+    @Autowired private ApplicationContext applicationContext;
+    @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private DataSource dataSource;
+    @Autowired private IntegrationService integrationService;
     @Autowired private TotpService totpService;
     @Autowired @Qualifier("mfaEncryptionService") private AesEncryptionService mfaEncryptionService;
 
@@ -195,7 +230,7 @@ class AuthRepositoryIntegrationTest {
     @org.junit.jupiter.api.BeforeEach
     void mfaResetAllowed() {
         org.mockito.BDDMockito.given(mfaResetRateLimiter.tryConsume(
-                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                        ArgumentMatchers.any(), ArgumentMatchers.any()))
                 .willReturn(com.incidentplatform.auth.ratelimit.RateLimitDecision.ALLOWED);
     }
 
@@ -539,6 +574,511 @@ class AuthRepositoryIntegrationTest {
                     .isInstanceOf(BusinessException.class);
         }
 
+        /** A live key, saved as-is (no email); the hash only has to be unique. */
+        private UUID apiKey(User owner) {
+            final String hash = UUID.randomUUID().toString().replace("-", "")
+                    + UUID.randomUUID().toString().replace("-", "");
+            final ApiKey key = owner == null
+                    ? ApiKey.createTenant(
+                            TENANT_ID, "tenant key", hash, hash.substring(0, 8), List.of("teams:read"), null)
+                    : ApiKey.createPersonal(
+                            TENANT_ID, "personal key", hash, hash.substring(0, 8), List.of("teams:read"), null, owner);
+            return apiKeyRepository.saveAndFlush(key).getId();
+        }
+
+        private boolean revoked(UUID keyId) {
+            return jdbcTemplate.queryForObject(
+                    "SELECT revoked_at IS NOT NULL FROM api_keys WHERE id = ?", Boolean.class, keyId);
+        }
+
+        @Test
+        @DisplayName("a password reset revokes the user's personal API keys, no one else's and no tenant key (backlog #0-89)")
+        void passwordResetRevokesPersonalKeys() {
+            final User user = persistUser("reset-keys@example.com", List.of("ROLE_ADMIN"));
+            final User other = persistUser("reset-keys-other@example.com", List.of("ROLE_ADMIN"));
+            final UUID first = apiKey(user);
+            final UUID second = apiKey(user);
+            final UUID othersKey = apiKey(other);
+            final UUID tenantKey = apiKey(null);
+            final String reset = authTokenService.generatePasswordResetToken(user, TENANT_ID);
+            startFreshRequest();
+
+            passwordService.resetPassword(new ResetPasswordRequest(reset, "a-new-password"), TENANT_ID);
+            entityManager.flush();
+
+            assertThat(revoked(first)).isTrue();
+            assertThat(revoked(second)).isTrue();
+            assertThat(revoked(othersKey)).as("another user's key").isFalse();
+            assertThat(revoked(tenantKey)).as("a tenant key").isFalse();
+            assertThat(passwordEncoder.matches("a-new-password", passwordHashOf(user.getId())))
+                    .as("the password change survives the bulk revocation after it").isTrue();
+        }
+
+        @Test
+        @DisplayName("a password change revokes the personal API keys only when asked (backlog #0-89)")
+        void passwordChangeRevokesOnRequest() {
+            final User user = persistUser("change-keys@example.com", List.of("ROLE_RESPONDER"));
+            user.setPasswordHash(passwordEncoder.encode("the-current-password"));
+            userRepository.saveAndFlush(user);
+            final UUID key = apiKey(user);
+            final UserPrincipal principal = new UserPrincipal(user.getId(), TENANT_ID, user.getEmail(),
+                    List.of("ROLE_RESPONDER"), List.of(), List.of(), UUID.randomUUID());
+            startFreshRequest();
+
+            passwordService.changePassword(principal, new ChangePasswordRequest(
+                    "the-current-password", "a-second-password"));
+            startFreshRequest();
+            assertThat(revoked(key)).as("a routine change keeps the key").isFalse();
+
+            passwordService.changePassword(principal, new ChangePasswordRequest(
+                    "a-second-password", "a-third-password", true));
+            entityManager.flush();
+            assertThat(revoked(key)).isTrue();
+            assertThat(passwordEncoder.matches("a-third-password", passwordHashOf(user.getId()))).isTrue();
+        }
+
+        @Test
+        @DisplayName("V26: keys record their creator and session; an admin revokes what one user created since a "
+                + "time, an integration with its key, nobody else's (backlog #0-89)")
+        void revokeKeysCreatedBy() {
+            final User intruded = persistUser("intruded-admin@example.com", List.of("ROLE_ADMIN"));
+            final User other = persistUser("other-admin@example.com", List.of("ROLE_ADMIN"));
+            final UUID session = UUID.randomUUID();
+            final UserPrincipal asIntruded = new UserPrincipal(intruded.getId(), TENANT_ID, intruded.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), session);
+            final UserPrincipal asOther = new UserPrincipal(other.getId(), TENANT_ID, other.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
+            startFreshRequest();
+            final UUID oldKey;
+            final UUID tenantKey;
+            final UUID integrationId;
+            final UUID othersKey;
+            TenantContext.set(TENANT_ID);
+            try {
+                final var shared = new CreateApiKeyRequest("shared",
+                        ApiKeyType.TENANT,
+                        List.of(ApiKeyScope.TEAMS_READ), null);
+                oldKey = apiKeyService.createApiKey(shared, asIntruded).id();
+                tenantKey = apiKeyService.createApiKey(shared, asIntruded).id();
+                integrationId = integrationService.createIntegration(
+                        new CreateIntegrationRequest(
+                                "intruder-int", "generic", null, null), asIntruded).id();
+                othersKey = apiKeyService.createApiKey(shared, asOther).id();
+                entityManager.flush();
+            } finally {
+                TenantContext.clear();
+            }
+            assertThat(jdbcTemplate.queryForMap(
+                    "SELECT created_by_user_id, created_in_session_id FROM api_keys WHERE id = ?", tenantKey))
+                    .containsEntry("created_by_user_id", intruded.getId())
+                    .containsEntry("created_in_session_id", session);
+            assertThat(apiKeyRepository.countActiveUnownedCreatedBy(TENANT_ID, intruded.getId())).isEqualTo(3);
+            // Another tenant's key carrying the same creator id (review: proves the tenant predicate).
+            final ApiKey foreign = ApiKey.createTenant(
+                    "other-tenant", "foreign", "f".repeat(64), "ffffffff", List.of("teams:read"), null);
+            foreign.recordCreator(intruded.getId(), null);
+            final UUID foreignKey = apiKeyRepository.saveAndFlush(foreign).getId();
+            assertThat(apiKeyRepository.countActiveUnownedCreatedBy(TENANT_ID, intruded.getId()))
+                    .as("counted in its own tenant only").isEqualTo(3);
+            final Instant since = Instant.now().minus(Duration.ofDays(1)).truncatedTo(ChronoUnit.MICROS);
+            // Created before the compromise: outside the window.
+            jdbcTemplate.update("UPDATE api_keys SET created_at = now() - INTERVAL '10 days' WHERE id = ?", oldKey);
+            // Created exactly at the given time: inside (>=), review asked to pin the boundary.
+            jdbcTemplate.update("UPDATE api_keys SET created_at = ? WHERE id = ?",
+                    java.sql.Timestamp.from(since), tenantKey);
+            startFreshRequest();
+
+            TenantContext.set(TENANT_ID);
+            final RevokedApiKeysResponse revoked;
+            try {
+                assertThat(apiKeyService.listApiKeys(asOther, intruded.getId()))
+                        .as("the list filtered by creator, through the real query")
+                        .extracting(ApiKeyDto::id)
+                        .containsExactlyInAnyOrder(oldKey, tenantKey,
+                                jdbcTemplate.queryForObject("SELECT api_key_id FROM integrations WHERE id = ?",
+                                        UUID.class, integrationId));
+                revoked = apiKeyService.revokeKeysCreatedBy(intruded.getId(), since, asOther);
+                entityManager.flush();
+            } finally {
+                TenantContext.clear();
+            }
+
+            assertThat(revoked.count()).isEqualTo(2);
+            assertThat(revoked(foreignKey)).as("another tenant's key, same creator id").isFalse();
+            assertThat(revoked.revokedIntegrationIds()).containsExactly(integrationId);
+            assertThat(revoked(tenantKey)).isTrue();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT revoked_at IS NOT NULL FROM integrations WHERE id = ?", Boolean.class, integrationId))
+                    .as("the integration goes with its key").isTrue();
+            assertThat(revoked(oldKey)).as("created before the given time").isFalse();
+            assertThat(revoked(othersKey)).as("another admin's key").isFalse();
+            assertThat(apiKeyRepository.countActiveUnownedCreatedBy(TENANT_ID, intruded.getId())).isEqualTo(1);
+        }
+
+        /** A committed admin of its own tenant, for the tests that commit (deleted by {@link #deleteKeyCreator}). */
+        private User committedKeyCreator(String tenant, String email) {
+            return userRepository.saveAndFlush(User.forTesting(null, tenant, email, "hashed-password", true,
+                    List.of("ROLE_ADMIN")));
+        }
+
+        private void deleteKeyCreator(User creator) {
+            jdbcTemplate.update("DELETE FROM auth_email_outbox WHERE user_id = ?", creator.getId());
+            jdbcTemplate.update("DELETE FROM integrations WHERE api_key_id IN "
+                    + "(SELECT id FROM api_keys WHERE created_by_user_id = ?)", creator.getId());
+            jdbcTemplate.update("DELETE FROM api_keys WHERE created_by_user_id = ?", creator.getId());
+            jdbcTemplate.update("DELETE FROM users WHERE id = ?", creator.getId());
+        }
+
+        private static CreateApiKeyRequest tenantKeyRequest(String name) {
+            return new CreateApiKeyRequest(name, ApiKeyType.TENANT, List.of(ApiKeyScope.TEAMS_READ), null);
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("the creation audit is published after commit, off the request thread: a stalled publish "
+                + "holds neither the request nor a pooled connection (backlog #0-89, review)")
+        void creationAuditOffRequestThread() throws Exception {
+            final String tenant = "audit-tenant";
+            final User admin = committedKeyCreator(tenant, "audit-admin@example.com");
+            final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
+            final CountDownLatch publishing = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            Mockito.doAnswer(invocation -> {
+                publishing.countDown();
+                release.await(30, TimeUnit.SECONDS); // a Kafka stall
+                return null;
+            }).when(auditEventPublisher).publishAuth(ArgumentMatchers.any(),
+                    ArgumentMatchers.eq(tenant),
+                    ArgumentMatchers.eq(AuditEventTypes.API_KEY_CREATED),
+                    ArgumentMatchers.any(), ArgumentMatchers.any(),
+                    ArgumentMatchers.any(), ArgumentMatchers.any());
+            final var pool = ((HikariDataSource) dataSource).getHikariPoolMXBean();
+            TenantContext.set(tenant);
+            try {
+                final long start = System.nanoTime();
+                apiKeyService.createApiKey(tenantKeyRequest("audited"), asAdmin);
+                assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the request does not wait for Kafka")
+                        .isLessThan(Duration.ofSeconds(5));
+
+                assertThat(publishing.await(10, TimeUnit.SECONDS)).as("published after commit").isTrue();
+                assertThat(pool.getActiveConnections()).as("no connection held while the publish stalls").isZero();
+            } finally {
+                release.countDown();
+                TenantContext.clear();
+                deleteKeyCreator(admin);
+            }
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a creation rolled back publishes no audit event (backlog #0-89, review)")
+        void rolledBackCreationPublishesNothing() {
+            final String tenant = "rollback-tenant";
+            final User admin = committedKeyCreator(tenant, "rollback-admin@example.com");
+            final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
+            TenantContext.set(tenant);
+            try {
+                new TransactionTemplate(transactionManager)
+                        .executeWithoutResult(status -> {
+                            apiKeyService.createApiKey(tenantKeyRequest("rolled back"), asAdmin);
+                            status.setRollbackOnly();
+                        });
+
+                Mockito.verify(auditEventPublisher, Mockito.after(1000).never())
+                        .publishAuth(ArgumentMatchers.any(), ArgumentMatchers.eq(tenant),
+                                ArgumentMatchers.eq(
+                                        AuditEventTypes.API_KEY_CREATED),
+                                ArgumentMatchers.any(), ArgumentMatchers.any(),
+                                ArgumentMatchers.any(), ArgumentMatchers.any());
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM api_keys WHERE created_by_user_id = ?",
+                        Integer.class, admin.getId())).isZero();
+            } finally {
+                TenantContext.clear();
+                deleteKeyCreator(admin);
+            }
+        }
+
+        @Test
+        @DisplayName("the audit pool is no Executor bean, so Spring Boot keeps its applicationTaskExecutor "
+                + "(backlog #0-89, review)")
+        void bootTaskExecutorKept() {
+            assertThat(applicationContext.containsBean("applicationTaskExecutor")).isTrue();
+            assertThat(applicationContext.getBeansOfType(Executor.class).keySet())
+                    .noneMatch(name -> name.toLowerCase().contains("audit"));
+        }
+
+        @Test
+        @DisplayName("the locking lookup finds only an active user of the given tenant, like the entity's "
+                + "@SQLRestriction it repeats natively (backlog #0-89, review)")
+        void lockingLookupFilters() {
+            final User active = persistUser("lock-filter@example.com", List.of("ROLE_ADMIN"));
+            final User archived = persistUser("lock-archived@example.com", List.of("ROLE_ADMIN"));
+            final User anonymized = persistUser("lock-anonymized@example.com", List.of("ROLE_ADMIN"));
+            jdbcTemplate.update("UPDATE users SET archived_at = now() WHERE id = ?", archived.getId());
+            jdbcTemplate.update("UPDATE users SET anonymized_at = now() WHERE id = ?", anonymized.getId());
+            startFreshRequest();
+
+            assertThat(userRepository.findByIdAndTenantIdForUpdate(active.getId(), TENANT_ID)).isPresent();
+            assertThat(userRepository.findByIdAndTenantIdForUpdate(active.getId(), "other-tenant"))
+                    .as("another tenant").isEmpty();
+            assertThat(userRepository.findByIdAndTenantIdForUpdate(archived.getId(), TENANT_ID))
+                    .as("archived").isEmpty();
+            assertThat(userRepository.findByIdAndTenantIdForUpdate(anonymized.getId(), TENANT_ID))
+                    .as("anonymized").isEmpty();
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a row referencing the creator in a transaction still open (a reset's outbox row) does not make "
+                + "a key creation a 429: FOR NO KEY UPDATE, not FOR UPDATE (backlog #0-89, review)")
+        void foreignKeyInsertDoesNotBlockCreation() throws Exception {
+            final String tenant = "fk-tenant";
+            final User admin = committedKeyCreator(tenant, "fk-admin@example.com");
+            final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
+            final CountDownLatch inserted = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newSingleThreadExecutor();
+            try {
+                final var holder = pool.submit(() -> new TransactionTemplate(transactionManager)
+                        .executeWithoutResult(status -> {
+                            // The insert takes FOR KEY SHARE on the user's row until this transaction ends.
+                            authEmailOutboxRepository.saveAndFlush(AuthEmailOutbox.request(
+                                    admin, AuthEmailType.PASSWORD_RESET, Duration.ofMinutes(15)));
+                            inserted.countDown();
+                            try {
+                                release.await(30, TimeUnit.SECONDS);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                            status.setRollbackOnly();
+                        }));
+                assertThat(inserted.await(10, TimeUnit.SECONDS)).isTrue();
+
+                TenantContext.set(tenant);
+                try {
+                    assertThat(apiKeyService.createApiKey(tenantKeyRequest("alongside a reset"), asAdmin).id())
+                            .isNotNull();
+                } finally {
+                    TenantContext.clear();
+                }
+                release.countDown();
+                holder.get(10, TimeUnit.SECONDS);
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+                deleteKeyCreator(admin);
+            }
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("while another transaction holds the creator's row, a key creation is refused at once (NOWAIT, "
+                + "429 after one second) instead of waiting on a pooled connection (backlog #0-89, review)")
+        void keyCreationRefusedWhileCreatorLocked() throws Exception {
+            final String tenant = "lock-tenant";
+            final User admin = userRepository.saveAndFlush(User.forTesting(null, tenant,
+                    "lock-admin@example.com", "hashed-password", true, List.of("ROLE_ADMIN")));
+            final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
+            final var request = new CreateApiKeyRequest("busy",
+                    ApiKeyType.TENANT,
+                    List.of(ApiKeyScope.TEAMS_READ), null);
+            final var txTemplate = new TransactionTemplate(transactionManager);
+            final CountDownLatch locked = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                final var holder = pool.submit(() -> txTemplate.executeWithoutResult(status -> {
+                    userRepository.findByIdAndTenantIdForUpdate(admin.getId(), tenant).orElseThrow();
+                    locked.countDown();
+                    try {
+                        release.await(30, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }));
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+                final Callable<ApiKeyCreatedResponse> create = () -> {
+                    TenantContext.set(tenant);
+                    try {
+                        return apiKeyService.createApiKey(request, asAdmin);
+                    } finally {
+                        TenantContext.clear();
+                    }
+                };
+                // A waiting call would not return before the holder lets go (30 s); NOWAIT returns at once.
+                final var busy = pool.submit(create);
+                assertThatThrownBy(() -> busy.get(5, TimeUnit.SECONDS))
+                        .hasCauseInstanceOf(RateLimitRefusedException.class)
+                        .cause().satisfies(e -> assertThat(((RateLimitRefusedException) e)
+                                .decision().retryAfterSeconds()).isEqualTo(1));
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM api_keys WHERE created_by_user_id = ?",
+                        Integer.class, admin.getId())).as("nothing created while refused").isZero();
+
+                release.countDown();
+                holder.get(10, TimeUnit.SECONDS);
+                assertThat(pool.submit(create).get(10, TimeUnit.SECONDS).id())
+                        .as("once the row is free, the creation goes through").isNotNull();
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+                jdbcTemplate.update("DELETE FROM auth_email_outbox WHERE user_id = ?", admin.getId());
+                jdbcTemplate.update("DELETE FROM api_keys WHERE created_by_user_id = ?", admin.getId());
+                jdbcTemplate.update("DELETE FROM users WHERE id = ?", admin.getId());
+            }
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("with two creations left in the hour, thirty parallel ones never go over the limit, the rest "
+                + "are 429s (busy row or limit), and one at a time it ends at exactly twenty (backlog #0-89, review)")
+        void creationLimitHoldsUnderConcurrency() throws Exception {
+            // A smoke test of the whole path under load; the lock itself is pinned
+            // deterministically by keyCreationRefusedWhileCreatorLocked (review).
+            final String tenant = "race-tenant";
+            final User admin = userRepository.saveAndFlush(User.forTesting(null, tenant,
+                    "race-admin@example.com", "hashed-password", true, List.of("ROLE_ADMIN")));
+            final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
+            final var request = new CreateApiKeyRequest("racer",
+                    ApiKeyType.TENANT,
+                    List.of(ApiKeyScope.TEAMS_READ), null);
+            // Eighteen made in the last hour already: two left, so any overshoot shows.
+            for (int i = 0; i < 18; i++) {
+                final String hash = (UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", "");
+                final ApiKey earlier = ApiKey.createTenant(tenant, "earlier", hash, hash.substring(0, 8),
+                        List.of("teams:read"), null);
+                earlier.recordCreator(admin.getId(), null);
+                apiKeyRepository.saveAndFlush(earlier);
+            }
+            final CountDownLatch start = new CountDownLatch(1);
+            final AtomicInteger created = new AtomicInteger();
+            final AtomicInteger limited = new AtomicInteger();
+            final List<Throwable> unexpected = Collections.synchronizedList(new ArrayList<>());
+            final ExecutorService pool = Executors.newFixedThreadPool(30);
+            try {
+                for (int i = 0; i < 30; i++) {
+                    pool.submit(() -> {
+                        TenantContext.set(tenant);
+                        try {
+                            start.await();
+                            apiKeyService.createApiKey(request, asAdmin);
+                            created.incrementAndGet();
+                        } catch (RateLimitRefusedException refused) {
+                            limited.incrementAndGet();
+                        } catch (Throwable other) {
+                            unexpected.add(other);
+                        } finally {
+                            TenantContext.clear();
+                        }
+                    });
+                }
+                start.countDown();
+                pool.shutdown();
+                assertThat(pool.awaitTermination(60, TimeUnit.SECONDS)).isTrue();
+
+                assertThat(unexpected).isEmpty();
+                assertThat(created.get() + limited.get()).isEqualTo(30);
+                assertThat(created.get()).as("keys created in parallel, never over the two left")
+                        .isPositive().isLessThanOrEqualTo(2);
+
+                // One at a time from here: exactly up to the limit, then the hourly limit refuses.
+                TenantContext.set(tenant);
+                try {
+                    while (true) {
+                        try {
+                            apiKeyService.createApiKey(request, asAdmin);
+                        } catch (RateLimitRefusedException refused) {
+                            assertThat(refused.decision().retryAfterSeconds()).as("the hourly limit").isGreaterThan(1);
+                            break;
+                        }
+                    }
+                } finally {
+                    TenantContext.clear();
+                }
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM api_keys WHERE created_by_user_id = ?",
+                        Integer.class, admin.getId())).as("keys in total").isEqualTo(20);
+                assertThat(jdbcTemplate.queryForObject(
+                        "SELECT count(*) FROM auth_email_outbox WHERE user_id = ? AND email_type = 'API_KEY_CREATED'",
+                        Integer.class, admin.getId()))
+                        .as("one email per key created through the service (the eighteen were inserted)")
+                        .isEqualTo(2);
+            } finally {
+                pool.shutdownNow();
+                jdbcTemplate.update("DELETE FROM auth_email_outbox WHERE user_id = ?", admin.getId());
+                jdbcTemplate.update("DELETE FROM api_keys WHERE created_by_user_id = ?", admin.getId());
+                jdbcTemplate.update("DELETE FROM users WHERE id = ?", admin.getId());
+            }
+        }
+
+        @Test
+        @DisplayName("the hourly creation limit counts revoked keys too, so a create-and-revoke loop stops "
+                + "(V26 index, backlog #0-89)")
+        void creationLimitCountsRevokedKeys() {
+            final User looper = persistUser("looper@example.com", List.of("ROLE_RESPONDER"));
+            for (int i = 0; i < 20; i++) {
+                final UUID key = apiKey(looper);
+                jdbcTemplate.update("UPDATE api_keys SET revoked_at = now() WHERE id = ?", key);
+            }
+            // One older than the hour does not count.
+            jdbcTemplate.update("UPDATE api_keys SET created_at = now() - INTERVAL '2 hours' "
+                    + "WHERE id = (SELECT id FROM api_keys WHERE created_by_user_id = ? LIMIT 1)", looper.getId());
+            final UserPrincipal asLooper = new UserPrincipal(looper.getId(), TENANT_ID, looper.getEmail(),
+                    List.of("ROLE_RESPONDER"), List.of(), List.of(), UUID.randomUUID());
+            final var request = new CreateApiKeyRequest("one more",
+                    ApiKeyType.PERSONAL,
+                    List.of(ApiKeyScope.TEAMS_READ), null);
+            startFreshRequest();
+
+            TenantContext.set(TENANT_ID);
+            try {
+                apiKeyService.createApiKey(request, asLooper);
+                entityManager.flush();
+                assertThatThrownBy(() -> apiKeyService.createApiKey(request, asLooper))
+                        .as("twenty in the last hour, all but one of them revoked")
+                        .isInstanceOf(RateLimitRefusedException.class);
+            } finally {
+                TenantContext.clear();
+            }
+        }
+
+        @Test
+        @DisplayName("creating a key queues the email to its owner, a tenant key's to the creating admin, one per "
+                + "key naming it (V25, backlog #0-89)")
+        void keyCreationQueuesEmail() {
+            final User admin = persistUser("key-creator@example.com", List.of("ROLE_ADMIN"));
+            final UserPrincipal principal = new UserPrincipal(admin.getId(), TENANT_ID, admin.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of());
+            startFreshRequest();
+            TenantContext.set(TENANT_ID);
+            try {
+                apiKeyService.createApiKey(new CreateApiKeyRequest("mine",
+                        ApiKeyType.PERSONAL,
+                        List.of(ApiKeyScope.TEAMS_READ), null), principal);
+                apiKeyService.createApiKey(new CreateApiKeyRequest("shared",
+                        ApiKeyType.TENANT,
+                        List.of(ApiKeyScope.TEAMS_READ), null), principal);
+                entityManager.flush();
+            } finally {
+                TenantContext.clear();
+            }
+
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT email_type FROM auth_email_outbox WHERE user_id = ? AND email = ?",
+                    String.class, admin.getId(), admin.getEmail()))
+                    .as("one notice per key, never merged (review: a merged one let a key hide)")
+                    .containsExactly("API_KEY_CREATED", "API_KEY_CREATED");
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(DISTINCT o.api_key_id) FROM auth_email_outbox o JOIN api_keys k ON k.id = o.api_key_id "
+                            + "WHERE o.user_id = ? AND k.created_by_user_id = ?",
+                    Integer.class, admin.getId(), admin.getId()))
+                    .as("each row names its own key (V25)").isEqualTo(2);
+        }
+
         @Test
         @DisplayName("an admin's MFA reset removes factor and codes, ends every session, queues the email; "
                 + "needs the admin's MFA session; another tenant's user is not found (backlog #0-88)")
@@ -560,6 +1100,7 @@ class AuthRepositoryIntegrationTest {
             final String targetRefresh = authTokenService.generateRefreshToken(
                     target, TENANT_ID, UUID.randomUUID(), Instant.now());
             final String targetMfaLogin = authTokenService.generateMfaSessionToken(target, TENANT_ID);
+            final UUID targetKey = apiKey(target);
 
             final User stranger = User.forTesting(null, "other-tenant", "reset-stranger@example.com",
                     "hashed-password", true, List.of("ROLE_RESPONDER"));
@@ -608,6 +1149,7 @@ class AuthRepositoryIntegrationTest {
             assertThat(jdbcTemplate.queryForList(
                     "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, target.getId()))
                     .as("the outbox row survives the bulk updates after it").containsExactly("MFA_RESET");
+            assertThat(revoked(targetKey)).as("personal API key (backlog #0-89)").isTrue();
             assertThatThrownBy(() -> authTokenService.rotateRefreshToken(targetRefresh))
                     .isInstanceOf(BusinessException.class);
             assertThatThrownBy(() -> authTokenService.consumeToken(targetMfaLogin, AuthToken.Type.MFA_SESSION))
@@ -617,6 +1159,57 @@ class AuthRepositoryIntegrationTest {
                     Boolean.class, stranger.getId())).as("another tenant's user untouched").isTrue();
             assertThat(mfaSessionStatusService.check(admin.getId(), TENANT_ID, adminMfaSession))
                     .as("the admin's own session untouched").isEqualTo(MfaSessionStatusService.Status.ACCEPTED);
+        }
+
+        @Test
+        @DisplayName("an admin MFA reset with revokeKeysCreatedSince also revokes the tenant and integration keys "
+                + "the user created, after the bulk revocation's clear (backlog #0-89, review)")
+        void adminMfaResetRevokesCreatedKeys() {
+            final User admin = persistUser("reset-keys-admin@example.com", List.of("ROLE_ADMIN"));
+            admin.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            admin.enableMfa();
+            userRepository.saveAndFlush(admin);
+            final UUID adminSession = UUID.randomUUID();
+            authTokenService.generateRefreshToken(admin, TENANT_ID, adminSession, Instant.now());
+            jdbcTemplate.update("UPDATE users SET mfa_enabled_at = now() - INTERVAL '26 hours', "
+                    + "mfa_enabled_notice_sent_at = now() - INTERVAL '25 hours' WHERE id = ?", admin.getId());
+
+            final User target = persistUser("reset-keys-target@example.com", List.of("ROLE_ADMIN"));
+            target.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            target.enableMfa();
+            userRepository.saveAndFlush(target);
+            final UUID personal = apiKey(target);
+            final UserPrincipal asTarget = new UserPrincipal(target.getId(), TENANT_ID, target.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of(), List.of(), UUID.randomUUID());
+            final UUID tenantKey;
+            final UUID integrationId;
+            TenantContext.set(TENANT_ID);
+            try {
+                tenantKey = apiKeyService.createApiKey(new CreateApiKeyRequest(
+                        "made by intruder", ApiKeyType.TENANT,
+                        List.of(ApiKeyScope.TEAMS_READ), null), asTarget).id();
+                integrationId = integrationService.createIntegration(
+                        new CreateIntegrationRequest(
+                                "intruder-int-2", "generic", null, null), asTarget).id();
+                entityManager.flush();
+                startFreshRequest();
+
+                mfaService.resetMfaByAdmin(target.getId(),
+                        new UserPrincipal(admin.getId(), TENANT_ID, admin.getEmail(), List.of("ROLE_ADMIN"),
+                                List.of(), List.of(), adminSession),
+                        Instant.now().minus(Duration.ofHours(1)));
+                entityManager.flush();
+            } finally {
+                TenantContext.clear();
+            }
+
+            assertThat(revoked(personal)).as("personal key, by the reset itself").isTrue();
+            assertThat(revoked(tenantKey)).as("tenant key the user created").isTrue();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT revoked_at IS NOT NULL FROM integrations WHERE id = ?", Boolean.class, integrationId))
+                    .as("integration the user created").isTrue();
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, target.getId())).isFalse();
         }
 
         /** An operator admin with MFA, backup codes and a live MFA session, committed (backlog #0-88). */
@@ -634,18 +1227,25 @@ class AuthRepositoryIntegrationTest {
             for (final String table : List.of("auth_email_outbox", "auth_tokens", "mfa_backup_codes")) {
                 jdbcTemplate.update("DELETE FROM " + table + " WHERE user_id = ?", userId);
             }
+            jdbcTemplate.update("DELETE FROM api_keys WHERE owner_user_id = ?", userId);
             jdbcTemplate.update("DELETE FROM users WHERE id = ?", userId);
         }
 
         @Test
-        @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
         @DisplayName("break-glass reset commits like the admin reset, audited with a confirmed send (backlog #0-88)")
         void breakGlassReset() {
             final User operator = committedOperatorWithMfa("break-glass-ok@example.com");
             final String refresh = authTokenService.generateRefreshToken(
                     operator, "platform-operator", UUID.randomUUID(), Instant.now());
+            final UUID key = apiKeyRepository.saveAndFlush(ApiKey.createPersonal(
+                    "platform-operator", "operator key", "b".repeat(64), "bbbbbbbb", List.of("teams:read"),
+                    null, operator)).getId();
             try {
                 mfaService.resetMfaBreakGlass(operator.getEmail(), "Jane Doe", "lost phone", "it@test-host", Duration.ofSeconds(30));
+
+                assertThat(jdbcTemplate.queryForObject("SELECT revoked_at IS NOT NULL FROM api_keys WHERE id = ?",
+                        Boolean.class, key)).as("personal API key (backlog #0-89)").isTrue();
 
                 assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
                         Boolean.class, operator.getId())).isFalse();
@@ -655,16 +1255,16 @@ class AuthRepositoryIntegrationTest {
                         String.class, operator.getId())).containsExactly("MFA_RESET");
                 assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh))
                         .isInstanceOf(BusinessException.class);
-                org.mockito.Mockito.verify(auditEventPublisher).publishAuthConfirmed(
-                        org.mockito.ArgumentMatchers.eq(operator.getId()),
-                        org.mockito.ArgumentMatchers.eq("platform-operator"),
-                        org.mockito.ArgumentMatchers.eq(
-                                com.incidentplatform.shared.audit.AuditEventTypes.MFA_RESET_BREAK_GLASS),
-                        org.mockito.ArgumentMatchers.anyString(),
-                        org.mockito.ArgumentMatchers.eq("break-glass:Jane Doe"),
-                        org.mockito.ArgumentMatchers.anyString(),
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.eq(Duration.ofSeconds(30)));
+                Mockito.verify(auditEventPublisher).publishAuthConfirmed(
+                        ArgumentMatchers.eq(operator.getId()),
+                        ArgumentMatchers.eq("platform-operator"),
+                        ArgumentMatchers.eq(
+                                AuditEventTypes.MFA_RESET_BREAK_GLASS),
+                        ArgumentMatchers.anyString(),
+                        ArgumentMatchers.eq("break-glass:Jane Doe"),
+                        ArgumentMatchers.anyString(),
+                        ArgumentMatchers.any(),
+                        ArgumentMatchers.eq(Duration.ofSeconds(30)));
             } finally {
                 deleteCommittedUser(operator.getId());
             }
@@ -688,7 +1288,7 @@ class AuthRepositoryIntegrationTest {
         }
 
         @Test
-        @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
         @DisplayName("break-glass reset whose audit Kafka does not confirm changes nothing (backlog #0-88)")
         void breakGlassRollsBackWithoutAudit() {
             final User operator = committedOperatorWithMfa("break-glass-rollback@example.com");
@@ -697,10 +1297,10 @@ class AuthRepositoryIntegrationTest {
             org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.audit.AuditNotConfirmedException(
                             "not confirmed", null))
                     .given(auditEventPublisher).publishAuthConfirmed(
-                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+                            ArgumentMatchers.any(), ArgumentMatchers.any(),
+                            ArgumentMatchers.any(), ArgumentMatchers.any(),
+                            ArgumentMatchers.any(), ArgumentMatchers.any(),
+                            ArgumentMatchers.any(), ArgumentMatchers.any());
             try {
                 assertThatThrownBy(() -> mfaService.resetMfaBreakGlass(
                         operator.getEmail(), "Jane Doe", "lost phone", "it@test-host", Duration.ofSeconds(30)))
@@ -1412,7 +2012,7 @@ class AuthRepositoryIntegrationTest {
          * proved nothing).
          */
         @Test
-        @Transactional(propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
         @DisplayName("a failure after the tenant insert rolls the tenant row back")
         void failureRollsBackTenant() {
             final String tenantId = newTenantId();
@@ -1676,7 +2276,7 @@ class AuthRepositoryIntegrationTest {
         }
 
         @Test
-        @DisplayName("V23/V24: the outbox accepts every AuthEmailType and still rejects an unknown one")
+        @DisplayName("V23/V24/V25: the outbox accepts every AuthEmailType and still rejects an unknown one")
         void outboxTypeConstraint() {
             // Every type, so a new AuthEmailType without a migration fails here (as for token types, #0-51).
             for (final AuthEmailType type : AuthEmailType.values()) {
@@ -1685,7 +2285,7 @@ class AuthRepositoryIntegrationTest {
             }
             assertThat(jdbcTemplate.queryForList(
                     "SELECT email_type FROM auth_email_outbox WHERE user_id = ?", String.class, user.getId()))
-                    .contains("MFA_ENABLED", "MFA_DISABLED", "MFA_RESET");
+                    .contains("MFA_ENABLED", "MFA_DISABLED", "MFA_RESET", "API_KEY_CREATED");
 
             assertThatThrownBy(() -> jdbcTemplate.update("""
                     UPDATE auth_email_outbox SET email_type = 'SOMETHING_ELSE' WHERE user_id = ?

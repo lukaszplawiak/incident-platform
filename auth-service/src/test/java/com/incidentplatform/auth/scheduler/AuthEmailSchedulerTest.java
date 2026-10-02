@@ -58,6 +58,7 @@ class AuthEmailSchedulerTest {
     @Mock private AuthEmailOutboxRepository outboxRepository;
     @Mock private AuthEmailService emailService;
     @Mock private AuthEmailPersistenceService persistenceService;
+    @Mock private com.incidentplatform.auth.repository.ApiKeyRepository apiKeyRepository;
 
     private SimpleMeterRegistry meterRegistry;
     private AuthEmailScheduler scheduler;
@@ -87,7 +88,7 @@ class AuthEmailSchedulerTest {
                 "noreply@test.com", "http://localhost:4200", batchSize, 30000L,
                 BACKOFF, budget, Duration.ofDays(30));
         return new AuthEmailScheduler(
-                outboxRepository, emailService, persistenceService, properties, meterRegistry);
+                outboxRepository, emailService, persistenceService, properties, meterRegistry, apiKeyRepository);
     }
 
     private static AuthEmailOutbox entry(String email, AuthEmailType type, Duration lifetime) {
@@ -194,11 +195,32 @@ class AuthEmailSchedulerTest {
             duePending(reset);
             given(persistenceService.prepareAttempt(any(), any(), any())).willReturn(new Attempt.Send(null, null));
             given(persistenceService.recordSent(any(), any())).willReturn(true);
+            // Backlog #0-89: the tenant keys the account created, counted when sent.
+            given(apiKeyRepository.countActiveUnownedCreatedBy(reset.getTenantId(), reset.getUserId())).willReturn(2L);
 
             scheduler.processPending();
 
-            then(emailService).should().sendMfaResetNotification("user@firma.pl", reset.getCreatedAt());
+            then(emailService).should().sendMfaResetNotification("user@firma.pl", reset.getCreatedAt(), 2L);
             assertThat(count(AuthEmailScheduler.SEND_COUNTER, "type", "MFA_RESET", "outcome", "sent"))
+                    .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("routes a new API key notice to its own template, with the key's id (backlog #0-89)")
+        void sendsApiKeyCreatedNotice() {
+            final UUID keyId = UUID.randomUUID();
+            final User user = User.forTesting(UUID.randomUUID(), TENANT_ID, "user@firma.pl", null, true,
+                    List.of("ROLE_ADMIN"));
+            final AuthEmailOutbox created = AuthEmailOutbox.requestAboutApiKey(user, keyId, Duration.ofHours(24));
+            duePending(created);
+            given(persistenceService.prepareAttempt(any(), any(), any())).willReturn(new Attempt.Send(null, null));
+            given(persistenceService.recordSent(any(), any())).willReturn(true);
+
+            scheduler.processPending();
+
+            then(emailService).should().sendApiKeyCreatedNotification("user@firma.pl", created.getCreatedAt(),
+                    keyId);
+            assertThat(count(AuthEmailScheduler.SEND_COUNTER, "type", "API_KEY_CREATED", "outcome", "sent"))
                     .isEqualTo(1.0);
         }
 
