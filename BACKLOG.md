@@ -1295,7 +1295,7 @@ refused to run on a request thread (a runtime guard). With the outbox the break-
 event in the transaction like everything else, and `publishAuthConfirmed`, `AuditEventKafkaSender.sendConfirmed`,
 `AuditNotConfirmedException` and the guard to go: done in the first step.
 
-**Progress: first step (PR #TBD; `shared`, incident-service, auth-service).**
+**Progress: first step (PR #449; `shared`, incident-service, auth-service).**
 - `shared`: `AuditOutbox` (JDBC INSERT into the table named by `audit.outbox.table`, joining the caller's
   transaction; behind the `AuditEventStore` interface, so the publisher in a service without
   `spring-jdbc` loads no JDBC class), `AuditOutboxRelay` (`@Scheduled`, ShedLock per table; a batch is
