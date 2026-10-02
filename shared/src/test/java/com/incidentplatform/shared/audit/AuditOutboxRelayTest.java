@@ -34,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -113,6 +114,8 @@ class AuditOutboxRelayTest {
     @BeforeEach
     void setUp() {
         given(lockProvider.lock(any())).willReturn(Optional.of(mock(SimpleLock.class)));
+        given(outbox.anyDue()).willReturn(true);
+        given(outbox.purgeSentOlderThan(any(), anyInt())).willReturn(new AuditOutbox.Purge(0, false));
         given(outbox.markSent(any())).willAnswer(i -> i.getArgument(0, List.class).size());
         given(outbox.markFailed(any(), any(), anyString())).willReturn(true);
         relay = relay(50, 10, Duration.ofSeconds(3));
@@ -349,6 +352,25 @@ class AuditOutboxRelayTest {
         }
 
         @Test
+        @DisplayName("a poll with nothing due neither ends a pause's count nor proves Kafka is back")
+        void nothingDueKeepsFailedRunCount() {
+            given(outbox.due(50)).willReturn(List.of(first));
+            given(sender.sendForRelay(any(), anyString()))
+                    .willReturn(CompletableFuture.failedFuture(new IllegalStateException("down")));
+            relay.relay();
+            assertThat(relay.pausedUntil()).isEqualTo(NOW.plusSeconds(5));
+
+            clock.advance(Duration.ofSeconds(5));
+            given(outbox.anyDue()).willReturn(false);
+            relay.relay();
+
+            given(outbox.anyDue()).willReturn(true);
+            relay.relay();
+            assertThat(relay.pausedUntil()).as("still the second failed run in a row")
+                    .isEqualTo(NOW.plusSeconds(15));
+        }
+
+        @Test
         @DisplayName("relayNow ignores a pause (the break-glass command sends its event at once)")
         void relayNowIgnoresPause() {
             given(outbox.due(50)).willReturn(List.of(first));
@@ -452,6 +474,27 @@ class AuditOutboxRelayTest {
         }
 
         @Test
+        @DisplayName("with nothing due a poll takes no lock and reads no rows (found in review)")
+        void nothingDueTakesNoLock() {
+            given(outbox.anyDue()).willReturn(false);
+
+            relay.relay();
+            assertThat(relay.relayNow()).isEqualTo(new AuditOutboxRelay.RunResult(0, 0));
+
+            then(lockProvider).should(never()).lock(any());
+            then(outbox).should(never()).due(anyInt());
+        }
+
+        @Test
+        @DisplayName("a database error asking whether anything is due is thrown, before any lock")
+        void anyDueFailure() {
+            given(outbox.anyDue()).willThrow(new IllegalStateException("db down"));
+
+            assertThatThrownBy(() -> relay.relay()).hasMessage("db down");
+            then(lockProvider).should(never()).lock(any());
+        }
+
+        @Test
         @DisplayName("a run another instance holds the lock for does nothing")
         void lockHeldElsewhere() {
             given(lockProvider.lock(any())).willReturn(Optional.empty());
@@ -507,11 +550,31 @@ class AuditOutboxRelayTest {
         }
 
         @Test
-        @DisplayName("purge deletes sent events older than the retention")
+        @DisplayName("purge deletes sent events older than the retention, at most 100 chunks a run")
         void purge() {
+            given(outbox.purgeSentOlderThan(any(), anyInt())).willReturn(new AuditOutbox.Purge(12, false));
+
             relay.purge();
 
-            then(outbox).should().purgeSentOlderThan(Duration.ofDays(7));
+            then(outbox).should().purgeSentOlderThan(Duration.ofDays(7), AuditOutboxRelay.MAX_PURGE_CHUNKS);
+            assertThat(AuditOutboxRelay.MAX_PURGE_CHUNKS).isEqualTo(100);
+        }
+
+        @Test
+        @DisplayName("a purge that hit its cap says so with a WARN; the rest waits for the next run")
+        void purgeCapLogged() {
+            given(outbox.purgeSentOlderThan(any(), anyInt())).willReturn(new AuditOutbox.Purge(500_000, true));
+            final ListAppender<ILoggingEvent> logs = captureLogs();
+            try {
+                relay.purge();
+
+                assertThat(logs.list).anySatisfy(event -> {
+                    assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                    assertThat(event.getFormattedMessage()).contains("500000").contains("next run");
+                });
+            } finally {
+                release(logs);
+            }
         }
 
         @Test
@@ -528,6 +591,10 @@ class AuditOutboxRelayTest {
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> new AuditOutboxProperties("Audit", null, null, null, null))
                     .isInstanceOf(IllegalArgumentException.class);
+            assertThat(new AuditOutboxProperties("a".repeat(45), null, null, null, null).table()).hasSize(45);
+            assertThatThrownBy(() -> new AuditOutboxProperties("a".repeat(46), null, null, null, null))
+                    .as("the relay's lock name would not fit shedlock.name VARCHAR(64)")
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("45");
             assertThatThrownBy(() -> new AuditOutboxProperties("a", 0, null, null, null))
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> new AuditOutboxProperties("a", null, 0, null, null))

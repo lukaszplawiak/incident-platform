@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The audit outbox SQL on a real Postgres (backlog #0-84): written with the
@@ -153,16 +154,58 @@ class AuditOutboxTest {
                 .isEqualTo("SENT");
     }
 
+    private void insertOldSent(int rows) {
+        jdbc.update("INSERT INTO " + TABLE + " (id, tenant_id, event_type, payload, status, attempts, "
+                + "created_at, next_attempt_at, sent_at) SELECT gen_random_uuid(), 'acme', 'A', '{}', 'SENT', 1, "
+                + "now(), now(), now() - INTERVAL '8 days' FROM generate_series(1, ?)", rows);
+    }
+
     @Test
     @DisplayName("purge deletes in chunks until no old sent row is left")
     void purgeInChunks() {
         final int rows = AuditOutbox.PURGE_CHUNK + 7;
-        jdbc.update("INSERT INTO " + TABLE + " (id, tenant_id, event_type, payload, status, attempts, "
-                + "created_at, next_attempt_at, sent_at) SELECT gen_random_uuid(), 'acme', 'A', '{}', 'SENT', 1, "
-                + "now(), now(), now() - INTERVAL '8 days' FROM generate_series(1, ?)", rows);
+        insertOldSent(rows);
 
-        assertThat(outbox.purgeSentOlderThan(Duration.ofDays(7))).isEqualTo(rows);
+        assertThat(outbox.purgeSentOlderThan(Duration.ofDays(7), 10)).isEqualTo(new AuditOutbox.Purge(rows, false));
         assertThat(rows()).isZero();
+    }
+
+    @Test
+    @DisplayName("purge stops after its chunk cap and says rows may be left (found in review)")
+    void purgeCapped() {
+        insertOldSent(AuditOutbox.PURGE_CHUNK + 7);
+
+        assertThat(outbox.purgeSentOlderThan(Duration.ofDays(7), 1))
+                .isEqualTo(new AuditOutbox.Purge(AuditOutbox.PURGE_CHUNK, true));
+        assertThat(rows()).isEqualTo(7);
+    }
+
+    @Test
+    @DisplayName("anyDue: false when empty, sent, or retried later; true once a pending row is due")
+    void anyDue() {
+        assertThat(outbox.anyDue()).isFalse();
+
+        final UUID sent = UUID.randomUUID();
+        outbox.enqueue(sent, "acme", "A", "{}");
+        outbox.markSent(List.of(sent));
+        final UUID later = UUID.randomUUID();
+        outbox.enqueue(later, "acme", "B", "{}");
+        outbox.markFailed(later, Duration.ofHours(1), "broker down");
+        assertThat(outbox.anyDue()).isFalse();
+
+        outbox.enqueue(UUID.randomUUID(), "acme", "C", "{}");
+        assertThat(outbox.anyDue()).isTrue();
+    }
+
+    @Test
+    @DisplayName("the constructor refuses a table name it would interpolate unchecked (found in review)")
+    void constructorChecksTableName() {
+        assertThatThrownBy(() -> new AuditOutbox(jdbc, "x; DROP TABLE users"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AuditOutbox(jdbc, null))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new AuditOutbox(jdbc, "a".repeat(46)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -204,7 +247,7 @@ class AuditOutboxTest {
         assertThat(backlog.oldestAge()).as("by the database's clock").hasValueSatisfying(age ->
                 assertThat(age).isBetween(Duration.ofSeconds(119), Duration.ofSeconds(125)));
 
-        assertThat(outbox.purgeSentOlderThan(Duration.ofDays(7))).isEqualTo(1);
+        assertThat(outbox.purgeSentOlderThan(Duration.ofDays(7), 10).deleted()).isEqualTo(1);
         assertThat(jdbc.queryForList("SELECT id FROM " + TABLE, UUID.class))
                 .containsExactlyInAnyOrder(pending, newSent);
     }

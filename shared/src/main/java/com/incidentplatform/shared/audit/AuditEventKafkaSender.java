@@ -3,21 +3,18 @@ package com.incidentplatform.shared.audit;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.shared.dto.AuditEventMessage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * The Kafka side of audit events: {@link #sendForRelay} for the outbox relay
- * (backlog #0-84), {@link #send} for services that do not use the outbox yet.
+ * The Kafka side of audit events: the JSON the outbox stores
+ * ({@link #serialize}) and the relay's send ({@link #sendForRelay}), backlog
+ * #0-84. A bean of {@link AuditOutboxConfiguration} only.
  *
  * <h2>Changed (backlog #0-84)</h2>
  * {@code send} used to carry {@code @Retryable} (3 attempts) and was described
@@ -25,7 +22,9 @@ import java.util.concurrent.CompletableFuture;
  * annotation did nothing and was removed. Retrying is now the outbox relay's
  * job ({@link AuditOutboxRelay}), which waits for every acknowledgement. The
  * confirmed send for the break-glass reset ({@code sendConfirmed}, #0-88) is
- * gone with it: that reset writes to the outbox like every other action.
+ * gone with it: that reset writes to the outbox like every other action. The
+ * fire-and-forget {@code send}, used by services without an outbox, went in
+ * #0-84's second step, once every service with audit events had one.
  *
  * <h2>Fixed (backlog #0-88): the X-Tenant-Id header is set here</h2>
  * Every record is meant to carry {@code X-Tenant-Id} (CLAUDE.md, Kafka), and
@@ -41,11 +40,7 @@ import java.util.concurrent.CompletableFuture;
  * to append the context's value, and consumers read the last header).
  * {@code AuditEventConsumer} stores the payload's tenant either way.
  */
-@Component
 class AuditEventKafkaSender {
-
-    private static final Logger log =
-            LoggerFactory.getLogger(AuditEventKafkaSender.class);
 
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final ObjectMapper objectMapper;
@@ -54,23 +49,10 @@ class AuditEventKafkaSender {
     AuditEventKafkaSender(
             KafkaTemplate<String, String> kafkaTemplate,
             ObjectMapper objectMapper,
-            @Value("${kafka.topics.audit-events:audit.events}") String auditEventsTopic) {
+            String auditEventsTopic) {
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.auditEventsTopic = auditEventsTopic;
-    }
-
-    /**
-     * Hands the event to the producer without waiting (services without an
-     * outbox, until they move to one: backlog #0-84). A delivery that fails
-     * later is lost; the outbox is the fix.
-     */
-    void send(AuditEventMessage message) throws JsonProcessingException {
-        final String payload = objectMapper.writeValueAsString(message);
-        kafkaTemplate.send(record(message.tenantId(), payload));
-        log.debug("Audit event published: eventType={}, resourceId={}, resourceType={}, tenant={}",
-                message.eventType(), message.resourceId(),
-                message.resourceType(), message.tenantId());
     }
 
     /** The JSON the relay stores and later sends (backlog #0-84). */
@@ -84,7 +66,7 @@ class AuditEventKafkaSender {
      * batch first and then waits, one round trip per batch rather than per
      * event (found in review). On the relay's thread only, never on a request.
      * The call itself blocks at most the producer's {@code max.block.ms} (set
-     * in the services with an outbox) while Kafka's metadata is missing.
+     * in every service with an outbox) while Kafka's metadata is missing.
      */
     CompletableFuture<?> sendForRelay(String tenantId, String payload) {
         return kafkaTemplate.send(record(tenantId, payload));

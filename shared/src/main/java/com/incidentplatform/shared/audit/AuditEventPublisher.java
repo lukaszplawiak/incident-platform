@@ -2,10 +2,6 @@ package com.incidentplatform.shared.audit;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.incidentplatform.shared.dto.AuditEventMessage;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -16,14 +12,19 @@ import java.util.UUID;
  * Publishes audit events for compliance and observability.
  *
  * <h2>Through the service's outbox (backlog #0-84)</h2>
- * In a service that sets {@code audit.outbox.table}, every event is written to
- * its outbox table ({@link AuditOutbox}), in the caller's transaction when
- * there is one: the event commits with the action or not at all, and
- * {@link AuditOutboxRelay} sends it to Kafka afterwards, waiting for each
- * acknowledgement. A failure to write it is not swallowed: it fails the
- * action, which is the point (no unaudited change). Without the property the
- * event is sent directly and a failure only logged, as before; the services
- * still doing so move to the outbox in #0-84's second step.
+ * Every event is written to the service's outbox table ({@link AuditOutbox}),
+ * in the caller's transaction when there is one: the event commits with the
+ * action or not at all, and {@link AuditOutboxRelay} sends it to Kafka
+ * afterwards, waiting for each acknowledgement. A failure to write it is not
+ * swallowed: it fails the action, which is the point (no unaudited change).
+ *
+ * <h2>Changed (backlog #0-84, second step): no direct path</h2>
+ * Until every service had an outbox, a service without
+ * {@code audit.outbox.table} got this publisher too and it sent each event to
+ * Kafka without waiting, logging every failure; an event was lost whenever
+ * Kafka was slow or down. That path is gone: the publisher is a bean of
+ * {@link AuditOutboxConfiguration} only, so a service that injects it without
+ * an outbox table fails at startup instead of losing events.
  *
  * <p>An event about a refused action whose transaction rolls back (a wrong
  * MFA code) must be published after that transaction ended, or the rollback
@@ -33,11 +34,10 @@ import java.util.UUID;
  *
  * <p>Metadata is stored as given, in plain text, in the outbox and in the
  * audit trail: identifiers and reasons only, never a secret (token, password,
- * key, TOTP secret), and a key named like one is refused. With the outbox an
- * event the trail cannot store (no tenant, no resource, a field over its
- * column, a payload over {@link #MAX_PAYLOAD_BYTES}) fails the action with an
- * {@link IllegalArgumentException}; without it the event is only logged as
- * refused and not sent, as every failure on that path is.
+ * key, TOTP secret), and a key named like one is refused. An event the
+ * trail cannot store (no tenant, no resource, a field over its column, a
+ * payload over {@link #MAX_PAYLOAD_BYTES}) fails the action with an
+ * {@link IllegalArgumentException}.
  *
  * <h2>Method naming convention</h2>
  * <ul>
@@ -47,11 +47,7 @@ import java.util.UUID;
  *   <li>{@link #publishAuthSystem} — system-initiated auth event (account lock, etc.)</li>
  * </ul>
  */
-@Component
 public class AuditEventPublisher {
-
-    private static final Logger log =
-            LoggerFactory.getLogger(AuditEventPublisher.class);
 
     /**
      * The largest payload accepted (backlog #0-84, found in review): well under
@@ -63,9 +59,9 @@ public class AuditEventPublisher {
     private final AuditEventKafkaSender sender;
     private final AuditEventStore outbox;
 
-    public AuditEventPublisher(AuditEventKafkaSender sender, ObjectProvider<AuditEventStore> outbox) {
+    AuditEventPublisher(AuditEventKafkaSender sender, AuditEventStore outbox) {
         this.sender = sender;
-        this.outbox = outbox.getIfAvailable();
+        this.outbox = outbox;
     }
 
     // ── Incident events ───────────────────────────────────────────────────
@@ -169,32 +165,8 @@ public class AuditEventPublisher {
     // ── internal ──────────────────────────────────────────────────────────
 
     private void publish(AuditEventMessage message) {
-        if (outbox != null) {
-            checkStorable(message);
-            outbox.enqueue(message.eventId(), message.tenantId(), message.eventType(), serialized(message));
-            return;
-        }
-        try {
-            // The old path keeps its contract, only logging (found in review):
-            // notification-, escalation- and postmortem-service run it from
-            // scheduled jobs and notification flows that never expected an
-            // audit call to throw. The check still keeps an unstorable event
-            // off Kafka; their move to the outbox (#0-84's second step) makes
-            // it fail the action there too.
-            checkStorable(message);
-            sender.send(message);
-        } catch (IllegalArgumentException e) {
-            log.error("Audit event refused, not sent: eventType={}, resourceId={}, reason={}",
-                    message.eventType(), message.resourceId(), e.getMessage());
-        } catch (JsonProcessingException e) {
-            log.error("Failed to serialize audit event — not retrying: " +
-                            "eventType={}, resourceId={}",
-                    message.eventType(), message.resourceId(), e);
-        } catch (Exception e) {
-            log.error("Failed to publish audit event: " +
-                            "eventType={}, resourceId={}",
-                    message.eventType(), message.resourceId(), e);
-        }
+        checkStorable(message);
+        outbox.enqueue(message.eventId(), message.tenantId(), message.eventType(), serialized(message));
     }
 
     private String serialized(AuditEventMessage message) {

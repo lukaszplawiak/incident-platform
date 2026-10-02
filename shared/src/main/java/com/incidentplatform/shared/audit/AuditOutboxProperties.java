@@ -3,7 +3,6 @@ package com.incidentplatform.shared.audit;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
-import java.util.regex.Pattern;
 
 /**
  * Settings of a service's audit outbox (backlog #0-84). The relay's schedule
@@ -12,8 +11,8 @@ import java.util.regex.Pattern;
  * {@code @Scheduled} annotations. Setting {@code table}
  * turns the outbox on for the service: {@link AuditEventPublisher} then writes
  * every audit event to that table, in the caller's transaction, and
- * {@link AuditOutboxRelay} sends it to Kafka. Without it the publisher sends
- * directly, as before (services not yet moved to the outbox).
+ * {@link AuditOutboxRelay} sends it to Kafka. Without it the service has no
+ * publisher at all.
  *
  * @param table        the service's own outbox table, created by its Flyway
  *                     migrations (one database, one table per service:
@@ -34,13 +33,10 @@ public record AuditOutboxProperties(
         Duration retention
 ) {
 
-    /** The table name is interpolated into SQL, so it is checked, not trusted. */
-    private static final Pattern TABLE_NAME = Pattern.compile("[a-z][a-z0-9_]{0,62}");
-
     public AuditOutboxProperties {
-        if (table != null && !TABLE_NAME.matcher(table).matches()) {
-            throw new IllegalArgumentException("audit.outbox.table must be a plain lower-case table name, was "
-                    + table);
+        if (table != null) {
+            // Interpolated into SQL and into the relay's lock names: checked at startup.
+            AuditOutbox.checkedTableName(table);
         }
         batchSize = batchSize != null ? batchSize : 100;
         maxBatchesPerRun = maxBatchesPerRun != null ? maxBatchesPerRun : 10;
