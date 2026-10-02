@@ -7,7 +7,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 
+import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Publishes unprocessable Kafka messages to a dead-letter topic.
@@ -67,6 +71,42 @@ public class DeadLetterPublisher {
                         String tenantId,
                         String errorReason) {
         doPublish(originalPayload, sourceTopic, tenantId, errorReason);
+    }
+
+    /**
+     * Like {@link #publish(String, String, String, String)}, but returns only
+     * once Kafka acknowledged the dead-letter record (backlog #0-84): for a
+     * consumer that acknowledges its own record only after the copy is safe.
+     * An audit record the consumer cannot store was already counted as
+     * delivered by its producer's outbox, so a dead-letter send that fails
+     * after the consumer moved on would lose it with only a log line (found in
+     * review); the caller leaves its record unacknowledged instead.
+     *
+     * @throws IllegalStateException if Kafka did not acknowledge within {@code timeout}
+     */
+    public void publishAndWait(String originalPayload,
+                               String sourceTopic,
+                               String tenantId,
+                               String errorReason,
+                               Duration timeout) {
+        final String dltPayload;
+        try {
+            dltPayload = buildDltPayload(originalPayload, sourceTopic, tenantId, errorReason);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Dead-letter record cannot be serialized", e);
+        }
+        try {
+            final var result = kafkaTemplate.send(deadLetterTopic, sourceService + ":" + tenantId, dltPayload)
+                    .get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            log.info("Message published to DLT: topic={}, partition={}, offset={}, sourceTopic={}, tenant={}, "
+                            + "reason={}", deadLetterTopic, result.getRecordMetadata().partition(),
+                    result.getRecordMetadata().offset(), sourceTopic, tenantId, errorReason);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while publishing to " + deadLetterTopic, e);
+        } catch (ExecutionException | TimeoutException e) {
+            throw new IllegalStateException("Dead-letter record not acknowledged by Kafka within " + timeout, e);
+        }
     }
 
     /**

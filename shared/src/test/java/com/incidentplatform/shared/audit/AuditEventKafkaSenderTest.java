@@ -3,11 +3,12 @@ package com.incidentplatform.shared.audit;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.incidentplatform.shared.dto.AuditEventMessage;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.Header;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.Mockito;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 
@@ -26,11 +27,11 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
 /**
- * {@link AuditEventKafkaSender#sendConfirmed} (backlog #0-88): it returns only
- * once Kafka acknowledged the event, and every other outcome is an
- * {@link AuditNotConfirmedException}, never a silent loss.
+ * {@link AuditEventKafkaSender}: {@code sendForRelay} for the outbox relay
+ * (backlog #0-84) hands back Kafka's acknowledgement to wait for; every
+ * record carries its tenant as key and {@code X-Tenant-Id} header (#0-88).
  */
-@DisplayName("AuditEventKafkaSender.sendConfirmed")
+@DisplayName("AuditEventKafkaSender")
 class AuditEventKafkaSenderTest {
 
     @SuppressWarnings("unchecked")
@@ -39,8 +40,8 @@ class AuditEventKafkaSenderTest {
             kafkaTemplate, new ObjectMapper().registerModule(new JavaTimeModule()), "audit.events");
 
     private final AuditEventMessage message = AuditEventMessage.auth(
-            UUID.randomUUID(), "platform-operator", AuditEventTypes.MFA_RESET_BREAK_GLASS,
-            "auth-service", "break-glass:Jane", "MFA reset", Map.of("reason", "lost phone"));
+            UUID.randomUUID(), "acme", AuditEventTypes.USER_LOGIN,
+            "auth-service", "user-1", "Login", Map.of());
 
     @SuppressWarnings("unchecked")
     private void kafkaAnswers(CompletableFuture<SendResult<String, String>> future) {
@@ -50,7 +51,7 @@ class AuditEventKafkaSenderTest {
     @SuppressWarnings("unchecked")
     private ProducerRecord<String, String> sentRecord() {
         final ArgumentCaptor<ProducerRecord<String, String>> sent = ArgumentCaptor.forClass(ProducerRecord.class);
-        org.mockito.Mockito.verify(kafkaTemplate).send(sent.capture());
+        Mockito.verify(kafkaTemplate).send(sent.capture());
         return sent.getValue();
     }
 
@@ -60,25 +61,28 @@ class AuditEventKafkaSenderTest {
     }
 
     @Test
-    @DisplayName("returns once Kafka acknowledges; the record is keyed and headed by the tenant")
-    void acknowledged() {
-        kafkaAnswers(CompletableFuture.completedFuture(null));
+    @DisplayName("sendForRelay returns Kafka's acknowledgement; the record is keyed and headed by the tenant")
+    void sendForRelay() {
+        final CompletableFuture<SendResult<String, String>> ack = new CompletableFuture<>();
+        kafkaAnswers(ack);
 
-        assertThatCode(() -> sender.sendConfirmed(message, Duration.ofSeconds(1))).doesNotThrowAnyException();
+        assertThat(sender.sendForRelay("acme", "{\"x\":1}")).isSameAs(ack);
+
         final ProducerRecord<String, String> record = sentRecord();
         assertThat(record.topic()).isEqualTo("audit.events");
-        assertThat(record.key()).isEqualTo("platform-operator");
-        assertThat(tenantHeader(record)).isEqualTo("platform-operator");
+        assertThat(record.key()).isEqualTo("acme");
+        assertThat(record.value()).isEqualTo("{\"x\":1}");
+        assertThat(tenantHeader(record)).isEqualTo("acme");
     }
 
     @Test
-    @DisplayName("the ordinary send carries the tenant header too, with no TenantContext (review of #0-88)")
-    void ordinarySendHasTenantHeader() throws Exception {
+    @DisplayName("the direct send (services without an outbox) carries the tenant header too")
+    void directSendHasTenantHeader() throws Exception {
         kafkaAnswers(CompletableFuture.completedFuture(null));
 
         sender.send(message);
 
-        assertThat(tenantHeader(sentRecord())).isEqualTo("platform-operator");
+        assertThat(tenantHeader(sentRecord())).isEqualTo("acme");
     }
 
     @Test
@@ -86,69 +90,20 @@ class AuditEventKafkaSenderTest {
     void noTenantNoHeader() throws Exception {
         kafkaAnswers(CompletableFuture.completedFuture(null));
 
-        sender.send(AuditEventMessage.auth(UUID.randomUUID(), null, AuditEventTypes.USER_LOGIN_FAILED,
-                "auth-service", "x", "login failed", Map.of()));
+        sender.send(AuditEventMessage.auth(UUID.randomUUID(), null, AuditEventTypes.USER_LOGIN,
+                "auth-service", "user-1", "Login", Map.of()));
 
         assertThat(tenantHeader(sentRecord())).isNull();
     }
 
     @Test
-    @DisplayName("a failed delivery is thrown, not swallowed")
-    void failed() {
-        kafkaAnswers(CompletableFuture.failedFuture(new IllegalStateException("broker down")));
+    @DisplayName("serialize writes the event, its eventId included, as JSON the consumer reads back")
+    void serializeKeepsEventId() throws Exception {
+        final String json = sender.serialize(message);
 
-        assertThatThrownBy(() -> sender.sendConfirmed(message, Duration.ofSeconds(1)))
-                .isInstanceOf(AuditNotConfirmedException.class)
-                .hasMessageContaining("MFA_RESET_BREAK_GLASS")
-                .hasRootCauseMessage("broker down");
-    }
-
-    @Test
-    @DisplayName("no acknowledgement within the timeout is a failure")
-    void timeout() {
-        kafkaAnswers(new CompletableFuture<>());
-
-        assertThatThrownBy(() -> sender.sendConfirmed(message, Duration.ofMillis(50)))
-                .isInstanceOf(AuditNotConfirmedException.class)
-                .hasCauseInstanceOf(TimeoutException.class);
-    }
-
-    @Test
-    @DisplayName("a send that throws before returning a future (no metadata) is a failure")
-    void sendThrows() {
-        given(kafkaTemplate.send(any(ProducerRecord.class)))
-                .willThrow(new org.apache.kafka.common.errors.TimeoutException("no metadata"));
-
-        assertThatThrownBy(() -> sender.sendConfirmed(message, Duration.ofSeconds(1)))
-                .isInstanceOf(AuditNotConfirmedException.class);
-    }
-
-    @Test
-    @DisplayName("an event that cannot be serialized is a failure, and nothing is sent (review of #0-88)")
-    void serializationFails() throws Exception {
-        final ObjectMapper failing = mock(ObjectMapper.class);
-        given(failing.writeValueAsString(message))
-                .willThrow(new com.fasterxml.jackson.core.JsonGenerationException("cannot serialize",
-                        (com.fasterxml.jackson.core.JsonGenerator) null));
-        final AuditEventKafkaSender failingSender = new AuditEventKafkaSender(kafkaTemplate, failing, "audit.events");
-
-        assertThatThrownBy(() -> failingSender.sendConfirmed(message, Duration.ofSeconds(1)))
-                .isInstanceOf(AuditNotConfirmedException.class)
-                .hasCauseInstanceOf(com.fasterxml.jackson.core.JsonProcessingException.class);
-        org.mockito.Mockito.verifyNoInteractions(kafkaTemplate);
-    }
-
-    @Test
-    @DisplayName("an interrupt is a failure and keeps the thread's interrupt flag")
-    void interrupted() {
-        kafkaAnswers(new CompletableFuture<>());
-        Thread.currentThread().interrupt();
-        try {
-            assertThatThrownBy(() -> sender.sendConfirmed(message, Duration.ofSeconds(5)))
-                    .isInstanceOf(AuditNotConfirmedException.class);
-            assertThat(Thread.currentThread().isInterrupted()).isTrue();
-        } finally {
-            Thread.interrupted();
-        }
+        final AuditEventMessage read = new ObjectMapper().registerModule(new JavaTimeModule())
+                .readValue(json, AuditEventMessage.class);
+        assertThat(read.eventId()).isEqualTo(message.eventId()).isNotNull();
+        assertThat(read.eventType()).isEqualTo(AuditEventTypes.USER_LOGIN);
     }
 }

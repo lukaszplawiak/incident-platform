@@ -1,0 +1,417 @@
+package com.incidentplatform.shared.audit;
+
+import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
+import net.javacrumbs.shedlock.core.DefaultLockingTaskExecutor;
+import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockProvider;
+import net.javacrumbs.shedlock.core.LockingTaskExecutor;
+import org.apache.kafka.common.InvalidRecordException;
+import org.apache.kafka.common.errors.RecordBatchTooLargeException;
+import org.apache.kafka.common.errors.RecordTooLargeException;
+import org.apache.kafka.common.errors.RetriableException;
+import org.apache.kafka.common.errors.SerializationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Sends a service's committed audit events from its outbox to Kafka
+ * (backlog #0-84), modelled on {@code IncidentEventOutboxScheduler} (#36).
+ *
+ * <ul>
+ *   <li>One instance at a time: a ShedLock lock named after the table, as
+ *       every service shares the {@code shedlock} table and each relays its
+ *       own outbox.</li>
+ *   <li>A batch is handed to the producer first and its acknowledgements
+ *       awaited afterwards, all within one {@code send-timeout}: one round
+ *       trip per batch, not per event (found in review: waiting per event
+ *       capped a service at a few dozen events a second). A run takes up to
+ *       {@code max-batches-per-run} full batches.</li>
+ *   <li>A batch's acknowledged rows are marked sent in one statement. A failed
+ *       row is retried with backoff (5 s doubling, at most 5 min, due by the
+ *       database's clock) and never given up: an audit event is kept until it
+ *       goes, and while it waits the {@code AuditOutboxBacklog} alert fires. A
+ *       row Kafka refuses for itself (larger than a record may be) keeps the
+ *       alert firing until someone looks, but holds no other row up: the
+ *       publisher refuses payloads over 256 KiB, so it should not happen.</li>
+ *   <li>After Kafka itself failed (a timeout, a broker error) the relay pauses
+ *       (the same backoff, by consecutive failed runs), so an outage costs one
+ *       timeout per pause rather than one per poll and new row (found in
+ *       review: the scheduling thread is shared with the service's other
+ *       jobs).</li>
+ *   <li>At least once: a crash, or a failure to mark the row, between the
+ *       acknowledgement and the update sends the event again; the consumer
+ *       deduplicates on its {@code eventId}.</li>
+ *   <li>The tenant is set per row for the logs and cleared after it (#42); the
+ *       record's {@code X-Tenant-Id} header comes from the row, not from it.</li>
+ *   <li>Runs on the scheduling thread, never on a request: a Kafka outage
+ *       delays audit events, it no longer holds requests or connections.</li>
+ * </ul>
+ *
+ * <p>Gauges {@code audit.outbox.pending} and
+ * {@code audit.outbox.oldest.pending.age} (seconds) are read from the table
+ * when Prometheus scrapes (at most every 5 s), on every replica, whether or
+ * not this relay runs: a relay that stopped, or a break-glass command's event
+ * left for a running service, shows as a growing age (found in review: when
+ * the relay refreshed them, a stopped relay froze them). Counters
+ * {@code audit.outbox.sent} and {@code audit.outbox.send.failed}.
+ */
+public class AuditOutboxRelay {
+
+    private static final Logger log = LoggerFactory.getLogger(AuditOutboxRelay.class);
+
+    static final Duration FIRST_RETRY = Duration.ofSeconds(5);
+    static final Duration MAX_RETRY = Duration.ofMinutes(5);
+    static final Duration BACKLOG_CACHE = Duration.ofSeconds(5);
+
+    /** What one run did. */
+    public record RunResult(int sent, int failed) {
+    }
+
+    private final AuditOutbox outbox;
+    private final AuditEventKafkaSender sender;
+    private final AuditOutboxProperties properties;
+    private final LockingTaskExecutor lockingTaskExecutor;
+    private final Clock clock;
+    private final String relayLockName;
+    private final String purgeLockName;
+    private final Counter sent;
+    private final Counter failed;
+
+    private volatile Instant pausedUntil = Instant.MIN;
+    private final AtomicInteger consecutiveFailedRuns = new AtomicInteger();
+
+    private volatile AuditOutbox.Backlog cachedBacklog;
+    private volatile Instant cachedBacklogAt = Instant.MIN;
+
+    public AuditOutboxRelay(AuditOutbox outbox,
+                            AuditEventKafkaSender sender,
+                            AuditOutboxProperties properties,
+                            LockProvider lockProvider,
+                            MeterRegistry meterRegistry,
+                            Clock clock) {
+        this.outbox = outbox;
+        this.sender = sender;
+        this.properties = properties;
+        this.lockingTaskExecutor = new DefaultLockingTaskExecutor(lockProvider);
+        this.clock = clock;
+        this.relayLockName = "audit-outbox-relay-" + properties.table();
+        this.purgeLockName = "audit-outbox-purge-" + properties.table();
+        this.sent = Counter.builder("audit.outbox.sent")
+                .description("Audit events sent from the outbox and acknowledged by Kafka (backlog #0-84)")
+                .register(meterRegistry);
+        this.failed = Counter.builder("audit.outbox.send.failed")
+                .description("Audit outbox send attempts that failed and will be retried (backlog #0-84)")
+                .register(meterRegistry);
+        Gauge.builder("audit.outbox.pending", this, relay -> relay.backlog().map(b -> (double) b.pending())
+                        .orElse(Double.NaN))
+                .description("Audit events waiting in the outbox (backlog #0-84)")
+                .register(meterRegistry);
+        Gauge.builder("audit.outbox.oldest.pending.age", this, AuditOutboxRelay::oldestPendingAgeSeconds)
+                .description("Age of the oldest audit event waiting in the outbox (backlog #0-84)")
+                .baseUnit("seconds")
+                .register(meterRegistry);
+    }
+
+    @Scheduled(fixedDelayString = "${audit.outbox.poll-interval-ms:2000}",
+            initialDelayString = "${audit.outbox.poll-interval-ms:2000}")
+    public void relay() {
+        if (clock.instant().isBefore(pausedUntil)) {
+            return;
+        }
+        relayNow();
+    }
+
+    /**
+     * One run now, under the relay's lock, ignoring a pause: for the
+     * break-glass command, which has no scheduler and sends the event it just
+     * wrote before it exits when Kafka is reachable (backlog #0-84).
+     *
+     * @return what the run did; nothing when another instance holds the lock
+     */
+    public RunResult relayNow() {
+        try {
+            final RunResult result = lockingTaskExecutor.executeWithLock(this::relayDue, new LockConfiguration(
+                    clock.instant(), relayLockName, lockAtMostFor(), Duration.ZERO)).getResult();
+            return result != null ? result : new RunResult(0, 0);
+        } catch (Throwable e) {
+            // executeWithLock declares Throwable; relayDue throws only unchecked
+            // exceptions (a database error reading the outbox), let through.
+            if (e instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (e instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Scheduled(fixedDelayString = "${audit.outbox.purge-interval-ms:3600000}",
+            initialDelayString = "${audit.outbox.purge-interval-ms:3600000}")
+    public void purge() {
+        lockingTaskExecutor.executeWithLock((Runnable) this::purgeSent, new LockConfiguration(
+                clock.instant(), purgeLockName, Duration.ofMinutes(10), Duration.ZERO));
+    }
+
+    /**
+     * One run: full batches until one is short, Kafka itself fails (a timeout,
+     * a broker error) or the run's batches are used. A row Kafka refuses for
+     * what it is (larger than a record may be) is backed off on its own and
+     * neither ends the run nor pauses the relay.
+     */
+    RunResult relayDue() {
+        int sentInRun = 0;
+        int failedInRun = 0;
+        for (int batch = 0; batch < properties.maxBatchesPerRun(); batch++) {
+            final List<AuditOutbox.Pending> due = outbox.due(properties.batchSize());
+            final BatchResult result = sendBatch(due);
+            sentInRun += result.sent();
+            failedInRun += result.failed();
+            if (result.kafkaFailed()) {
+                pauseAfterFailure();
+                return new RunResult(sentInRun, failedInRun);
+            }
+            if (due.size() < properties.batchSize()) {
+                break;
+            }
+        }
+        consecutiveFailedRuns.set(0);
+        pausedUntil = Instant.MIN;
+        return new RunResult(sentInRun, failedInRun);
+    }
+
+    void purgeSent() {
+        final int purged = outbox.purgeSentOlderThan(properties.retention());
+        if (purged > 0) {
+            log.info("Audit outbox purged {} sent events older than {}", purged, properties.retention());
+        }
+    }
+
+    /** 5 s, 10 s, 20 s, ... at most 5 min. */
+    static Duration retryDelay(int attempt) {
+        final int doublings = Math.min(Math.max(attempt - 1, 0), 10);
+        final Duration delay = FIRST_RETRY.multipliedBy(1L << doublings);
+        return delay.compareTo(MAX_RETRY) > 0 ? MAX_RETRY : delay;
+    }
+
+    /** Until when scheduled runs are skipped; {@link Instant#MIN} when not paused. */
+    Instant pausedUntil() {
+        return pausedUntil;
+    }
+
+    private record BatchResult(int sent, int failed, boolean kafkaFailed) {
+    }
+
+    private BatchResult sendBatch(List<AuditOutbox.Pending> due) {
+        final List<CompletableFuture<?>> acks = new ArrayList<>(due.size());
+        for (final AuditOutbox.Pending row : due) {
+            final CompletableFuture<?> ack = dispatch(row);
+            acks.add(ack);
+            if (ack.isCompletedExceptionally() && isKafkaFailure(ack)) {
+                // No metadata, a broker gone: the next sends would wait for the
+                // same, so they stay for the next run. A record refused for
+                // itself (too large) does not stop the others (found in review:
+                // one such row used to pause every tenant's events).
+                break;
+            }
+        }
+        final long deadline = System.nanoTime() + properties.sendTimeout().toNanos();
+        final List<UUID> acknowledged = new ArrayList<>(acks.size());
+        int failedRows = 0;
+        boolean kafkaFailed = false;
+        for (int i = 0; i < acks.size(); i++) {
+            final AuditOutbox.Pending row = due.get(i);
+            final Throwable failure = awaitAck(acks.get(i), deadline);
+            if (failure == null) {
+                acknowledged.add(row.id());
+            } else {
+                failedRows++;
+                kafkaFailed |= isKafkaFailure(failure);
+                withTenant(row, () -> markFailed(row, failure));
+            }
+        }
+        sent.increment(acknowledged.size());
+        failed.increment(failedRows);
+        markSent(acknowledged);
+        return new BatchResult(acknowledged.size(), failedRows, kafkaFailed);
+    }
+
+    /**
+     * Whether a failure is Kafka's (retriable by Kafka's own classification, a
+     * timeout or an interrupt) rather than the record's. Anything not known to
+     * be the record's counts as Kafka's: pausing is the safe side.
+     */
+    static boolean isKafkaFailure(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof RetriableException
+                    || cause instanceof TimeoutException
+                    || cause instanceof InterruptedException) {
+                return true;
+            }
+            if (cause instanceof RecordTooLargeException
+                    || cause instanceof RecordBatchTooLargeException
+                    || cause instanceof SerializationException
+                    || cause instanceof InvalidRecordException) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isKafkaFailure(CompletableFuture<?> failedAck) {
+        try {
+            failedAck.getNow(null);
+            return false;
+        } catch (CompletionException e) {
+            return isKafkaFailure(e.getCause() != null ? e.getCause() : e);
+        } catch (CancellationException e) {
+            return true;
+        }
+    }
+
+    /** A send that throws instead of failing its future is a failed send of that row. */
+    private CompletableFuture<?> dispatch(AuditOutbox.Pending row) {
+        if (row.tenantId() != null) {
+            TenantContext.set(row.tenantId());
+        }
+        try {
+            return sender.sendForRelay(row.tenantId(), row.payload());
+        } catch (RuntimeException e) {
+            return CompletableFuture.failedFuture(e);
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    private static void withTenant(AuditOutbox.Pending row, Runnable action) {
+        if (row.tenantId() != null) {
+            TenantContext.set(row.tenantId());
+        }
+        try {
+            action.run();
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    private static Throwable awaitAck(CompletableFuture<?> ack, long deadlineNanos) {
+        try {
+            ack.get(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return e;
+        } catch (ExecutionException e) {
+            return e.getCause() != null ? e.getCause() : e;
+        } catch (TimeoutException e) {
+            return e;
+        }
+    }
+
+    /**
+     * Kafka has these events; a failure here only leaves rows pending, so they
+     * are sent again and deduplicated by the consumer. Not a send failure
+     * (found in review: it used to be counted and logged as one).
+     */
+    private void markSent(List<UUID> acknowledged) {
+        if (acknowledged.isEmpty()) {
+            return;
+        }
+        try {
+            final int marked = outbox.markSent(acknowledged);
+            if (marked != acknowledged.size()) {
+                // One writer per row (the relay, under its lock): rows no
+                // longer pending mean the lock was lost mid-run or someone
+                // edited the table.
+                log.warn("Audit events sent but {} of {} outbox rows were no longer pending",
+                        acknowledged.size() - marked, acknowledged.size());
+            }
+        } catch (RuntimeException e) {
+            log.error("{} audit events sent but not marked sent; they will be sent again and deduplicated",
+                    acknowledged.size(), e);
+        }
+    }
+
+    private void markFailed(AuditOutbox.Pending row, Throwable failure) {
+        final int attempt = row.attempts() + 1;
+        final Duration wait = retryDelay(attempt);
+        log.warn("Audit event not sent, retrying in {}: id={}, eventType={}, attempt={}",
+                wait, row.id(), row.eventType(), attempt, failure);
+        try {
+            if (!outbox.markFailed(row.id(), wait, failure.toString())) {
+                log.warn("Audit event failed but its outbox row was no longer pending: id={}, eventType={}",
+                        row.id(), row.eventType());
+            }
+        } catch (RuntimeException e) {
+            // The row stays due and is tried again on the next run.
+            log.error("Audit outbox row could not be marked failed: id={}, eventType={}",
+                    row.id(), row.eventType(), e);
+        }
+    }
+
+    private void pauseAfterFailure() {
+        final int failedRuns = consecutiveFailedRuns.incrementAndGet();
+        final Duration pause = retryDelay(failedRuns);
+        pausedUntil = clock.instant().plus(pause);
+        log.warn("Audit outbox relay paused for {} after Kafka failed a send (failed runs in a row: {})",
+                pause, failedRuns);
+    }
+
+    /** The table's backlog, read at most every {@link #BACKLOG_CACHE}; empty when it cannot be read. */
+    Optional<AuditOutbox.Backlog> backlog() {
+        final Instant now = clock.instant();
+        if (cachedBacklog != null && now.isBefore(cachedBacklogAt.plus(BACKLOG_CACHE))) {
+            return Optional.of(cachedBacklog);
+        }
+        try {
+            cachedBacklog = outbox.backlog();
+            cachedBacklogAt = now;
+            return Optional.of(cachedBacklog);
+        } catch (RuntimeException e) {
+            // NaN in the gauges; the database being unreachable has its own
+            // signals (health, the service's errors).
+            log.warn("Audit outbox backlog could not be read for the metrics: {}", e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * The oldest pending event's age as the database measured it at the last
+     * read, plus the time since that read: between reads the age keeps
+     * growing, and only an elapsed time is taken from this process's clock.
+     */
+    private double oldestPendingAgeSeconds() {
+        return backlog()
+                .map(b -> b.oldestAge()
+                        .map(age -> (double) age.plus(Duration.between(cachedBacklogAt, clock.instant())).toSeconds())
+                        .orElse(0.0))
+                .orElse(Double.NaN);
+    }
+
+    /**
+     * Long enough for a full run: each batch waits at most the send timeout,
+     * plus the producer's own blocking and the database work.
+     */
+    private Duration lockAtMostFor() {
+        return properties.sendTimeout().multipliedBy(properties.maxBatchesPerRun()).plusSeconds(30);
+    }
+}
