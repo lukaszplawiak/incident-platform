@@ -5,6 +5,7 @@ import com.incidentplatform.postmortem.domain.PostmortemStatus;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.domain.Severity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -185,11 +186,15 @@ public class PostmortemPersistenceService {
         postmortem.markFailed(errorMessage);
         postmortemRepository.save(postmortem);
 
+        // Backlog #0-84: the event is written in this transaction now, so an
+        // event too large to store would roll the FAILED mark back with it;
+        // the error goes in cut and on one line (AuditText, found in review).
+        final String auditError = AuditText.error(errorMessage);
         auditEventPublisher.publishIncident(
                 incidentId, tenantId,
                 AuditEventTypes.POSTMORTEM_FAILED, SERVICE_NAME,
-                String.format("Postmortem generation failed: %s", errorMessage),
-                Map.of("error", errorMessage,
+                String.format("Postmortem generation failed: %s", auditError),
+                Map.of("error", auditError,
                         "status", PostmortemStatus.FAILED.name())
         );
     }
@@ -237,12 +242,14 @@ public class PostmortemPersistenceService {
         postmortem.markPermanentlyFailed(errorMessage);
         postmortemRepository.save(postmortem);
 
+        // As in markFailedAndPublish: the error cut and on one line (#0-84).
+        final String auditError = AuditText.error(errorMessage);
         auditEventPublisher.publishIncident(
                 incidentId, tenantId,
                 AuditEventTypes.POSTMORTEM_PERMANENTLY_FAILED, SERVICE_NAME,
                 String.format("Postmortem generation permanently failed after " +
-                        "%d attempts: %s", maxRetryAttempts, errorMessage),
-                Map.of("error", errorMessage,
+                        "%d attempts: %s", maxRetryAttempts, auditError),
+                Map.of("error", auditError,
                         "status", PostmortemStatus.PERMANENTLY_FAILED.name(),
                         "attempts", maxRetryAttempts)
         );

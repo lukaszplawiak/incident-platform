@@ -7,6 +7,7 @@ import com.incidentplatform.postmortem.domain.Postmortem;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -280,15 +281,14 @@ public class PostmortemRetryScheduler {
             // record's own data) — mark FAILED so the retry scheduler
             // picks it up. retryCount stays at 0 (not incremented here —
             // retry scheduler increments before each retry attempt).
-            final String errorMessage = e.getMessage() != null
-                    ? e.getMessage() : e.getClass().getSimpleName();
+            final String errorMessage = failureText(e);
 
             persistenceService.markFailedAndPublish(
                     postmortemId, incidentId, tenantId, errorMessage);
 
             log.warn("Postmortem generation failed on first attempt, " +
                             "will be retried: incidentId={}, tenant={}, error={}",
-                    incidentId, tenantId, errorMessage);
+                    incidentId, tenantId, errorMessage, e);
         }
     }
 
@@ -347,8 +347,7 @@ public class PostmortemRetryScheduler {
             throw e;
 
         } catch (Exception e) {
-            final String errorMessage = e.getMessage() != null
-                    ? e.getMessage() : e.getClass().getSimpleName();
+            final String errorMessage = failureText(e);
 
             if (retryCount >= maxRetryAttempts) {
                 persistenceService.markPermanentlyFailedAndPublish(
@@ -357,14 +356,14 @@ public class PostmortemRetryScheduler {
 
                 log.error("Postmortem permanently failed after {} attempts: " +
                                 "incidentId={}, tenant={}, lastError={}",
-                        maxRetryAttempts, incidentId, tenantId, errorMessage);
+                        maxRetryAttempts, incidentId, tenantId, errorMessage, e);
             } else {
                 persistenceService.markFailedAndPublish(
                         postmortemId, incidentId, tenantId, errorMessage);
 
                 log.warn("Postmortem retry failed, will retry later: " +
                                 "incidentId={}, attempt={}/{}, error={}",
-                        incidentId, retryCount, maxRetryAttempts, errorMessage);
+                        incidentId, retryCount, maxRetryAttempts, errorMessage, e);
             }
         }
     }
@@ -382,5 +381,27 @@ public class PostmortemRetryScheduler {
     private static String auditPromptRecord(String systemInstruction, String userContent) {
         return "[system_instruction]\n" + systemInstruction +
                 "\n\n[user content]\n" + userContent;
+    }
+
+    /** What a failed Gemini call records (backlog #0-84). */
+    static final String GEMINI_FAILED = "Gemini request failed (details in the postmortem-service log)";
+
+    /**
+     * What a failed attempt records on the postmortem and in its audit event
+     * (backlog #0-84, found in review): platform-written text only, never an
+     * exception's message. {@code GeminiClientImpl} builds a
+     * {@code GeminiException}'s message from the HTTP client's or Jackson's,
+     * which can quote Gemini's response body; any other exception (prompt
+     * building, JPA, Jackson) may quote incident data or SQL; and both the
+     * postmortem and the audit trail are the tenant's to read. So a Gemini
+     * failure is a fixed text and anything else its type
+     * ({@link AuditText#unexpected}); the full exception goes to the log line
+     * written with it.
+     */
+    static String failureText(Exception e) {
+        if (e instanceof GeminiException) {
+            return GEMINI_FAILED;
+        }
+        return AuditText.unexpected(e);
     }
 }

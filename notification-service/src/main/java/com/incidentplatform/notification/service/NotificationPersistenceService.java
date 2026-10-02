@@ -5,9 +5,13 @@ import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
+import com.incidentplatform.shared.audit.AuditEventPublisher;
+import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.audit.AuditText;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -48,18 +52,32 @@ import java.util.UUID;
  * commits immediately in its own short transaction, so a crash partway
  * through only ever risks re-attempting channels that genuinely were
  * never confirmed sent.
+ *
+ * <h2>Audit events in the same transaction (backlog #0-84)</h2>
+ * Each outcome that has an audit event ({@code NOTIFICATION_SENT},
+ * {@code NOTIFICATION_FAILED}, {@code NOTIFICATION_UNDELIVERABLE}) writes it
+ * to the service's audit outbox in the transaction of the row it records: the
+ * {@code notification_log} row (or the queue entry's status) and its audit
+ * event commit together or not at all. Before, the event was sent to Kafka
+ * after the commit and without waiting, and was lost whenever Kafka was slow
+ * or down. A failure to write it now fails the method, and the row with it.
  */
 @Service
 public class NotificationPersistenceService {
 
+    private static final String SERVICE_NAME = "notification-service";
+
     private final NotificationQueueRepository queueRepository;
     private final NotificationLogRepository logRepository;
+    private final AuditEventPublisher auditEventPublisher;
 
     public NotificationPersistenceService(
             NotificationQueueRepository queueRepository,
-            NotificationLogRepository logRepository) {
+            NotificationLogRepository logRepository,
+            AuditEventPublisher auditEventPublisher) {
         this.queueRepository = queueRepository;
         this.logRepository = logRepository;
+        this.auditEventPublisher = auditEventPublisher;
     }
 
     /**
@@ -98,16 +116,29 @@ public class NotificationPersistenceService {
     }
 
     /**
-     * Marks {@code entry} UNDELIVERABLE and commits immediately (backlog
-     * #0-18): nobody in the tenant could be notified.
+     * Marks {@code entry} UNDELIVERABLE (backlog #0-18): nobody in the tenant
+     * could be notified. Its {@code NOTIFICATION_UNDELIVERABLE} audit event is
+     * written in the same transaction (backlog #0-84).
      */
     @Transactional
     public void markUndeliverable(NotificationQueueEntry entry,
                                   UndeliverableReason reason) {
         entry.markUndeliverable(reason);
         queueRepository.save(entry);
+
+        auditEventPublisher.publishIncident(
+                entry.getIncidentId(), entry.getTenantId(),
+                AuditEventTypes.NOTIFICATION_UNDELIVERABLE, SERVICE_NAME,
+                "Notification undeliverable: nobody in the tenant could be "
+                        + "notified (" + reason + ")",
+                Map.of("eventType", entry.getEventType(), "reason", reason.name()));
     }
 
+    /**
+     * Records a delivered notification in {@code notification_log}, with its
+     * {@code NOTIFICATION_SENT} audit event in the same transaction (backlog
+     * #0-84).
+     */
     @Transactional
     public void recordChannelSent(UUID incidentId, String tenantId,
                                   String eventType, int escalationLevel,
@@ -116,15 +147,49 @@ public class NotificationPersistenceService {
         logRepository.save(NotificationLog.sent(
                 incidentId, tenantId, eventType, escalationLevel,
                 channelName, recipient, subject, message));
+
+        auditEventPublisher.publishIncident(
+                incidentId, tenantId,
+                AuditEventTypes.NOTIFICATION_SENT, SERVICE_NAME,
+                String.format("Notification sent via %s to %s", channelName, recipient),
+                Map.of("channel", channelName,
+                        "recipient", recipient,
+                        "eventType", eventType));
     }
 
+    /**
+     * Records a failed send in {@code notification_log}, with its
+     * {@code NOTIFICATION_FAILED} audit event in the same transaction (backlog
+     * #0-84). Every failed send has one now, a channel's own failure and an
+     * unexpected error alike: before, only the first was audited. The audit
+     * event carries the error through {@link AuditText#error} (one line, at
+     * most 500 characters; found in review: an unbounded message could make
+     * the event too large to store, and fail this write with it).
+     *
+     * @param errorMessage why the send failed, written by the platform (the
+     *                     caller passes {@link AuditText#unexpected} for an
+     *                     exception it did not anticipate, never that
+     *                     exception's message); {@code null} is recorded as
+     *                     "unknown" ({@code Map.of} refuses a null value)
+     */
     @Transactional
     public void recordChannelFailed(UUID incidentId, String tenantId,
                                     String eventType, int escalationLevel,
                                     String channelName, String recipient,
                                     String errorMessage) {
+        final String error = errorMessage != null ? errorMessage : "unknown";
         logRepository.save(NotificationLog.failed(
                 incidentId, tenantId, eventType, escalationLevel,
-                channelName, recipient, errorMessage));
+                channelName, recipient, error));
+
+        final String auditError = AuditText.error(error);
+
+        auditEventPublisher.publishIncident(
+                incidentId, tenantId,
+                AuditEventTypes.NOTIFICATION_FAILED, SERVICE_NAME,
+                String.format("Notification failed via %s to %s: %s", channelName, recipient, auditError),
+                Map.of("channel", channelName,
+                        "recipient", recipient,
+                        "error", auditError));
     }
 }

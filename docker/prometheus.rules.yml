@@ -318,6 +318,35 @@ groups:
             the tenant's audit trail. The ERROR log "Audit event rejected"
             names it.
 
+      - alert: AuditEventUnrecorded
+        # Backlog #0-84 (second step): notification- and escalation-service
+        # write an audit event after the fact for an action that cannot be
+        # undone (a notification delivered, an escalation fired), so a failure
+        # to write it is counted rather than thrown: thrown, it would record a
+        # delivered notification as failed, or count a failed attempt against
+        # an escalation that happened. The event is then missing from the
+        # tenant's audit trail (and, for a notification, from
+        # notification_log). Critical, as AuditEventsRejected: a gap in the
+        # audit trail. Resolves by itself an hour after the last one. The
+        # counter is registered at zero for every event type at startup
+        # (UnrecordedAuditEvents): a series that began at 1 would hide its
+        # first failure from increase().
+        expr: |
+          sum by (job, event_type) (
+            increase(audit_event_unrecorded_total[1h])
+          ) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} could not record {{ $labels.event_type }} audit events"
+          description: >
+            {{ $labels.job }} failed to write at least one {{ $labels.event_type }}
+            audit event in the last hour, after the action it records had
+            happened; it is missing from the tenant's audit trail. The ERROR
+            log ("Audit event not recorded", or "Notification delivered but not
+            recorded") names the incident and holds what to reconstruct.
+
       - alert: PlatformTenantProvisioningSpike
         # Backlog #0-83: more tenants created through the platform API in an
         # hour than onboarding normally needs. A taken-over operator session can

@@ -485,7 +485,21 @@ class AuditEventConsumerTest {
 
             then(acknowledgment).should().nack(AuditEventConsumer.DEAD_LETTER_RETRY);
             then(acknowledgment).should(never()).acknowledge();
-            assertThat(meters.find("audit.events.rejected").counter()).isNull();
+            assertThat(meters.find("audit.events.rejected").counters())
+                    .allSatisfy(counter -> assertThat(counter.count()).isZero());
+        }
+
+        /**
+         * Found in the review of #0-84's second step: a counter created at its
+         * first rejection starts its series at 1, which AuditEventsRejected's
+         * increase() cannot see.
+         */
+        @Test
+        @DisplayName("every rejection reason's counter exists at zero before the first rejection")
+        void rejectedCountersRegisteredAtZero() {
+            assertThat(meters.find("audit.events.rejected").counters())
+                    .extracting(counter -> counter.getId().getTag("reason"))
+                    .containsExactlyInAnyOrder("unreadable", "constraint", "tenant_mismatch");
         }
     }
 

@@ -12,7 +12,9 @@ import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.router.NotificationEventTypes;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.audit.UnrecordedAuditEvents;
 import com.incidentplatform.shared.domain.Severity;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
@@ -39,6 +41,7 @@ public class SlackActionService {
     private final SlackWorkspaceClient slackWorkspaceClient;
     private final ObjectMapper objectMapper;
     private final AuditEventPublisher auditEventPublisher;
+    private final UnrecordedAuditEvents unrecorded;
 
     public SlackActionService(IncidentAckClient incidentAckClient,
                               SlackNotificationChannel slackChannel,
@@ -46,7 +49,8 @@ public class SlackActionService {
                               OncallClient oncallClient,
                               SlackWorkspaceClient slackWorkspaceClient,
                               ObjectMapper objectMapper,
-                              AuditEventPublisher auditEventPublisher) {
+                              AuditEventPublisher auditEventPublisher,
+                              MeterRegistry meterRegistry) {
         this.incidentAckClient = incidentAckClient;
         this.slackChannel = slackChannel;
         this.messageStore = messageStore;
@@ -54,6 +58,8 @@ public class SlackActionService {
         this.slackWorkspaceClient = slackWorkspaceClient;
         this.objectMapper = objectMapper;
         this.auditEventPublisher = auditEventPublisher;
+        this.unrecorded = new UnrecordedAuditEvents(meterRegistry,
+                AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED);
     }
 
     @Async("slackTaskExecutor")
@@ -247,25 +253,37 @@ public class SlackActionService {
                         "failedChannels={}",
                 failedChannels.size(), incidentId, tenantId, failedChannels);
 
-        auditEventPublisher.publishIncident(
-                incidentId, tenantId,
-                AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED, SERVICE_NAME,
-                String.format("Incident acknowledged, but the Slack message could " +
-                                "not be updated for %d of %d channel(s) — those " +
-                                "messages may still show as unacknowledged.",
-                        failedChannels.size(),
-                        // Fixed: otherChannels (from findAllChannelsForIncident)
-                        // already includes the primary channel — that's exactly
-                        // why the loop above skips it via
-                        // otherChannel.equals(channel) rather than
-                        // findAllChannelsForIncident itself excluding it. An
-                        // earlier version of this line used
-                        // otherChannels.size() + 1, double-counting the primary
-                        // channel.
-                        otherChannels.size()),
-                Map.of("acknowledgedBy", acknowledgedByName,
-                        "failedChannels", failedChannels)
-        );
+        // Backlog #0-84: the acknowledgement and the failed updates already
+        // happened; this event has no change to commit with, so it is written
+        // on its own. A failure to write it is logged and counted
+        // (audit.event.unrecorded, alert AuditEventUnrecorded), as for the
+        // other events written after the fact.
+        try {
+            auditEventPublisher.publishIncident(
+                    incidentId, tenantId,
+                    AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED, SERVICE_NAME,
+                    String.format("Incident acknowledged, but the Slack message could " +
+                                    "not be updated for %d of %d channel(s) — those " +
+                                    "messages may still show as unacknowledged.",
+                            failedChannels.size(),
+                            // Fixed: otherChannels (from findAllChannelsForIncident)
+                            // already includes the primary channel — that's exactly
+                            // why the loop above skips it via
+                            // otherChannel.equals(channel) rather than
+                            // findAllChannelsForIncident itself excluding it. An
+                            // earlier version of this line used
+                            // otherChannels.size() + 1, double-counting the primary
+                            // channel.
+                            otherChannels.size()),
+                    Map.of("acknowledgedBy", acknowledgedByName,
+                            "failedChannels", failedChannels)
+            );
+        } catch (RuntimeException e) {
+            unrecorded.increment(AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED);
+            log.error("Audit event not recorded: eventType={}, incidentId={}, tenant={}, failedChannels={}",
+                    AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED, incidentId, tenantId,
+                    failedChannels, e);
+        }
     }
 
     /**

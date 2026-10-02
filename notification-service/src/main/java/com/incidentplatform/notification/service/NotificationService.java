@@ -3,11 +3,13 @@ package com.incidentplatform.notification.service;
 import com.incidentplatform.notification.channel.NotificationException;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.domain.UndeliverableReason;
+import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.repository.NotificationLogRepository;
 import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.router.NotificationRouter;
-import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.audit.AuditText;
+import com.incidentplatform.shared.audit.UnrecordedAuditEvents;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.security.TenantContext;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -17,7 +19,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -64,8 +65,6 @@ public class NotificationService {
     private static final Logger log =
             LoggerFactory.getLogger(NotificationService.class);
 
-    private static final String SERVICE_NAME = "notification-service";
-
     /**
      * Events that ask someone to act. Only these alert the operator when they
      * are undeliverable; for the others (acknowledged, resolved, closed) the
@@ -78,24 +77,24 @@ public class NotificationService {
     private final NotificationLogRepository logRepository;
     private final NotificationQueueRepository queueRepository;
     private final NotificationPersistenceService persistenceService;
-    private final AuditEventPublisher auditEventPublisher;
     private final OperatorAlertService operatorAlertService;
     private final MeterRegistry meterRegistry;
+    private final UnrecordedAuditEvents unrecorded;
 
     public NotificationService(NotificationRouter router,
                                NotificationLogRepository logRepository,
                                NotificationQueueRepository queueRepository,
                                NotificationPersistenceService persistenceService,
-                               AuditEventPublisher auditEventPublisher,
                                OperatorAlertService operatorAlertService,
                                MeterRegistry meterRegistry) {
         this.router = router;
         this.logRepository = logRepository;
         this.queueRepository = queueRepository;
         this.persistenceService = persistenceService;
-        this.auditEventPublisher = auditEventPublisher;
         this.operatorAlertService = operatorAlertService;
         this.meterRegistry = meterRegistry;
+        this.unrecorded = new UnrecordedAuditEvents(meterRegistry,
+                AuditEventTypes.NOTIFICATION_SENT, AuditEventTypes.NOTIFICATION_FAILED);
     }
 
     /**
@@ -198,23 +197,37 @@ public class NotificationService {
         final String tenantId = entry.getTenantId();
         final String eventType = entry.getEventType();
 
-        persistenceService.markUndeliverable(entry, reason);
+        // The status and its NOTIFICATION_UNDELIVERABLE audit event commit
+        // together (backlog #0-84). The operator is told whether or not that
+        // write succeeds (found in review: a failed write used to skip the
+        // alert, though nobody had been notified either way); the alert is
+        // content-free and rate-limited, so a retried entry does not repeat it.
+        // A failed write is rethrown after the alert, never replaced by an
+        // alert failure (found in review: a finally block could do that).
+        RuntimeException writeFailure = null;
+        try {
+            persistenceService.markUndeliverable(entry, reason);
+        } catch (RuntimeException e) {
+            writeFailure = e;
+        }
+        if (ACTIONABLE_EVENTS.contains(eventType)) {
+            try {
+                operatorAlertService.undeliverable(
+                        incidentId, tenantId, eventType, reason);
+            } catch (RuntimeException alertFailure) {
+                if (writeFailure == null) {
+                    throw alertFailure;
+                }
+                writeFailure.addSuppressed(alertFailure);
+            }
+        }
+        if (writeFailure != null) {
+            throw writeFailure;
+        }
 
         meterRegistry.counter("notification.undeliverable",
                 "event_type", eventType,
                 "reason", reason.name()).increment();
-
-        auditEventPublisher.publishIncident(
-                incidentId, tenantId,
-                AuditEventTypes.NOTIFICATION_UNDELIVERABLE, SERVICE_NAME,
-                "Notification undeliverable: nobody in the tenant could be "
-                        + "notified (" + reason + ")",
-                Map.of("eventType", eventType, "reason", reason.name()));
-
-        if (ACTIONABLE_EVENTS.contains(eventType)) {
-            operatorAlertService.undeliverable(
-                    incidentId, tenantId, eventType, reason);
-        }
     }
 
     /**
@@ -299,59 +312,33 @@ public class NotificationService {
 
             try {
                 channel.send(request);
-
-                persistenceService.recordChannelSent(
-                        incidentId, tenantId, eventType, escalationLevel,
-                        channel.channelName(), request.recipient(),
-                        request.subject(), request.message());
-
-                log.info("Notification sent: channel={}, recipient={}, " +
-                                "incidentId={}, tenant={}",
-                        channel.channelName(), request.recipient(),
-                        incidentId, tenantId);
-
-                auditEventPublisher.publishIncident(
-                        incidentId, tenantId,
-                        AuditEventTypes.NOTIFICATION_SENT, SERVICE_NAME,
-                        String.format("Notification sent via %s to %s",
-                                channel.channelName(), request.recipient()),
-                        Map.of("channel", channel.channelName(),
-                                "recipient", request.recipient(),
-                                "eventType", eventType)
-                );
-
             } catch (NotificationException e) {
-                persistenceService.recordChannelFailed(
-                        incidentId, tenantId, eventType, escalationLevel,
-                        channel.channelName(), request.recipient(),
-                        e.getMessage());
+                recordFailed(entry, channel.channelName(), request, e.getMessage());
 
                 log.error("Notification failed: channel={}, recipient={}, " +
                                 "incidentId={}, error={}",
                         channel.channelName(), request.recipient(),
                         incidentId, e.getMessage());
-
-                auditEventPublisher.publishIncident(
-                        incidentId, tenantId,
-                        AuditEventTypes.NOTIFICATION_FAILED, SERVICE_NAME,
-                        String.format("Notification failed via %s to %s: %s",
-                                channel.channelName(), request.recipient(),
-                                e.getMessage()),
-                        Map.of("channel", channel.channelName(),
-                                "recipient", request.recipient(),
-                                "error", e.getMessage())
-                );
-
+                continue;
             } catch (Exception e) {
-                persistenceService.recordChannelFailed(
-                        incidentId, tenantId, eventType, escalationLevel,
-                        channel.channelName(), request.recipient(),
-                        "Unexpected error: " + e.getMessage());
+                // Recorded by its type only: the message of an exception the
+                // channel did not anticipate may quote a URL with a token, a
+                // host name or a response body, and notification_log and the
+                // audit trail are the tenant's to read (backlog #0-84, found
+                // in review). The full exception is in the log line below.
+                recordFailed(entry, channel.channelName(), request, AuditText.unexpected(e));
 
                 log.error("Unexpected error sending notification: " +
                                 "channel={}, incidentId={}",
                         channel.channelName(), incidentId, e);
+                continue;
             }
+
+            // Delivered. Recorded outside the send's try (backlog #0-84,
+            // found while moving the audit event into this write): a failure
+            // to record it used to land in the catch above and log a
+            // delivered notification as a failed one.
+            recordDelivered(entry, channel.channelName(), request);
         }
 
         // Mark the queue entry as processed — all channels attempted.
@@ -362,5 +349,74 @@ public class NotificationService {
         log.info("Notification queue entry processed: eventType={}, " +
                         "channels={}, incidentId={}, tenant={}",
                 eventType, channelRequests.size(), incidentId, tenantId);
+    }
+
+    /**
+     * Records a failed send: its {@code notification_log} row and
+     * {@code NOTIFICATION_FAILED} audit event, in one transaction (backlog
+     * #0-84). A failure of that write is logged and counted
+     * ({@code audit.event.unrecorded}), not thrown (found in review): thrown,
+     * it left the loop and the remaining channels untried, for a record of a
+     * send that had already failed.
+     */
+    private void recordFailed(NotificationQueueEntry entry,
+                              String channelName,
+                              NotificationRequest request,
+                              String error) {
+        try {
+            persistenceService.recordChannelFailed(
+                    entry.getIncidentId(), entry.getTenantId(), entry.getEventType(),
+                    entry.getEscalationLevel(), channelName, request.recipient(), error);
+        } catch (RuntimeException e) {
+            unrecorded.increment(AuditEventTypes.NOTIFICATION_FAILED);
+            // "Audit event not recorded" is what the AuditEventUnrecorded alert
+            // tells the operator to search for (found in review).
+            log.error("Audit event not recorded: eventType={}, a failed notification missing from "
+                            + "notification_log too: channel={}, recipient={}, incidentId={}, tenant={}, "
+                            + "notificationEventType={}, escalationLevel={}, error={}",
+                    AuditEventTypes.NOTIFICATION_FAILED, channelName, request.recipient(), entry.getIncidentId(), entry.getTenantId(),
+                    entry.getEventType(), entry.getEscalationLevel(), error, e);
+        }
+    }
+
+    /**
+     * Records a delivered notification: its {@code notification_log} row and
+     * {@code NOTIFICATION_SENT} audit event, in one transaction (backlog
+     * #0-84).
+     *
+     * <p>When that write fails (the database unreachable, or the audit event
+     * refused as unstorable, a programming error) the message has already
+     * reached its recipient and cannot be taken back. It is not recorded as a
+     * failed send, which it was not, and the entry is not failed with it, so
+     * the remaining channels are still tried and the entry is still marked
+     * processed: failing it would leave the other recipients unnotified, as a
+     * FAILED entry is never picked up again. The delivery is then missing from
+     * {@code notification_log} and the audit trail, so it is logged at ERROR
+     * with everything needed to reconstruct it and counted in
+     * {@code audit.event.unrecorded}, which the {@code AuditEventUnrecorded}
+     * alert watches.
+     */
+    private void recordDelivered(NotificationQueueEntry entry,
+                                 String channelName,
+                                 NotificationRequest request) {
+        try {
+            persistenceService.recordChannelSent(
+                    entry.getIncidentId(), entry.getTenantId(), entry.getEventType(),
+                    entry.getEscalationLevel(), channelName, request.recipient(),
+                    request.subject(), request.message());
+        } catch (RuntimeException e) {
+            unrecorded.increment(AuditEventTypes.NOTIFICATION_SENT);
+            log.error("Notification delivered but not recorded in notification_log or the audit "
+                            + "trail: channel={}, recipient={}, incidentId={}, tenant={}, eventType={}, "
+                            + "escalationLevel={}",
+                    channelName, request.recipient(), entry.getIncidentId(), entry.getTenantId(),
+                    entry.getEventType(), entry.getEscalationLevel(), e);
+            return;
+        }
+
+        log.info("Notification sent: channel={}, recipient={}, " +
+                        "incidentId={}, tenant={}",
+                channelName, request.recipient(),
+                entry.getIncidentId(), entry.getTenantId());
     }
 }

@@ -10,6 +10,7 @@ import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableE
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -52,6 +53,7 @@ class SlackActionServiceTest {
     @Mock private OncallClient oncallClient;
     @Mock private SlackWorkspaceClient slackWorkspaceClient;
     @Mock private AuditEventPublisher auditEventPublisher;
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     private SlackActionService service;
 
@@ -65,7 +67,7 @@ class SlackActionServiceTest {
     void setUp() {
         service = new SlackActionService(
                 incidentAckClient, slackChannel, messageStore,
-                oncallClient, slackWorkspaceClient, new ObjectMapper(), auditEventPublisher);
+                oncallClient, slackWorkspaceClient, new ObjectMapper(), auditEventPublisher, meterRegistry);
     }
 
     private void givenTenantWorkspace() {
@@ -198,6 +200,25 @@ class SlackActionServiceTest {
             final List<String> failedChannels =
                     (List<String>) metadataCaptor.getValue().get("failedChannels");
             assertThat(failedChannels).containsExactly(CHANNEL);
+        }
+
+        /**
+         * Backlog #0-84: the event is written after the acknowledgement and
+         * the failed updates, so a failure to write it is counted and logged,
+         * not thrown to the async caller's generic catch.
+         */
+        @Test
+        @DisplayName("a failure to record SLACK_ACK_MESSAGE_UPDATE_FAILED is counted, not thrown")
+        void auditFailureCounted() {
+            given(slackWorkspaceClient.getWorkspace(TENANT_ID)).willReturn(Optional.empty());
+            given(messageStore.findAllChannelsForIncident(INCIDENT_ID)).willReturn(List.of(CHANNEL));
+            willThrow(new IllegalStateException("outbox write failed")).given(auditEventPublisher)
+                    .publishIncident(any(), any(), any(), any(), any(), any());
+
+            service.updateSlackMessages(INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
+
+            assertThat(meterRegistry.counter("audit.event.unrecorded",
+                    "event_type", AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED).count()).isEqualTo(1.0);
         }
 
         @Test

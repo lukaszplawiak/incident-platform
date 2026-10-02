@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -106,6 +107,12 @@ public class AuditEventConsumer {
         this.deadLetterPublisher = deadLetterPublisher;
         this.recordResolver = recordResolver;
         this.meterRegistry = meterRegistry;
+        // Registered at zero now (backlog #0-84, found in the review of the
+        // second step): a counter created at its first rejection starts its
+        // series at 1, and AuditEventsRejected's increase() missed that first one.
+        for (final String reason : List.of(REASON_UNREADABLE, REASON_CONSTRAINT, REASON_TENANT_MISMATCH)) {
+            rejected.put(reason, rejectedCounter(reason));
+        }
     }
 
     @KafkaListener(
@@ -201,6 +208,14 @@ public class AuditEventConsumer {
         }
     }
 
+    private Counter rejectedCounter(String reason) {
+        return Counter.builder("audit.events.rejected")
+                .description("Audit records the consumer could not store, sent to the dead-letter topic "
+                        + "(backlog #0-84)")
+                .tag("reason", reason)
+                .register(meterRegistry);
+    }
+
     /**
      * A record that can never be stored: logged, sent to the dead-letter topic
      * for a person to look at (as incident events are, {@code IncidentKafkaConsumer}),
@@ -229,11 +244,7 @@ public class AuditEventConsumer {
             acknowledgment.nack(DEAD_LETTER_RETRY);
             return;
         }
-        rejected.computeIfAbsent(reason, r -> Counter.builder("audit.events.rejected")
-                .description("Audit records the consumer could not store, sent to the dead-letter topic "
-                        + "(backlog #0-84)")
-                .tag("reason", r)
-                .register(meterRegistry)).increment();
+        rejected.computeIfAbsent(reason, this::rejectedCounter).increment();
         acknowledgment.acknowledge();
     }
 

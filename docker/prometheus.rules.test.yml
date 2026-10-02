@@ -166,6 +166,13 @@ tests:
         values: '0x5 60+60x30 0x20'
       - series: 'audit_outbox_oldest_pending_age_seconds{job="incident-service",instance="incident-1"}'
         values: '0x60'
+      # The services moved in #0-84's second step expose the same gauge.
+      - series: 'audit_outbox_oldest_pending_age_seconds{job="notification-service",instance="notification-1"}'
+        values: '0x60'
+      - series: 'audit_outbox_oldest_pending_age_seconds{job="escalation-service",instance="escalation-1"}'
+        values: '0x60'
+      - series: 'audit_outbox_oldest_pending_age_seconds{job="postmortem-service",instance="postmortem-1"}'
+        values: '0x5 60+60x30 0x20'
     alert_rule_test:
       - eval_time: 10m
         alertname: AuditOutboxBacklog
@@ -183,6 +190,13 @@ tests:
             exp_annotations:
               summary: "auth-service audit events waiting in the outbox for over 10 minutes"
               description: "The oldest audit event in auth-service's outbox has waited 20m 0s. Nothing is lost, but the audit trail is behind until the relay sends it. Check Kafka and the service's \"Audit event not sent\" WARN lines.\n"
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: postmortem-service
+            exp_annotations:
+              summary: "postmortem-service audit events waiting in the outbox for over 10 minutes"
+              description: "The oldest audit event in postmortem-service's outbox has waited 20m 0s. Nothing is lost, but the audit trail is behind until the relay sends it. Check Kafka and the service's \"Audit event not sent\" WARN lines.\n"
       - eval_time: 45m
         alertname: AuditOutboxBacklog
         exp_alerts: []
@@ -210,6 +224,34 @@ tests:
               description: "incident-service could not store at least one audit event in the last hour (constraint); it is in the dead-letter topic (incidents.dead-letter, sourceTopic audit.events) and missing from the tenant's audit trail. The ERROR log \"Audit event rejected\" names it.\n"
       - eval_time: 85m
         alertname: AuditEventsRejected
+        exp_alerts: []
+
+  # Audit events written after the fact and not recorded (backlog #0-84,
+  # second step): fire on the first one, per service and type; resolve an
+  # hour after the last.
+  - interval: 1m
+    input_series:
+      - series: 'audit_event_unrecorded_total{job="notification-service",instance="notification-1",event_type="NOTIFICATION_SENT"}'
+        values: '0x10 1x90'
+      - series: 'audit_event_unrecorded_total{job="escalation-service",instance="escalation-1",event_type="ESCALATION_FIRED"}'
+        values: '0x100'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AuditEventUnrecorded
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuditEventUnrecorded
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: notification-service
+              event_type: NOTIFICATION_SENT
+            exp_annotations:
+              summary: "notification-service could not record NOTIFICATION_SENT audit events"
+              description: "notification-service failed to write at least one NOTIFICATION_SENT audit event in the last hour, after the action it records had happened; it is missing from the tenant's audit trail. The ERROR log (\"Audit event not recorded\", or \"Notification delivered but not recorded\") names the incident and holds what to reconstruct.\n"
+      - eval_time: 85m
+        alertname: AuditEventUnrecorded
         exp_alerts: []
 
   # Platform API (backlog #0-83): more than 10 tenants in an hour fires the

@@ -8,10 +8,13 @@ import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.escalation.service.EscalationTaskPersistenceService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.audit.AuditText;
+import com.incidentplatform.shared.audit.UnrecordedAuditEvents;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.MeterRegistry;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,6 +86,7 @@ public class EscalationScheduler {
     private final EscalationService escalationService;
     private final AuditEventPublisher auditEventPublisher;
     private final OncallServiceClient oncallServiceClient;
+    private final UnrecordedAuditEvents unrecorded;
     private final int batchSize;
 
     public EscalationScheduler(
@@ -92,6 +96,7 @@ public class EscalationScheduler {
             EscalationService escalationService,
             AuditEventPublisher auditEventPublisher,
             OncallServiceClient oncallServiceClient,
+            MeterRegistry meterRegistry,
             // Fixed (backlog #39): caps how many due tasks one poll cycle
             // processes — matches IncidentEventOutboxRepository's bounded-
             // batch pattern (incident-service). Without this, a large
@@ -108,6 +113,8 @@ public class EscalationScheduler {
         this.escalationService = escalationService;
         this.auditEventPublisher = auditEventPublisher;
         this.oncallServiceClient = oncallServiceClient;
+        this.unrecorded = new UnrecordedAuditEvents(meterRegistry,
+                AuditEventTypes.ESCALATION_FIRED, AuditEventTypes.ESCALATION_NOTIFICATION_FAILED);
         this.batchSize = batchSize;
     }
 
@@ -363,9 +370,8 @@ public class EscalationScheduler {
                     task.getIncidentId(), task.getTenantId(),
                     task.getEscalationLevel(), e.getMessage(), e);
 
-            auditEventPublisher.publishIncident(
-                    task.getIncidentId(), task.getTenantId(),
-                    AuditEventTypes.ESCALATION_NOTIFICATION_FAILED, SERVICE_NAME,
+            auditAfterTheFact(task,
+                    AuditEventTypes.ESCALATION_NOTIFICATION_FAILED,
                     String.format("Escalation level %d marked complete, but the " +
                                     "notification to %s failed to send — no automatic " +
                                     "retry will occur. Manual follow-up required.",
@@ -373,7 +379,7 @@ public class EscalationScheduler {
                     Map.of("escalationLevel", task.getEscalationLevel(),
                             "role", role,
                             "failurePhase", "kafka-send",
-                            "error", e.getMessage() != null ? e.getMessage() : "unknown")
+                            "error", AuditText.unexpected(e))
             );
             return;
         }
@@ -383,9 +389,8 @@ public class EscalationScheduler {
                 task.getIncidentId(), task.getTenantId(),
                 task.getSeverity(), task.getEscalationLevel());
 
-        auditEventPublisher.publishIncident(
-                task.getIncidentId(), task.getTenantId(),
-                AuditEventTypes.ESCALATION_FIRED, SERVICE_NAME,
+        auditAfterTheFact(task,
+                AuditEventTypes.ESCALATION_FIRED,
                 String.format("Escalation level %d fired — %s notified. " +
                                 "No ACK within timeout for severity %s.",
                         task.getEscalationLevel(), role,
@@ -412,21 +417,12 @@ public class EscalationScheduler {
                         task.getTitle()
                 );
 
+                // Its ESCALATION_SCHEDULED audit event is written by
+                // scheduleLevel2Escalation, with the task (backlog #0-84).
                 log.info("Level 2 escalation scheduled: incidentId={}, " +
                                 "tenant={}, severity={}",
                         task.getIncidentId(), task.getTenantId(),
                         task.getSeverity());
-
-                auditEventPublisher.publishIncident(
-                        task.getIncidentId(), task.getTenantId(),
-                        AuditEventTypes.ESCALATION_SCHEDULED, SERVICE_NAME,
-                        String.format("Level 2 escalation scheduled — MANAGER " +
-                                        "will be notified if no ACK within %d minutes.",
-                                EscalationTask.resolveTimeout(task.getSeverity())),
-                        Map.of("escalationLevel", 2,
-                                "timeoutMinutes",
-                                EscalationTask.resolveTimeout(task.getSeverity()))
-                );
             } catch (Exception e) {
                 log.error("Failed to schedule level 2 escalation — level 1 " +
                                 "notification was sent, but this incident's " +
@@ -436,19 +432,49 @@ public class EscalationScheduler {
                         task.getIncidentId(), task.getTenantId(),
                         e.getMessage(), e);
 
-                auditEventPublisher.publishIncident(
-                        task.getIncidentId(), task.getTenantId(),
-                        AuditEventTypes.ESCALATION_NOTIFICATION_FAILED, SERVICE_NAME,
+                auditAfterTheFact(task,
+                        AuditEventTypes.ESCALATION_NOTIFICATION_FAILED,
                         "Level 1 escalation fired, but scheduling level 2 failed — " +
                                 "no automatic retry will occur. Manual follow-up required.",
                         Map.of("escalationLevel", 2,
                                 "failurePhase", "schedule-level-2",
-                                "error", e.getMessage() != null ? e.getMessage() : "unknown")
+                                "error", AuditText.unexpected(e))
                 );
             }
         } else {
             log.info("Max escalation level reached: incidentId={}, tenant={}",
                     task.getIncidentId(), task.getTenantId());
+        }
+    }
+
+    /**
+     * Writes an audit event about what already happened to {@code task}, in
+     * a transaction of its own (backlog #0-84): the escalation it records
+     * committed earlier ({@code markEscalated}), or there is no change to
+     * commit it with (a failure). A failure to write it is logged with the
+     * event's content and counted in {@code audit.event.unrecorded} (alert
+     * {@code AuditEventUnrecorded}), not thrown: thrown, it would reach
+     * {@link #checkAndEscalate}'s catch and count a failed attempt against a
+     * task that did escalate, and skip scheduling level 2. A failure's
+     * exception goes in by its type only ({@code AuditText.unexpected}, found
+     * in review): its message may quote anything the Kafka or JDBC client saw,
+     * and the audit trail is the tenant's to read; the full exception is in
+     * the ERROR log line written before.
+     */
+    private void auditAfterTheFact(EscalationTask task,
+                                   String eventType,
+                                   String detail,
+                                   Map<String, Object> metadata) {
+        try {
+            auditEventPublisher.publishIncident(
+                    task.getIncidentId(), task.getTenantId(),
+                    eventType, SERVICE_NAME, detail, metadata);
+        } catch (RuntimeException e) {
+            unrecorded.increment(eventType);
+            log.error("Audit event not recorded: eventType={}, incidentId={}, tenant={}, " +
+                            "escalationLevel={}, detail={}",
+                    eventType, task.getIncidentId(), task.getTenantId(),
+                    task.getEscalationLevel(), detail, e);
         }
     }
 }
