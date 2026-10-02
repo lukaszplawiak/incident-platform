@@ -1,12 +1,12 @@
 package com.incidentplatform.auth.api;
 
 import com.incidentplatform.auth.dto.ChangePasswordRequest;
+import com.incidentplatform.auth.dto.MfaResetRequest;
 import com.incidentplatform.auth.dto.CreateUserRequest;
 import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.dto.UpdateUserRolesRequest;
 import com.incidentplatform.auth.dto.UpdateUserStatusRequest;
 import com.incidentplatform.auth.dto.UserSummaryDto;
-import com.incidentplatform.auth.ratelimit.RateLimitDecision;
 import com.incidentplatform.auth.ratelimit.RateLimitRefusedException;
 import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.PasswordService;
@@ -24,8 +24,6 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -239,6 +237,11 @@ public class UserController {
                     factor announced at least 24 h ago. Rate-limited per admin and
                     per tenant. Not for your own account: use
                     POST /api/v1/auth/mfa/disable.
+
+                    The user's personal API keys are revoked. With an optional body
+                    {"revokeKeysCreatedSince": "<instant>"} every API key the user
+                    created since then is revoked too, tenant and integration keys
+                    included (backlog #0-89).
                     """)
     @ApiResponses({
             @ApiResponse(responseCode = "204", description = "MFA reset"),
@@ -252,8 +255,9 @@ public class UserController {
     })
     public ResponseEntity<Void> resetMfa(
             @PathVariable UUID id,
+            @RequestBody(required = false) MfaResetRequest request,
             @AuthenticationPrincipal UserPrincipal principal) {
-        mfaService.resetMfaByAdmin(id, principal);
+        mfaService.resetMfaByAdmin(id, principal, request == null ? null : request.revokeKeysCreatedSince());
         return ResponseEntity.noContent().build();
     }
 
@@ -263,12 +267,7 @@ public class UserController {
      */
     @ExceptionHandler(RateLimitRefusedException.class)
     ResponseEntity<Void> rateLimited(RateLimitRefusedException refused) {
-        final RateLimitDecision decision = refused.decision();
-        final HttpStatus status = decision.outcome() == RateLimitDecision.Outcome.LIMITED
-                ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.SERVICE_UNAVAILABLE;
-        return ResponseEntity.status(status)
-                .header(HttpHeaders.RETRY_AFTER, Long.toString(decision.retryAfterSeconds()))
-                .build();
+        return RateLimitResponses.refused(refused);
     }
 
     // ── DELETE /users/{id} ────────────────────────────────────────────────
@@ -284,6 +283,13 @@ public class UserController {
 
                     For permanent GDPR erasure of personal data, use
                     POST /api/v1/users/{id}/anonymize after archiving.
+
+                    Revokes the user's personal API keys. Tenant and integration keys
+                    the user created stay (integrations must not stop with a departure;
+                    the audit event counts them as unownedApiKeysKept, only those with a
+                    recorded creator, so keys from before V26 are not counted): if the account
+                    was taken over, list them with GET /api/v1/api-keys?createdBy={id}
+                    and revoke them with POST /api/v1/api-keys/revoke-created-by.
 
                     Admins cannot archive their own account.
                     """
@@ -315,6 +321,10 @@ public class UserController {
                     Requires the current password to prevent session-hijacking attacks:
                     an attacker with a stolen JWT cannot change the password without
                     knowing the current one.
+
+                    Ends every other session. With "revokePersonalApiKeys": true it also
+                    revokes the caller's personal API keys (use it when the password may
+                    be known to someone else); a password reset always does.
                     """
     )
     @ApiResponses({

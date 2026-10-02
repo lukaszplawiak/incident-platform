@@ -158,6 +158,29 @@ tests:
         alertname: AuthEmailPermanentlyFailed
         exp_alerts: []
 
+  # Audit events dropped (backlog #0-89): fires on any drop, resolves an hour
+  # after the last.
+  - interval: 1m
+    input_series:
+      - series: 'auth_audit_after_commit_rejected_total{job="auth-service",instance="auth-1"}'
+        values: '0x10 3x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AuditEventsDropped
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AuditEventsDropped
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "auth-service dropped audit events"
+              description: "auth-service dropped at least one audit event in the last hour, before it reached the Kafka client: the after-commit audit queue was full (usually Kafka slow or down) or the publish failed. Those API key creations or revocations are missing from their tenants' audit trail, and more may be lost unseen. Check Kafka and the auth-service ERROR log (\"Audit event dropped\").\n"
+      - eval_time: 85m
+        alertname: AuditEventsDropped
+        exp_alerts: []
+
   # Platform API (backlog #0-83): more than 10 tenants in an hour fires the
   # spike alert; 10 does not.
   - interval: 1m

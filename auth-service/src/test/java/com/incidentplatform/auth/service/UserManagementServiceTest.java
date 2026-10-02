@@ -258,6 +258,29 @@ class UserManagementServiceTest {
         }
 
         @Test
+        @DisplayName("revokes the personal API keys, records how many, and how many tenant keys it kept (backlog #0-89)")
+        void auditsRevokedKeyCount() {
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
+                    .willReturn(Optional.of(buildUser("ROLE_RESPONDER")));
+            given(apiKeyService.revokeAllPersonalKeysForUser(USER_ID, TENANT_ID)).willReturn(3);
+            given(apiKeyService.countActiveUnownedCreatedBy(TENANT_ID, USER_ID)).willReturn(2L);
+
+            service.archiveUser(USER_ID, buildPrincipal(ADMIN_ID));
+
+            then(auditEventPublisher).should().publishAuth(
+                    org.mockito.ArgumentMatchers.eq(USER_ID),
+                    org.mockito.ArgumentMatchers.eq(TENANT_ID),
+                    org.mockito.ArgumentMatchers.eq(
+                            com.incidentplatform.shared.audit.AuditEventTypes.USER_ARCHIVED),
+                    org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.eq(ADMIN_ID.toString()),
+                    org.mockito.ArgumentMatchers.anyString(),
+                    org.mockito.ArgumentMatchers.eq(java.util.Map.of("archivedBy", ADMIN_ID.toString(),
+                            ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "3",
+                            UserManagementService.AUDIT_UNOWNED_KEYS_KEPT, "2")));
+        }
+
+        @Test
         @DisplayName("throws 403 when admin tries to archive themselves")
         void throws403OnSelfArchive() {
             assertThatThrownBy(() ->

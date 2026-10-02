@@ -203,9 +203,27 @@ class ApiKeyControllerSecurityTest {
         }
 
         @Test
+        @DisplayName("POST /api-keys — 429 with Retry-After over the hourly creation limit (backlog #0-89)")
+        void createApiKey_limited_returns429() throws Exception {
+            given(apiKeyService.createApiKey(any(), any())).willThrow(
+                    new com.incidentplatform.auth.ratelimit.RateLimitRefusedException(
+                            new com.incidentplatform.auth.ratelimit.RateLimitDecision(
+                                    com.incidentplatform.auth.ratelimit.RateLimitDecision.Outcome.LIMITED, 601)));
+
+            mockMvc.perform(post("/api/v1/api-keys")
+                            .with(principal("ROLE_RESPONDER"))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(
+                                    buildCreateRequest(ApiKeyType.PERSONAL))))
+                    .andExpect(status().isTooManyRequests())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .header().string("Retry-After", "601"));
+        }
+
+        @Test
         @DisplayName("GET /api-keys — 200 for RESPONDER (sees only own keys, decided by the service)")
         void listApiKeys_returns200ForResponder() throws Exception {
-            given(apiKeyService.listApiKeys(any())).willReturn(List.of());
+            given(apiKeyService.listApiKeys(any(), any())).willReturn(List.of());
 
             mockMvc.perform(get("/api/v1/api-keys").with(principal("ROLE_RESPONDER")))
                     .andExpect(status().isOk());
@@ -214,10 +232,45 @@ class ApiKeyControllerSecurityTest {
         @Test
         @DisplayName("GET /api-keys — 200 for ADMIN (sees all tenant keys, decided by the service)")
         void listApiKeys_returns200ForAdmin() throws Exception {
-            given(apiKeyService.listApiKeys(any())).willReturn(List.of());
+            given(apiKeyService.listApiKeys(any(), any())).willReturn(List.of());
 
             mockMvc.perform(get("/api/v1/api-keys").with(principal("ROLE_ADMIN")))
                     .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("GET /api-keys?createdBy= — passes the filter to the service (backlog #0-89)")
+        void listApiKeys_passesCreatedBy() throws Exception {
+            final java.util.UUID creator = java.util.UUID.randomUUID();
+            given(apiKeyService.listApiKeys(any(), org.mockito.ArgumentMatchers.eq(creator))).willReturn(List.of());
+
+            mockMvc.perform(get("/api/v1/api-keys").param("createdBy", creator.toString())
+                            .with(principal("ROLE_ADMIN")))
+                    .andExpect(status().isOk());
+            org.mockito.Mockito.verify(apiKeyService).listApiKeys(any(), org.mockito.ArgumentMatchers.eq(creator));
+        }
+
+        @Test
+        @DisplayName("POST /api-keys/revoke-created-by — 200 for ADMIN, 403 for RESPONDER, 400 without userId (backlog #0-89)")
+        void revokeCreatedBy_adminOnly() throws Exception {
+            final java.util.UUID creator = java.util.UUID.randomUUID();
+            given(apiKeyService.revokeKeysCreatedBy(org.mockito.ArgumentMatchers.eq(creator), any(), any()))
+                    .willReturn(new com.incidentplatform.auth.dto.RevokedApiKeysResponse(List.of(KEY_ID), List.of()));
+            final String body = "{\"userId\":\"" + creator + "\",\"since\":\"2026-10-01T00:00:00Z\"}";
+
+            mockMvc.perform(post("/api/v1/api-keys/revoke-created-by").with(principal("ROLE_ADMIN"))
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isOk())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.revokedKeyIds[0]").value(KEY_ID.toString()));
+            mockMvc.perform(post("/api/v1/api-keys/revoke-created-by").with(principal("ROLE_RESPONDER"))
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isForbidden());
+            mockMvc.perform(post("/api/v1/api-keys/revoke-created-by").with(principal("ROLE_ADMIN"))
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON).content("{}"))
+                    .andExpect(status().isBadRequest());
+            org.mockito.Mockito.verify(apiKeyService, org.mockito.Mockito.times(1))
+                    .revokeKeysCreatedBy(any(), any(), any());
         }
 
         @Test

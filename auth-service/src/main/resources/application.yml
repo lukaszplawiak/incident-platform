@@ -208,6 +208,14 @@ mfa-reset:
     per-admin-per-hour: ${MFA_RESET_RATE_LIMIT_PER_ADMIN_PER_HOUR:10}
     per-tenant-per-hour: ${MFA_RESET_RATE_LIMIT_PER_TENANT_PER_HOUR:30}
 
+# Backlog #0-89: API keys one user may create per hour, revoked ones and
+# integrations' keys included. Every key emails its account, one email per key,
+# so this bounds the emails a session holder can send by creating and revoking
+# keys in a loop. Counted in the database (no Redis): 429 + Retry-After beyond it.
+api-keys:
+  creation-limit:
+    per-user-per-hour: ${API_KEY_CREATION_LIMIT_PER_USER_PER_HOUR:20}
+
 mfa:
   # AES-256-GCM key for encrypting TOTP secrets at rest.
   # REQUIRED — service will refuse to start if not set.

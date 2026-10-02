@@ -16,13 +16,19 @@ public record ApiKeyDto(
         String name,
         ApiKeyType keyType,
 
-        /** First 8 chars for UI identification. Example: "ipl_abc1" */
+        /**
+         * The 8 characters after "ipl_", for identification (e.g. "abcd1234" for
+         * "ipl_abcd1234..."). Part of the secret, so the API_KEY_CREATED email shows
+         * the key's id instead (backlog #0-89).
+         */
         String keyPrefix,
         List<String> scopes,
         String ownerEmail,    // null for TENANT keys
         Instant lastUsedAt,
         Instant expiresAt,
         Instant createdAt,
+        /** Who created the key (backlog #0-89); null for a tenant key made before V26. */
+        UUID createdByUserId,
         boolean active
 ) {
     public static ApiKeyDto from(ApiKey key) {
@@ -36,6 +42,7 @@ public record ApiKeyDto(
                 key.getLastUsedAt(),
                 key.getExpiresAt(),
                 key.getCreatedAt(),
+                key.getCreatedByUserId(),
                 key.isActive()
         );
     }

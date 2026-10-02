@@ -225,6 +225,23 @@ class IntegrationControllerSecurityTest {
         }
 
         @Test
+        @DisplayName("POST /integrations — 429 with Retry-After over the hourly key creation limit (backlog #0-89)")
+        void createIntegration_limited_returns429() throws Exception {
+            given(integrationService.createIntegration(any(), any())).willThrow(
+                    new com.incidentplatform.auth.ratelimit.RateLimitRefusedException(
+                            new com.incidentplatform.auth.ratelimit.RateLimitDecision(
+                                    com.incidentplatform.auth.ratelimit.RateLimitDecision.Outcome.LIMITED, 30)));
+
+            mockMvc.perform(post("/api/v1/integrations")
+                            .with(principal("ROLE_ADMIN"))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(buildCreateRequest())))
+                    .andExpect(status().isTooManyRequests())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .header().string("Retry-After", "30"));
+        }
+
+        @Test
         @DisplayName("GET /integrations — 200")
         void listIntegrations_returns200() throws Exception {
             given(integrationService.listIntegrations()).willReturn(List.of());

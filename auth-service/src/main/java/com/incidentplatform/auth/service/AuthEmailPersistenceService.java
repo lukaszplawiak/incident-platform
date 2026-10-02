@@ -92,7 +92,8 @@ public class AuthEmailPersistenceService {
      *
      * <ul>
      *   <li>SUPERSEDED — the user is gone (deleted or archived), an invite was
-     *       already accepted, or a newer request of this type exists.</li>
+     *       already accepted, or a newer request of this type exists (except
+     *       for API_KEY_CREATED, one per key: {@link AuthEmailType#supersededByNewer}).</li>
      *   <li>PERMANENTLY_FAILED — the deadline, plus {@code deadlineTolerance}
      *       for the scheduler's own latency, has passed. The tolerance lets
      *       the last attempt {@code AuthEmailRetryPolicy} schedules at the
@@ -108,7 +109,8 @@ public class AuthEmailPersistenceService {
                 ? "user no longer exists"
                 : entry.getEmailType() == AuthEmailType.INVITE && user.get().getPasswordHash() != null
                 ? "invite already accepted"
-                : outboxRepository.existsByUserIdAndEmailTypeAndCreatedAtAfter(
+                : entry.getEmailType().supersededByNewer()
+                        && outboxRepository.existsByUserIdAndEmailTypeAndCreatedAtAfter(
                         entry.getUserId(), entry.getEmailType(), entry.getCreatedAt())
                 ? "replaced by a newer request"
                 : null;
@@ -129,7 +131,7 @@ public class AuthEmailPersistenceService {
             case INVITE -> tokenService.generateInviteTokenWithEntity(user.get(), entry.getTenantId());
             case PASSWORD_RESET ->
                     tokenService.generatePasswordResetTokenWithEntity(user.get(), entry.getTenantId());
-            case MFA_ENABLED, MFA_DISABLED, MFA_RESET -> throw new IllegalStateException("unreachable: no token");
+            case MFA_ENABLED, MFA_DISABLED, MFA_RESET, API_KEY_CREATED -> throw new IllegalStateException("unreachable: no token");
         };
         return new Attempt.Send(token.rawToken(), token.token().getId());
     }

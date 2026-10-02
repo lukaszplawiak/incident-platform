@@ -64,6 +64,7 @@ class MfaServiceTest {
     @Mock private AuthEmailRequestService authEmailRequestService;
     @Mock private MfaSessionStatusService mfaSessionStatusService;
     @Mock private MfaResetRateLimiter mfaResetRateLimiter;
+    @Mock private ApiKeyService apiKeyService;
 
     private final PasswordEncoder passwordEncoder =
             Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
@@ -82,7 +83,7 @@ class MfaServiceTest {
                 teamMemberRepository, totpService, aesEncryptionService,
                 passwordEncoder, jwtUtils, auditEventPublisher,
                 bruteForceProtectionService, authEmailRequestService, mfaSessionStatusService,
-                mfaResetRateLimiter);
+                mfaResetRateLimiter, apiKeyService);
         TenantContext.set(TENANT_ID);
         org.mockito.Mockito.lenient().when(authTokenService.isSessionLive(USER_ID, TENANT_ID, SESSION_ID)).thenReturn(true);
     }
@@ -835,10 +836,13 @@ class MfaServiceTest {
             user.storePendingMfaSecret("encrypted-pending");
             adminSessionCompletedMfa(true);
             given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(user));
+            given(apiKeyService.revokeAllPersonalKeysForUser(USER_ID, TENANT_ID)).willReturn(2);
 
             service.resetMfaByAdmin(USER_ID, admin());
 
             then(mfaResetRateLimiter).should().tryConsume(ADMIN_ID, TENANT_ID);
+            // Backlog #0-89: a key made with the stolen password goes too.
+            then(apiKeyService).should().revokeAllPersonalKeysForUser(USER_ID, TENANT_ID);
             assertThat(user.isMfaEnabled()).isFalse();
             assertThat(user.getMfaSecret()).isNull();
             assertThat(user.getMfaPendingSecret()).isNull();
@@ -853,7 +857,47 @@ class MfaServiceTest {
             then(auditEventPublisher).should().publishAuth(eq(USER_ID), eq(TENANT_ID),
                     eq(AuditEventTypes.MFA_RESET_BY_ADMIN),
                     eq("auth-service"), eq(ADMIN_ID.toString()), anyString(),
-                    eq(java.util.Map.of("resetBy", ADMIN_ID.toString())));
+                    eq(java.util.Map.of("resetBy", ADMIN_ID.toString(),
+                            ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "2")));
+        }
+
+        @Test
+        @DisplayName("with a time, also revokes every key the user created since, listed in the audit (backlog #0-89)")
+        void revokesKeysCreatedSince() {
+            final User user = buildUser(true);
+            final Instant since = Instant.parse("2026-10-01T00:00:00Z");
+            adminSessionCompletedMfa(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(user));
+            final UUID key1 = UUID.randomUUID();
+            final UUID key2 = UUID.randomUUID();
+            final UUID integration = UUID.randomUUID();
+            given(apiKeyService.revokeCreatedBy(USER_ID, TENANT_ID, since, ADMIN_ID)).willReturn(
+                    new com.incidentplatform.auth.dto.RevokedApiKeysResponse(List.of(key1, key2), List.of(integration)));
+
+            service.resetMfaByAdmin(USER_ID, admin(), since);
+
+            // The admin is the actor of the INTEGRATION_REVOKED events revokeCreatedBy publishes.
+            then(apiKeyService).should().revokeCreatedBy(USER_ID, TENANT_ID, since, ADMIN_ID);
+            then(auditEventPublisher).should().publishAuth(eq(USER_ID), eq(TENANT_ID),
+                    eq(AuditEventTypes.MFA_RESET_BY_ADMIN),
+                    eq("auth-service"), eq(ADMIN_ID.toString()), anyString(),
+                    eq(java.util.Map.of("resetBy", ADMIN_ID.toString(),
+                            ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "0",
+                            MfaService.AUDIT_KEYS_CREATED_SINCE, since.toString(),
+                            MfaService.AUDIT_CREATED_KEYS_REVOKED, "2",
+                            "keyIds", key1 + "," + key2,
+                            "integrationIds", integration.toString())));
+        }
+
+        @Test
+        @DisplayName("without a time, the keys the user created are kept (only personal keys go)")
+        void keepsCreatedKeysByDefault() {
+            adminSessionCompletedMfa(true);
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(buildUser(true)));
+
+            service.resetMfaByAdmin(USER_ID, admin());
+
+            then(apiKeyService).should(org.mockito.Mockito.never()).revokeCreatedBy(any(), any(), any(), any());
         }
 
         @Test
@@ -919,6 +963,7 @@ class MfaServiceTest {
             then(authTokenService).shouldHaveNoInteractions();
             then(authEmailRequestService).shouldHaveNoInteractions();
             then(auditEventPublisher).shouldHaveNoInteractions();
+            then(apiKeyService).shouldHaveNoInteractions();
         }
 
         @Test
@@ -988,6 +1033,7 @@ class MfaServiceTest {
             then(authTokenService).shouldHaveNoInteractions();
             then(authEmailRequestService).shouldHaveNoInteractions();
             then(auditEventPublisher).shouldHaveNoInteractions();
+            then(apiKeyService).shouldHaveNoInteractions();
             // A 409 spends no budget either.
             then(mfaResetRateLimiter).shouldHaveNoInteractions();
         }
@@ -1016,10 +1062,12 @@ class MfaServiceTest {
         void resets() {
             final User user = operatorWithMfa();
             given(userRepository.findByEmailAndTenantId("ops@example.com", OPERATOR)).willReturn(Optional.of(user));
+            given(apiKeyService.revokeAllPersonalKeysForUser(USER_ID, OPERATOR)).willReturn(1);
 
             assertThat(service.resetMfaBreakGlass("ops@example.com", " Jane Doe ", " lost phone ", ORIGIN, TIMEOUT))
                     .isEqualTo(USER_ID);
 
+            then(apiKeyService).should().revokeAllPersonalKeysForUser(USER_ID, OPERATOR);
             assertThat(user.isMfaEnabled()).isFalse();
             then(backupCodeRepository).should().deleteAllByUserId(USER_ID);
             then(authTokenService).should().forgetMfaOfAllSessions(USER_ID, OPERATOR);
@@ -1030,7 +1078,7 @@ class MfaServiceTest {
                     eq(AuditEventTypes.MFA_RESET_BREAK_GLASS),
                     eq("auth-service"), eq("break-glass:Jane Doe"), anyString(),
                     eq(java.util.Map.of("resetBy", "break-glass:Jane Doe", "reason", "lost phone",
-                            "executedOn", ORIGIN)),
+                            "executedOn", ORIGIN, ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, "1")),
                     eq(TIMEOUT));
             then(auditEventPublisher).should(org.mockito.Mockito.never())
                     .publishAuth(any(), any(), any(), any(), any(), any(), any());

@@ -176,6 +176,18 @@ class AuthEmailPersistenceServiceTest {
         }
 
         @Test
+        @DisplayName("an API key notice is never superseded: each is about another key (backlog #0-89, review)")
+        void apiKeyNoticeNotSuperseded() {
+            final AuthEmailOutbox entry = request(AuthEmailType.API_KEY_CREATED, Duration.ofHours(24));
+            userExists();
+
+            assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE)).isInstanceOf(Attempt.Send.class);
+            then(outboxRepository).should(org.mockito.Mockito.never())
+                    .existsByUserIdAndEmailTypeAndCreatedAtAfter(any(), any(), any());
+            then(outboxRepository).should(org.mockito.Mockito.never()).close(any(), any(), any());
+        }
+
+        @Test
         @DisplayName("SUPERSEDED when a newer request of the type exists")
         void supersededByNewer() {
             final AuthEmailOutbox entry = request(AuthEmailType.PASSWORD_RESET, Duration.ofMinutes(15));

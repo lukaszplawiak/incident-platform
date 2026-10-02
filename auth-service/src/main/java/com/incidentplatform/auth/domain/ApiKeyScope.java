@@ -19,7 +19,11 @@ import com.incidentplatform.shared.security.ApiScopes;
  * <ol>
  *   <li>Add the enum value here.</li>
  *   <li>Update {@link #allowedForRole} if the scope should be restricted.</li>
- *   <li>Add the corresponding {@code hasScope()} check in the service layer.</li>
+ *   <li>Enforce it where the route is declared: in auth-service, list the
+ *       route for keys in {@code SecurityConfig} with
+ *       {@code ApiKeyAccess.scopeOrElse} (backlog #0-89; every route not
+ *       listed refuses keys); in another service, a {@code hasScope()} check
+ *       like ingestion-service's.</li>
  *   <li>If another service needs to check this scope by name (like
  *       ingestion-service does for {@link #ALERTS_INGEST}), add a constant
  *       to {@link ApiScopes} in the shared module and construct the enum

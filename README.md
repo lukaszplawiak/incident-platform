@@ -404,8 +404,8 @@ Summary; details in [Resilience & Security](#security).
   by email; `PlatformApiRateLimitUnavailable` reports the Redis case.
 - **MFA change notifications**: enabling or disabling MFA on any account emails the account's address (backlog
   #0-83), so an owner learns when someone else used their password to change the second factor. A password reset by
-  email ends every session and unfinished login but never touches the second factor (backlog #0-88), so a mailbox
-  alone cannot undo MFA.
+  email ends every session and unfinished login and revokes the personal API keys (backlog #0-89), but never
+  touches the second factor (backlog #0-88), so a mailbox alone cannot undo MFA.
 - **Admin MFA reset**: an admin of the tenant removes another user's factor, backup codes and every session
   (`POST /api/v1/users/{id}/mfa-reset`, backlog #0-88), for a lost phone or a factor someone else enrolled. Only
   from an admin session that passes the platform API's MFA rule (MFA within 12 h, a factor announced at least 24 h
@@ -417,6 +417,20 @@ Summary; details in [Resilience & Security](#security).
   admin: a one-off break-glass command of auth-service does the same reset, audited as `MFA_RESET_BREAK_GLASS` with
   the operator's name and reason, and rolled back if Kafka does not confirm that event
   ([docs/tenant-provisioning.md](docs/tenant-provisioning.md)).
+- **API keys** (backlog #0-89): in auth-service a key reaches only the team routes, and only with the scope
+  `teams:read` / `teams:write` (the role checks kept); every other route refuses it, so a key cannot invite users,
+  change roles, create keys or integrations or change tenant settings (`ApiKeyAccess`, deny by default). A
+  password reset, an admin MFA reset and the break-glass reset revoke the user's personal keys; a password change
+  does on request (`revokePersonalApiKeys`). Creating a key, an integration's included, emails the account (a
+  personal key its owner, a tenant key the admin who created it). Tenant and integration keys outlive their
+  creator by design, so every key records who created it and from which session: an admin lists a user's keys
+  (`GET /api/v1/api-keys?createdBy=`) and revokes all they created since a time
+  (`POST /api/v1/api-keys/revoke-created-by`, or `revokeKeysCreatedSince` on the admin MFA reset; an archive
+  records how many it kept). Tenant and integration keys created before V26 have no recorded creator. Every key is
+  announced by its own email, showing its id (never merged, so one key cannot hide behind another's notice);
+  a user may create at most 20 keys per hour, revoked ones included (429; `api-keys.creation-limit.per-user-per-hour`,
+  env `API_KEY_CREATION_LIMIT_PER_USER_PER_HOUR`), which bounds those emails. Outside auth-service only ingestion-service accepts API keys, and only
+  tenant keys (backlog #0-16).
 - **Service identity**: service tokens carry the tenant as a signed claim and an `aud` naming the one service that
   accepts them; the only tenant-less token is the API-key introspection purpose token, accepted on one route.
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
@@ -467,12 +481,13 @@ Open items from the audit and earlier, most important first within each area. Ea
     backlog #0-82.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
-  - A personal API key created with a stolen password survives the owner's password reset and an admin MFA
-    reset: backlog #0-89 (High).
   - Audit events are sent to Kafka inside the database transaction, not through an outbox: an event can record
     a rolled-back action, a committed action can lose its event silently, and a Kafka outage stalls requests:
     backlog #0-84. The admin MFA reset's event is one of them; only the break-glass MFA reset waits for Kafka's
-    acknowledgement (#0-88).
+    acknowledgement (#0-88). The API key creation and bulk revocation events go after commit, on a bounded
+    executor (`AfterCommit`, #0-89): no phantom event and no stalled request, but still lost if Kafka is down;
+    the queue is shared, so when a long Kafka outage fills it every tenant's such events are dropped (alerted
+    by `AuditEventsDropped`, critical).
   - A customer tenant's only admin has no way back from a factor someone else enrolled with their password, or
     from a lost phone and lost backup codes: break-glass covers only the operator tenant: backlog #0-90.
   - A Kafka record's `X-Tenant-Id` has two writers (explicit senders and the thread-context interceptor, which
@@ -856,7 +871,8 @@ it goes out. A failed send is retried after 1 min, 5 min, 30 min, 2 h and then e
 made). When sends keep failing for 30 minutes with none succeeding, `AuthEmailDeliveryFailing` (critical)
 fires; each email given up is reported by `AuthEmailPermanentlyFailed` (high) — resend the invite, or have
 the user request a new reset. The same outbox sends the "two-factor authentication was enabled/disabled"
-notices (backlog #0-83): no token, no link, retried for at least 24 h (as long as the platform API's grace
+notices (backlog #0-83), the "an administrator reset your MFA" notice (#0-88) and one "API key created"
+notice per key (#0-89): no token, no link, retried for at least 24 h (as long as the platform API's grace
 period). An MFA_ENABLED notice that was never sent keeps that factor out of the platform API.
 
 One-time setup (needs the services from Step 4 running). auth-service invites the operator

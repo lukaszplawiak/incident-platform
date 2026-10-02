@@ -73,7 +73,7 @@ class ApiKeyIntrospectionServiceTest {
     @DisplayName("PERSONAL key with alerts:ingest: inactive for introspection, and not recorded as used")
     void personalKeyIsNotActiveForIntrospection() {
         final ApiKey personal = ApiKey.createPersonal(TENANT, "my-script", HASH, "abcdefgh",
-                List.of("alerts:ingest"), null, null);
+                List.of("alerts:ingest"), null, owner());
         ReflectionTestUtils.setField(personal, "id", UUID.randomUUID());
         given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(personal));
 
@@ -88,7 +88,7 @@ class ApiKeyIntrospectionServiceTest {
     @DisplayName("PERSONAL key still resolves for auth-service's own endpoints")
     void personalKeyStillResolves() {
         final ApiKey personal = ApiKey.createPersonal(TENANT, "my-script", HASH, "abcdefgh",
-                List.of("incidents:read"), null, null);
+                List.of("incidents:read"), null, owner());
         ReflectionTestUtils.setField(personal, "id", UUID.randomUUID());
         given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(personal));
 
@@ -134,5 +134,10 @@ class ApiKeyIntrospectionServiceTest {
         final ApiKeyIntrospectionResponse response = service.introspect(HASH);
         assertThat(response.active()).isTrue();
         assertThat(response.teamId()).isNull();
+    }
+
+    private static com.incidentplatform.auth.domain.User owner() {
+        return com.incidentplatform.auth.domain.User.forTesting(UUID.randomUUID(), TENANT, "owner@acme.example",
+                "hash", true, List.of("ROLE_RESPONDER"));
     }
 }

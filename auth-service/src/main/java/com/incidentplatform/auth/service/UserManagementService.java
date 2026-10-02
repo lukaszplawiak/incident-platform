@@ -27,6 +27,14 @@ import java.util.UUID;
 @Service
 public class UserManagementService {
 
+    /**
+     * Audit metadata of an archive (backlog #0-89): active tenant and
+     * integration keys the user created, which the archive keeps; revoke them
+     * with {@code POST /api/v1/api-keys/revoke-created-by} if the account was
+     * taken over.
+     */
+    static final String AUDIT_UNOWNED_KEYS_KEPT = "unownedApiKeysKept";
+
     private static final Logger log =
             LoggerFactory.getLogger(UserManagementService.class);
 
@@ -136,7 +144,11 @@ public class UserManagementService {
         userRepository.save(user);
 
         // Revoke all personal API keys — archived user cannot authenticate
-        apiKeyService.revokeAllPersonalKeysForUser(userId, tenantId);
+        final int keysRevoked = apiKeyService.revokeAllPersonalKeysForUser(userId, tenantId);
+        // Backlog #0-89 (review): tenant and integration keys the user created
+        // stay, as integrations must not stop with a departure; recorded so an
+        // admin archiving a taken-over account knows to review them.
+        final long unownedKeysKept = apiKeyService.countActiveUnownedCreatedBy(tenantId, userId);
 
         auditEventPublisher.publishAuth(
                 userId, tenantId,
@@ -144,10 +156,12 @@ public class UserManagementService {
                 "auth-service",
                 principal.userId().toString(),
                 "User archived",
-                Map.of("archivedBy", principal.userId().toString()));
+                Map.of("archivedBy", principal.userId().toString(),
+                        ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked),
+                        AUDIT_UNOWNED_KEYS_KEPT, String.valueOf(unownedKeysKept)));
 
-        log.info("User archived: userId={}, tenant={}, by={}",
-                userId, tenantId, principal.userId());
+        log.info("User archived: userId={}, tenant={}, by={}, unownedApiKeysKept={}",
+                userId, tenantId, principal.userId(), unownedKeysKept);
     }
 
     // ── restoreUser ───────────────────────────────────────────────────────

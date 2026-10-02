@@ -266,6 +266,31 @@ groups:
             The auth-service ERROR log names the user; resend the invite, or ask
             the user to request a new password reset.
 
+      - alert: AuditEventsDropped
+        # Backlog #0-89: auth-service hands the audit events of API key
+        # creation and revocation to a bounded queue after commit (AfterCommit);
+        # when Kafka stalls long enough to fill it, or a publish throws, events
+        # are dropped (for every tenant at once when the queue is full). A send
+        # that fails later inside the Kafka client is not counted: the alert is
+        # a lower bound of what is lost until #0-84. A dropped event may hide what an
+        # intruder did, so critical: it reaches the operator by email outside
+        # the platform. The auth-service ERROR log has each drop; fix Kafka.
+        # Interim until #0-84's audit outbox. Resolves an hour after the last.
+        expr: |
+          sum(increase(auth_audit_after_commit_rejected_total[1h])) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "auth-service dropped audit events"
+          description: >
+            auth-service dropped at least one audit event in the last hour,
+            before it reached the Kafka client: the after-commit audit queue was
+            full (usually Kafka slow or down) or the publish failed. Those API
+            key creations or revocations are missing from their tenants' audit
+            trail, and more may be lost unseen. Check Kafka and the auth-service
+            ERROR log ("Audit event dropped").
+
       - alert: PlatformTenantProvisioningSpike
         # Backlog #0-83: more tenants created through the platform API in an
         # hour than onboarding normally needs. A taken-over operator session can
