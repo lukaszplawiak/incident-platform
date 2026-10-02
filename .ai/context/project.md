@@ -378,9 +378,11 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     revoke that revoked nothing publishes nothing. 429 + Retry-After
     (`RateLimitResponses`). `revokeCreatedBy` audits each integration as `INTEGRATION_REVOKED`, so the endpoint
     and the MFA reset (which also lists `keyIds` / `integrationIds`) leave the same trace.
-- **Audit outbox** (#0-84, first step: `shared`, incident-service, auth-service): `AuditEventPublisher.publish*`
-  INSERTs into the service's own table (`audit.outbox.table`, e.g. `auth_audit_outbox` V27,
-  `incident_audit_outbox` V14) through `AuditEventStore` -> `AuditOutbox` (JDBC, joins the caller's JPA
+- **Audit outbox** (#0-84, done in two PRs: #449 `shared` + auth- and incident-service; the second
+  notification-, escalation- and postmortem-service): `AuditEventPublisher.publish*`
+  INSERTs into the service's own table (`audit.outbox.table`: `auth_audit_outbox` V27,
+  `incident_audit_outbox` V14, `notification_audit_outbox` V8, `escalation_audit_outbox` V7,
+  `postmortem_audit_outbox` V5) through `AuditEventStore` -> `AuditOutbox` (JDBC, joins the caller's JPA
   transaction; the interface keeps JDBC types out of the publisher, as ingestion-service has no
   `spring-jdbc`), so an event exists iff its action committed and a Kafka outage stalls no request.
   - Consequence: an audit call followed by a throw in the same transaction loses its event. A refusal is
@@ -389,7 +391,9 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     `MFA_VERIFY_FAILED` and throw. Not a nested `REQUIRES_NEW` write: tried first, found in review to hold two
     pooled connections per wrong code (auth-service's pool is 5).
   - `AuditOutboxRelay` (`shared`, `@Scheduled` every `audit.outbox.poll-interval-ms`, ShedLock
-    `audit-outbox-relay-<table>` since all services share one `shedlock` table): hands a batch
+    `audit-outbox-relay-<table>` since all services share one `shedlock` table, taken only after a lock-free
+    `AuditOutbox.anyDue()` says a row is due, as taking it writes to that shared table; a poll with nothing due
+    leaves the pause's failed-run count alone): hands a batch
     (`batch-size`, 100) to the producer (`sendForRelay`), then awaits the acks within `send-timeout` (5 s);
     up to `max-batches-per-run` (10) full batches a run; lock at most `send-timeout x batches + 30 s`. Acked
     rows SENT in one `UPDATE ... WHERE id = ANY(?)` per batch; a failed row backs off 5 s doubling to
@@ -397,21 +401,56 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (`RetriableException`, timeouts, anything unknown) end the batch and pause the relay by the same backoff;
     a record Kafka refuses for itself (`RecordTooLargeException`, serialization) is backed off alone
     (`isKafkaFailure`). `markSent` failing after the ack is logged, not counted as a failure (resent,
-    deduplicated). With the outbox the publisher refuses (IllegalArgumentException, failing the action) an
-    event the trail cannot store; without it (the services still on direct sends) it only logs the refusal
-    and sends nothing, as that path never throws: no tenant/resource/source, a field over its `audit_events` column, and with the outbox a payload
+    deduplicated). The publisher refuses (IllegalArgumentException, failing the action) an
+    event the trail cannot store: no tenant/resource/source, a field over its `audit_events` column, a payload
     over 256 KiB (`MAX_PAYLOAD_BYTES`), so no row is ever one Kafka refuses for ever; also a metadata key
     named like a secret (`looksSecret`: password, secret, credential, totp, *token, rawKey, apiKey).
     Due rows are read `ORDER BY next_attempt_at, created_at`, the due index's order. SENT rows purged after
-    `retention`, 5,000 per statement, by the database's clock. `relayNow()` runs once ignoring the pause
+    `retention`, 5,000 per statement, at most `MAX_PURGE_CHUNKS` (100) statements a run (WARN when capped),
+    by the database's clock. Table names: `[a-z][a-z0-9_]`, at most 45 characters (`AuditOutbox.
+    MAX_TABLE_NAME_LENGTH`: the 19-character lock prefix + the name must fit `shedlock.name VARCHAR(64)`),
+    checked by `AuditOutbox`'s constructor and by `AuditOutboxProperties`. `relayNow()` runs once ignoring the pause
     (break-glass). Defaults live in `AuditOutboxProperties`.
-  - Outbox tables (V14, V27): `tenant_id NOT NULL`; indexes `_due (next_attempt_at, created_at)`,
+  - Outbox tables (all five have the same shape): `tenant_id NOT NULL`; indexes `_due (next_attempt_at, created_at)`,
     `_pending_created (created_at)` for the gauge's `min`, `_sent (sent_at)` for the purge, all partial.
-  - Env overrides: `AUDIT_OUTBOX_POLL_INTERVAL_MS` (poll), `KAFKA_PRODUCER_MAX_BLOCK_MS` (5 s in auth- and
-    incident-service, or `send()` blocks Kafka's default 60 s per run while metadata is missing),
+  - Env overrides: `AUDIT_OUTBOX_POLL_INTERVAL_MS` (poll), `KAFKA_PRODUCER_MAX_BLOCK_MS` (5 s in auth-,
+    incident-, notification- and postmortem-service, or `send()` blocks Kafka's default 60 s per run while
+    metadata is missing; NOT set in escalation-service on purpose: its `IncidentEscalatedEvent` is sent once,
+    fire-and-forget, never retried (#0-4), so 5 s would turn a short Kafka outage into a lost escalation; its
+    relay has its own virtual thread and a lock (80 s) longer than one 60 s block),
     `SCHEDULING_POOL_SIZE` (4, auth-service only, which runs on platform threads, so a slow relay run does
-    not hold its other `@Scheduled` jobs; incident-service has virtual threads, where Boot schedules each
+    not hold its other `@Scheduled` jobs; the other four have virtual threads, where Boot schedules each
     run on its own virtual thread and `pool.size` has no effect).
+  - Where the write goes in the three later services: postmortem: already in the `@Transactional` with
+    the `save` (unchanged). notification: inside `NotificationPersistenceService.recordChannelSent /
+    recordChannelFailed / markUndeliverable` with the row (every failed send audited now, not only a
+    `NotificationException`; a null error message stored as "unknown", `Map.of` refuses null);
+    `processEntry` records a delivery outside the send's try, and a failed record of a delivered message is
+    an ERROR + `audit.event.unrecorded{event_type}`, neither a failed send nor a failed entry (a FAILED entry
+    is never retried, so the other channels would go unsent). escalation: `ESCALATION_SCHEDULED` inside
+    `EscalationService.scheduleLevel2Escalation` (only when a task is inserted); `ESCALATION_FIRED` and
+    `ESCALATION_NOTIFICATION_FAILED` via `EscalationScheduler.auditAfterTheFact` (own transaction; failure ->
+    ERROR + `audit.event.unrecorded`, so it neither counts a failed attempt against an escalated task nor
+    skips level 2). `SlackActionService`'s `SLACK_ACK_MESSAGE_UPDATE_FAILED` is a standalone write on the
+    `@Async` thread, guarded the same way (ERROR + `audit.event.unrecorded`). The alert
+    `AuditEventUnrecorded` (critical) watches that counter; every such ERROR line starts "Audit event not
+    recorded" (or, for a delivered notification, "Notification delivered but not recorded"). A failed send's own record (`recordChannelFailed`) is
+    guarded the same way, so the remaining channels are still tried; `markUndeliverable` alerts the operator
+    in a `finally`, whether or not its write succeeded.
+  - Error text in audit events goes through `AuditText` (`shared`): `error(msg)` = one line, at most 500
+    characters (else an unbounded Gemini/SMTP message could exceed 256 KiB and roll the action back);
+    `unexpected(e)` = "Unexpected error: <ExceptionClass>" for exceptions the code did not anticipate
+    (notification's generic catch, both escalation failure events), never their message: it can quote a
+    URL with a token, an internal host or a response body, and the trail is tenant-readable. The full
+    message stays in the ERROR log (and, for a channel's own failure, in `notification_log`). postmortem:
+    `PostmortemRetryScheduler.failureText` records a fixed text (`GEMINI_FAILED`) for a `GeminiException`
+    (its message is built from the HTTP client's or Jackson's and can quote Gemini's response) and the type
+    for anything else, on the postmortem and in the event; the full exception is logged. Third-party text inside a
+    channel's own `NotificationException` (SMTP reply, Slack error body) still passes: #0-93.
+  - Counters behind alerts are registered at zero when their owner is built (`UnrecordedAuditEvents` in
+    `shared` for `audit.event.unrecorded`, the reasons of `audit.events.rejected` in `AuditEventConsumer`;
+    as `AuthEmailScheduler` does): a counter created at its first increment starts its series at 1, and
+    `increase()` misses that first failure, so the alert would wait for a second one.
   - The consumer logs and dead-letters a rejected record's reason without the database's or parser's text
     (`constraintReason`: constraint name and SQLState; `unreadableReason`: JSON error type and position):
     Postgres's `Failing row contains (...)` and Jackson's messages quote the event's content.
@@ -433,9 +472,11 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     `audit_outbox_pending`, `audit_outbox_oldest_pending_age_seconds`; counters `audit_outbox_sent_total`,
     `audit_outbox_send_failed_total`. Alert `AuditOutboxBacklog` (oldest pending > 10 min for 5 min,
     critical); a down service is `PlatformServiceDown`.
-  - A service without `audit.outbox.table` (notification-, escalation-, postmortem-service until #0-84's
-    second step) still sends fire-and-forget. `@Retryable` on the sender was inert (no `@EnableRetry`
-    anywhere) and is gone. Audit metadata never holds a secret: the outbox keeps it in plain text 7 days.
+  - No direct send any more: `AuditEventPublisher` and `AuditEventKafkaSender` are beans of
+    `AuditOutboxConfiguration` only (`@ConditionalOnProperty(audit.outbox.table)`), so a service that injects
+    the publisher without a table fails at startup (ingestion- and oncall-service have none and need none;
+    oncall's web tests still `@MockitoBean` it, harmless). `@Retryable` on the sender was inert (no
+    `@EnableRetry` anywhere) and is gone. Audit metadata never holds a secret: the outbox keeps it in plain text 7 days.
 - **Auth email outbox = intent to send** (#0-52): a request (`UserService`, `ResendInviteService`,
   `ForgotPasswordService`, `MfaService`, `ApiKeyService`, `IntegrationService`) only INSERTs through `AuthEmailRequestService`; `AuthEmailScheduler` is
   the only writer afterwards. Per attempt it closes entries no longer worth sending (SUPERSEDED: a newer request
