@@ -404,6 +404,33 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   would dead-letter it as a mismatch). `AlertIngestionService.ingest` checks the tenant before normalizing or
   setting a dedup key, and releases the key when the publish throws synchronously. A dead-letter topic must be
   named `*.dead-letter` (`DeadLetterPublisher` refuses another name at construction: `withoutTenant` needs it).
+  Kafka record fate (backlog #0-96): every listener is `MANUAL_IMMEDIATE` and never `return`s without
+  acknowledging — the next record's ack would commit the offset past it (`DeadLetterPublisherKafkaIntegrationTest`, real broker).
+  Poison pill -> `DeadLetterPublisher.deadLetterThenAcknowledge` (acks only once Kafka has the copy, else
+  `nack(5 s)`); transient (`KafkaFailures.isTransient`: TransientDAE, RecoverableDAE,
+  DataAccessResourceFailureException, CannotCreateTransactionException, SQL transient/recoverable, any cause depth)
+  -> `redeliverLater(record, tenant, ack, cause)` (nack); a last `catch (Exception)` -> `redeliverIfTransientElseDeadLetter`. Counter
+  `kafka.records.redelivery.requested{transient|dead_letter_failed}`. No fire-and-forget `publish` exists any more;
+  ingestion uses `publishAndWait` (normalization failure) or `publishAsync` + `await` and maps `DeadLetterNotStoredException` to 503 + Retry-After 10
+  (`INGESTION_UNAVAILABLE`). A listener must not be `@Transactional` (its ack would commit the offset before the
+  DB commit): `IncidentEscalationEventConsumer` writes through `IncidentCommandService.recordEscalationLevel`.
+  Bounds: a copy waits <= 5 s in all (`deadLetterTemplate` = the service's producer settings with max.block 2 s, a
+  producer of its own closed by `DeadLetterPublisher.destroy`); `requireFitsPollInterval(max.poll.records, interval)`
+  in each consumer's KafkaConfig (interval 120 s in incident/escalation/postmortem, 300 s notification);
+  `RecordRedeliveries` (per group + partition, keyed by the head offset; `KafkaUtils.getConsumerGroupId()`) -> past
+  `kafka.consumer.redelivery-deadline` (PT30M) dead-letter + `kafka.records.redelivery.gave_up` + alert
+  `KafkaRecordRedeliveryGaveUp`; `KafkaRecordRedeliveryStuck` after 15 min of nacks. Accepted trade-off: a database
+  outage longer than the deadline dead-letters one record per partition per deadline (an audit event is then missing
+  from the trail until replayed by hand; it also raises `AuditEventsRejected{reason=gave_up}`). A copy's payload is
+  cut to 128 KiB UTF-8. What a copy or log line says: `KafkaFailures.reason` (a message only for
+  TenantResolution-, UnrecognizedSeverity-, UnreadableRecordException; else `KafkaFailures.describe` = type + first
+  platform frame); an unexpected exception -> `AuditText.unexpected` in the copy, `describe` in the log; a header
+  value (`X-Event-Type`) logged through `AuditText.error`. Ingestion (`DeadLetterCopies`): copies started with
+  `publishAsync`, awaited together with one deadline counted from the wait (`await(copies, clock.instant())`), none
+  started after one failed at once, the raw payload copied once per request, the dedup keys of alerts kept only by
+  a copy released when it is not stored (an alert is registered before its copy starts); producer max.block.ms 5 s.
+  Missing `X-Event-Type` -> copy under `TenantKafkaRecordResolver.trustedTenantOrNull` (not counted).
+  Moving to `DefaultErrorHandler` + DLT replay: #0-97.
   `TenantKafkaRecordInterceptor` MDC: valid header, else
   `_missing`/`_invalid` (not slugs, so never a real tenant; `"unknown"` was a valid slug); the MDC shows the
   header's claim until the consumer resolves the record (a refused record's log lines carry the claimed
@@ -496,8 +523,8 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     payload's valid tenant, a header must equal it), sets/clears `TenantContext`; a refused tenant is
     `tenant_mismatch` or `tenant_invalid`, dead-lettered with no tenant. It acknowledges as duplicates only violations of `IDEMPOTENCY_KEYS` (V10 offset key, V13), by
     Hibernate's constraint name; any other violation, unreadable JSON or a tenant mismatch is rejected: ERROR
-    log, `incidents.dead-letter` through `DeadLetterPublisher.publishAndWait` (acknowledged only once Kafka has
-    the copy, else `nack(5 s)`), counter `audit.events.rejected{reason}` and alert `AuditEventsRejected`
+    log, `incidents.dead-letter` through `DeadLetterPublisher.deadLetterThenAcknowledge` (acknowledged only once
+    Kafka has the copy, else `nack(5 s)`; a failed save: transient -> nack, else reason `unexpected`), counter `audit.events.rejected{reason}` and alert `AuditEventsRejected`
     (critical) — the outbox already counted the event delivered, so nothing else would show the gap. The non-transactional Flyway lock assumes no transaction-pooling proxy.
     `occurredAt` is the producer's time, not the consume time.
   - Metrics, read from the table at scrape time (cached 5 s, NaN if unreadable; the age measured by the

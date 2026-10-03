@@ -159,8 +159,8 @@ Per-service history tables scatter the timeline across databases and require mul
 **Why Consumer-Driven Contracts for notification-service?**
 The notification consumer deserializes Kafka messages to `JsonNode` and extracts only the fields it needs. This decouples the consumer from the exact producer schema — a producer adding new fields to `IncidentOpenedEvent` won't break notification-service.
 
-**Why separate DLQ strategies for ingestion vs. incident?**
-`ingestion-service` processes batches — one bad alert must not block the rest, so it uses a custom `DeadLetterPublisher`. `incident-service` processes single messages where Spring Kafka's built-in DLT handles retries correctly.
+**How does a consumer treat a record it cannot process?**
+Every consumer listens in `MANUAL_IMMEDIATE` mode and decides each record's fate itself, through `DeadLetterPublisher` (`shared`, backlog #0-96). A record that fails the same way every time (a poison pill) is copied to the service's dead-letter topic and acknowledged only once Kafka has the copy; if Kafka does not take it, the record is `nack`ed and read again. A transient failure (`KafkaFailures`: the database unreachable, timed out or a lost version race, in any of the types Spring gives it) is `nack`ed and read again after 5 s; the records after it on the partition wait, so order is kept and consumer lag shows the stall. Leaving a record unacknowledged is never a retry: the next record's acknowledgement commits the offset past it (shown on a real broker by `DeadLetterPublisherKafkaIntegrationTest`), which is how the consumers used to lose records on a transient failure. Anything else is a poison pill (backlog #47). A dead-letter reason and its log line carry a message only when the platform wrote it content-free (a refused tenant, an unknown severity, unparseable JSON); any other exception is named by its type and the platform's line that threw it (`KafkaFailures.reason`), never its message, which may quote the record. Every wait is bounded: a copy waits at most 5 s in all (its own producer blocks at most 2 s for metadata), each consumer refuses to start unless a poll of such waits fits in half of `max.poll.interval.ms` (120 s; 300 s in notification-service), a record still failing after `kafka.consumer.redelivery-deadline` (30 min) is dead-lettered instead of holding its partition, and a copy's original payload is cut to 128 KiB so it always fits in a record. `ingestion-service` has an HTTP request, not a record: it starts a request's copies together, waits for them under one 5 s deadline and answers 503 with `Retry-After` if Kafka does not take them, so the sender retries; the dedup keys of alerts a lost copy was to keep are released first. Moving the consumers onto Spring Kafka's `DefaultErrorHandler` with a dead-letter recoverer, and replaying dead letters, is backlog #0-97.
 
 **Why bucket4j backed by Redis instead of in-memory rate limiting?**
 This reverses an earlier in-memory design. In-memory buckets were per-pod (each replica kept independent counters, so the effective limit multiplied with the replica count) and were held in unbounded maps keyed by tenant and IP — a memory-exhaustion vector, since the client IP comes from the caller-controlled `X-Forwarded-For` header. `RateLimitingService` now keeps bucket state in Redis through bucket4j's `ProxyManager` (`bucket4j-redis`): state is shared across replicas and expires automatically. The Redis call is protected by `@CircuitBreaker` (backlog #67) and fails open, matching the dedup layer's policy for the same dependency. auth-service has the two limiters that fail closed: the platform API's (`PlatformRateLimiter`, backlog #0-83) and the admin MFA reset's (`MfaResetRateLimiter`, backlog #0-88). Both guard rare, privileged security actions, so while Redis cannot be checked, tenant provisioning and admin MFA resets answer 503 — those writes depend on Redis, logins and every other auth-service API do not.
@@ -440,6 +440,24 @@ Summary; details in [Resilience & Security](#security).
   without Kafka's metadata (`KAFKA_PRODUCER_MAX_BLOCK_MS`) instead of Kafka's default 60 s, except
   escalation-service's, whose escalation event is sent once (#0-4). A backlog older than 10 minutes alerts the
   operator by email (`AuditOutboxBacklog`, critical, read from the table, so a stopped relay shows too).
+- **No Kafka record let go unkept** (backlog #0-96): a consumer acknowledges a record only once it is processed or
+  its dead-letter copy is acknowledged by Kafka (`DeadLetterPublisher.deadLetterThenAcknowledge`); a failed copy and
+  a transient failure (`KafkaFailures`) are `nack`ed and read again, never left unacknowledged, which skipped them.
+  A record without `X-Event-Type` is dead-lettered, no longer dropped. ingestion-service answers 503 with
+  `Retry-After` when an alert it cannot process cannot be copied either. At least once: a copy can be stored twice,
+  identified by its `sourceTopic`, `sourcePartition` and `sourceOffset`. Bounded so that no record can hold a
+  partition, every tenant on it, for ever: 5 s per copy (a producer of its own, 2 s metadata block), a poll of
+  copies within half of `max.poll.interval.ms` (checked at startup), a record failing past
+  `kafka.consumer.redelivery-deadline` (30 min) dead-lettered and alerted (`KafkaRecordRedeliveryGaveUp`,
+  critical), a copy's payload cut to 128 KiB. Retries are counted in `kafka.records.redelivery.requested{reason}`
+  and alert after 15 minutes without a break (`KafkaRecordRedeliveryStuck`, high). An unexpected exception goes
+  into the copy and the log by its type only (a driver's message can quote a row). ingestion-service waits for a
+  request's copies together (one 5 s deadline, `max.block.ms` 5 s instead of Kafka's 60 s) and releases the dedup
+  keys of alerts a lost copy was to keep; its copies' deadline counts from the wait, and no copy is started after one
+  failed. Not bounded: a copy Kafka does not take at all, retried while Kafka is down. Accepted: a database outage
+  longer than the redelivery deadline dead-letters the record at each partition's head, about one per partition per
+  deadline; an audit event dead-lettered that way is missing from the trail until replayed by hand (#0-97), and
+  raises both `AuditEventsRejected` and `KafkaRecordRedeliveryGaveUp`.
 - **Tenant id and Kafka tenant** (backlogs #0-91, #0-92): every tenant id is a slug of 3-63 `[a-z0-9-]`
   (`TenantIds`), enforced by a `CHECK` on every table with a `tenant_id` in every service, when a token is issued and read
   (`JwtUtils`, `JwtAuthFilter`), on the `X-Tenant-Id` header of auth-service's public endpoints (400),
@@ -501,9 +519,6 @@ Open items from the audit and earlier, most important first within each area. Ea
     topics' content is untrusted for the same reason (any field, the tenant and the `X-Tenant-Unresolved`
     marker included, can be forged): nothing reads them today, and a future reader or replayer must resolve
     the tenant again from the original payload, as a consumer does.
-  - Every consumer but `AuditEventConsumer` acknowledges a poison pill before its dead-letter copy is written
-    (`DeadLetterPublisher.publish`, fire-and-forget): if that send fails, the record, a refused forged one
-    included, survives only as an ERROR log line: backlog #0-96.
   - All seven services share one database role that owns every table, so neither grants nor Row-Level Security
     separate one service's tables from another's, and a SQL injection can plant a trigger, view or function that
     runs as a superuser if a superuser touches a service table, even under `SET ROLE`: backlog #0-67.
@@ -1430,9 +1445,12 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | Test class | What it covers |
 |---|---|
 | `IncidentFsmTest` | 25 parameterized cases — all allowed and forbidden state transitions |
-| `IncidentCommandServiceTest` | Deduplication, severity escalation, optimistic lock, FSM validation |
+| `IncidentCommandServiceTest` | Deduplication, severity escalation, optimistic lock, FSM validation; the escalation level recorded in a transaction of its own (backlog #0-96) |
+| `IncidentEscalationLevelIntegrationTest` (incident-service, Postgres) | `recordEscalationLevel` commits before it returns, a REST change committed between its read and commit is thrown from the call, another tenant's incident is untouched (backlog #0-96) |
+| `AlertIngestionServiceTest` (ingestion-service) | Dead-letter copies awaited together from the wait, none started after a failed one, the payload copied once, dedup keys released when a copy is not stored and kept when it is (backlog #0-96) |
+| `AlertIngestionControllerSecurityTest` (ingestion-service) | Roles per endpoint; 503 with `Retry-After: 10` and `INGESTION_UNAVAILABLE` when a dead-letter copy is not stored (backlog #0-96) |
 | `IncidentQueryServiceTest` | Filter routing (Specification vs simple query), tenant scoping |
-| `IncidentKafkaConsumerTest` | Per-record tenant isolation, TenantContext cleanup in `finally`, no cross-tenant leaks |
+| `IncidentKafkaConsumerTest` | Per-record tenant isolation, TenantContext cleanup in `finally`, no cross-tenant leaks; a failure handed to `DeadLetterPublisher`, never acknowledged by the consumer itself (backlog #0-96) |
 | `NotificationServiceTest` | Orchestration, fault isolation between channels, idempotency |
 | `NotificationRouterTest` | Routing for all 5 event types, escalation-target lookup with PRIMARY fallback, UNDELIVERABLE when nobody is on call or no channel has an address, skipped channels |
 | `NotificationChannelPropertiesTest` | Operator alert address validation, `min-interval` default and rejection of zero or negative values |
@@ -1443,24 +1461,27 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `AuditOutboxPersistenceIntegrationTest` (notification-, escalation-, postmortem-service, Postgres) | The service's outbox migration takes the shared SQL and joins the JPA transaction; through the real service: the `notification_log` row, the level-2 escalation task, the postmortem's FAILED mark each commit or roll back with its audit event, under the action's tenant (backlog #0-84) |
 | `AuditTextTest` (shared) | Error text for an audit event: cut to 500 characters on one line (control characters and U+2028/U+2029 too), never inside a surrogate pair; an unexpected exception by its type only (backlog #0-84) |
 | `TenantIdsTest`, `TenantRecordsTest` (shared) | The one tenant id format (slug), refused without quoting the value; every tenant record built with its header (backlog #0-91/#0-92) |
-| `TenantKafkaRecordResolverTest` (shared) | A record's tenant is its payload's; a header must match it; missing, invalid and mismatched tenants refused, counted (registered at zero) and never quoted (backlog #0-92) |
+| `TenantKafkaRecordResolverTest` (shared) | A record's tenant is its payload's; a header must match it; missing, invalid and mismatched tenants refused, counted (registered at zero) and never quoted (backlog #0-92); `trustedTenantOrNull` neither throws nor counts (backlog #0-96) |
 | `TenantKafkaProducerInterceptorTest` (shared) | The interceptor writes no header any more: it counts records without a valid one, except a dead-letter record marked as tenant-less (`TenantRecords.withoutTenant`); the topic name alone exempts nothing (backlog #0-91) |
 | `TenantKafkaConsumerInterceptorTest`, `TenantKafkaRecordInterceptorTest` (shared) | Validation only on the poll thread (nothing dropped or rewritten); the MDC takes only a valid header (`_missing` / `_invalid` otherwise) and no metric is tagged with a record's value (backlog #0-92) |
 | Tenant-id CHECK guard (every service's Postgres integration test) | Every table with a `tenant_id` carries the slug `CHECK`; a new table without one fails (backlog #0-92) |
 | Scheduler and relay batches (`IncidentEventOutboxSchedulerTest`, `NotificationSchedulerTest`, `EscalationSchedulerTest`, `PostmortemRetrySchedulerTest`, `AuthEmailSchedulerTest`, `AuditOutboxRelayTest`) | A row whose tenant id `TenantContext` refuses fails alone; the next row is processed (backlog #0-92) |
-| `DeadLetterPublisherTest` (shared) | `publishAndWait` returns only once Kafka has the dead-letter copy; a failure or timeout is thrown (backlog #0-84); a record carries a valid tenant in its header or none, and its reason on one line (backlog #0-91/#0-92) |
+| `DeadLetterPublisherTest` (shared) | `publishAndWait` returns only once Kafka has the dead-letter copy; a failure, a timeout or a send that throws at once is thrown (backlog #0-84); a record carries a valid tenant in its header or none, and its reason on one line (backlog #0-91/#0-92); a consumed record is acknowledged only after its copy is stored, nacked when it is not (stack trace logged once); a transient failure nacked without a copy and dead-lettered after its deadline; an unexpected exception recorded by type only; payloads cut on a character boundary; copies awaited under one deadline; the poll-interval budget; the dead-letter template's short metadata block (backlog #0-96) |
+| `DeadLetterPublisherKafkaIntegrationTest` (shared, Kafka) | On a real broker in `MANUAL_IMMEDIATE`: a record left unacknowledged is skipped by the next acknowledgement and never comes back (a sentinel record shows it, no clock wait); a nacked one does; `DeadLetterPublisher` retries a transient failure and dead-letters a poison pill before acknowledging (backlog #0-96) |
+| `RecordRedeliveriesTest` (shared) | Since when the record at a partition's head has been failing, per consumer group; another offset replaces it; a settled record is forgotten (backlog #0-96) |
+| `KafkaFailuresTest` (shared) | A database outage in every type Spring gives it (incl. `DataAccessResourceFailureException`, `CannotCreateTransactionException`) is transient, at any cause depth; a record's own fault is not (backlog #0-96); `reason` keeps a content-free platform message and names any other exception by type and place, never its message |
 | `AuditPersistenceIntegrationTest` (incident-service, Postgres) | V12–V14: event-id dedup per tenant, the consumer's constraint names, the CONCURRENTLY index valid, the outbox joining the JPA transaction (backlog #0-84) |
 | `AuditEventTypesTest` (shared) | Audit event type values equal their names, are unique and fit the column; `NOTIFICATION_UNDELIVERABLE` is distinct from `NOTIFICATION_FAILED` |
 | `OperatorAlertServiceTest` | Content-free operator email, per tenant and reason rate limit, no email when unconfigured, a send failure never fails the caller |
-| `IncidentEventConsumerTest` (notification-service) | Tenant from the payload, header required and equal (backlog #0-92), TenantContext lifecycle, escalation level/target parsing, dead-lettering of invalid levels |
+| `IncidentEventConsumerTest` (notification-service) | Tenant from the payload, header required and equal (backlog #0-92), TenantContext lifecycle, escalation level/target parsing, dead-lettering of invalid levels; a database outage nacked, an unexpected exception dead-lettered, a record without `X-Event-Type` dead-lettered (backlog #0-96) |
 | `NotificationEscalationSchemaIntegrationTest` | V5/V6 migrations, `ddl-auto: validate`, tenant- and level-aware unique index and CHECK constraints, UNDELIVERABLE status and the first-lookup-failure column (Testcontainers, needs Docker) |
 | `EscalationServiceTest` | Level 1/2 scheduling, ACK cancellation, idempotency, severity timeouts |
 | `EscalationSchedulerTest` | Timer logic, level 2 scheduling after level 1, fault isolation (a task with an invalid tenant id fails alone, backlog #0-92) |
-| `IncidentEventConsumerTest` (escalation-service) | Per-record tenant isolation, sequential records without leaks, a record without `X-Tenant-Id` dead-lettered (backlog #0-92) |
+| `IncidentEventConsumerTest` (escalation-service) | Per-record tenant isolation, sequential records without leaks, a record without `X-Tenant-Id` dead-lettered (backlog #0-92); a database outage nacked, not dead-lettered; a record without `X-Event-Type` dead-lettered (backlog #0-96) |
 | `PostmortemServiceTest` | Generation, Gemini failure handling, CRUD, audit event publishing |
 | `PostmortemRetrySchedulerTest` | Retry logic for FAILED postmortems, max retry limit; what a failure records: a fixed text for Gemini, the type for anything else, never a message (backlog #0-84) |
-| `AuditEventConsumerTest` (incident-service) | Audit events stored per record's tenant; duplicates by event id or offset; unstorable records dead-lettered, counted (counters registered at zero) and acknowledged only once Kafka has the copy (backlog #0-84) |
-| `IncidentEventConsumerTest` (postmortem-service) | Tenant from the payload, header required and equal (a missing or mismatched header is dead-lettered), ignored event types |
+| `AuditEventConsumerTest` (incident-service) | Audit events stored per record's tenant; duplicates by event id or offset; unstorable records dead-lettered, counted (counters registered at zero) and acknowledged only once Kafka has the copy (backlog #0-84); a failed save nacked when transient, rejected as `unexpected` otherwise (backlog #0-96) |
+| `IncidentEventConsumerTest` (postmortem-service) | Tenant from the payload, header required and equal (a missing or mismatched header is dead-lettered), ignored event types; a database outage nacked, not dead-lettered; a record without `X-Event-Type` dead-lettered (backlog #0-96) |
 | `JwtUtilsTest` | Token generation, validation, expiry, secret length validation; no token issued for a tenant id that is not a slug (backlog #0-92) |
 | `TenantContextTest` | ThreadLocal isolation between threads, TenantAwareTaskDecorator propagation; an invalid tenant id refused before it reaches the MDC (backlog #0-92) |
 | `OncallScheduleServiceTest` | Schedule creation, overlap detection, current on-call resolution |
@@ -1480,7 +1501,8 @@ incident-platform/
 │       ├── exception/             # GlobalExceptionHandler, BusinessException, ResourceNotFoundException
 │       ├── kafka/                 # TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor,
 │       │                          # TenantKafkaRecordResolver, TenantRecords, TenantResolutionException,
-│       │                          # DeadLetterPublisher
+│       │                          # DeadLetterPublisher, DeadLetterNotStoredException, KafkaFailures,
+│       │                          # RecordRedeliveries, UnreadableRecordException
 │       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, TenantIds, InvalidTenantIdException,
 │                                  # TenantAwareTaskDecorator, ServiceTokenProvider
 │
