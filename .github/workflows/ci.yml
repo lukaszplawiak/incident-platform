@@ -545,6 +545,14 @@ jobs:
           amtool config routes test --config.file=alertmanager.yml \
             --verify.receivers=platform-webhook \
             alertname=KafkaRecordsWithoutTenant scope=platform severity=high
+          # Backlog #0-96: a record given up on is an event not processed, so it
+          # reaches the operator by email too; a stuck partition is high.
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email,platform-webhook \
+            alertname=KafkaRecordRedeliveryGaveUp scope=platform severity=critical
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=platform-webhook \
+            alertname=KafkaRecordRedeliveryStuck scope=platform severity=high
 
   # ──────────────────────────────────────────────────────────
   # Job 5: Smoke test — boot the real stack via docker compose and

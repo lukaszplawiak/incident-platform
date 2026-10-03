@@ -51,7 +51,7 @@ import java.util.List;
  * {@code PrometheusNormalizer}'s own per-item try/catch for where these
  * are collected, and {@code AlertIngestionService} for where each one is
  * now dead-lettered individually (the same
- * {@code DeadLetterPublisher.publish} call already used for
+ * {@code DeadLetterPublisher} copy already used for
  * serialization failures, just also reached from this new source), while
  * every other alert in the same batch is still processed normally. Same
  * principle already established elsewhere in this codebase for batch

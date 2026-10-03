@@ -5,6 +5,9 @@ import com.incidentplatform.ingestion.ratelimit.RateLimitingService;
 import com.incidentplatform.ingestion.ratelimit.RateLimitResult;
 import com.incidentplatform.ingestion.service.AlertIngestionService;
 import com.incidentplatform.ingestion.service.IngestionSummary;
+import com.incidentplatform.shared.dto.ErrorResponse;
+import com.incidentplatform.shared.exception.ErrorCodes;
+import com.incidentplatform.shared.kafka.DeadLetterNotStoredException;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -22,11 +25,14 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -34,6 +40,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -53,6 +60,9 @@ public class AlertIngestionController {
     // that class's Javadoc for why the check used to live here, too late
     // to matter, and IngestionProperties.maxPayloadBytes for the
     // configured limit itself.
+
+    /** Retry-After when an alert's dead-letter copy was not stored (backlog #0-96). */
+    static final Duration DEAD_LETTER_RETRY_AFTER = Duration.ofSeconds(10);
 
     private final AlertIngestionService alertIngestionService;
     private final RateLimitingService rateLimitingService;
@@ -116,7 +126,8 @@ public class AlertIngestionController {
                             "failed API key authentications from this client"),
             @ApiResponse(responseCode = "503",
                     description = "The API key could not be checked right now (auth-service " +
-                            "unavailable) — retry; see Retry-After")
+                            "unavailable), or an alert that could not be processed could not be " +
+                            "kept in the dead-letter topic (Kafka unavailable) — retry; see Retry-After")
     })
     public ResponseEntity<IngestionSummary> ingestAlerts(
             @Parameter(
@@ -235,5 +246,23 @@ public class AlertIngestionController {
         final List<String> sources = alertIngestionService.getAvailableSources();
         log.debug("Available alert sources requested: {}", sources);
         return ResponseEntity.ok(sources);
+    }
+
+    /**
+     * Backlog #0-96: an alert that could not be processed could not be kept
+     * in the dead-letter topic either (Kafka unavailable). 503 with
+     * {@code Retry-After}, never 2xx: the sender, Alertmanager included,
+     * retries a 5xx and drops a 4xx, and a 200 used to tell it the alert was
+     * handled while the copy was lost.
+     */
+    @ExceptionHandler(DeadLetterNotStoredException.class)
+    public ResponseEntity<ErrorResponse> handleDeadLetterNotStored(DeadLetterNotStoredException e) {
+        log.error("Alert ingestion refused with 503: a rejected alert could not be dead-lettered", e);
+        final String requestId = MDC.get("requestId");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(DEAD_LETTER_RETRY_AFTER.toSeconds()))
+                .body(ErrorResponse.of(HttpStatus.SERVICE_UNAVAILABLE.value(), ErrorCodes.INGESTION_UNAVAILABLE,
+                        "The alert could not be stored right now; retry later",
+                        requestId != null ? requestId : "unknown"));
     }
 }

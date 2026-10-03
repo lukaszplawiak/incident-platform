@@ -75,7 +75,12 @@ spring:
       enable-auto-commit: false
       properties:
         interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaConsumerInterceptor
-        max.poll.interval.ms: 30000
+        # Backlog #0-96: a poison pill now waits up to 5 s for its dead-letter
+        # copy before it is acknowledged, so a poll of max.poll.records of them
+        # must fit with room to spare; 30 s did not (10 x 5 s). The consumer's
+        # KafkaConfig refuses to start when max.poll.records x 5 s exceeds half
+        # of this. A nack's delay pauses the partition, not the poll loop.
+        max.poll.interval.ms: 120000
         session.timeout.ms: 15000
         heartbeat.interval.ms: 5000
         max.poll.records: 10

@@ -104,9 +104,11 @@ public class GenericNormalizer extends BaseNormalizer {
         try {
             return Severity.fromString(rawSeverity);
         } catch (IllegalArgumentException e) {
+            // Backlog #0-96 (found in review): the reason goes into the
+            // dead-letter copy and the log, so it names the field, not the
+            // sender's value (the copy keeps the payload itself).
             throw new NormalizationException(SOURCE,
-                    String.format("Invalid severity '%s'. Allowed values: %s",
-                            rawSeverity,
+                    String.format("Invalid severity. Allowed values: %s",
                             java.util.Arrays.toString(Severity.values())));
         }
     }

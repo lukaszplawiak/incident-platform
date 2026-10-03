@@ -11,6 +11,9 @@ import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,15 +24,22 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.support.SendResult;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -47,6 +57,13 @@ class IncidentEventConsumerTest {
     private Acknowledgment acknowledgment;
 
     @Mock
+    private KafkaTemplate<String, String> kafkaTemplate;
+
+    /**
+     * A real publisher (spied, to verify what it was handed) over a mocked
+     * Kafka: since backlog #0-96 it decides whether a failed record is
+     * acknowledged or nacked, so the test runs its real decision.
+     */
     private DeadLetterPublisher deadLetterPublisher;
 
     private IncidentEventConsumer consumer;
@@ -58,6 +75,11 @@ class IncidentEventConsumerTest {
 
     @BeforeEach
     void setUp() {
+        deadLetterPublisher = spy(new DeadLetterPublisher(kafkaTemplate, new ObjectMapper(),
+                "escalation.dead-letter", "escalation-service", new SimpleMeterRegistry()));
+        lenient().when(kafkaTemplate.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(
+                new SendResult<>(new ProducerRecord<>("escalation.dead-letter", "v"),
+                        new RecordMetadata(new TopicPartition("escalation.dead-letter", 0), 0, 0, 0, 0, 0))));
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
         // Fixed (backlog #75): extractTenantId/parseJson moved to the
@@ -340,8 +362,8 @@ class IncidentEventConsumerTest {
     class MissingEventTypeHeader {
 
         @Test
-        @DisplayName("should acknowledge and skip when X-Event-Type header is missing")
-        void shouldAcknowledgeAndSkipWhenEventTypeHeaderMissing() {
+        @DisplayName("dead-letters a record without X-Event-Type, then acknowledges (backlog #0-96: it used to drop it)")
+        void deadLettersWhenEventTypeHeaderMissing() {
             // given — no eventType header (e.g. a producer that forgot to set it)
             final ConsumerRecord<String, String> record =
                     buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID, null);
@@ -349,7 +371,9 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — acknowledged to skip, no routing
+            // its tenant is trustworthy (payload and header agree), so the copy names it
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                    eq("missing X-Event-Type header"), eq(acknowledgment));
             then(acknowledgment).should().acknowledge();
             then(escalationService).shouldHaveNoInteractions();
         }
@@ -426,12 +450,12 @@ class IncidentEventConsumerTest {
         }
 
         @Test
-        @DisplayName("should NOT acknowledge when escalationService throws a " +
+        @DisplayName("nacks (never acknowledges) when escalationService throws a " +
                 "genuinely transient error")
-        void shouldNotAcknowledgeOnTransientException() {
+        void shouldNackOnTransientException() {
             // given — a real TransientDataAccessException subtype (DB down,
-            // network issue) is transient — consumer should return without
-            // acknowledging so Kafka redelivers.
+            // network issue) is transient — the consumer nacks the record so
+            // it is read again (backlog #0-96; the rule is now KafkaFailures).
             //
             // Fixed (backlog #47): uses a real TransientDataAccessException
             // subtype now, not a plain RuntimeException — under the new,
@@ -452,9 +476,31 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — NOT acknowledged, Kafka will redeliver
+            // then — nacked and read again (backlog #0-96: "NOT
+            // acknowledged, Kafka will redeliver" did not hold — the next
+            // record's acknowledgement committed the offset past it)
+            then(acknowledgment).should().nack(DeadLetterPublisher.REDELIVERY_DELAY);
             then(acknowledgment).should(never()).acknowledge();
             assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("a database outage (non-transient in Spring's hierarchy) is nacked, not dead-lettered "
+                + "(backlog #0-96)")
+        void shouldNackOnDatabaseOutage() {
+            final ConsumerRecord<String, String> record =
+                    buildRecord(openedEvent(Severity.CRITICAL), TENANT_ID,
+                            IncidentEventTypes.INCIDENT_OPENED);
+
+            org.mockito.BDDMockito.willThrow(new DataAccessResourceFailureException("connection refused"))
+                    .given(escalationService)
+                    .scheduleEscalation(any(), any(), any(), any(), any(), any());
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(acknowledgment).should().nack(DeadLetterPublisher.REDELIVERY_DELAY);
+            then(acknowledgment).should(never()).acknowledge();
+            then(kafkaTemplate).shouldHaveNoInteractions();
         }
 
         /**
@@ -485,8 +531,8 @@ class IncidentEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(deadLetterPublisher).should().publish(
-                    eq(malformedTimestampPayload), eq(TOPIC), eq(TENANT_ID), any());
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), eq(TENANT_ID),
+                    any(), eq(acknowledgment));
             then(acknowledgment).should().acknowledge();
         }
 
@@ -517,8 +563,8 @@ class IncidentEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(deadLetterPublisher).should().publish(
-                    eq(payload), eq(TOPIC), eq(TENANT_ID), any());
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), eq(TENANT_ID),
+                    any(), eq(acknowledgment));
             then(acknowledgment).should().acknowledge();
         }
 
@@ -544,9 +590,26 @@ class IncidentEventConsumerTest {
 
             // then — routed to DLT (previously: only logged and discarded),
             // acknowledged to skip the poison pill
-            then(deadLetterPublisher).should().publish(
-                    eq(badSeverityPayload), eq(TOPIC), eq(TENANT_ID), anyString());
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), eq(TENANT_ID),
+                    anyString(), eq(acknowledgment));
             then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("a poison pill's reason names the exception and where, never the record's value "
+                + "(backlog #0-96, found in review)")
+        void reasonDoesNotQuoteTheRecord() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    "{\"incidentId\":\"top-secret-value\",\"tenantId\":\"" + TENANT_ID
+                            + "\",\"severity\":\"CRITICAL\"}",
+                    TENANT_ID, IncidentEventTypes.INCIDENT_OPENED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                    argThat(reason -> reason.startsWith("IllegalArgumentException at ")
+                            && !reason.contains("top-secret-value")),
+                    eq(acknowledgment));
         }
 
         @Test
@@ -572,8 +635,8 @@ class IncidentEventConsumerTest {
             // then — routed to DLT rather than silently discarded, with no
             // tenant since none was resolved (backlog #0-91: it used to be
             // the string "unknown", itself a valid tenant id)
-            then(deadLetterPublisher).should().publish(
-                    eq(payloadWithoutTenantId), eq(TOPIC), isNull(), anyString());
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    anyString(), eq(acknowledgment));
             then(acknowledgment).should().acknowledge();
             then(escalationService).shouldHaveNoInteractions();
         }
@@ -599,7 +662,8 @@ class IncidentEventConsumerTest {
 
             // then — processed under no tenant
             then(escalationService).shouldHaveNoInteractions();
-            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(), anyString());
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    anyString(), eq(acknowledgment));
             then(acknowledgment).should().acknowledge();
         }
     }

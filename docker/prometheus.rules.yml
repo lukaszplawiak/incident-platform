@@ -394,6 +394,55 @@ groups:
             whose X-Tenant-Id header was {{ $labels.reason }}. Its WARN log names
             the topic; the sender should build the record with TenantRecords.
 
+      - alert: KafkaRecordRedeliveryGaveUp
+        # Backlog #0-96: a consumed record kept failing "transiently" (the
+        # database, a timeout, a version race) for longer than its redelivery
+        # deadline (kafka.consumer.redelivery-deadline, 30 min) and was
+        # dead-lettered instead of read again, so it no longer holds its
+        # partition. Its event was not processed: a notification, an
+        # escalation, a postmortem or an audit entry is missing until someone
+        # replays it (#0-97). Critical. Resolves an hour after the last one.
+        # An audit record given up on raises AuditEventsRejected (reason
+        # gave_up) too, on purpose: that one says the audit trail has a gap,
+        # this one that a partition's record was let go.
+        expr: |
+          sum by (job) (
+            increase(kafka_records_redelivery_gave_up_total[1h])
+          ) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} gave up redelivering Kafka records"
+          description: >
+            {{ $labels.job }} dead-lettered at least one Kafka record in the last
+            hour because it was still failing after its redelivery deadline. Its
+            event was not processed. The ERROR log "longer than its redelivery
+            deadline" names its topic, partition and offset; the dead-letter
+            topic holds it.
+
+      - alert: KafkaRecordRedeliveryStuck
+        # Backlog #0-96: a consumer has been nacking records for 15 minutes
+        # without a break: a record at a partition's head keeps failing (the
+        # database down, or the record's dead-letter copy not stored), and
+        # every record behind it, of every tenant on that partition, waits. The
+        # consumer-lag alerts show the backlog; this one names the cause. High.
+        expr: |
+          sum by (job, reason) (
+            increase(kafka_records_redelivery_requested_total[5m])
+          ) > 0
+        for: 15m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} keeps reading Kafka records again ({{ $labels.reason }})"
+          description: >
+            {{ $labels.job }} has been nacking Kafka records for 15 minutes
+            ({{ $labels.reason }}); the records behind them wait. The WARN logs
+            "Transient failure processing record" or "could not be dead-lettered"
+            name the partition and the cause.
+
       - alert: PlatformTenantProvisioningSpike
         # Backlog #0-83: more tenants created through the platform API in an
         # hour than onboarding normally needs. A taken-over operator session can

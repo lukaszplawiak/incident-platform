@@ -2,6 +2,7 @@ package com.incidentplatform.ingestion.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -89,15 +90,21 @@ public class KafkaConfig {
     // DeadLetterPublisher moved from ingestion-service/service/ to shared module.
     // Instantiated here (not @Component) so each service can provide its own
     // topic name and service name without property name conflicts across services.
+    // Backlog #0-96: its own producer, which blocks at most
+    // DeadLetterPublisher.DEAD_LETTER_MAX_BLOCK for Kafka's metadata, so a
+    // request waiting for an alert's dead-letter copy is bounded by
+    // DEAD_LETTER_TIMEOUT whatever this service's producer allows.
     @Bean
     public DeadLetterPublisher deadLetterPublisher(
             KafkaTemplate<String, String> kafkaTemplate,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            MeterRegistry meterRegistry) {
         return new DeadLetterPublisher(
-                kafkaTemplate,
+                DeadLetterPublisher.deadLetterTemplate(kafkaTemplate.getProducerFactory()),
                 objectMapper,
                 alertsDeadLetterTopic,
-                "ingestion-service"
+                "ingestion-service",
+                meterRegistry
         );
     }
 }

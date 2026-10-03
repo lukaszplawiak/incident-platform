@@ -7,8 +7,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.domain.AuditEvent;
 import com.incidentplatform.incident.repository.AuditEventRepository;
 import com.incidentplatform.shared.audit.ActorType;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.dto.AuditEventMessage;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.kafka.KafkaFailures;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.kafka.TenantResolutionException;
 import com.incidentplatform.shared.security.TenantContext;
@@ -25,7 +27,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.sql.SQLException;
-import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -84,11 +85,10 @@ public class AuditEventConsumer {
     static final String REASON_TENANT_MISMATCH = "tenant_mismatch";
     /** Backlog #0-92: no valid tenant in the payload, or an invalid tenant header. */
     static final String REASON_TENANT_INVALID = "tenant_invalid";
-
-    /** How long the consumer waits for the dead-letter copy of a rejected record. */
-    static final Duration DEAD_LETTER_TIMEOUT = Duration.ofSeconds(10);
-    /** When a record whose dead-letter copy failed comes again. */
-    static final Duration DEAD_LETTER_RETRY = Duration.ofSeconds(5);
+    /** Backlog #0-96: the save failed with an exception that is not a transient one (KafkaFailures). */
+    static final String REASON_UNEXPECTED = "unexpected";
+    /** Backlog #0-96: a save that kept failing transiently past the redelivery deadline. */
+    static final String REASON_GAVE_UP = "gave_up";
 
     private final AuditEventRepository auditEventRepository;
     private final ObjectMapper objectMapper;
@@ -111,7 +111,7 @@ public class AuditEventConsumer {
         // second step): a counter created at its first rejection starts its
         // series at 1, and AuditEventsRejected's increase() missed that first one.
         for (final String reason : List.of(REASON_UNREADABLE, REASON_CONSTRAINT, REASON_TENANT_MISMATCH,
-                REASON_TENANT_INVALID)) {
+                REASON_TENANT_INVALID, REASON_UNEXPECTED, REASON_GAVE_UP)) {
             rejected.put(reason, rejectedCounter(reason));
         }
     }
@@ -183,20 +183,36 @@ public class AuditEventConsumer {
                 }
                 return;
             } catch (Exception e) {
-                // Transient error (DB unavailable, connection pool exhausted).
-                // Do NOT acknowledge — Kafka will redeliver after consumer restart.
-                // At-least-once delivery for audit events is preferred over losing
-                // entries permanently when the DB is temporarily unavailable.
-                log.error("Transient error persisting audit event — " +
-                                "will be redelivered: topic={}, partition={}, " +
-                                "offset={}, error={}",
-                        record.topic(), record.partition(),
-                        record.offset(), e.getMessage(), e);
+                // Transient error (DB unavailable, connection pool exhausted):
+                // at-least-once delivery for audit events is preferred over
+                // losing entries permanently when the DB is temporarily
+                // unavailable.
+                //
+                // Changed (backlog #0-96): this returned without acknowledging,
+                // expecting Kafka to redeliver; the next record's
+                // acknowledgement committed the offset past it instead. A
+                // transient failure is now nacked and read again; any other
+                // fails the same way every time and is rejected like a poison
+                // pill (KafkaFailures).
+                if (KafkaFailures.isTransient(e)) {
+                    // Dead-lettered instead once it has been failing past its
+                    // redelivery deadline: then it is a rejection like any other.
+                    if (deadLetterPublisher.redeliverLater(record, tenantId, acknowledgment, e)) {
+                        rejected.computeIfAbsent(REASON_GAVE_UP, this::rejectedCounter).increment();
+                    }
+                } else {
+                    // By type and place only (found in review): a constraint's or
+                    // the driver's message can quote the row.
+                    log.error("Unexpected error persisting audit event: topic={}, partition={}, offset={}, error={}",
+                            record.topic(), record.partition(), record.offset(), KafkaFailures.describe(e));
+                    rejectThenAcknowledge(record, tenantId, REASON_UNEXPECTED, AuditText.unexpected(e),
+                            acknowledgment);
+                }
                 return;
             }
 
             log.debug("Audit event saved: eventType={}, incidentId={}, tenant={}",
-                    message.eventType(), message.resourceId(), tenantId);
+                    AuditText.error(message.eventType()), message.resourceId(), tenantId);
             acknowledgment.acknowledge();
         } finally {
             TenantContext.clear();
@@ -221,26 +237,19 @@ public class AuditEventConsumer {
      * outbox already counts the event delivered, so acknowledging before the
      * copy is safe would lose it on a failed send with only a log line. If
      * Kafka does not take the copy, the record is not acknowledged but
-     * {@code nack}ed: the partition is sought back to it and it comes again
-     * after {@link #DEAD_LETTER_RETRY}, while consumer lag shows the stall.
+     * {@code nack}ed: the partition is sought back to it and it comes again,
+     * while consumer lag shows the stall. Since backlog #0-96 every consumer
+     * does this, through {@link DeadLetterPublisher#deadLetterThenAcknowledge}.
      */
     private void rejectThenAcknowledge(ConsumerRecord<String, String> record, String tenantId, String reason,
                                        String error, Acknowledgment acknowledgment) {
         log.error("Audit event rejected ({}) — NOT stored, sending it to the dead-letter topic: topic={}, "
                         + "partition={}, offset={}, tenant={}, error={}",
                 reason, record.topic(), record.partition(), record.offset(), tenantId, error);
-        try {
-            deadLetterPublisher.publishAndWait(record.value(), record.topic(),
-                    tenantId, reason + ": " + error, DEAD_LETTER_TIMEOUT);
-        } catch (RuntimeException e) {
-            log.error("Rejected audit event could not be dead-lettered — not acknowledged, retried in {}: "
-                            + "topic={}, partition={}, offset={}", DEAD_LETTER_RETRY,
-                    record.topic(), record.partition(), record.offset(), e);
-            acknowledgment.nack(DEAD_LETTER_RETRY);
-            return;
+        if (deadLetterPublisher.deadLetterThenAcknowledge(record, tenantId, reason + ": " + error,
+                acknowledgment)) {
+            rejected.computeIfAbsent(reason, this::rejectedCounter).increment();
         }
-        rejected.computeIfAbsent(reason, this::rejectedCounter).increment();
-        acknowledgment.acknowledge();
     }
 
     /**

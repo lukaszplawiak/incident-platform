@@ -2,10 +2,10 @@ package com.incidentplatform.incident.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.incident.domain.Incident;
-import com.incidentplatform.incident.repository.IncidentRepository;
-import com.incidentplatform.shared.audit.AuditText;
+import com.incidentplatform.incident.service.IncidentCommandService;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.kafka.KafkaFailures;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -16,7 +16,6 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -63,6 +62,17 @@ import java.util.UUID;
  * specific catch below doesn't change the retry behavior at all (still
  * no acknowledge, still relies on Kafka redelivery) — only the
  * diagnostic precision of what gets logged.
+ *
+ * <h2>Changed (backlog #0-96): the conflict is now actually retried</h2>
+ * "No acknowledge, Kafka redelivers" did not hold: in {@code MANUAL_IMMEDIATE}
+ * mode the next record's acknowledgement commits the offset past an
+ * unacknowledged one. And this listener method was {@code @Transactional},
+ * so its own acknowledgement committed the offset before the database commit,
+ * where the {@code @Version} conflict is actually thrown — after this
+ * {@code catch}. The write now runs and commits in
+ * {@link IncidentCommandService#recordEscalationLevel} before the record is
+ * acknowledged, and a conflict (a transient failure, {@code KafkaFailures})
+ * is {@code nack}ed and read again.
  */
 @Component
 public class IncidentEscalationEventConsumer {
@@ -70,14 +80,14 @@ public class IncidentEscalationEventConsumer {
     private static final Logger log =
             LoggerFactory.getLogger(IncidentEscalationEventConsumer.class);
 
-    private final IncidentRepository incidentRepository;
+    private final IncidentCommandService commandService;
     private final TenantKafkaRecordResolver tenantRecordResolver;
     private final DeadLetterPublisher deadLetterPublisher;
 
-    public IncidentEscalationEventConsumer(IncidentRepository incidentRepository,
+    public IncidentEscalationEventConsumer(IncidentCommandService commandService,
                                            TenantKafkaRecordResolver tenantRecordResolver,
                                            DeadLetterPublisher deadLetterPublisher) {
-        this.incidentRepository = incidentRepository;
+        this.commandService = commandService;
         this.tenantRecordResolver = tenantRecordResolver;
         this.deadLetterPublisher = deadLetterPublisher;
     }
@@ -87,7 +97,6 @@ public class IncidentEscalationEventConsumer {
             groupId = "incident-service-escalation-sync",
             containerFactory = "kafkaListenerContainerFactory"
     )
-    @Transactional
     public void consumeIncidentEvent(ConsumerRecord<String, String> record,
                                      Acknowledgment acknowledgment) {
         log.debug("Received incident event: topic={}, partition={}, offset={}",
@@ -96,10 +105,17 @@ public class IncidentEscalationEventConsumer {
         try {
             final String eventType = extractEventType(record);
             if (eventType == null) {
-                log.error("Missing {} header — skipping: topic={}, partition={}, offset={}",
+                // Changed (backlog #0-96): this record was acknowledged and
+                // dropped with only a log line; it is now kept like any other
+                // record this consumer cannot read, under its tenant when the
+                // record has a trustworthy one (not counted as a tenant
+                // refusal: it is refused for its header).
+                log.error("Missing {} header — routing to DLT: topic={}, partition={}, offset={}",
                         IncidentEventTypes.HEADER_NAME,
                         record.topic(), record.partition(), record.offset());
-                acknowledgment.acknowledge();
+                deadLetterPublisher.deadLetterThenAcknowledge(record,
+                        tenantRecordResolver.trustedTenantOrNull(record),
+                        "missing " + IncidentEventTypes.HEADER_NAME + " header", acknowledgment);
                 return;
             }
 
@@ -125,44 +141,38 @@ public class IncidentEscalationEventConsumer {
             // Fixed (backlog #0-92): it used to be acknowledged and dropped,
             // the only consumer that kept no copy; it now goes to the
             // dead-letter topic like every other consumer's, with its resolved
-            // tenant or none, and the error on one line.
-            final String error = AuditText.error(e.getMessage());
+            // tenant or none; since backlog #0-96 the reason never quotes the
+            // record (KafkaFailures.reason).
+            final String error = KafkaFailures.reason(e);
             log.error("Poison pill in incident escalation event — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(),
                     record.offset(), TenantContext.getOrNull(), error);
-            deadLetterPublisher.publish(record.value(), record.topic(), TenantContext.getOrNull(), error);
-            acknowledgment.acknowledge();
+            deadLetterPublisher.deadLetterThenAcknowledge(record, TenantContext.getOrNull(), error, acknowledgment);
             return;
 
         } catch (OptimisticLockingFailureException e) {
             // Fixed (backlog #40): a REST-driven change to this same
             // incident (e.g. an ACK) raced with recordEscalation() and won.
-            // Not a genuine failure — unlike EscalationScheduler's version
-            // of this conflict (backlog #38), retrying here actually
-            // resolves it: recordEscalation() only touches escalationLevel,
-            // so redelivery re-reads the now-current row (including
-            // whatever the other writer changed) and correctly reapplies
-            // just the escalation level on top of it. Same
-            // don't-acknowledge-let-Kafka-redeliver behavior as the
-            // generic catch below — this exists purely so the log
-            // distinguishes "routine, self-healing concurrency conflict"
-            // from "the database is actually unreachable" (see this
-            // class's own Javadoc for the full account).
+            // Not a genuine failure: recordEscalation() only touches
+            // escalationLevel, so reading the record again re-reads the
+            // now-current row and reapplies just the level on top of it.
+            // Logged apart from the generic catch below so a routine,
+            // self-healing conflict is not reported as an outage.
+            // Backlog #0-96: nacked (the conflict is transient), no longer
+            // left unacknowledged, which skipped it.
             log.info("Concurrent modification detected while recording " +
-                            "escalation — will resolve via Kafka redelivery: " +
+                            "escalation — reading the record again: " +
                             "topic={}, partition={}, offset={}",
                     record.topic(), record.partition(), record.offset());
+            deadLetterPublisher.redeliverLater(record, TenantContext.getOrNull(), acknowledgment, e);
             return;
 
         } catch (Exception e) {
-            // Transient error (DB unavailable). Do NOT acknowledge — Kafka
-            // will redeliver after consumer restart.
-            log.error("Transient error processing escalation event — " +
-                            "will be redelivered: topic={}, partition={}, " +
-                            "offset={}, error={}",
-                    record.topic(), record.partition(),
-                    record.offset(), e.getMessage(), e);
+            // Backlog #0-96: a transient failure (the database) is nacked and
+            // read again; anything else is dead-lettered (KafkaFailures).
+            deadLetterPublisher.redeliverIfTransientElseDeadLetter(
+                    record, TenantContext.getOrNull(), e, acknowledgment);
             return;
 
         } finally {
@@ -177,20 +187,15 @@ public class IncidentEscalationEventConsumer {
                 event.get("incidentId").asText());
         final int escalationLevel = event.path("escalationLevel").asInt(0);
 
-        incidentRepository.findByIdAndTenantId(incidentId, tenantId)
-                .ifPresentOrElse(
-                        incident -> {
-                            incident.recordEscalation(escalationLevel);
-                            incidentRepository.save(incident);
-
-                            log.info("Escalation level recorded: incidentId={}, " +
-                                            "level={}, tenant={}",
-                                    incidentId, escalationLevel, tenantId);
-                        },
-                        () -> log.warn("Escalated incident not found locally — " +
-                                        "skipping: incidentId={}, tenant={}",
-                                incidentId, tenantId)
-                );
+        if (commandService.recordEscalationLevel(incidentId, tenantId, escalationLevel)) {
+            log.info("Escalation level recorded: incidentId={}, " +
+                            "level={}, tenant={}",
+                    incidentId, escalationLevel, tenantId);
+        } else {
+            log.warn("Escalated incident not found locally — " +
+                            "skipping: incidentId={}, tenant={}",
+                    incidentId, tenantId);
+        }
     }
 
     private String extractEventType(ConsumerRecord<?, ?> record) {
