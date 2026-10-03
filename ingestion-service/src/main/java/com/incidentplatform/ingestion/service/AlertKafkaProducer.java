@@ -4,11 +4,10 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
-import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.TenantRecords;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,7 +15,6 @@ import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -121,29 +119,14 @@ public class AlertKafkaProducer {
         try {
             final String payload = objectMapper.writeValueAsString(alert);
 
-            // TenantKafkaProducerInterceptor still runs as a safety net but is not
-            // the primary source of the X-Tenant-Id header here.
+            // Backlog #0-91: the record and its X-Tenant-Id header are built by
+            // TenantRecords from the alert's own tenant, as every tenant record
+            // is; TenantKafkaProducerInterceptor only checks it.
             //
-            // TODO: Migrate to Envelope Pattern for a fully explicit messaging contract:
-            //  Instead of setting tenantId only as a Kafka header, wrap every message in
-            //  a typed KafkaEnvelope<T> carrying routing metadata (tenantId, eventType,
-            //  correlationId, producedAt) alongside the domain payload. Benefits: tenantId
-            //  is part of the schema (not just a header), end-to-end correlation ID
-            //  tracing, easy replay with full context, consumers access metadata without
-            //  deserializing the inner payload. Requires: new KafkaEnvelope<T> record in
-            //  shared/, schema changes in all producers/consumers, and a consistent
-            //  deserialization strategy. Justified when adding OpenTelemetry distributed
-            //  tracing or when the number of producers/consumers grows significantly.
-            final ProducerRecord<String, String> record = new ProducerRecord<>(
-                    alertsRawTopic,
-                    null,
-                    alert.tenantId(),
-                    payload
-            );
-            record.headers().add(new RecordHeader(
-                    TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
-                    alert.tenantId().getBytes(StandardCharsets.UTF_8)
-            ));
+            // TODO (backlog #0-95): a message envelope or standard headers for
+            //  correlation id, schema version and producer; options in BACKLOG.
+            final ProducerRecord<String, String> record = TenantRecords.forTenant(
+                    alertsRawTopic, alert.tenantId(), payload, alert.tenantId());
 
             final var future = kafkaTemplate.send(record);
 
@@ -181,16 +164,8 @@ public class AlertKafkaProducer {
         try {
             final String payload = objectMapper.writeValueAsString(notification);
 
-            final ProducerRecord<String, String> record = new ProducerRecord<>(
-                    alertsResolvedTopic,
-                    null,
-                    notification.tenantId(),
-                    payload
-            );
-            record.headers().add(new RecordHeader(
-                    TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
-                    notification.tenantId().getBytes(StandardCharsets.UTF_8)
-            ));
+            final ProducerRecord<String, String> record = TenantRecords.forTenant(
+                    alertsResolvedTopic, notification.tenantId(), payload, notification.tenantId());
 
             kafkaTemplate.send(record)
                     .whenComplete((result, ex) -> {

@@ -254,6 +254,62 @@ tests:
         alertname: AuditEventUnrecorded
         exp_alerts: []
 
+  # Kafka records whose tenant a consumer refused (backlog #0-92; a missing
+  # header is refused too), and records produced without a valid tenant header
+  # (backlog #0-91): fire on the first
+  # one, per service and reason; resolve an hour after the last. The counters
+  # are registered at zero, so the series start at 0.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_records_tenant_rejected_total{job="notification-service",instance="notification-1",reason="mismatch"}'
+        values: '0x10 1x90'
+      - series: 'kafka_records_tenant_rejected_total{job="escalation-service",instance="escalation-1",reason="invalid"}'
+        values: '0x100'
+      - series: 'kafka_records_tenant_rejected_total{job="postmortem-service",instance="postmortem-1",reason="header_missing"}'
+        values: '0x10 1x90'
+      - series: 'kafka_records_produced_tenant_invalid_total{job="incident-service",instance="incident-1",reason="missing"}'
+        values: '0x10 1x90'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KafkaRecordsTenantRejected
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: KafkaRecordsTenantRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: notification-service
+              reason: mismatch
+            exp_annotations:
+              summary: "notification-service refused Kafka records' tenant (mismatch)"
+              description: "notification-service dead-lettered at least one Kafka record in the last hour because its tenant could not be trusted (mismatch). Its event was not processed. The dead-letter topic holds it; the ERROR log \"Poison pill\" (or \"Audit event rejected\") names its topic, partition and offset.\n"
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: postmortem-service
+              reason: header_missing
+            exp_annotations:
+              summary: "postmortem-service refused Kafka records' tenant (header_missing)"
+              description: "postmortem-service dead-lettered at least one Kafka record in the last hour because its tenant could not be trusted (header_missing). Its event was not processed. The dead-letter topic holds it; the ERROR log \"Poison pill\" (or \"Audit event rejected\") names its topic, partition and offset.\n"
+      - eval_time: 85m
+        alertname: KafkaRecordsTenantRejected
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: KafkaRecordsWithoutTenant
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: incident-service
+              reason: missing
+            exp_annotations:
+              summary: "incident-service produced Kafka records without a valid tenant header (missing)"
+              description: "incident-service sent at least one Kafka record in the last hour whose X-Tenant-Id header was missing. Its WARN log names the topic; the sender should build the record with TenantRecords.\n"
+      - eval_time: 85m
+        alertname: KafkaRecordsWithoutTenant
+        exp_alerts: []
+
   # Platform API (backlog #0-83): more than 10 tenants in an hour fires the
   # spike alert; 10 does not.
   - interval: 1m

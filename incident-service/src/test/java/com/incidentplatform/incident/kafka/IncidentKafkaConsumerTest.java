@@ -11,6 +11,7 @@ import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.AfterEach;
@@ -32,6 +33,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
@@ -69,7 +72,7 @@ class IncidentKafkaConsumerTest {
         // consumeAlert/consumeResolvedAlert methods.
         consumer = new IncidentKafkaConsumer(
                 commandService, objectMapper, deadLetterPublisher,
-                new TenantKafkaRecordResolver(objectMapper));
+                new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()));
     }
 
     @AfterEach
@@ -93,8 +96,13 @@ class IncidentKafkaConsumerTest {
     }
 
     private String buildAlertJson() throws Exception {
+        return buildAlertJson(TENANT_ID);
+    }
+
+    /** The payload's tenant is the record's; a header must agree with it (backlog #0-92). */
+    private String buildAlertJson(String tenantId) throws Exception {
         final UnifiedAlertDto alert = new UnifiedAlertDto(
-                UUID.randomUUID(), TENANT_ID, "prometheus",
+                UUID.randomUUID(), tenantId, "prometheus",
                 SourceType.OPS, Severity.CRITICAL,
                 "High CPU usage", "CPU exceeded 95%",
                 Instant.now().minusSeconds(60),
@@ -121,7 +129,7 @@ class IncidentKafkaConsumerTest {
     class ConsumeAlert {
 
         @Test
-        @DisplayName("should call createFromAlert with correct tenantId from header")
+        @DisplayName("should call createFromAlert with correct tenantId from the record (payload, matching header)")
         void shouldCallCreateFromAlertWithTenantId() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
@@ -215,7 +223,7 @@ class IncidentKafkaConsumerTest {
 
             // then — DLT receives the message
             then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), anyString(), anyString());
+                    .publish(anyString(), anyString(), isNull(), anyString());
 
             // and — acknowledged to unblock partition
             then(acknowledgment).should().acknowledge();
@@ -236,21 +244,19 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should fall back to payload tenantId when X-Tenant-Id header is missing")
-        void shouldFallBackToPayloadTenantIdWhenHeaderMissing() throws Exception {
-            // given — no header, but payload contains tenantId (step 2 of extraction)
+        @DisplayName("dead-letters a record without X-Tenant-Id, even with a valid payload tenant (backlog #0-92)")
+        void shouldDeadLetterWhenHeaderMissing() throws Exception {
+            // given — no header: no platform sender builds such a record (TenantRecords)
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), null);
 
             // when
             consumer.consumeAlert(record, acknowledgment);
 
-            // then — tenantId resolved from payload, processing succeeds
-            final ArgumentCaptor<String> tenantCaptor =
-                    ArgumentCaptor.forClass(String.class);
-            then(commandService).should()
-                    .createFromAlert(any(), tenantCaptor.capture());
-            assertThat(tenantCaptor.getValue()).isEqualTo(TENANT_ID);
+            // then — refused, never processed under the payload's tenant
+            then(commandService).should(never()).createFromAlert(any(), any());
+            then(deadLetterPublisher).should()
+                    .publish(anyString(), anyString(), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
         }
 
@@ -269,17 +275,17 @@ class IncidentKafkaConsumerTest {
 
             // then — routed to DLT, partition unblocked
             then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), anyString(), anyString());
+                    .publish(anyString(), anyString(), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
             then(commandService).should(never()).createFromAlert(any(), any());
         }
 
         @Test
-        @DisplayName("should set TenantContext from header before calling service")
+        @DisplayName("should set TenantContext from the record (payload, matching header) before calling service")
         void shouldSetTenantContextFromHeaderBeforeCallingService() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
-                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), "tenant-xyz");
+                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson("tenant-xyz"), "tenant-xyz");
 
             // when
             consumer.consumeAlert(record, acknowledgment);
@@ -293,13 +299,26 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
+        @DisplayName("dead-letters a record whose header names another tenant than its payload (backlog #0-92)")
+        void shouldDeadLetterTenantMismatch() throws Exception {
+            final String payload = buildAlertJson("tenant-a");
+            final ConsumerRecord<String, String> record = buildRecord(TOPIC_ALERTS_RAW, payload, "tenant-b");
+
+            consumer.consumeAlert(record, acknowledgment);
+
+            then(commandService).should(never()).createFromAlert(any(), any());
+            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC_ALERTS_RAW), isNull(), anyString());
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
         @DisplayName("should process different tenants correctly — no cross-tenant leak")
         void shouldProcessDifferentTenantsWithoutLeak() throws Exception {
             // given
             final ConsumerRecord<String, String> recordA =
-                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), "tenant-a");
+                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson("tenant-a"), "tenant-a");
             final ConsumerRecord<String, String> recordB =
-                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), "tenant-b");
+                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson("tenant-b"), "tenant-b");
 
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);
@@ -328,7 +347,7 @@ class IncidentKafkaConsumerTest {
     class ConsumeResolvedAlert {
 
         @Test
-        @DisplayName("should call autoResolve with tenantId from header")
+        @DisplayName("should call autoResolve with tenantId from the record (payload, matching header)")
         void shouldCallAutoResolveWithTenantId() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
@@ -402,26 +421,24 @@ class IncidentKafkaConsumerTest {
 
             // then
             then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), anyString(), anyString());
+                    .publish(anyString(), anyString(), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
         }
 
         @Test
-        @DisplayName("should fall back to payload tenantId when X-Tenant-Id header is missing")
-        void shouldFallBackToPayloadTenantIdWhenHeaderMissing() throws Exception {
-            // given — no header, but payload contains tenantId
+        @DisplayName("dead-letters a record without X-Tenant-Id, even with a valid payload tenant (backlog #0-92)")
+        void shouldDeadLetterWhenHeaderMissing() throws Exception {
+            // given — no header: no platform sender builds such a record (TenantRecords)
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RESOLVED, buildResolvedJson(), null);
 
             // when
             consumer.consumeResolvedAlert(record, acknowledgment);
 
-            // then — tenantId resolved from payload, processing succeeds
-            final ArgumentCaptor<String> tenantCaptor =
-                    ArgumentCaptor.forClass(String.class);
-            then(commandService).should()
-                    .autoResolve(any(), tenantCaptor.capture());
-            assertThat(tenantCaptor.getValue()).isEqualTo(TENANT_ID);
+            // then — refused, never processed under the payload's tenant
+            then(commandService).should(never()).autoResolve(any(), any());
+            then(deadLetterPublisher).should()
+                    .publish(anyString(), anyString(), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
         }
 
@@ -440,7 +457,7 @@ class IncidentKafkaConsumerTest {
 
             // then
             then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), anyString(), anyString());
+                    .publish(anyString(), anyString(), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
             then(commandService).should(never()).autoResolve(any(), any());
         }

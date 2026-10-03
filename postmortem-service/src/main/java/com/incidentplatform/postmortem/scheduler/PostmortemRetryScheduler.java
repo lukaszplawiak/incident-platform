@@ -138,8 +138,10 @@ public class PostmortemRetryScheduler {
                 candidates.size());
 
         for (final Postmortem postmortem : candidates) {
-            TenantContext.set(postmortem.getTenantId());
+            // Inside the try: set refuses an invalid tenant id, and that must stay
+            // this entry's failure, not end the batch (backlog #0-92).
             try {
+                TenantContext.set(postmortem.getTenantId());
                 processOne(postmortem);
             } catch (OptimisticLockingFailureException e) {
                 // Fixed (backlog #49): see Postmortem.version's own
@@ -196,8 +198,10 @@ public class PostmortemRetryScheduler {
                 candidates.size(), maxRetryAttempts);
 
         for (final Postmortem postmortem : candidates) {
-            TenantContext.set(postmortem.getTenantId());
+            // Inside the try: set refuses an invalid tenant id, and that must stay
+            // this entry's failure, not end the batch (backlog #0-92).
             try {
+                TenantContext.set(postmortem.getTenantId());
                 retryOne(postmortem);
             } catch (OptimisticLockingFailureException e) {
                 // Fixed (backlog #49): same reasoning as processGenerating's

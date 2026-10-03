@@ -3,6 +3,7 @@ package com.incidentplatform.incident.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.service.IncidentCommandService;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
@@ -55,9 +56,9 @@ public class IncidentKafkaConsumer {
         log.debug("Received alert: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        // TenantContext is pre-initialised so that finally { TenantContext.clear() }
-        // is always safe, even if extractTenantId() throws before setting it.
-        TenantContext.set("unknown");
+        // Backlog #0-91: no placeholder tenant is set before the record's own
+        // ("unknown" used to be, a valid tenant id that reached the dead-letter
+        // key and header); TenantContext.clear() in finally is safe either way.
 
         try {
             final JsonNode raw = tenantRecordResolver.parseJson(record.value());
@@ -94,17 +95,21 @@ public class IncidentKafkaConsumer {
                     alert.alertId(), tenantId);
 
         } catch (IllegalArgumentException e) {
+            // Backlog #0-92: the tenant is the resolved one, or none (null)
+            // when the record's tenant was refused; the error on one line, as
+            // an exception message may quote the record.
             final String tenantId = TenantContext.getOrNull();
+            final String error = AuditText.error(e.getMessage());
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, e.getMessage());
+                    tenantId, error);
 
             deadLetterPublisher.publish(
                     record.value(),
                     record.topic(),
-                    tenantId != null ? tenantId : "unknown",
-                    e.getMessage());
+                    tenantId,
+                    error);
 
         } catch (Exception e) {
             log.error("Transient error processing alert — message will be redelivered: " +
@@ -130,8 +135,6 @@ public class IncidentKafkaConsumer {
         log.debug("Received resolved alert: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        TenantContext.set("unknown");
-
         try {
             final JsonNode raw = tenantRecordResolver.parseJson(record.value());
             final String tenantId = tenantRecordResolver.extractTenantId(record, raw);
@@ -150,17 +153,21 @@ public class IncidentKafkaConsumer {
 
         } catch (IllegalArgumentException e) {
             // Poison pill — route to DLT and acknowledge to unblock partition.
+            // Backlog #0-92: the tenant is the resolved one, or none (null)
+            // when the record's tenant was refused; the error on one line, as
+            // an exception message may quote the record.
             final String tenantId = TenantContext.getOrNull();
+            final String error = AuditText.error(e.getMessage());
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, e.getMessage());
+                    tenantId, error);
 
             deadLetterPublisher.publish(
                     record.value(),
                     record.topic(),
-                    tenantId != null ? tenantId : "unknown",
-                    e.getMessage());
+                    tenantId,
+                    error);
 
         } catch (Exception e) {
             // Transient error — do NOT acknowledge, allow redelivery.

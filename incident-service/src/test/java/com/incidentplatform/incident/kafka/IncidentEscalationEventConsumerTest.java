@@ -7,8 +7,10 @@ import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.AfterEach;
@@ -28,6 +30,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
@@ -46,6 +52,7 @@ class IncidentEscalationEventConsumerTest {
 
     @Mock private IncidentRepository incidentRepository;
     @Mock private Acknowledgment acknowledgment;
+    @Mock private DeadLetterPublisher deadLetterPublisher;
 
     private IncidentEscalationEventConsumer consumer;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -59,7 +66,8 @@ class IncidentEscalationEventConsumerTest {
         // shared TenantKafkaRecordResolver — objectMapper is no longer
         // passed to the consumer directly, only used to build this.
         consumer = new IncidentEscalationEventConsumer(
-                incidentRepository, new TenantKafkaRecordResolver(objectMapper));
+                incidentRepository, new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()),
+                deadLetterPublisher);
     }
 
     @AfterEach
@@ -155,8 +163,8 @@ class IncidentEscalationEventConsumerTest {
         }
 
         @Test
-        @DisplayName("skips and acknowledges on unparseable JSON")
-        void skipsOnUnparseableJson() {
+        @DisplayName("dead-letters and acknowledges unparseable JSON (backlog #0-92: it used to drop it)")
+        void deadLettersUnparseableJson() {
             final ConsumerRecord<String, String> record = new ConsumerRecord<>(
                     TOPIC, 0, 0L, "key", "not valid json !!!");
             record.headers().add(new RecordHeader(IncidentEventTypes.HEADER_NAME,
@@ -165,12 +173,49 @@ class IncidentEscalationEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             then(incidentRepository).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(eq("not valid json !!!"), eq(TOPIC), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
         }
 
         @Test
-        @DisplayName("skips and acknowledges when tenantId is missing from both header and payload")
-        void skipsWhenTenantIdMissing() {
+        @DisplayName("dead-letters a record whose header names another tenant than its payload (backlog #0-92)")
+        void deadLettersTenantMismatch() {
+            final String payload = "{\"incidentId\":\"" + UUID.randomUUID()
+                    + "\",\"tenantId\":\"" + TENANT_ID + "\",\"escalationLevel\":1}";
+            final ConsumerRecord<String, String> record = new ConsumerRecord<>(TOPIC, 0, 0L, "key", payload);
+            record.headers().add(new RecordHeader(IncidentEventTypes.HEADER_NAME,
+                    IncidentEventTypes.INCIDENT_ESCALATED.getBytes(StandardCharsets.UTF_8)));
+            record.headers().add(new RecordHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
+                    "globex".getBytes(StandardCharsets.UTF_8)));
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(incidentRepository).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(),
+                    argThat(reason -> reason.contains("another tenant") && !reason.contains("globex")));
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("dead-letters a record without X-Tenant-Id, even with a valid payload tenant (backlog #0-92)")
+        void deadLettersMissingTenantHeader() {
+            final String payload = "{\"incidentId\":\"" + UUID.randomUUID()
+                    + "\",\"tenantId\":\"" + TENANT_ID + "\",\"escalationLevel\":1}";
+            final ConsumerRecord<String, String> record = new ConsumerRecord<>(TOPIC, 0, 0L, "key", payload);
+            record.headers().add(new RecordHeader(IncidentEventTypes.HEADER_NAME,
+                    IncidentEventTypes.INCIDENT_ESCALATED.getBytes(StandardCharsets.UTF_8)));
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(incidentRepository).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(),
+                    argThat(reason -> reason.contains("header is missing")));
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("dead-letters and acknowledges when the payload names no tenant")
+        void deadLettersWhenTenantIdMissing() {
             final ConsumerRecord<String, String> record = new ConsumerRecord<>(
                     TOPIC, 0, 0L, "key",
                     "{\"incidentId\":\"" + UUID.randomUUID() + "\",\"escalationLevel\":1}");
@@ -180,6 +225,7 @@ class IncidentEscalationEventConsumerTest {
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             then(incidentRepository).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(any(String.class), eq(TOPIC), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
         }
     }

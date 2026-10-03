@@ -9,13 +9,12 @@ import com.incidentplatform.incident.repository.AuditEventRepository;
 import com.incidentplatform.shared.audit.ActorType;
 import com.incidentplatform.shared.dto.AuditEventMessage;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
-import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
+import com.incidentplatform.shared.kafka.TenantResolutionException;
 import com.incidentplatform.shared.security.TenantContext;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.common.header.Header;
 import org.hibernate.exception.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,7 +24,6 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.List;
@@ -84,6 +82,8 @@ public class AuditEventConsumer {
     static final String REASON_UNREADABLE = "unreadable";
     static final String REASON_CONSTRAINT = "constraint";
     static final String REASON_TENANT_MISMATCH = "tenant_mismatch";
+    /** Backlog #0-92: no valid tenant in the payload, or an invalid tenant header. */
+    static final String REASON_TENANT_INVALID = "tenant_invalid";
 
     /** How long the consumer waits for the dead-letter copy of a rejected record. */
     static final Duration DEAD_LETTER_TIMEOUT = Duration.ofSeconds(10);
@@ -110,7 +110,8 @@ public class AuditEventConsumer {
         // Registered at zero now (backlog #0-84, found in the review of the
         // second step): a counter created at its first rejection starts its
         // series at 1, and AuditEventsRejected's increase() missed that first one.
-        for (final String reason : List.of(REASON_UNREADABLE, REASON_CONSTRAINT, REASON_TENANT_MISMATCH)) {
+        for (final String reason : List.of(REASON_UNREADABLE, REASON_CONSTRAINT, REASON_TENANT_MISMATCH,
+                REASON_TENANT_INVALID)) {
             rejected.put(reason, rejectedCounter(reason));
         }
     }
@@ -129,12 +130,22 @@ public class AuditEventConsumer {
             final AuditEventMessage message;
             final String tenantId;
             try {
-                // Backlog #0-84 (found in review): the tenant per record, header
-                // first and payload as the fallback (CLAUDE.md, Kafka), as every
-                // other consumer resolves it; this one used to take the payload's.
+                // The tenant per record, as every consumer resolves it: since
+                // backlog #0-92 the payload's, which the header must match
+                // (TenantKafkaRecordResolver). This consumer used to compare
+                // the two itself, the only one that did.
                 final JsonNode payload = recordResolver.parseJson(record.value());
                 tenantId = recordResolver.extractTenantId(record, payload);
                 message = objectMapper.treeToValue(payload, AuditEventMessage.class);
+            } catch (TenantResolutionException e) {
+                // A record whose tenant cannot be trusted: stored under neither
+                // the header's tenant nor the payload's (found in review of
+                // #0-84). Its dead-letter entry names no tenant.
+                rejectThenAcknowledge(record, null,
+                        e.reason() == TenantResolutionException.Reason.MISMATCH
+                                ? REASON_TENANT_MISMATCH : REASON_TENANT_INVALID,
+                        "record tenant refused (" + e.reason().tag() + ")", acknowledgment);
+                return;
             } catch (IOException | IllegalArgumentException e) {
                 // Poison pill — unparseable JSON, no tenant, or a structurally
                 // invalid payload. Retrying will never succeed.
@@ -143,26 +154,10 @@ public class AuditEventConsumer {
                 // line. Producers with an outbox mark an event sent once Kafka
                 // has it, so a record skipped here is lost with no backlog to
                 // show it: it goes to the dead-letter topic and is counted.
-                rejectThenAcknowledge(record, headerTenant(record), REASON_UNREADABLE, unreadableReason(e),
-                        acknowledgment);
+                rejectThenAcknowledge(record, null, REASON_UNREADABLE, unreadableReason(e), acknowledgment);
                 return;
             }
             TenantContext.set(tenantId);
-
-            if (!tenantId.equals(message.tenantId())) {
-                // The event would be stored, and deduplicated, under a tenant its
-                // record does not carry (found in review): a forged or broken
-                // producer, never a platform sender (they set the header from the
-                // event's own tenant). A payload without a tenant is refused too
-                // (found in review): the header alone would then decide which
-                // tenant's trail the event lands in, and AuditEventPublisher never
-                // sends an event without one.
-                rejectThenAcknowledge(record, tenantId, REASON_TENANT_MISMATCH, message.tenantId() == null
-                        ? "the payload names no tenant"
-                        : "header tenant " + tenantId + " differs from the payload's " + message.tenantId(),
-                        acknowledgment);
-                return;
-            }
 
             try {
                 auditEventRepository.save(toEntity(message, tenantId, record));
@@ -236,7 +231,7 @@ public class AuditEventConsumer {
                 reason, record.topic(), record.partition(), record.offset(), tenantId, error);
         try {
             deadLetterPublisher.publishAndWait(record.value(), record.topic(),
-                    tenantId != null ? tenantId : "unknown", reason + ": " + error, DEAD_LETTER_TIMEOUT);
+                    tenantId, reason + ": " + error, DEAD_LETTER_TIMEOUT);
         } catch (RuntimeException e) {
             log.error("Rejected audit event could not be dead-lettered — not acknowledged, retried in {}: "
                             + "topic={}, partition={}, offset={}", DEAD_LETTER_RETRY,
@@ -278,21 +273,7 @@ public class AuditEventConsumer {
                         + (at != null ? " at line " + at.getLineNr() + ", column " + at.getColumnNr() : "") + ")";
             }
         }
-        if (e instanceof IllegalArgumentException && e.getMessage() != null
-                && e.getMessage().startsWith("Missing tenantId")) {
-            return "no tenant in X-Tenant-Id or the payload";
-        }
         return e.getClass().getSimpleName();
-    }
-
-    /** The record's {@code X-Tenant-Id}, for the dead-letter entry of a record whose payload is unreadable. */
-    private static String headerTenant(ConsumerRecord<String, String> record) {
-        final Header header = record.headers().lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
-        if (header == null) {
-            return null;
-        }
-        final String tenantId = new String(header.value(), StandardCharsets.UTF_8);
-        return tenantId.isBlank() ? null : tenantId;
     }
 
     /**

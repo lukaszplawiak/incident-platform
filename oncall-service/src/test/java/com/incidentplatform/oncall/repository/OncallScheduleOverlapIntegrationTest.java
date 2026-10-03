@@ -2,6 +2,7 @@ package com.incidentplatform.oncall.repository;
 
 import com.incidentplatform.oncall.domain.OncallRole;
 import com.incidentplatform.oncall.domain.OncallSchedule;
+import com.incidentplatform.shared.security.TenantIds;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -64,6 +65,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 })
 @DisplayName("OncallScheduleRepository — real Postgres integration")
 class OncallScheduleOverlapIntegrationTest {
+
+    /**
+     * Tables of this schema with a tenant_id column but no CHECK holding the
+     * platform's tenant id pattern ({@code TenantIds.SLUG}, the one parameter);
+     * backlog #0-92.
+     */
+    private static final String TENANT_ID_COLUMNS_WITHOUT_SLUG_CHECK = """
+            SELECT c.table_name FROM information_schema.columns c
+            JOIN information_schema.tables t
+              ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+             AND t.table_type = 'BASE TABLE'
+            WHERE c.table_schema = current_schema() AND c.column_name = 'tenant_id'
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_constraint k
+                WHERE k.conrelid = (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass
+                  AND k.contype = 'c'
+                  AND position(? IN pg_get_constraintdef(k.oid)) > 0)
+            ORDER BY c.table_name
+            """;
 
     // postgres:16-alpine — same image version used in docker/docker-compose.yml,
     // for consistency between what's tested here and what actually runs.
@@ -630,5 +650,20 @@ void twoActiveRowsStillConflict() {
 
             assertThat(result).isEmpty();
         }
+    }
+
+    /**
+     * Backlog #0-92 (found in review): every table of this service with a
+     * tenant_id carries the slug CHECK (V7), as on every other service's
+     * tables. A new table without the constraint fails here.
+     */
+    @Test
+    @DisplayName("every table with a tenant_id carries the tenant id slug CHECK (V7, backlog #0-92)")
+    void everyTenantIdColumnChecked() {
+        assertThat(jdbcTemplate.queryForList(TENANT_ID_COLUMNS_WITHOUT_SLUG_CHECK, String.class,
+                TenantIds.SLUG)).isEmpty();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+                        + "AND column_name = 'tenant_id'", Integer.class)).isGreaterThanOrEqualTo(1);
     }
 }

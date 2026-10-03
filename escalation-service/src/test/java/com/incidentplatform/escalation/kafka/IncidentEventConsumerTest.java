@@ -9,6 +9,7 @@ import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
 
@@ -65,7 +67,7 @@ class IncidentEventConsumerTest {
         // direct objectMapper parameter).
         consumer = new IncidentEventConsumer(
                 escalationService, deadLetterPublisher,
-                new TenantKafkaRecordResolver(objectMapper));
+                new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()));
     }
 
     @AfterEach
@@ -93,6 +95,11 @@ class IncidentEventConsumerTest {
         }
         return record;
     }
+    /** {@code payload} with its tenant replaced, so header and payload agree (backlog #0-92). */
+    private static String forTenant(String payload, String tenant) {
+        return payload.replace("\"" + TENANT_ID + "\"", "\"" + tenant + "\"");
+    }
+
 
     private String openedEvent(Severity severity) {
         return String.format("""
@@ -147,7 +154,7 @@ class IncidentEventConsumerTest {
     class OnIncidentOpened {
 
         @Test
-        @DisplayName("should schedule escalation with tenantId from header")
+        @DisplayName("should schedule escalation with tenantId from the record (payload, matching header)")
         void shouldScheduleEscalationWithTenantId() {
             // given
             final ConsumerRecord<String, String> record =
@@ -243,7 +250,7 @@ class IncidentEventConsumerTest {
     class OnIncidentAcknowledged {
 
         @Test
-        @DisplayName("should cancel escalation with tenantId from header")
+        @DisplayName("should cancel escalation with tenantId from the record (payload, matching header)")
         void shouldCancelEscalationWithTenantId() {
             // given
             final ConsumerRecord<String, String> record =
@@ -372,10 +379,10 @@ class IncidentEventConsumerTest {
         void shouldNotLeakTenantIdBetweenRecords() {
             // given
             final ConsumerRecord<String, String> recordA =
-                    buildRecord(openedEvent(Severity.CRITICAL), "tenant-a",
+                    buildRecord(forTenant(openedEvent(Severity.CRITICAL), "tenant-a"), "tenant-a",
                             IncidentEventTypes.INCIDENT_OPENED);
             final ConsumerRecord<String, String> recordB =
-                    buildRecord(acknowledgedEvent(), "tenant-b",
+                    buildRecord(forTenant(acknowledgedEvent(), "tenant-b"), "tenant-b",
                             IncidentEventTypes.INCIDENT_ACKNOWLEDGED);
 
             final ArgumentCaptor<String> scheduleCaptor =
@@ -562,12 +569,38 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — routed to DLT rather than silently discarded, tenantId
-            // reported as "unknown" since it was never resolved
+            // then — routed to DLT rather than silently discarded, with no
+            // tenant since none was resolved (backlog #0-91: it used to be
+            // the string "unknown", itself a valid tenant id)
             then(deadLetterPublisher).should().publish(
-                    eq(payloadWithoutTenantId), eq(TOPIC), eq("unknown"), anyString());
+                    eq(payloadWithoutTenantId), eq(TOPIC), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
             then(escalationService).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("dead-letters a record without X-Tenant-Id, even with a valid payload tenant (backlog #0-92)")
+        void shouldDeadLetterWhenTenantHeaderMissing() {
+            // given — every platform sender writes the header (TenantRecords)
+            final String payload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "CRITICAL",
+                      "occurredAt": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, Instant.now());
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(payload, null, IncidentEventTypes.INCIDENT_OPENED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — processed under no tenant
+            then(escalationService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(), anyString());
+            then(acknowledgment).should().acknowledge();
         }
     }
 }

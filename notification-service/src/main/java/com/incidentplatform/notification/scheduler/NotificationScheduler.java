@@ -172,8 +172,10 @@ public class NotificationScheduler {
             }
             processed++;
 
-            TenantContext.set(entry.getTenantId());
+            // Inside the try: set refuses an invalid tenant id, and that must stay
+            // this entry's failure, not end the batch (backlog #0-92).
             try {
+                TenantContext.set(entry.getTenantId());
                 notificationService.processEntry(entry);
             } catch (OncallLookupUnavailableException e) {
                 if (handleLookupUnavailable(entry, e, "oncall-service",

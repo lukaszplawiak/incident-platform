@@ -2,6 +2,7 @@ package com.incidentplatform.incident.api;
 
 import com.incidentplatform.shared.security.JwtUtils;
 import com.incidentplatform.shared.security.ReservedTenants;
+import com.incidentplatform.shared.security.TenantIds;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -41,6 +42,22 @@ class DevTokenControllerTest {
 
             assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
             assertThat(response.getBody()).containsKey("error").doesNotContainKey("token");
+        }
+        verifyNoInteractions(jwtUtils);
+    }
+
+    @Test
+    @DisplayName("refuses a tenant id that is not a slug with 400 naming the rule, not the value (backlog #0-92)")
+    void refusesInvalidTenant() {
+        final DevTokenController controller = new DevTokenController(jwtUtils, environment);
+
+        for (final String tenant : List.of("Acme", "acme corp", "acme\nforged", "ab")) {
+            final ResponseEntity<Map<String, String>> response =
+                    controller.generateToken(tenant, List.of("ROLE_ADMIN"));
+
+            assertThat(response.getStatusCode()).as(tenant).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(response.getBody()).containsEntry("error", "tenantId: " + TenantIds.RULE)
+                    .doesNotContainKey("token");
         }
         verifyNoInteractions(jwtUtils);
     }

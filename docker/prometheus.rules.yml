@@ -347,6 +347,53 @@ groups:
             log ("Audit event not recorded", or "Notification delivered but not
             recorded") names the incident and holds what to reconstruct.
 
+      - alert: KafkaRecordsTenantRejected
+        # Backlog #0-92: a consumer refused a record's tenant (no valid tenant
+        # in the payload, a missing or invalid X-Tenant-Id header, or a header
+        # naming another tenant than the payload) and dead-lettered it. No platform
+        # sender builds such a record (TenantRecords), so it is a forged record
+        # (Kafka has no ACLs yet: #0-66) or a sender's bug, and the event it
+        # carried was not processed: a notification, an escalation or an audit
+        # entry is missing. Critical. Resolves an hour after the last one.
+        expr: |
+          sum by (job, reason) (
+            increase(kafka_records_tenant_rejected_total[1h])
+          ) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} refused Kafka records' tenant ({{ $labels.reason }})"
+          description: >
+            {{ $labels.job }} dead-lettered at least one Kafka record in the last
+            hour because its tenant could not be trusted ({{ $labels.reason }}).
+            Its event was not processed. The dead-letter topic holds it; the
+            ERROR log "Poison pill" (or "Audit event rejected") names its topic,
+            partition and offset.
+
+      - alert: KafkaRecordsWithoutTenant
+        # Backlog #0-91: a service produced a record without a valid
+        # X-Tenant-Id header (TenantKafkaProducerInterceptor counts, never
+        # writes): a sender that does not build its records through
+        # TenantRecords. Its consumer refuses such a record too, missing or
+        # invalid header alike, and dead-letters it (the critical alert above);
+        # this one names the service that produced it. High, as the event's
+        # loss is already reported critical there. A dead-letter record marked
+        # as tenant-less (TenantRecords.withoutTenant) is not counted.
+        expr: |
+          sum by (job, reason) (
+            increase(kafka_records_produced_tenant_invalid_total[1h])
+          ) > 0
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} produced Kafka records without a valid tenant header ({{ $labels.reason }})"
+          description: >
+            {{ $labels.job }} sent at least one Kafka record in the last hour
+            whose X-Tenant-Id header was {{ $labels.reason }}. Its WARN log names
+            the topic; the sender should build the record with TenantRecords.
+
       - alert: PlatformTenantProvisioningSpike
         # Backlog #0-83: more tenants created through the platform API in an
         # hour than onboarding normally needs. A taken-over operator session can
