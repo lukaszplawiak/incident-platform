@@ -17,6 +17,8 @@ import com.incidentplatform.shared.security.UserPrincipal;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
@@ -181,6 +183,43 @@ class AuthControllerSecurityTest {
                                     {"email":"user@example.com"}
                                     """))
                     .andExpect(status().isBadRequest());
+        }
+
+        /**
+         * Backlog #0-92: a public endpoint has no signed tenant, so its
+         * X-Tenant-Id header is checked before it reaches a query, a log line
+         * or TenantContext.
+         */
+        @ParameterizedTest
+        @ValueSource(strings = {"Bad Tenant", "evil%0AFAKE", "ab", "UPPER"})
+        @DisplayName("400 when X-Tenant-Id is not a valid tenant id, never reaching the service (backlog #0-92)")
+        void invalidTenantHeader_returns400(String tenant) throws Exception {
+            mockMvc.perform(post("/api/v1/auth/login")
+                            .header("X-Tenant-Id", tenant)
+                            .contentType("application/json")
+                            .content("""
+                                    {"email":"user@example.com","password":"secret123"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+            mockMvc.perform(post("/api/v1/auth/forgot-password")
+                            .header("X-Tenant-Id", tenant)
+                            .contentType("application/json")
+                            .content("""
+                                    {"email":"user@example.com"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+            // Found in review: the third public endpoint that takes the header.
+            mockMvc.perform(post("/api/v1/auth/reset-password")
+                            .header("X-Tenant-Id", tenant)
+                            .contentType("application/json")
+                            .content("""
+                                    {"token":"valid-token","newPassword":"NewSecure123!"}
+                                    """))
+                    .andExpect(status().isBadRequest());
+
+            then(authService).shouldHaveNoInteractions();
+            then(forgotPasswordService).shouldHaveNoInteractions();
+            then(passwordService).shouldHaveNoInteractions();
         }
 
         @Test

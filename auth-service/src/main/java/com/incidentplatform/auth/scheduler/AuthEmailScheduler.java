@@ -273,8 +273,10 @@ public class AuthEmailScheduler {
             }
             processed++;
             // Fixed (backlog #55): see this class's own Javadoc.
-            TenantContext.set(entry.getTenantId());
+            // Inside the try: set refuses an invalid tenant id, and that must stay
+            // this entry's failure, not end the batch (backlog #0-92).
             try {
+                TenantContext.set(entry.getTenantId());
                 processOne(entry);
             } catch (RuntimeException e) {
                 // A database error on this entry must not stop the batch; the

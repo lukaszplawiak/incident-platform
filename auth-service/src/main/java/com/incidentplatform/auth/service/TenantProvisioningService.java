@@ -9,7 +9,6 @@ import com.incidentplatform.auth.dto.CreateUserResponse;
 import com.incidentplatform.auth.dto.ProvisionTenantRequest;
 import com.incidentplatform.auth.dto.ProvisionTenantResponse;
 import com.incidentplatform.auth.dto.TenantDto;
-import com.incidentplatform.auth.dto.TenantIds;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
 import com.incidentplatform.auth.repository.TenantRepository;
@@ -20,6 +19,7 @@ import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.ReservedTenants;
+import com.incidentplatform.shared.security.TenantIds;
 import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.TenantContext;
 import com.incidentplatform.shared.security.UserPrincipal;
@@ -35,7 +35,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 /**
  * How a platform operator onboards a customer: creates a tenant and invites its
@@ -68,7 +67,6 @@ public class TenantProvisioningService {
 
     private static final Logger log = LoggerFactory.getLogger(TenantProvisioningService.class);
 
-    private static final Pattern SLUG = Pattern.compile(TenantIds.SLUG);
 
     private final TenantRepository tenantRepository;
     private final UserRepository userRepository;
@@ -115,7 +113,7 @@ public class TenantProvisioningService {
         // change its case, and login compares it exactly).
         final String email = request.adminEmail().trim();
         final String displayName = request.displayName().trim();
-        if (tenantId == null || !SLUG.matcher(tenantId).matches()) {
+        if (!TenantIds.isValid(tenantId)) {
             throw new BusinessException(ErrorCodes.VALIDATION_FAILED,
                     "tenantId must be 3-63 lowercase letters, digits or hyphens, "
                             + "starting and ending with a letter or digit", HttpStatus.BAD_REQUEST);

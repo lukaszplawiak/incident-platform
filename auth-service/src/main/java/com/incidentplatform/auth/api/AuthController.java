@@ -26,6 +26,7 @@ import com.incidentplatform.auth.service.LogoutService;
 import com.incidentplatform.auth.service.PasswordService;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
+import com.incidentplatform.shared.security.TenantIds;
 import com.incidentplatform.shared.security.UserPrincipal;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -94,7 +95,7 @@ public class AuthController {
         // X-Tenant-Id is read directly from the header because this is a
         // public endpoint — JwtAuthFilter.shouldNotFilter() skips it, so
         // TenantContext is never populated for unauthenticated requests.
-        return ResponseEntity.ok(authService.login(request, tenantId));
+        return ResponseEntity.ok(authService.login(request, checkedTenant(tenantId)));
     }
 
     @PostMapping(
@@ -168,7 +169,7 @@ public class AuthController {
         // X-Tenant-Id is read directly from the header because this is a public
         // endpoint — JwtAuthFilter.shouldNotFilter() skips it, so TenantContext
         // is never populated for unauthenticated requests.
-        forgotPasswordService.initiateReset(request.email(), tenantId);
+        forgotPasswordService.initiateReset(request.email(), checkedTenant(tenantId));
         // Always 202 — user enumeration protection (layer 1).
         return ResponseEntity.accepted().build();
     }
@@ -195,7 +196,7 @@ public class AuthController {
                     required = false,
                     defaultValue = "default") String tenantId) {
         // tenantId from header — PasswordService needs it to validate the token
-        passwordService.resetPassword(request, tenantId);
+        passwordService.resetPassword(request, checkedTenant(tenantId));
         return ResponseEntity.noContent().build();
     }
 
@@ -364,4 +365,18 @@ public class AuthController {
     }
 
 
+
+    /**
+     * The {@code X-Tenant-Id} header of a public endpoint (no token, so no
+     * signed tenant): refused with 400 unless it is a valid tenant id (backlog
+     * #0-92), before it reaches a query, a log line or {@code TenantContext}.
+     * The message states the rule and does not quote the value.
+     */
+    private static String checkedTenant(String tenantId) {
+        if (!TenantIds.isValid(tenantId)) {
+            throw new BusinessException(ErrorCodes.VALIDATION_FAILED,
+                    "X-Tenant-Id: " + TenantIds.RULE, HttpStatus.BAD_REQUEST);
+        }
+        return tenantId;
+    }
 }
