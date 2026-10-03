@@ -101,7 +101,7 @@ public class TenantKafkaRecordResolver {
         try {
             return objectMapper.readTree(value);
         } catch (IOException e) {
-            throw new IllegalArgumentException("Unparseable JSON payload ("
+            throw new UnreadableRecordException("Unparseable JSON payload ("
                     + e.getClass().getSimpleName() + ")", e);
         }
     }
@@ -113,32 +113,61 @@ public class TenantKafkaRecordResolver {
      * @throws TenantResolutionException when the tenant cannot be trusted
      */
     public String extractTenantId(ConsumerRecord<?, ?> record, JsonNode payload) {
+        final Refusal refusal = check(record, payload);
+        if (refusal != null) {
+            throw refuse(refusal.reason(), record, refusal.what());
+        }
+        return payload.path("tenantId").asText();
+    }
+
+    /**
+     * The record's tenant by the same rule as {@link #extractTenantId}, or
+     * {@code null} when it cannot be trusted or the payload is not JSON:
+     * neither counted nor thrown. For a record already refused for another
+     * reason (a missing {@code X-Event-Type}, backlog #0-96, found in review),
+     * whose dead-letter copy should still name its tenant when it has a
+     * trustworthy one; counting it here would report a tenant refusal for a
+     * record refused for something else.
+     */
+    public String trustedTenantOrNull(ConsumerRecord<?, String> record) {
+        final JsonNode payload;
+        try {
+            payload = objectMapper.readTree(record.value());
+        } catch (IOException | IllegalArgumentException e) {
+            return null;
+        }
+        return payload != null && check(record, payload) == null ? payload.path("tenantId").asText() : null;
+    }
+
+    private record Refusal(TenantResolutionException.Reason reason, String what) {
+    }
+
+    private static Refusal check(ConsumerRecord<?, ?> record, JsonNode payload) {
         final JsonNode field = payload.path("tenantId");
         final String payloadTenantId = field.isTextual() ? field.asText() : null;
         if (payloadTenantId == null || payloadTenantId.isBlank()) {
-            throw refuse(TenantResolutionException.Reason.MISSING, record, "the payload names no tenantId");
+            return new Refusal(TenantResolutionException.Reason.MISSING, "the payload names no tenantId");
         }
         if (!TenantIds.isValid(payloadTenantId)) {
-            throw refuse(TenantResolutionException.Reason.INVALID, record,
+            return new Refusal(TenantResolutionException.Reason.INVALID,
                     "the payload's tenantId is not a valid tenant id");
         }
 
         final Header header = record.headers()
                 .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
         if (header == null) {
-            throw refuse(TenantResolutionException.Reason.HEADER_MISSING, record,
-                    "the X-Tenant-Id header is missing");
+            return new Refusal(TenantResolutionException.Reason.HEADER_MISSING, "the X-Tenant-Id header is missing");
         }
         final String headerTenantId = new String(header.value(), StandardCharsets.UTF_8);
         if (!TenantIds.isValid(headerTenantId)) {
-            throw refuse(TenantResolutionException.Reason.INVALID, record,
+            return new Refusal(TenantResolutionException.Reason.INVALID,
                     "the X-Tenant-Id header is not a valid tenant id");
         }
         if (!headerTenantId.equals(payloadTenantId)) {
-            throw refuse(TenantResolutionException.Reason.MISMATCH, record,
+            return new Refusal(TenantResolutionException.Reason.MISMATCH,
                     "the X-Tenant-Id header names another tenant than the payload");
         }
-        return payloadTenantId;
+        return null;
     }
 
     private TenantResolutionException refuse(TenantResolutionException.Reason reason,

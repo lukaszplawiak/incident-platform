@@ -17,7 +17,7 @@ public class UnrecognizedSeverityException extends RuntimeException {
         // getRawSeverity() for a caller that needs it.
         super(String.format(
                 "Unrecognized severity value for incidentId=%s " +
-                        "during '%s'. Message skipped — check producer/consumer " +
+                        "during '%s'. Message dead-lettered — check producer/consumer " +
                         "version compatibility.",
                 incidentId, operation));
         this.rawSeverity = rawSeverity;

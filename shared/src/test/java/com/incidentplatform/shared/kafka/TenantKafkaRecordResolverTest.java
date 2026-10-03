@@ -124,10 +124,28 @@ class TenantKafkaRecordResolverTest {
     }
 
     @Test
-    @DisplayName("unparseable JSON: an IllegalArgumentException that does not quote the payload")
+    @DisplayName("unparseable JSON: an IllegalArgumentException that does not quote the payload, typed as such "
+            + "so its message may go into a dead-letter reason (backlog #0-96)")
     void unparseable() {
         assertThatThrownBy(() -> resolver.parseJson("{\"tenantId\": \"acme\nFAKE"))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(UnreadableRecordException.class)
                 .satisfies(e -> assertThat(e.getMessage()).doesNotContain("FAKE").doesNotContain("acme"));
+    }
+
+    @Test
+    @DisplayName("trustedTenantOrNull: the tenant by the same rule, else null — never thrown, never counted "
+            + "(backlog #0-96)")
+    void trustedTenantOrNull() {
+        assertThat(resolver.trustedTenantOrNull(record("{\"tenantId\":\"acme\"}", "acme"))).isEqualTo("acme");
+        assertThat(resolver.trustedTenantOrNull(record("{\"tenantId\":\"acme\"}", null))).isNull();
+        assertThat(resolver.trustedTenantOrNull(record("{\"tenantId\":\"acme\"}", "globex"))).isNull();
+        assertThat(resolver.trustedTenantOrNull(record("{\"tenantId\":\"Not A Slug\"}", "Not A Slug"))).isNull();
+        assertThat(resolver.trustedTenantOrNull(record("{}", "acme"))).isNull();
+        assertThat(resolver.trustedTenantOrNull(record("not json", "acme"))).isNull();
+        assertThat(resolver.trustedTenantOrNull(record(null, "acme"))).isNull();
+        assertThat(resolver.trustedTenantOrNull(record("", "acme"))).isNull();
+        assertThat(resolver.trustedTenantOrNull(record("   ", "acme"))).isNull();
+        assertThat(meters.find(TenantKafkaRecordResolver.REJECTED_COUNTER).counters())
+                .allSatisfy(counter -> assertThat(counter.count()).isZero());
     }
 }
