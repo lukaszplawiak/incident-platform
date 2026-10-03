@@ -8,6 +8,9 @@ import com.incidentplatform.shared.audit.ActorType;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.dto.AuditEventMessage;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -25,12 +28,17 @@ import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.kafka.support.SendResult;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -39,7 +47,11 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("AuditEventConsumer")
@@ -52,9 +64,16 @@ class AuditEventConsumerTest {
     private Acknowledgment acknowledgment;
 
     @Mock
-    private DeadLetterPublisher deadLetterPublisher;
+    private KafkaTemplate<String, String> kafkaTemplate;
 
     private final SimpleMeterRegistry meters = new SimpleMeterRegistry();
+
+    /**
+     * A real publisher (spied, to verify what it was handed) over a mocked
+     * Kafka: whether a record is acknowledged or nacked is decided by it
+     * since backlog #0-96, so the test runs its real decision.
+     */
+    private DeadLetterPublisher deadLetterPublisher;
 
     private AuditEventConsumer consumer;
     private ObjectMapper objectMapper;
@@ -67,6 +86,11 @@ class AuditEventConsumerTest {
     void setUp() {
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
+        deadLetterPublisher = spy(new DeadLetterPublisher(
+                kafkaTemplate, objectMapper, "incidents.dead-letter", "incident-service", meters));
+        lenient().when(kafkaTemplate.send(any(ProducerRecord.class))).thenReturn(CompletableFuture.completedFuture(
+                new SendResult<>(new ProducerRecord<>("incidents.dead-letter", "v"),
+                        new RecordMetadata(new TopicPartition("incidents.dead-letter", 0), 0, 0, 0, 0, 0))));
         consumer = new AuditEventConsumer(auditEventRepository, objectMapper, deadLetterPublisher,
                 new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()), meters);
     }
@@ -263,9 +287,10 @@ class AuditEventConsumerTest {
          * translates the resulting SQL constraint violation into
          * DataIntegrityViolationException — this must be treated as
          * "already processed" (acknowledge, no error), not as a transient
-         * failure (which would leave it unacknowledged and cause Kafka to
-         * redeliver the same message again, forever, against the same
-         * unresolvable conflict).
+         * failure (which would read the same message again, forever,
+         * against the same unresolvable conflict; since backlog #0-96 a
+         * transient failure is nacked, and dead-lettered after its
+         * redelivery deadline).
          */
         @Test
         @DisplayName("acknowledges (does not error) when save fails on the " +
@@ -319,9 +344,8 @@ class AuditEventConsumerTest {
                     assertThat(event.getLevel()).isEqualTo(Level.ERROR);
                     assertThat(event.getFormattedMessage()).contains("chk_audit_actor_type").contains("NOT stored");
                 });
-                then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
-                        org.mockito.ArgumentMatchers.contains("chk_audit_actor_type"),
-                        eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+                then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), eq(TENANT_ID),
+                    org.mockito.ArgumentMatchers.contains("chk_audit_actor_type"), eq(acknowledgment));
                 assertThat(meters.counter("audit.events.rejected", "reason", "constraint").count()).isEqualTo(1.0);
             } finally {
                 release(logs);
@@ -360,8 +384,8 @@ class AuditEventConsumerTest {
             then(acknowledgment).should().acknowledge();
             then(auditEventRepository).should(never()).save(any());
             // Backlog #0-84: not just a log line — dead-lettered and counted.
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
-                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(acknowledgment));
             assertThat(meters.counter("audit.events.rejected", "reason", "unreadable").count()).isEqualTo(1.0);
         }
 
@@ -379,8 +403,8 @@ class AuditEventConsumerTest {
             then(acknowledgment).should().acknowledge();
             then(auditEventRepository).should(never()).save(any());
             // Backlog #0-84: not just a log line — dead-lettered and counted.
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
-                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(acknowledgment));
             assertThat(meters.counter("audit.events.rejected", "reason", "unreadable").count()).isEqualTo(1.0);
         }
     }
@@ -403,9 +427,8 @@ class AuditEventConsumerTest {
             consumer.consume(buildRecordWithoutHeader(buildAuditEventJson()), acknowledgment);
 
             then(auditEventRepository).should(never()).save(any());
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
-                    eq("tenant_invalid: record tenant refused (header_missing)"),
-                    eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    eq("tenant_invalid: record tenant refused (header_missing)"), eq(acknowledgment));
             assertThat(meters.counter("audit.events.rejected", "reason", "tenant_invalid").count()).isEqualTo(1.0);
             then(acknowledgment).should().acknowledge();
         }
@@ -436,9 +459,8 @@ class AuditEventConsumerTest {
             consumer.consume(withHeader(buildAuditEventJson(), "globex"), acknowledgment);
 
             then(auditEventRepository).should(never()).save(any());
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
-                    org.mockito.ArgumentMatchers.startsWith("tenant_mismatch"),
-                    eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    org.mockito.ArgumentMatchers.startsWith("tenant_mismatch"), eq(acknowledgment));
             assertThat(meters.counter("audit.events.rejected", "reason", "tenant_mismatch").count()).isEqualTo(1.0);
             then(acknowledgment).should().acknowledge();
         }
@@ -449,8 +471,8 @@ class AuditEventConsumerTest {
         void unreadableHasNoTenant() {
             consumer.consume(withHeader("not-json", TENANT_ID), acknowledgment);
 
-            then(deadLetterPublisher).should().publishAndWait(eq("not-json"), eq(TOPIC), isNull(),
-                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(acknowledgment));
         }
 
         @Test
@@ -463,8 +485,8 @@ class AuditEventConsumerTest {
             consumer.consume(withHeader(noTenant, TENANT_ID), acknowledgment);
 
             then(auditEventRepository).should(never()).save(any());
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
-                    eq("tenant_invalid: record tenant refused (missing)"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    eq("tenant_invalid: record tenant refused (missing)"), eq(acknowledgment));
             assertThat(meters.counter("audit.events.rejected", "reason", "tenant_invalid").count()).isEqualTo(1.0);
         }
 
@@ -474,8 +496,8 @@ class AuditEventConsumerTest {
             consumer.consume(withHeader(buildAuditEventJson(), "evil\nFAKE LOG LINE"), acknowledgment);
 
             then(auditEventRepository).should(never()).save(any());
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
-                    eq("tenant_invalid: record tenant refused (invalid)"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    eq("tenant_invalid: record tenant refused (invalid)"), eq(acknowledgment));
         }
 
         @Test
@@ -492,9 +514,8 @@ class AuditEventConsumerTest {
             try {
                 consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
 
-                then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
-                        eq("constraint: violates chk_audit_actor_type (SQLState 23514)"),
-                        eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+                then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), eq(TENANT_ID),
+                    eq("constraint: violates chk_audit_actor_type (SQLState 23514)"), eq(acknowledgment));
                 assertThat(logs.list).noneMatch(event -> event.getFormattedMessage().contains("top-secret"));
             } finally {
                 release(logs);
@@ -507,8 +528,8 @@ class AuditEventConsumerTest {
             consumer.consume(withHeader("{\"tenantId\": top-secret}", TENANT_ID), acknowledgment);
 
             final ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
-                    reason.capture(), any());
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), isNull(),
+                    reason.capture(), eq(acknowledgment));
             assertThat(reason.getValue()).startsWith("unreadable: invalid JSON (").contains("line 1")
                     .doesNotContain("top-secret");
         }
@@ -516,12 +537,12 @@ class AuditEventConsumerTest {
         @Test
         @DisplayName("a dead-letter copy Kafka did not take: not acknowledged, nacked to come again, not counted")
         void deadLetterFailureNacks() {
-            org.mockito.BDDMockito.willThrow(new IllegalStateException("broker down")).given(deadLetterPublisher)
-                    .publishAndWait(anyString(), anyString(), any(), anyString(), any());
+            given(kafkaTemplate.send(any(ProducerRecord.class)))
+                    .willReturn(CompletableFuture.failedFuture(new IllegalStateException("broker down")));
 
             consumer.consume(buildRecord("not-json"), acknowledgment);
 
-            then(acknowledgment).should().nack(AuditEventConsumer.DEAD_LETTER_RETRY);
+            then(acknowledgment).should().nack(DeadLetterPublisher.REDELIVERY_DELAY);
             then(acknowledgment).should(never()).acknowledge();
             assertThat(meters.find("audit.events.rejected").counters())
                     .allSatisfy(counter -> assertThat(counter.count()).isZero());
@@ -537,50 +558,75 @@ class AuditEventConsumerTest {
         void rejectedCountersRegisteredAtZero() {
             assertThat(meters.find("audit.events.rejected").counters())
                     .extracting(counter -> counter.getId().getTag("reason"))
-                    .containsExactlyInAnyOrder("unreadable", "constraint", "tenant_mismatch", "tenant_invalid");
+                    .containsExactlyInAnyOrder("unreadable", "constraint", "tenant_mismatch", "tenant_invalid",
+                            "unexpected", "gave_up");
         }
     }
 
     // ─── transient errors ────────────────────────────────────────────────────
 
     @Nested
-    @DisplayName("transient error handling")
+    @DisplayName("save failures (backlog #0-96)")
     class TransientErrorHandling {
 
+        /**
+         * The database unavailable: nacked so the record is read again. It
+         * used to be left unacknowledged, which only looked like a retry —
+         * the next record's acknowledgement committed the offset past it
+         * ({@code DeadLetterPublisherKafkaIntegrationTest} in shared).
+         */
         @Test
-        @DisplayName("should NOT acknowledge when DB save throws — Kafka will redeliver")
-        void shouldNotAcknowledgeOnDbFailure() throws Exception {
-            // given — DB unavailable: save() throws RuntimeException (transient)
-            final ConsumerRecord<String, String> record =
-                    buildRecord(buildAuditEventJson());
-
-            willThrow(new RuntimeException("DB connection lost"))
+        @DisplayName("a transient failure (the database) is nacked, neither acknowledged nor dead-lettered")
+        void transientFailureNacked() throws Exception {
+            willThrow(new DataAccessResourceFailureException("DB connection lost"))
                     .given(auditEventRepository).save(any());
 
-            // when
-            consumer.consume(record, acknowledgment);
+            consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
 
-            // then — NOT acknowledged so Kafka redelivers after consumer restart.
-            // At-least-once delivery for audit events prevents permanent gaps
-            // in the audit trail when the DB is temporarily unavailable.
+            then(acknowledgment).should().nack(DeadLetterPublisher.REDELIVERY_DELAY);
+            then(acknowledgment).should(never()).acknowledge();
+            then(kafkaTemplate).shouldHaveNoInteractions();
+            assertThat(meters.counter(DeadLetterPublisher.REDELIVERY_COUNTER, "reason", "transient").count())
+                    .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("a transient failure past its redelivery deadline is dead-lettered and counted as a rejection")
+        void gaveUpCountedAsRejection() throws Exception {
+            final DataAccessResourceFailureException down = new DataAccessResourceFailureException("DB down");
+            willThrow(down).given(auditEventRepository).save(any());
+            doReturn(true).when(deadLetterPublisher)
+                    .redeliverLater(any(), eq(TENANT_ID), eq(acknowledgment), eq(down));
+
+            consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
+
+            assertThat(meters.counter("audit.events.rejected", "reason", "gave_up").count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("a connection that cannot be had for the transaction is transient too")
+        void cannotCreateTransactionNacked() throws Exception {
+            willThrow(new CannotCreateTransactionException("connection pool exhausted"))
+                    .given(auditEventRepository).save(any());
+
+            consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
+
+            then(acknowledgment).should().nack(DeadLetterPublisher.REDELIVERY_DELAY);
             then(acknowledgment).should(never()).acknowledge();
         }
 
         @Test
-        @DisplayName("should NOT acknowledge on any unexpected transient exception")
-        void shouldNotAcknowledgeOnUnexpectedTransientException() throws Exception {
-            // given
-            final ConsumerRecord<String, String> record =
-                    buildRecord(buildAuditEventJson());
-
-            willThrow(new RuntimeException("connection pool exhausted"))
+        @DisplayName("any other failure is rejected like a poison pill: dead-lettered by type only, counted, acknowledged")
+        void unexpectedFailureRejected() throws Exception {
+            willThrow(new IllegalStateException("secret row text"))
                     .given(auditEventRepository).save(any());
 
-            // when
-            consumer.consume(record, acknowledgment);
+            consumer.consume(buildRecord(buildAuditEventJson()), acknowledgment);
 
-            // then
-            then(acknowledgment).should(never()).acknowledge();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(any(), eq(TENANT_ID),
+                    eq("unexpected: Unexpected error: IllegalStateException"), eq(acknowledgment));
+            then(acknowledgment).should().acknowledge();
+            assertThat(meters.counter("audit.events.rejected", "reason", "unexpected").count()).isEqualTo(1.0);
         }
     }
 

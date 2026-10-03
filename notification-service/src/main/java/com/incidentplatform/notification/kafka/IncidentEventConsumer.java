@@ -2,10 +2,11 @@ package com.incidentplatform.notification.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.notification.service.NotificationService;
-import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.kafka.KafkaFailures;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
@@ -75,10 +76,17 @@ public class IncidentEventConsumer {
             // the type, consumers don't need to guess from payload structure.
             final String eventType = extractEventType(record);
             if (eventType == null) {
-                log.error("Missing {} header — skipping: topic={}, partition={}, offset={}",
+                // Changed (backlog #0-96): this record was acknowledged and
+                // dropped with only a log line; it is now kept like any other
+                // record this consumer cannot read, under its tenant when the
+                // record has a trustworthy one (not counted as a tenant
+                // refusal: it is refused for its header).
+                log.error("Missing {} header — routing to DLT: topic={}, partition={}, offset={}",
                         IncidentEventTypes.HEADER_NAME,
                         record.topic(), record.partition(), record.offset());
-                acknowledgment.acknowledge();
+                deadLetterPublisher.deadLetterThenAcknowledge(record,
+                        tenantRecordResolver.trustedTenantOrNull(record),
+                        "missing " + IncidentEventTypes.HEADER_NAME + " header", acknowledgment);
                 return;
             }
 
@@ -111,9 +119,10 @@ public class IncidentEventConsumer {
             // team to scope that lookup.
             final UUID teamId = extractTeamId(event);
 
+            // The header is the producer's: one line, bounded (backlog #0-96).
             log.info("Processing incident event: type={}, incidentId={}, " +
                             "severity={}, escalationLevel={}, tenant={}, teamId={}",
-                    eventType, incidentId, severity, escalationLevel, tenantId, teamId);
+                    AuditText.error(eventType), incidentId, severity, escalationLevel, tenantId, teamId);
 
             // Outbox Pattern: write PENDING entry and acknowledge immediately.
             // NotificationScheduler sends actual notifications asynchronously.
@@ -128,14 +137,10 @@ public class IncidentEventConsumer {
             log.error("Poison pill (unrecognized severity) — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, AuditText.error(e.getMessage()));
+                    tenantId, KafkaFailures.reason(e));
 
-            deadLetterPublisher.publish(
-                    record.value(),
-                    record.topic(),
-                    tenantId,
-                    AuditText.error(e.getMessage()));
-            acknowledgment.acknowledge();
+            deadLetterPublisher.deadLetterThenAcknowledge(record, tenantId,
+                    KafkaFailures.reason(e), acknowledgment);
             return;
 
         } catch (IllegalArgumentException e) {
@@ -146,25 +151,26 @@ public class IncidentEventConsumer {
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, AuditText.error(e.getMessage()));
+                    tenantId, KafkaFailures.reason(e));
 
-            deadLetterPublisher.publish(
-                    record.value(),
-                    record.topic(),
-                    tenantId,
-                    AuditText.error(e.getMessage()));
-            acknowledgment.acknowledge();
+            deadLetterPublisher.deadLetterThenAcknowledge(record, tenantId,
+                    KafkaFailures.reason(e), acknowledgment);
             return;
 
         } catch (Exception e) {
-            // Transient error — most likely DB unavailable during outbox INSERT.
-            // Do NOT acknowledge — Kafka will redeliver after DB recovers.
-            // No notification is lost because the outbox entry was not written.
-            log.error("Transient error processing incident event — " +
-                            "will be redelivered: topic={}, partition={}, " +
-                            "offset={}, error={}",
-                    record.topic(), record.partition(),
-                    record.offset(), e.getMessage(), e);
+            // Changed (backlog #0-96): one rule for every consumer
+            // (KafkaFailures). A transient failure — the database
+            // unreachable, timed out, or a lost version race — is nacked and
+            // read again; it used to be left unacknowledged, which the next
+            // record's acknowledgement skipped. Anything else fails the same
+            // way every time and is dead-lettered (backlog #47's direction):
+            // this consumer used to call every exception transient ("most
+            // likely DB unavailable during outbox INSERT"), which, once
+            // retried for real, would hold the partition for good on a
+            // deterministic bug. No notification is lost either way: the
+            // outbox entry was not written, and the event is kept.
+            deadLetterPublisher.redeliverIfTransientElseDeadLetter(
+                    record, TenantContext.getOrNull(), e, acknowledgment);
             return;
 
         } finally {

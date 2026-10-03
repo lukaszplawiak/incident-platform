@@ -3,11 +3,11 @@ package com.incidentplatform.incident.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.service.IncidentCommandService;
-import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.kafka.KafkaFailures;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -96,26 +96,31 @@ public class IncidentKafkaConsumer {
 
         } catch (IllegalArgumentException e) {
             // Backlog #0-92: the tenant is the resolved one, or none (null)
-            // when the record's tenant was refused; the error on one line, as
-            // an exception message may quote the record.
+            // when the record's tenant was refused. Changed (backlog #0-96,
+            // found in review): the reason is a message only when the platform
+            // wrote it content-free, else the exception's type and place
+            // (KafkaFailures.reason) — one line was not enough, a parser's
+            // message quotes the record's values.
             final String tenantId = TenantContext.getOrNull();
-            final String error = AuditText.error(e.getMessage());
+            final String error = KafkaFailures.reason(e);
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
                     tenantId, error);
 
-            deadLetterPublisher.publish(
-                    record.value(),
-                    record.topic(),
-                    tenantId,
-                    error);
+            // Backlog #0-96: acknowledged only once Kafka has the copy.
+            deadLetterPublisher.deadLetterThenAcknowledge(record, tenantId, error, acknowledgment);
+            return;
 
         } catch (Exception e) {
-            log.error("Transient error processing alert — message will be redelivered: " +
-                            "topic={}, partition={}, offset={}, tenant={}, error={}",
-                    record.topic(), record.partition(), record.offset(),
-                    TenantContext.getOrNull(), e.getMessage(), e);
+            // Changed (backlog #0-96): this returned without acknowledging
+            // for any exception, as "will be redelivered" — it was not: the
+            // next record's acknowledgement committed the offset past it. A
+            // transient failure (the database) is now nacked and read again;
+            // anything else fails the same way every time and is
+            // dead-lettered (backlog #47's rule, now shared: KafkaFailures).
+            deadLetterPublisher.redeliverIfTransientElseDeadLetter(
+                    record, TenantContext.getOrNull(), e, acknowledgment);
             return;
 
         } finally {
@@ -152,29 +157,27 @@ public class IncidentKafkaConsumer {
                     notification.alertFingerprint(), tenantId);
 
         } catch (IllegalArgumentException e) {
-            // Poison pill — route to DLT and acknowledge to unblock partition.
-            // Backlog #0-92: the tenant is the resolved one, or none (null)
-            // when the record's tenant was refused; the error on one line, as
-            // an exception message may quote the record.
+            // Poison pill — route to DLT, then acknowledge to unblock the
+            // partition. Backlog #0-92: the tenant is the resolved one, or none (null)
+            // when the record's tenant was refused. Changed (backlog #0-96,
+            // found in review): the reason is a message only when the platform
+            // wrote it content-free, else the exception's type and place
+            // (KafkaFailures.reason) — one line was not enough, a parser's
+            // message quotes the record's values.
             final String tenantId = TenantContext.getOrNull();
-            final String error = AuditText.error(e.getMessage());
+            final String error = KafkaFailures.reason(e);
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
                     tenantId, error);
 
-            deadLetterPublisher.publish(
-                    record.value(),
-                    record.topic(),
-                    tenantId,
-                    error);
+            deadLetterPublisher.deadLetterThenAcknowledge(record, tenantId, error, acknowledgment);
+            return;
 
         } catch (Exception e) {
-            // Transient error — do NOT acknowledge, allow redelivery.
-            log.error("Transient error processing resolved alert — will be redelivered: " +
-                            "topic={}, partition={}, offset={}, tenant={}, error={}",
-                    record.topic(), record.partition(), record.offset(),
-                    TenantContext.getOrNull(), e.getMessage(), e);
+            // Backlog #0-96: as in consumeAlert.
+            deadLetterPublisher.redeliverIfTransientElseDeadLetter(
+                    record, TenantContext.getOrNull(), e, acknowledgment);
             return;
 
         } finally {

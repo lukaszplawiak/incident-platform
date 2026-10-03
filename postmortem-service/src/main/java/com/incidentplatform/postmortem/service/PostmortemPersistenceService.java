@@ -81,7 +81,11 @@ public class PostmortemPersistenceService {
      * {@code catch (Exception e)}, which treats it as transient and does
      * NOT acknowledge — Kafka redelivers the same event, hits the same
      * violation, forever, blocking every other message on that partition
-     * indefinitely.
+     * indefinitely. (Changed, backlog #0-96: that path is gone — a
+     * {@code DataIntegrityViolationException} is not transient
+     * ({@code KafkaFailures}), so the consumer now dead-letters it; the
+     * duplicate check below still keeps a redelivered event from getting
+     * that far.)
      *
      * <p>Fixed the same way {@code oncall-service}'s equivalent
      * check-then-act race was just fixed: an app-level check first

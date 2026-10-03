@@ -43,6 +43,8 @@ public final class ErrorCodes {
     // ── Ingestion domain ─────────────────────────────────────────────────────
     public static final String NORMALIZATION_FAILED  = "NORMALIZATION_FAILED";
     public static final String UNKNOWN_ALERT_SOURCE  = "UNKNOWN_ALERT_SOURCE";
+    /** Backlog #0-96: an alert that could not be processed could not be kept either; retry (503). */
+    public static final String INGESTION_UNAVAILABLE = "INGESTION_UNAVAILABLE";
 
     private ErrorCodes() {}
 }

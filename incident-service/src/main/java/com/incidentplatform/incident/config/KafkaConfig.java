@@ -15,6 +15,8 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
 
+import java.time.Duration;
+
 @Configuration
 @EnableKafka
 public class KafkaConfig {
@@ -147,21 +149,43 @@ public class KafkaConfig {
      * Dead-letter publisher for IncidentKafkaConsumer — handles poison pills
      * (permanently malformed messages) in MANUAL_IMMEDIATE ack mode.
      * We use MANUAL ack to distinguish:
-     *   - poison pill (acknowledge + DLT) — always fails, skip immediately
-     *   - transient error (no acknowledge) — may recover, Kafka redelivers
-     * DefaultErrorHandler with DeadLetterPublishingRecoverer was removed because
-     * it only works with AUTO ack mode. In MANUAL_IMMEDIATE mode the listener
-     * owns offset management and DefaultErrorHandler is never invoked.
+     *   - poison pill — copied to the DLT, acknowledged once Kafka has the copy
+     *     ({@link DeadLetterPublisher#deadLetterThenAcknowledge})
+     *   - transient error — {@code nack}ed, read again after a delay
+     *     ({@link DeadLetterPublisher#redeliverLater})
+     *
+     * <p>Changed (backlog #0-96): this said DefaultErrorHandler "is never
+     * invoked" in MANUAL_IMMEDIATE mode. It is, whenever a listener throws;
+     * the listeners here simply never throw, they decide each record's fate
+     * themselves. A transient error used to be "no acknowledge, Kafka
+     * redelivers", which it does not: the next record's acknowledgement
+     * commits the offset past it. Moving the consumers onto DefaultErrorHandler
+     * with a dead-letter recoverer is backlog #0-97.
+     *
+     * <p>Backlog #0-96 (found in review): the publisher sends with a producer of
+     * its own, which blocks at most {@link DeadLetterPublisher#DEAD_LETTER_MAX_BLOCK}
+     * for Kafka's metadata, so a copy waits at most
+     * {@link DeadLetterPublisher#DEAD_LETTER_TIMEOUT} in all; the service
+     * does not start unless a whole poll of such waits fits in
+     * {@code max.poll.interval.ms}; and a record that keeps failing is
+     * dead-lettered after {@code kafka.consumer.redelivery-deadline}.
      */
     @Bean
     public DeadLetterPublisher deadLetterPublisher(
             KafkaTemplate<String, String> kafkaTemplate,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            MeterRegistry meterRegistry,
+            @Value("${kafka.consumer.redelivery-deadline:PT30M}") Duration redeliveryDeadline,
+            @Value("${spring.kafka.consumer.properties.max.poll.records}") int maxPollRecords,
+            @Value("${spring.kafka.consumer.properties.max.poll.interval.ms}") long maxPollIntervalMs) {
+        DeadLetterPublisher.requireFitsPollInterval(maxPollRecords, Duration.ofMillis(maxPollIntervalMs));
         return new DeadLetterPublisher(
-                kafkaTemplate,
+                DeadLetterPublisher.deadLetterTemplate(kafkaTemplate.getProducerFactory()),
                 objectMapper,
                 incidentsDeadLetterTopic,
-                "incident-service"
+                "incident-service",
+                meterRegistry,
+                redeliveryDeadline
         );
     }
 }

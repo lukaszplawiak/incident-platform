@@ -27,6 +27,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import org.springframework.transaction.annotation.Transactional;
+
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -65,6 +67,43 @@ class IncidentCommandServiceTest {
                 incidentRepository, historyRepository,
                 eventPublisher, webSocketPublisher, auditEventPublisher,
                 incidentCreationService);
+    }
+
+    @Nested
+    @DisplayName("recordEscalationLevel (backlog #0-96)")
+    class RecordEscalationLevel {
+
+        @Test
+        @DisplayName("records the level on the tenant's incident and reports it found")
+        void recordsLevel() {
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            assertThat(commandService.recordEscalationLevel(incident.getId(), TENANT_ID, 2)).isTrue();
+
+            assertThat(incident.getEscalationLevel()).isEqualTo(2);
+            then(incidentRepository).should().save(incident);
+        }
+
+        @Test
+        @DisplayName("an incident not in this tenant: nothing saved, reported not found")
+        void notFound() {
+            final UUID incidentId = UUID.randomUUID();
+            given(incidentRepository.findByIdAndTenantId(incidentId, TENANT_ID)).willReturn(Optional.empty());
+
+            assertThat(commandService.recordEscalationLevel(incidentId, TENANT_ID, 1)).isFalse();
+
+            then(incidentRepository).should(never()).save(any(Incident.class));
+        }
+
+        @Test
+        @DisplayName("is transactional itself, so its commit (and a version conflict) happens before it returns")
+        void transactional() throws Exception {
+            assertThat(IncidentCommandService.class
+                    .getMethod("recordEscalationLevel", UUID.class, String.class, int.class)
+                    .isAnnotationPresent(Transactional.class)).isTrue();
+        }
     }
 
     @Nested

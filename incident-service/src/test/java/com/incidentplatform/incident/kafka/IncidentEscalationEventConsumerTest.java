@@ -2,7 +2,7 @@ package com.incidentplatform.incident.kafka;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.domain.Incident;
-import com.incidentplatform.incident.repository.IncidentRepository;
+import com.incidentplatform.incident.service.IncidentCommandService;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.events.SourceType;
@@ -19,17 +19,18 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.Optional;
 import java.util.UUID;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -37,7 +38,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
-import static org.mockito.Mockito.never;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.inOrder;
 
 /**
  * Previously had no test file at all. Added primarily to cover backlog
@@ -50,7 +52,7 @@ import static org.mockito.Mockito.never;
 @DisplayName("IncidentEscalationEventConsumer")
 class IncidentEscalationEventConsumerTest {
 
-    @Mock private IncidentRepository incidentRepository;
+    @Mock private IncidentCommandService commandService;
     @Mock private Acknowledgment acknowledgment;
     @Mock private DeadLetterPublisher deadLetterPublisher;
 
@@ -66,7 +68,7 @@ class IncidentEscalationEventConsumerTest {
         // shared TenantKafkaRecordResolver — objectMapper is no longer
         // passed to the consumer directly, only used to build this.
         consumer = new IncidentEscalationEventConsumer(
-                incidentRepository, new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()),
+                commandService, new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()),
                 deadLetterPublisher);
     }
 
@@ -107,13 +109,14 @@ class IncidentEscalationEventConsumerTest {
             final Incident incident = buildIncident();
             final ConsumerRecord<String, String> record =
                     buildEscalatedRecord(incident.getId(), 2);
-            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
-                    .willReturn(Optional.of(incident));
+            given(commandService.recordEscalationLevel(incident.getId(), TENANT_ID, 2)).willReturn(true);
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).should().save(incident);
-            then(acknowledgment).should().acknowledge();
+            // Backlog #0-96: acknowledged after the transactional write returned.
+            final InOrder order = inOrder(commandService, acknowledgment);
+            order.verify(commandService).recordEscalationLevel(incident.getId(), TENANT_ID, 2);
+            order.verify(acknowledgment).acknowledge();
         }
 
         @Test
@@ -126,7 +129,7 @@ class IncidentEscalationEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).shouldHaveNoInteractions();
+            then(commandService).shouldHaveNoInteractions();
             then(acknowledgment).should().acknowledge();
         }
 
@@ -136,12 +139,10 @@ class IncidentEscalationEventConsumerTest {
             final UUID incidentId = UUID.randomUUID();
             final ConsumerRecord<String, String> record =
                     buildEscalatedRecord(incidentId, 1);
-            given(incidentRepository.findByIdAndTenantId(incidentId, TENANT_ID))
-                    .willReturn(Optional.empty());
+            given(commandService.recordEscalationLevel(incidentId, TENANT_ID, 1)).willReturn(false);
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).should(never()).save(any());
             then(acknowledgment).should().acknowledge();
         }
     }
@@ -151,15 +152,37 @@ class IncidentEscalationEventConsumerTest {
     class PoisonPillHandling {
 
         @Test
-        @DisplayName("skips and acknowledges when the X-Event-Type header is missing")
-        void skipsWhenEventTypeHeaderMissing() {
+        @DisplayName("dead-letters a record without X-Event-Type (backlog #0-96: it used to drop it)")
+        void deadLettersWhenEventTypeHeaderMissing() {
             final ConsumerRecord<String, String> record = new ConsumerRecord<>(
                     TOPIC, 0, 0L, "key", "{}");
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).shouldHaveNoInteractions();
-            then(acknowledgment).should().acknowledge();
+            then(commandService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    argThat(reason -> reason.contains(IncidentEventTypes.HEADER_NAME)), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("a poison pill's reason names the exception and where, never the record's value "
+                + "(backlog #0-96, found in review)")
+        void reasonDoesNotQuoteTheRecord() {
+            final String payload = "{\"incidentId\":\"top-secret-value\",\"tenantId\":\"" + TENANT_ID
+                    + "\",\"escalationLevel\":1}";
+            final ConsumerRecord<String, String> record = new ConsumerRecord<>(TOPIC, 0, 0L, "key", payload);
+            record.headers().add(new RecordHeader(IncidentEventTypes.HEADER_NAME,
+                    IncidentEventTypes.INCIDENT_ESCALATED.getBytes(StandardCharsets.UTF_8)));
+            record.headers().add(new RecordHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
+                    TENANT_ID.getBytes(StandardCharsets.UTF_8)));
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                    argThat(reason -> reason.startsWith("IllegalArgumentException at ")
+                            && !reason.contains("top-secret-value")),
+                    eq(acknowledgment));
         }
 
         @Test
@@ -172,9 +195,10 @@ class IncidentEscalationEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).shouldHaveNoInteractions();
-            then(deadLetterPublisher).should().publish(eq("not valid json !!!"), eq(TOPIC), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(commandService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -190,10 +214,10 @@ class IncidentEscalationEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).shouldHaveNoInteractions();
-            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(),
-                    argThat(reason -> reason.contains("another tenant") && !reason.contains("globex")));
-            then(acknowledgment).should().acknowledge();
+            then(commandService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    argThat(reason -> reason.contains("another tenant") && !reason.contains("globex")), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -207,10 +231,10 @@ class IncidentEscalationEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).shouldHaveNoInteractions();
-            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(),
-                    argThat(reason -> reason.contains("header is missing")));
-            then(acknowledgment).should().acknowledge();
+            then(commandService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    argThat(reason -> reason.contains("header is missing")), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -224,58 +248,60 @@ class IncidentEscalationEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(incidentRepository).shouldHaveNoInteractions();
-            then(deadLetterPublisher).should().publish(any(String.class), eq(TOPIC), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(commandService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
     }
 
     @Nested
-    @DisplayName("concurrency conflict handling (backlog #40)")
+    @DisplayName("concurrency conflict and failures (backlog #40, #0-96)")
     class ConcurrencyConflictHandling {
 
         /**
-         * The actual regression test for backlog #40. Verifies the new,
-         * specific catch does NOT change the retry behavior — still no
-         * acknowledge, letting Kafka redeliver — only that it's reached
-         * (rather than falling into the generic catch) and doesn't
-         * acknowledge, exactly matching this class's documented contract
-         * that retrying a genuine OptimisticLockingFailureException here
-         * is expected to resolve the conflict correctly.
+         * Backlog #40's conflict is read again — since backlog #0-96 by
+         * {@code nack}, as leaving the record unacknowledged skipped it.
          */
         @Test
-        @DisplayName("does NOT acknowledge on OptimisticLockingFailureException — " +
-                "relies on Kafka redelivery, same as before this fix")
-        void doesNotAcknowledgeOnOptimisticLockConflict() {
+        @DisplayName("an OptimisticLockingFailureException is nacked, never acknowledged")
+        void redeliversOnOptimisticLockConflict() {
             final Incident incident = buildIncident();
             final ConsumerRecord<String, String> record =
                     buildEscalatedRecord(incident.getId(), 2);
-            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
-                    .willReturn(Optional.of(incident));
-            willThrow(new OptimisticLockingFailureException(
-                    "Row was updated or deleted by another transaction"))
-                    .given(incidentRepository).save(any());
+            final OptimisticLockingFailureException conflict = new OptimisticLockingFailureException(
+                    "Row was updated or deleted by another transaction");
+            willThrow(conflict).given(commandService).recordEscalationLevel(incident.getId(), TENANT_ID, 2);
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(acknowledgment).should(never()).acknowledge();
+            then(deadLetterPublisher).should().redeliverLater(record, TENANT_ID, acknowledgment, conflict);
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
-        @DisplayName("does NOT acknowledge on a generic transient failure — " +
-                "existing behavior unchanged by this fix")
-        void doesNotAcknowledgeOnGenericTransientFailure() {
+        @DisplayName("any other failure is classified by DeadLetterPublisher (transient: nack, else DLT)")
+        void otherFailureClassified() {
             final Incident incident = buildIncident();
             final ConsumerRecord<String, String> record =
                     buildEscalatedRecord(incident.getId(), 2);
-            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
-                    .willReturn(Optional.of(incident));
-            willThrow(new RuntimeException("Database connection lost"))
-                    .given(incidentRepository).save(any());
+            final RuntimeException failure = new DataAccessResourceFailureException("Database connection lost");
+            willThrow(failure).given(commandService).recordEscalationLevel(incident.getId(), TENANT_ID, 2);
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            then(acknowledgment).should(never()).acknowledge();
+            then(deadLetterPublisher).should()
+                    .redeliverIfTransientElseDeadLetter(record, TENANT_ID, failure, acknowledgment);
+            then(acknowledgment).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("the listener method is not @Transactional: the write commits before the acknowledgement")
+        void listenerNotTransactional() throws Exception {
+            assertThat(IncidentEscalationEventConsumer.class
+                    .getMethod("consumeIncidentEvent", ConsumerRecord.class, Acknowledgment.class)
+                    .isAnnotationPresent(Transactional.class)).isFalse();
+            assertThat(IncidentEscalationEventConsumer.class.isAnnotationPresent(Transactional.class)).isFalse();
         }
     }
 }

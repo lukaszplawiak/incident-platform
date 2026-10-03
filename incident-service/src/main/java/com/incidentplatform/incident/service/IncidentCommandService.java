@@ -116,6 +116,34 @@ public class IncidentCommandService {
         }
     }
 
+    /**
+     * Records the escalation level an {@code IncidentEscalatedEvent} carries
+     * ({@code IncidentEscalationEventConsumer}); a pure attribute update, not
+     * an {@link IncidentFsm} transition.
+     *
+     * <h2>Moved here (backlog #0-96)</h2>
+     * The consumer's listener method used to be {@code @Transactional} itself
+     * and acknowledged its record inside the transaction. In
+     * {@code MANUAL_IMMEDIATE} mode that commits the offset at once, before
+     * the database commit, where Hibernate flushes and checks the
+     * {@code @Version}: a lost race with a REST change was thrown after the
+     * listener's {@code catch}, past an already committed offset. Here the
+     * transaction ends, and any conflict is thrown, before this method
+     * returns, so the consumer acknowledges only a committed change, and no
+     * database connection is held while it waits for a dead-letter copy.
+     *
+     * @return whether the incident exists in this tenant
+     */
+    @Transactional
+    public boolean recordEscalationLevel(UUID incidentId, String tenantId, int escalationLevel) {
+        final Optional<Incident> incident = incidentRepository.findByIdAndTenantId(incidentId, tenantId);
+        incident.ifPresent(found -> {
+            found.recordEscalation(escalationLevel);
+            incidentRepository.save(found);
+        });
+        return incident.isPresent();
+    }
+
     @Transactional
     public void autoResolve(ResolvedAlertNotification notification,
                             String tenantId) {

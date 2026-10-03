@@ -111,7 +111,8 @@ public class EscalationService {
      * {@link org.springframework.dao.OptimisticLockingFailureException}
      * immediately — letting this method's caller
      * ({@code IncidentEventConsumer}) treat it as a transient error and
-     * retry via Kafka redelivery, rather than silently overwriting
+     * {@code nack} the event to read it again (backlog #0-96;
+     * {@code KafkaFailures}), rather than silently overwriting
      * whatever the scheduler already committed.
      */
     @Transactional

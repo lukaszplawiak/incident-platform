@@ -33,6 +33,13 @@ spring:
       properties:
         enable.idempotence: true
         interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor
+        # Backlog #0-96 (found in review): how long KafkaProducer.send() may
+        # block while Kafka's metadata is missing. Kafka's default, 60 s, held
+        # an alert request (and its thread) that long while the sender had
+        # long timed out; the other services use 5 s as well. The dead-letter
+        # copies go through a producer of their own that blocks at most 2 s
+        # (DeadLetterPublisher.deadLetterTemplate).
+        max.block.ms: ${KAFKA_PRODUCER_MAX_BLOCK_MS:5000}
     # No consumer: ingestion-service only produces (alerts.raw, alerts.resolved,
     # alerts.dead-letter) and has no @KafkaListener. The consumer/listener
     # block that used to be here configured nothing (removed with backlog #0-16).

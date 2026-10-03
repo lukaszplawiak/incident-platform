@@ -297,7 +297,8 @@ class EscalationServiceTest {
          * that as OptimisticLockingFailureException. This must propagate
          * out of cancelEscalation() (not be silently swallowed) so
          * IncidentEventConsumer's existing generic catch treats it as a
-         * transient error and lets Kafka redeliver the ack event — see
+         * transient error and nacks the ack event to read it again
+         * (backlog #0-96) — see
          * this method's own Javadoc for the full account.
          */
         @Test

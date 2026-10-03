@@ -98,16 +98,18 @@ class GenericNormalizerTest {
         }
 
         @Test
-        @DisplayName("should throw NormalizationException for invalid severity")
+        @DisplayName("should throw NormalizationException for invalid severity, naming the field, not the value "
+                + "(backlog #0-96: the reason goes into the dead-letter copy and the log)")
         void shouldThrowForInvalidSeverity() throws Exception {
             // given
-            final JsonNode payload = buildPayload("INVALID", "title", "OPS");
+            final JsonNode payload = buildPayload("top-secret-value", "title", "OPS");
 
             // then
             assertThatThrownBy(() -> normalizer.normalize(payload, TENANT_ID, null))
                     .isInstanceOf(NormalizationException.class)
                     .hasMessageContaining("severity")
-                    .hasMessageContaining("INVALID");
+                    .hasMessageContaining("CRITICAL")
+                    .hasMessageNotContaining("top-secret-value");
         }
 
         @Test

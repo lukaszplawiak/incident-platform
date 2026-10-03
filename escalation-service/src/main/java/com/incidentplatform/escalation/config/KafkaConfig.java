@@ -15,6 +15,8 @@ import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
 
+import java.time.Duration;
+
 @Configuration
 @EnableKafka
 public class KafkaConfig {
@@ -96,16 +98,31 @@ public class KafkaConfig {
      * <p>Previously these cases were only logged and acknowledged — the
      * message itself was discarded with no way to inspect or replay it.
      * Mirrors incident-service's DeadLetterPublisher wiring exactly.
+     *
+     * <p>Backlog #0-96 (found in review): the publisher sends with a producer of
+     * its own, which blocks at most {@link DeadLetterPublisher#DEAD_LETTER_MAX_BLOCK}
+     * for Kafka's metadata, so a copy waits at most
+     * {@link DeadLetterPublisher#DEAD_LETTER_TIMEOUT} in all; the service
+     * does not start unless a whole poll of such waits fits in
+     * {@code max.poll.interval.ms}; and a record that keeps failing is
+     * dead-lettered after {@code kafka.consumer.redelivery-deadline}.
      */
     @Bean
     public DeadLetterPublisher deadLetterPublisher(
             KafkaTemplate<String, String> kafkaTemplate,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            MeterRegistry meterRegistry,
+            @Value("${kafka.consumer.redelivery-deadline:PT30M}") Duration redeliveryDeadline,
+            @Value("${spring.kafka.consumer.properties.max.poll.records}") int maxPollRecords,
+            @Value("${spring.kafka.consumer.properties.max.poll.interval.ms}") long maxPollIntervalMs) {
+        DeadLetterPublisher.requireFitsPollInterval(maxPollRecords, Duration.ofMillis(maxPollIntervalMs));
         return new DeadLetterPublisher(
-                kafkaTemplate,
+                DeadLetterPublisher.deadLetterTemplate(kafkaTemplate.getProducerFactory()),
                 objectMapper,
                 escalationDeadLetterTopic,
-                "escalation-service"
+                "escalation-service",
+                meterRegistry,
+                redeliveryDeadline
         );
     }
 }

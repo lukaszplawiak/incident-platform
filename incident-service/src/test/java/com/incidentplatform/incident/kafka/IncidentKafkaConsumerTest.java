@@ -23,6 +23,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.kafka.support.Acknowledgment;
 
 import java.nio.charset.StandardCharsets;
@@ -32,6 +33,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -129,6 +131,24 @@ class IncidentKafkaConsumerTest {
     class ConsumeAlert {
 
         @Test
+        @DisplayName("a poison pill's reason names the exception and where, never its message "
+                + "(backlog #0-96, found in review)")
+        void reasonDoesNotQuoteTheRecord() throws Exception {
+            final ConsumerRecord<String, String> record =
+                    buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
+            willThrow(new IllegalArgumentException("Invalid UUID string: top-secret-value"))
+                    .given(commandService).createFromAlert(any(), any());
+
+            consumer.consumeAlert(record, acknowledgment);
+
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                    argThat(reason -> reason.startsWith("IllegalArgumentException at ")
+                            && !reason.contains("top-secret-value")),
+                    eq(acknowledgment));
+        }
+
+
+        @Test
         @DisplayName("should call createFromAlert with correct tenantId from the record (payload, matching header)")
         void shouldCallCreateFromAlertWithTenantId() throws Exception {
             // given
@@ -175,20 +195,22 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should NOT acknowledge on transient error — Kafka will redeliver")
-        void shouldNotAcknowledgeOnTransientError() throws Exception {
+        @DisplayName("hands a processing failure to DeadLetterPublisher (transient: nack, else DLT; backlog #0-96)")
+        void shouldHandOverProcessingFailure() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RAW, buildAlertJson(), TENANT_ID);
+            final RuntimeException failure = new DataAccessResourceFailureException("DB connection lost");
+            willThrow(failure).given(commandService).createFromAlert(any(), any());
 
-            willThrow(new RuntimeException("DB connection lost"))
-                    .given(commandService).createFromAlert(any(), any());
-
-            // when — no exception propagated, consumer returns early
+            // when — no exception propagated
             consumer.consumeAlert(record, acknowledgment);
 
-            // then — NOT acknowledged so Kafka redelivers after consumer restart
-            then(acknowledgment).should(never()).acknowledge();
+            // then — never acknowledged here: a plain "return" used to let the
+            // next record's acknowledgement skip this one
+            then(deadLetterPublisher).should()
+                    .redeliverIfTransientElseDeadLetter(record, TENANT_ID, failure, acknowledgment);
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -222,11 +244,11 @@ class IncidentKafkaConsumerTest {
             consumer.consumeAlert(record, acknowledgment);
 
             // then — DLT receives the message
-            then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), isNull(), anyString());
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
 
             // and — acknowledged to unblock partition
-            then(acknowledgment).should().acknowledge();
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -255,9 +277,9 @@ class IncidentKafkaConsumerTest {
 
             // then — refused, never processed under the payload's tenant
             then(commandService).should(never()).createFromAlert(any(), any());
-            then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -274,9 +296,9 @@ class IncidentKafkaConsumerTest {
             consumer.consumeAlert(record, acknowledgment);
 
             // then — routed to DLT, partition unblocked
-            then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
             then(commandService).should(never()).createFromAlert(any(), any());
         }
 
@@ -307,8 +329,9 @@ class IncidentKafkaConsumerTest {
             consumer.consumeAlert(record, acknowledgment);
 
             then(commandService).should(never()).createFromAlert(any(), any());
-            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC_ALERTS_RAW), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -393,20 +416,21 @@ class IncidentKafkaConsumerTest {
         }
 
         @Test
-        @DisplayName("should NOT acknowledge on transient error")
-        void shouldNotAcknowledgeOnTransientError() throws Exception {
+        @DisplayName("hands a processing failure to DeadLetterPublisher (backlog #0-96)")
+        void shouldHandOverProcessingFailure() throws Exception {
             // given
             final ConsumerRecord<String, String> record =
                     buildRecord(TOPIC_ALERTS_RESOLVED, buildResolvedJson(), TENANT_ID);
-
-            willThrow(new RuntimeException("DB connection lost"))
-                    .given(commandService).autoResolve(any(), any());
+            final RuntimeException failure = new IllegalStateException("unexpected");
+            willThrow(failure).given(commandService).autoResolve(any(), any());
 
             // when
             consumer.consumeResolvedAlert(record, acknowledgment);
 
             // then
-            then(acknowledgment).should(never()).acknowledge();
+            then(deadLetterPublisher).should()
+                    .redeliverIfTransientElseDeadLetter(record, TENANT_ID, failure, acknowledgment);
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -420,9 +444,9 @@ class IncidentKafkaConsumerTest {
             consumer.consumeResolvedAlert(record, acknowledgment);
 
             // then
-            then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -437,9 +461,9 @@ class IncidentKafkaConsumerTest {
 
             // then — refused, never processed under the payload's tenant
             then(commandService).should(never()).autoResolve(any(), any());
-            then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
         }
 
         @Test
@@ -456,9 +480,9 @@ class IncidentKafkaConsumerTest {
             consumer.consumeResolvedAlert(record, acknowledgment);
 
             // then
-            then(deadLetterPublisher).should()
-                    .publish(anyString(), anyString(), isNull(), anyString());
-            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), isNull(),
+                    anyString(), eq(acknowledgment));
+            then(acknowledgment).shouldHaveNoInteractions();
             then(commandService).should(never()).autoResolve(any(), any());
         }
     }

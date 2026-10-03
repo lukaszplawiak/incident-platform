@@ -6,6 +6,7 @@ import com.incidentplatform.ingestion.ratelimit.RateLimitResult;
 import com.incidentplatform.ingestion.ratelimit.RateLimitingService;
 import com.incidentplatform.ingestion.service.AlertIngestionService;
 import com.incidentplatform.ingestion.service.IngestionSummary;
+import com.incidentplatform.shared.kafka.DeadLetterNotStoredException;
 import com.incidentplatform.shared.security.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +42,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -231,6 +233,21 @@ class AlertIngestionControllerSecurityTest {
                             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                             .content(PROMETHEUS_PAYLOAD))
                     .andExpect(status().isOk());
+        }
+
+        @Test
+        @DisplayName("503 with Retry-After when a rejected alert's dead-letter copy was not stored (backlog #0-96)")
+        void returns503WhenDeadLetterNotStored() throws Exception {
+            given(alertIngestionService.ingest(any(), any(), any(), any()))
+                    .willThrow(new DeadLetterNotStoredException("not acknowledged", new RuntimeException()));
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .with(principal("ROLE_INGESTOR"))
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(header().string("Retry-After", "10"))
+                    .andExpect(jsonPath("$.errorCode").value("INGESTION_UNAVAILABLE"));
         }
 
         @Test

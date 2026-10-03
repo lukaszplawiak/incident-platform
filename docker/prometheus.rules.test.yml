@@ -310,6 +310,51 @@ tests:
         alertname: KafkaRecordsWithoutTenant
         exp_alerts: []
 
+  # Kafka redelivery (backlog #0-96): a record given up on fires at once and
+  # resolves an hour later; nacking for 15 minutes without a break fires the
+  # stuck alert, a single nack does not. Counters are registered at zero.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_records_redelivery_gave_up_total{job="escalation-service",instance="escalation-1"}'
+        values: '0x10 1x90'
+      - series: 'kafka_records_redelivery_gave_up_total{job="postmortem-service",instance="postmortem-1"}'
+        values: '0x100'
+      - series: 'kafka_records_redelivery_requested_total{job="notification-service",instance="notification-1",reason="transient"}'
+        values: '0+12x40'
+      - series: 'kafka_records_redelivery_requested_total{job="incident-service",instance="incident-1",reason="transient"}'
+        values: '0x10 1x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: KafkaRecordRedeliveryGaveUp
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: KafkaRecordRedeliveryGaveUp
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: escalation-service
+            exp_annotations:
+              summary: "escalation-service gave up redelivering Kafka records"
+              description: "escalation-service dead-lettered at least one Kafka record in the last hour because it was still failing after its redelivery deadline. Its event was not processed. The ERROR log \"longer than its redelivery deadline\" names its topic, partition and offset; the dead-letter topic holds it.\n"
+      - eval_time: 85m
+        alertname: KafkaRecordRedeliveryGaveUp
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: KafkaRecordRedeliveryStuck
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KafkaRecordRedeliveryStuck
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: notification-service
+              reason: transient
+            exp_annotations:
+              summary: "notification-service keeps reading Kafka records again (transient)"
+              description: "notification-service has been nacking Kafka records for 15 minutes (transient); the records behind them wait. The WARN logs \"Transient failure processing record\" or \"could not be dead-lettered\" name the partition and the cause.\n"
+
   # Platform API (backlog #0-83): more than 10 tenants in an hour fires the
   # spike alert; 10 does not.
   - interval: 1m

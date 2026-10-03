@@ -2,10 +2,11 @@ package com.incidentplatform.escalation.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.escalation.service.EscalationService;
-import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.kafka.KafkaFailures;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.kafka.UnrecognizedSeverityException;
 import com.incidentplatform.shared.security.TenantContext;
@@ -13,7 +14,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.dao.TransientDataAccessException;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
@@ -54,6 +54,22 @@ import java.util.UUID;
  * else — including any future exception type nobody explicitly
  * anticipated — defaults to poison-pill handling (DLT + acknowledge)
  * instead of defaulting to "retry forever".
+ *
+ * <h2>Changed (backlog #0-96): a database outage is transient too, and
+ * "transient" now means nack</h2>
+ * The allow-list above missed the commonest transient failure: an
+ * unreachable database is {@code DataAccessResourceFailureException} (a
+ * <em>non</em>-transient {@code DataAccessException}) or, at a transaction's
+ * start, {@code CannotCreateTransactionException} (no
+ * {@code DataAccessException} at all), so a database outage dead-lettered
+ * every event. The rule now lives in {@code shared}
+ * ({@code KafkaFailures}, used through
+ * {@code DeadLetterPublisher.redeliverIfTransientElseDeadLetter}) for every
+ * consumer. And "do not acknowledge, Kafka redelivers" did not hold in
+ * {@code MANUAL_IMMEDIATE} mode — the next record's acknowledgement
+ * committed the offset past the unacknowledged one — so a transient failure
+ * is {@code nack}ed, and a poison pill is acknowledged only once Kafka has
+ * its dead-letter copy.
  */
 @Component
 public class IncidentEventConsumer {
@@ -94,10 +110,17 @@ public class IncidentEventConsumer {
             // and stable — no guessing from payload field presence.
             final String eventType = extractEventType(record);
             if (eventType == null) {
-                log.error("Missing {} header — skipping: topic={}, partition={}, offset={}",
+                // Changed (backlog #0-96): this record was acknowledged and
+                // dropped with only a log line; it is now kept like any other
+                // record this consumer cannot read, under its tenant when the
+                // record has a trustworthy one (not counted as a tenant
+                // refusal: it is refused for its header).
+                log.error("Missing {} header — routing to DLT: topic={}, partition={}, offset={}",
                         IncidentEventTypes.HEADER_NAME,
                         record.topic(), record.partition(), record.offset());
-                acknowledgment.acknowledge();
+                deadLetterPublisher.deadLetterThenAcknowledge(record,
+                        tenantRecordResolver.trustedTenantOrNull(record),
+                        "missing " + IncidentEventTypes.HEADER_NAME + " header", acknowledgment);
                 return;
             }
 
@@ -110,7 +133,8 @@ public class IncidentEventConsumer {
                         handleOpened(event, tenantId);
                 case IncidentEventTypes.INCIDENT_ACKNOWLEDGED ->
                         handleAcknowledged(event, tenantId);
-                default -> log.debug("Ignoring event type: {}", eventType);
+                // The header is the producer's: one line, bounded (backlog #0-96).
+                default -> log.debug("Ignoring event type: {}", AuditText.error(eventType));
             }
 
         } catch (UnrecognizedSeverityException e) {
@@ -120,14 +144,10 @@ public class IncidentEventConsumer {
             log.error("Poison pill (unrecognized severity) — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, AuditText.error(e.getMessage()));
+                    tenantId, KafkaFailures.reason(e));
 
-            deadLetterPublisher.publish(
-                    record.value(),
-                    record.topic(),
-                    tenantId,
-                    AuditText.error(e.getMessage()));
-            acknowledgment.acknowledge();
+            deadLetterPublisher.deadLetterThenAcknowledge(record, tenantId,
+                    KafkaFailures.reason(e), acknowledgment);
             return;
 
         } catch (IllegalArgumentException e) {
@@ -138,63 +158,21 @@ public class IncidentEventConsumer {
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, AuditText.error(e.getMessage()));
+                    tenantId, KafkaFailures.reason(e));
 
-            deadLetterPublisher.publish(
-                    record.value(),
-                    record.topic(),
-                    tenantId,
-                    AuditText.error(e.getMessage()));
-            acknowledgment.acknowledge();
-            return;
-
-        } catch (TransientDataAccessException e) {
-            // Fixed (backlog #47): genuinely transient — most likely a DB
-            // write failure (connection pool exhaustion, query timeout)
-            // while scheduling/cancelling an escalation, OR (see this
-            // class's own Javadoc) EscalationService.cancelEscalation's
-            // deliberate ObjectOptimisticLockingFailureException
-            // propagation from backlog #38 — both are
-            // TransientDataAccessException, Spring's own authoritative
-            // signal for "retrying this, unmodified, might succeed". Do
-            // NOT acknowledge — Kafka will redeliver after consumer
-            // restart. Escalation scheduling may be delayed but will not
-            // be lost.
-            log.error("Transient error processing incident event — " +
-                            "will be redelivered: topic={}, partition={}, " +
-                            "offset={}, error={}",
-                    record.topic(), record.partition(),
-                    record.offset(), e.getMessage(), e);
+            deadLetterPublisher.deadLetterThenAcknowledge(record, tenantId,
+                    KafkaFailures.reason(e), acknowledgment);
             return;
 
         } catch (Exception e) {
-            // Fixed (backlog #47): this used to be the "assume transient,
-            // retry forever" default — the exact branch that let
-            // DateTimeParseException fall through uncaught. Now inverted:
-            // only the specific TransientDataAccessException catch above
-            // is treated as worth retrying. Anything else reaching this
-            // generic catch — including DateTimeParseException, and any
-            // future exception type nobody explicitly anticipated — is
-            // routed to DLT + acknowledged, exactly like the specific
-            // poison-pill catches above, rather than blocking this
-            // partition forever. See this class's own Javadoc for why
-            // this default direction, not "assume transient", is the
-            // safer one — a genuine, unexpected programming error is
-            // also correctly poison-pill handled this way, since
-            // retrying a deterministic bug would never succeed either.
-            final String tenantId = TenantContext.getOrNull();
-            log.error("Unexpected error (not a recognized transient failure) — " +
-                            "routing to DLT: topic={}, partition={}, offset={}, " +
-                            "tenant={}, error={}",
-                    record.topic(), record.partition(), record.offset(),
-                    tenantId, AuditText.error(e.getMessage()), e);
-
-            deadLetterPublisher.publish(
-                    record.value(),
-                    record.topic(),
-                    tenantId,
-                    AuditText.error(e.getMessage()));
-            acknowledgment.acknowledge();
+            // Changed (backlog #0-96): one rule for every consumer
+            // (KafkaFailures). A transient failure — the database
+            // unreachable, timed out, or a lost version race — is nacked and
+            // read again; it used to be left unacknowledged, which the next
+            // record's acknowledgement skipped. Anything else fails the same
+            // way every time and is dead-lettered (backlog #47's direction).
+            deadLetterPublisher.redeliverIfTransientElseDeadLetter(
+                    record, TenantContext.getOrNull(), e, acknowledgment);
             return;
 
         } finally {
