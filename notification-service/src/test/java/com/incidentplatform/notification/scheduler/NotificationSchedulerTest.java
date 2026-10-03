@@ -28,6 +28,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
@@ -450,5 +452,22 @@ class NotificationSchedulerTest {
 
             then(messageStore).should().deleteOlderThan(any(Instant.class));
         }
+    }
+
+    @Test
+    @DisplayName("an entry whose tenant id is not valid is marked failed alone: the next entry is processed "
+            + "(backlog #0-92, found in review)")
+    void invalidTenantEntryDoesNotStopBatch() {
+        final NotificationQueueEntry badTenant = NotificationQueueEntry.pending(
+                UUID.randomUUID(), "Acme\nforged", "IncidentOpenedEvent", Severity.CRITICAL, "High CPU");
+        final NotificationQueueEntry good = buildPendingEntry();
+        given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(badTenant, good));
+
+        scheduler.processPendingNotifications();
+
+        then(notificationService).should(never()).processEntry(badTenant);
+        then(persistenceService).should().markFailed(eq(badTenant), anyString());
+        then(notificationService).should().processEntry(good);
+        assertThat(TenantContext.getOrNull()).isNull();
     }
 }

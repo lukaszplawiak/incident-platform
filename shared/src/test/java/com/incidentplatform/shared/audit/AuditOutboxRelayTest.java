@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.incidentplatform.shared.security.InvalidTenantIdException;
 import com.incidentplatform.shared.security.TenantContext;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import net.javacrumbs.shedlock.core.LockConfiguration;
@@ -291,6 +292,31 @@ class AuditOutboxRelayTest {
                     new RecordTooLargeException("too large")))).isFalse();
             assertThat(AuditOutboxRelay.isKafkaFailure(
                     new org.apache.kafka.common.errors.SerializationException("bad"))).isFalse();
+            // Backlog #0-91: TenantRecords refusing the row's tenant is the row's fault;
+            // any other bad argument is not known to be, so it pauses (found in review).
+            assertThat(AuditOutboxRelay.isKafkaFailure(
+                    new InvalidTenantIdException())).isFalse();
+            assertThat(AuditOutboxRelay.isKafkaFailure(new IllegalArgumentException("other"))).isTrue();
+        }
+
+        @Test
+        @DisplayName("a row whose tenant is not a valid tenant id fails alone: the next row is sent, no pause "
+                + "(backlog #0-92, found in review)")
+        void invalidTenantRowFailsAlone() {
+            final AuditOutbox.Pending badTenant =
+                    new AuditOutbox.Pending(UUID.randomUUID(), "Acme\nforged", "X", "{x}", 0);
+            given(outbox.due(50)).willReturn(List.of(badTenant, first));
+            acknowledgeEverything();
+
+            assertThat(relay.relayNow()).isEqualTo(new AuditOutboxRelay.RunResult(1, 1));
+
+            // TenantContext.set refused it before the send: the sender never saw it.
+            then(sender).should(never()).sendForRelay(eq("Acme\nforged"), anyString());
+            then(sender).should().sendForRelay(eq("acme"), anyString());
+            then(outbox).should().markFailed(eq(badTenant.id()), eq(Duration.ofSeconds(5)), contains("tenant"));
+            then(outbox).should().markSent(List.of(first.id()));
+            assertThat(relay.pausedUntil()).isEqualTo(Instant.MIN);
+            assertThat(TenantContext.isSet()).isFalse();
         }
 
         @Test

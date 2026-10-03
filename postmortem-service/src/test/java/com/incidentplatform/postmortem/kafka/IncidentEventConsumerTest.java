@@ -9,6 +9,7 @@ import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.AfterEach;
@@ -32,6 +33,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
@@ -64,7 +66,7 @@ class IncidentEventConsumerTest {
         // argument order also changed to match production.
         consumer = new IncidentEventConsumer(
                 persistenceService, deadLetterPublisher,
-                new TenantKafkaRecordResolver(objectMapper));
+                new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()));
     }
 
     @AfterEach
@@ -89,6 +91,11 @@ class IncidentEventConsumerTest {
         }
         return record;
     }
+    /** {@code payload} with its tenant replaced, so header and payload agree (backlog #0-92). */
+    private static String forTenant(String payload, String tenant) {
+        return payload.replace("\"" + TENANT_ID + "\"", "\"" + tenant + "\"");
+    }
+
 
     private String resolvedEvent() {
         return String.format("""
@@ -131,8 +138,8 @@ class IncidentEventConsumerTest {
     class OnIncidentResolved {
 
         @Test
-        @DisplayName("should write outbox entry with tenantId from header")
-        void shouldWriteOutboxEntryWithTenantIdFromHeader() {
+        @DisplayName("should write outbox entry with tenantId from the record (payload, matching header)")
+        void shouldWriteOutboxEntryWithRecordTenant() {
             // given
             final ConsumerRecord<String, String> record =
                     buildRecord(resolvedEvent(), TENANT_ID,
@@ -276,8 +283,9 @@ class IncidentEventConsumerTest {
         }
 
         @Test
-        @DisplayName("header tenant wins over payload tenant")
-        void headerTenantWinsOverPayloadTenant() {
+        @DisplayName("a header naming another tenant than the payload: dead-lettered, processed under neither "
+                + "(backlog #0-92: the header used to win)")
+        void headerPayloadMismatchDeadLettered() {
             final String payloadWithDifferentTenant = String.format("""
                     {
                       "incidentId": "%s",
@@ -295,11 +303,35 @@ class IncidentEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            final ArgumentCaptor<String> tenantCaptor =
-                    ArgumentCaptor.forClass(String.class);
-            then(persistenceService).should().createGeneratingRecord(
-                    any(), tenantCaptor.capture(), any(), any(), any(), any(), anyInt());
-            assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
+            then(persistenceService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(
+                    eq(payloadWithDifferentTenant), eq(TOPIC), isNull(), anyString());
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("dead-letters a record without X-Tenant-Id, even with a valid payload tenant (backlog #0-92)")
+        void shouldDeadLetterWhenTenantHeaderMissing() {
+            // given — every platform sender writes the header (TenantRecords)
+            final String payload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "CRITICAL",
+                      "occurredAt": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, Instant.now());
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(payload, null, IncidentEventTypes.INCIDENT_OPENED);
+
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — processed under no tenant
+            then(persistenceService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(), anyString());
+            then(acknowledgment).should().acknowledge();
         }
     }
 
@@ -452,10 +484,11 @@ class IncidentEventConsumerTest {
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — routed to DLT rather than silently discarded, tenantId
-            // reported as "unknown" since it was never resolved
+            // then — routed to DLT rather than silently discarded, with no
+            // tenant since none was resolved (backlog #0-91: it used to be
+            // the string "unknown", itself a valid tenant id)
             then(deadLetterPublisher).should().publish(
-                    eq(payloadWithoutTenantId), eq(TOPIC), eq("unknown"), anyString());
+                    eq(payloadWithoutTenantId), eq(TOPIC), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
             then(persistenceService).shouldHaveNoInteractions();
         }

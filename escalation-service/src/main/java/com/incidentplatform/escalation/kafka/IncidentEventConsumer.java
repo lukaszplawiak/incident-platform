@@ -2,6 +2,7 @@ package com.incidentplatform.escalation.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.escalation.service.EscalationService;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
@@ -82,9 +83,9 @@ public class IncidentEventConsumer {
         log.debug("Received incident event: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
 
-        // TenantContext is pre-initialised so that finally { TenantContext.clear() }
-        // is always safe, even if extractTenantId() throws before setting it.
-        TenantContext.set("unknown");
+        // Backlog #0-91: no placeholder tenant before the record's own ("unknown"
+        // used to be set, a valid tenant id that reached the dead-letter key);
+        // TenantContext.clear() in finally is safe either way.
 
         try {
             // Read eventType from the X-Event-Type header set by
@@ -119,13 +120,13 @@ public class IncidentEventConsumer {
             log.error("Poison pill (unrecognized severity) — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, e.getMessage());
+                    tenantId, AuditText.error(e.getMessage()));
 
             deadLetterPublisher.publish(
                     record.value(),
                     record.topic(),
-                    tenantId != null ? tenantId : "unknown",
-                    e.getMessage());
+                    tenantId,
+                    AuditText.error(e.getMessage()));
             acknowledgment.acknowledge();
             return;
 
@@ -137,13 +138,13 @@ public class IncidentEventConsumer {
             log.error("Poison pill detected — routing to DLT: " +
                             "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, e.getMessage());
+                    tenantId, AuditText.error(e.getMessage()));
 
             deadLetterPublisher.publish(
                     record.value(),
                     record.topic(),
-                    tenantId != null ? tenantId : "unknown",
-                    e.getMessage());
+                    tenantId,
+                    AuditText.error(e.getMessage()));
             acknowledgment.acknowledge();
             return;
 
@@ -186,13 +187,13 @@ public class IncidentEventConsumer {
                             "routing to DLT: topic={}, partition={}, offset={}, " +
                             "tenant={}, error={}",
                     record.topic(), record.partition(), record.offset(),
-                    tenantId, e.getMessage(), e);
+                    tenantId, AuditText.error(e.getMessage()), e);
 
             deadLetterPublisher.publish(
                     record.value(),
                     record.topic(),
-                    tenantId != null ? tenantId : "unknown",
-                    e.getMessage());
+                    tenantId,
+                    AuditText.error(e.getMessage()));
             acknowledgment.acknowledge();
             return;
 

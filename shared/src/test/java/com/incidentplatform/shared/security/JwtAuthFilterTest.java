@@ -27,6 +27,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("JwtAuthFilter")
@@ -221,6 +222,23 @@ class JwtAuthFilterTest {
             filter.doFilterInternal(request, response, filterChain);
 
             assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        }
+
+        @Test
+        @DisplayName("should NOT authenticate a user token whose tenantId claim is not a slug (backlog #0-92)")
+        void shouldNotAuthenticateWithInvalidTenantClaim() throws Exception {
+            given(request.getHeader("Authorization")).willReturn("Bearer token");
+            given(jwtUtils.validateAndGetClaims("token")).willReturn(Optional.of(claims));
+            given(jwtUtils.extractUserId(claims)).willReturn(Optional.of(USER_ID));
+            given(jwtUtils.extractTenantId(claims)).willReturn(Optional.of("Acme\nforged"));
+            given(jwtUtils.extractEmail(claims)).willReturn(Optional.of(EMAIL));
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+            then(request).should(never())
+                    .setAttribute(eq(TenantContext.REQUEST_ATTRIBUTE_TENANT_ID), any());
+            then(filterChain).should().doFilter(request, response);
         }
 
         @Test

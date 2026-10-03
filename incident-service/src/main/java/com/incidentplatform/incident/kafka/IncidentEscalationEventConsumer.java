@@ -3,7 +3,9 @@ package com.incidentplatform.incident.kafka;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.repository.IncidentRepository;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -70,11 +72,14 @@ public class IncidentEscalationEventConsumer {
 
     private final IncidentRepository incidentRepository;
     private final TenantKafkaRecordResolver tenantRecordResolver;
+    private final DeadLetterPublisher deadLetterPublisher;
 
     public IncidentEscalationEventConsumer(IncidentRepository incidentRepository,
-                                           TenantKafkaRecordResolver tenantRecordResolver) {
+                                           TenantKafkaRecordResolver tenantRecordResolver,
+                                           DeadLetterPublisher deadLetterPublisher) {
         this.incidentRepository = incidentRepository;
         this.tenantRecordResolver = tenantRecordResolver;
+        this.deadLetterPublisher = deadLetterPublisher;
     }
 
     @KafkaListener(
@@ -87,8 +92,6 @@ public class IncidentEscalationEventConsumer {
                                      Acknowledgment acknowledgment) {
         log.debug("Received incident event: topic={}, partition={}, offset={}",
                 record.topic(), record.partition(), record.offset());
-
-        TenantContext.set("unknown");
 
         try {
             final String eventType = extractEventType(record);
@@ -116,12 +119,19 @@ public class IncidentEscalationEventConsumer {
             handleEscalated(event, tenantId);
 
         } catch (IllegalArgumentException e) {
-            // Poison pill — unparseable JSON, missing tenantId, bad UUID, or
+            // Poison pill — unparseable JSON, a refused tenant, bad UUID, or
             // missing required field. Retrying will never succeed.
-            log.error("Poison pill in incident escalation event — skipping: " +
-                            "topic={}, partition={}, offset={}, error={}",
+            //
+            // Fixed (backlog #0-92): it used to be acknowledged and dropped,
+            // the only consumer that kept no copy; it now goes to the
+            // dead-letter topic like every other consumer's, with its resolved
+            // tenant or none, and the error on one line.
+            final String error = AuditText.error(e.getMessage());
+            log.error("Poison pill in incident escalation event — routing to DLT: " +
+                            "topic={}, partition={}, offset={}, tenant={}, error={}",
                     record.topic(), record.partition(),
-                    record.offset(), e.getMessage());
+                    record.offset(), TenantContext.getOrNull(), error);
+            deadLetterPublisher.publish(record.value(), record.topic(), TenantContext.getOrNull(), error);
             acknowledgment.acknowledge();
             return;
 

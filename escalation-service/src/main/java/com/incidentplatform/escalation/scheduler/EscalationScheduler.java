@@ -168,8 +168,10 @@ public class EscalationScheduler {
             // already used by every Kafka consumer in this codebase. Cleared
             // in finally so a failure for one tenant's task can never leak
             // its context into the next iteration.
-            TenantContext.set(task.getTenantId());
+            // Inside the try: set refuses an invalid tenant id, and that must stay
+            // this entry's failure, not end the batch (backlog #0-92).
             try {
+                TenantContext.set(task.getTenantId());
                 escalate(task);
             } catch (Exception e) {
                 // Fixed (backlog #41): logs and records which attempt this

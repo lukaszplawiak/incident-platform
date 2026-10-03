@@ -159,6 +159,25 @@ class AuthEmailSchedulerTest {
         }
 
         @Test
+        @DisplayName("an entry whose tenant id is not valid does not stop the batch: the next is sent "
+                + "(backlog #0-92, found in review)")
+        void invalidTenantEntryDoesNotStopBatch() {
+            final User badTenantUser = User.forTesting(UUID.randomUUID(), "Acme\nforged",
+                    "bad@firma.pl", null, true, List.of("ROLE_RESPONDER"));
+            final AuthEmailOutbox badTenant = AuthEmailOutbox.request(badTenantUser, AuthEmailType.INVITE,
+                    Duration.ofDays(7));
+            final AuthEmailOutbox good = invite();
+            duePending(badTenant, good);
+            readyToSend(good);
+
+            scheduler.processPending();
+
+            then(persistenceService).should(never()).prepareAttempt(eq(badTenant), any(), any());
+            then(emailService).should().sendInviteEmail("user@firma.pl", "raw-user@firma.pl");
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
         @DisplayName("routes a password reset to the reset template")
         void sendsPasswordReset() {
             final AuthEmailOutbox entry = entry("user@firma.pl", AuthEmailType.PASSWORD_RESET,

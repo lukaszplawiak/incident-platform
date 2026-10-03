@@ -685,6 +685,22 @@ class EscalationSchedulerTest {
         }
     }
 
+    @Test
+    @DisplayName("a task whose tenant id is not valid fails alone: the next task is escalated "
+            + "(backlog #0-92, found in review)")
+    void invalidTenantTaskDoesNotStopBatch() {
+        final EscalationTask badTenant = buildOverdueTaskForTenant("Acme\nforged");
+        final EscalationTask good = buildOverdueTask(1);
+        given(taskRepository.findDueForEscalation(any(), any())).willReturn(List.of(badTenant, good));
+
+        scheduler.checkAndEscalate();
+
+        then(persistenceService).should().recordFailedAttempt(eq(badTenant), any());
+        then(persistenceService).should(never()).markEscalated(badTenant);
+        then(persistenceService).should().markEscalated(good);
+        assertThat(TenantContext.getOrNull()).isNull();
+    }
+
     private EscalationTask buildOverdueTask(int level) {
         return buildOverdueTaskForTenantAndLevel(TENANT_ID, level);
     }

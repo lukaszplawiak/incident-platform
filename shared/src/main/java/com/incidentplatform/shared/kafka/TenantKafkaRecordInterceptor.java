@@ -1,5 +1,6 @@
 package com.incidentplatform.shared.kafka;
 
+import com.incidentplatform.shared.security.TenantIds;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -38,10 +39,19 @@ import java.util.concurrent.TimeUnit;
  * topic, partition, offset, tenant, payload size in bytes, producer
  * timestamp, and consumer lag (time between producer publish and now).
  *
- * <h2>3. Per-tenant Micrometer metrics</h2>
+ * <h2>3. Micrometer metrics</h2>
  * Increments {@code kafka.records.received} counter tagged with
- * {@code topic} and {@code tenant}. Measures total processing time
+ * {@code topic}. Measures total processing time
  * via {@code kafka.record.processing.duration} Timer.
+ *
+ * <h2>Changed (backlog #0-92): no {@code tenant} tag</h2>
+ * The counter used to carry a {@code tenant} tag from the record's header,
+ * read before the consumer resolves (and possibly refuses) the record's
+ * tenant: a producer could open a new series per value, unbounded (found in
+ * the end-to-end test of #0-92: a forged but well-formed header counted
+ * under the tenant it claimed). Kafka has no ACLs yet (#0-66), so a value
+ * from a record is not a label; per-tenant volume belongs to a metric
+ * recorded after resolution, which no dashboard asked for.
  *
  * <h2>Why RecordInterceptor and not ConsumerInterceptor</h2>
  * {@link org.apache.kafka.clients.consumer.ConsumerInterceptor} runs on the
@@ -70,6 +80,11 @@ public class TenantKafkaRecordInterceptor<K, V> implements RecordInterceptor<K, 
 
     static final String MDC_TENANT_ID  = "tenantId";
     static final String MDC_MESSAGE_ID = "kafkaMessageId";
+
+    /** MDC and metric value for a record without a tenant header (backlog #0-92). */
+    static final String MISSING = "_missing";
+    /** MDC and metric value for a record whose tenant header is not a valid tenant id (backlog #0-92). */
+    static final String INVALID = "_invalid";
 
     private static final String MDC_START_NANOS = "_kafkaStartNanos";
 
@@ -101,20 +116,23 @@ public class TenantKafkaRecordInterceptor<K, V> implements RecordInterceptor<K, 
         MDC.put(MDC_START_NANOS, String.valueOf(System.nanoTime()));
 
         // ── Observability log ─────────────────────────────────────────────
-        final long producerTimestampMs = record.timestamp();
-        final long lagMs = System.currentTimeMillis() - producerTimestampMs;
-        final int payloadBytes = record.value() instanceof String s
-                ? s.getBytes(StandardCharsets.UTF_8).length
-                : -1;
-
-        log.debug("KAFKA_RECORD_RECEIVED topic={} partition={} offset={} " +
-                        "tenant={} payloadBytes={} producerTimestamp={} lagMs={}",
-                record.topic(), record.partition(), record.offset(),
-                tenant, payloadBytes,
-                Instant.ofEpochMilli(producerTimestampMs), lagMs);
+        // Only when DEBUG is on: measuring the payload copies it, per record
+        // (found in review).
+        if (log.isDebugEnabled()) {
+            final long producerTimestampMs = record.timestamp();
+            final int payloadBytes = record.value() instanceof String s
+                    ? s.getBytes(StandardCharsets.UTF_8).length
+                    : -1;
+            log.debug("KAFKA_RECORD_RECEIVED topic={} partition={} offset={} " +
+                            "tenant={} payloadBytes={} producerTimestamp={} lagMs={}",
+                    record.topic(), record.partition(), record.offset(),
+                    tenant, payloadBytes,
+                    Instant.ofEpochMilli(producerTimestampMs),
+                    System.currentTimeMillis() - producerTimestampMs);
+        }
 
         // ── Metrics ───────────────────────────────────────────────────────
-        receivedCounter(record.topic(), tenant).increment();
+        receivedCounter(record.topic()).increment();
 
         return record;
     }
@@ -155,30 +173,39 @@ public class TenantKafkaRecordInterceptor<K, V> implements RecordInterceptor<K, 
         MDC.remove(MDC_START_NANOS);
     }
 
+    /**
+     * The tenant for the MDC, read from the header before the consumer parses
+     * the payload and resolves (or refuses) the record's tenant.
+     *
+     * <h2>Changed (backlog #0-92): only a valid tenant id goes in</h2>
+     * The raw header used to go into the MDC (so into every log line of the
+     * record's processing) and into a metric tag (removed, see the class
+     * Javadoc). Now a header that is not a valid tenant id is
+     * {@value #INVALID}, and a missing one {@value #MISSING}: neither is a
+     * valid tenant id (an underscore is not allowed in one), so no real tenant
+     * can be mistaken for them, which the earlier {@code "unknown"} could be.
+     * The consumer then refuses an invalid header, or takes the payload's
+     * tenant ({@code TenantKafkaRecordResolver}).
+     */
     private String extractTenantHeader(ConsumerRecord<K, V> record) {
         final Header header = record.headers()
                 .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
-        if (header != null) {
-            final String value = new String(header.value(), StandardCharsets.UTF_8);
-            if (!value.isBlank()) {
-                return value;
-            }
+        if (header == null) {
+            return MISSING;
         }
-        // "unknown" placeholder — consumer's extractTenantId() resolves the real
-        // value from the payload or routes to DLT after intercept() returns.
-        return "unknown";
+        final String value = new String(header.value(), StandardCharsets.UTF_8);
+        return TenantIds.isValid(value) ? value : INVALID;
     }
 
     private String buildMessageId(ConsumerRecord<K, V> record) {
         return record.topic() + "-" + record.partition() + "-" + record.offset();
     }
 
-    private Counter receivedCounter(String topic, String tenant) {
-        return counterCache.computeIfAbsent(topic + ":" + tenant, k ->
+    private Counter receivedCounter(String topic) {
+        return counterCache.computeIfAbsent(topic, k ->
                 Counter.builder("kafka.records.received")
-                        .description("Number of Kafka records received per topic and tenant")
+                        .description("Number of Kafka records received per topic")
                         .tag("topic", topic)
-                        .tag("tenant", tenant)
                         .register(meterRegistry));
     }
 

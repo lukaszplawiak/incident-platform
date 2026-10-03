@@ -2,6 +2,7 @@ package com.incidentplatform.shared.audit;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.incidentplatform.shared.dto.AuditEventMessage;
+import com.incidentplatform.shared.security.TenantIds;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -196,6 +197,12 @@ public class AuditEventPublisher {
      */
     static void checkStorable(AuditEventMessage message) {
         requireText("tenantId", message.tenantId(), 255);
+        if (!TenantIds.isValid(message.tenantId())) {
+            // Backlog #0-92: the relay builds the record's tenant header from
+            // it (TenantRecords), which refuses anything else.
+            throw new IllegalArgumentException("Audit event " + message.eventType()
+                    + " has an invalid tenantId: " + TenantIds.RULE);
+        }
         requireText("eventType", message.eventType(), 100);
         requireText("sourceService", message.sourceService(), 100);
         if (message.resourceId() == null) {

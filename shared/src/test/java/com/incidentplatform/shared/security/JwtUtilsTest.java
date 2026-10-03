@@ -65,6 +65,18 @@ class JwtUtilsTest {
     }
 
     @Test
+    @DisplayName("refuses to issue a user token for a tenant id that is not a slug (backlog #0-92)")
+    void shouldRefuseInvalidTenant() {
+        for (final String tenant : new String[] {"Acme", "acme corp", "acme\nforged", "ab", null}) {
+            assertThatThrownBy(() -> jwtUtils.generateToken(
+                    UUID.randomUUID(), tenant, "user@acme.com", List.of(SecurityRoles.ROLE_ADMIN),
+                    List.of(), List.of()))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Invalid tenant id: " + TenantIds.RULE);
+        }
+    }
+
+    @Test
     @DisplayName("should generate different tokens for different users")
     void shouldGenerateDifferentTokensForDifferentUsers() {
         final String token1 = jwtUtils.generateToken(

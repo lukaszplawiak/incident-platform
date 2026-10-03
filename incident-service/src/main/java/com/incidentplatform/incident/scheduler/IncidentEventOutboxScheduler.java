@@ -59,6 +59,20 @@ import java.util.List;
  * the tenant at all. {@link IncidentEventOutbox} already carries
  * {@code tenantId} per entry, so nothing else needed to change to fix
  * this — just set and clear it around {@link #processOne}.
+ *
+ * <h2>One entry never stops the batch (backlog #0-92)</h2>
+ * {@link TenantContext#set} refuses a tenant id that is not a slug, and it
+ * used to run before the {@code try}: one such row, oldest first, ended every
+ * poll before any later entry was sent, for every tenant (found in review).
+ * The set is now inside {@link #processOne}'s {@code try}, so a refused
+ * tenant is recorded on the entry ({@code markFailed}, once) like a failed
+ * send. Anything that escapes it ({@code markFailed} itself failing) is logged
+ * and the loop goes on, without a second {@code markFailed} against the same
+ * failing database (found in review). Such a row cannot be written any more
+ * (V15's CHECK on {@code tenant_id}). The entry stays PENDING and first in
+ * line, as every entry that keeps failing does (see
+ * {@code IncidentEventOutboxStatus}: nothing here gives up); the CHECK is what
+ * keeps a refused tenant from being one of them.
  */
 @Component
 @EnableConfigurationProperties(IncidentEventOutboxProperties.class)
@@ -108,10 +122,18 @@ public class IncidentEventOutboxScheduler {
             // Fixed (backlog #42): see this class's own Javadoc for the
             // full account — matches the same per-entry
             // set/try/finally-clear pattern already used by every other
-            // scheduler in this codebase.
-            TenantContext.set(entry.getTenantId());
+            // scheduler in this codebase. The set is inside processOne's
+            // try (see "One entry never stops the batch" in the class
+            // Javadoc).
             try {
                 processOne(entry);
+            } catch (RuntimeException e) {
+                // Only markFailed itself failing reaches here: logged, not
+                // recorded again (the same database would fail again, and
+                // each attempt waits for a connection; found in review).
+                log.error("Incident event outbox entry could not be processed, "
+                                + "the rest of the batch goes on: entryId={}, eventType={}, error={}",
+                        entry.getId(), entry.getEventType(), e.toString());
             } finally {
                 TenantContext.clear();
             }
@@ -120,8 +142,12 @@ public class IncidentEventOutboxScheduler {
 
     private void processOne(IncidentEventOutbox entry) {
         try {
+            // Inside the try: a tenant TenantContext refuses is this entry's
+            // failed attempt, recorded once like a failed send (backlog #0-92).
+            TenantContext.set(entry.getTenantId());
             kafkaSender.sendRawSync(
                     entry.getIncidentId().toString(),
+                    entry.getTenantId(),
                     entry.getEventType(),
                     entry.getPayload(),
                     properties.sendTimeout());
@@ -134,6 +160,11 @@ public class IncidentEventOutboxScheduler {
                     entry.getTenantId(), entry.getRetryCount() + 1);
 
         } catch (Exception e) {
+            if (e instanceof InterruptedException) {
+                // Restored, not swallowed: the scheduler is being stopped
+                // (found in review). The attempt is still recorded.
+                Thread.currentThread().interrupt();
+            }
             // No permanent-failure branch — see IncidentEventOutboxStatus's
             // Javadoc for why every failure here is left PENDING for the
             // next poll cycle to retry, indefinitely.

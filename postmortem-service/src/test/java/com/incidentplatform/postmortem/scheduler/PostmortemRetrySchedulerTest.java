@@ -468,6 +468,44 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
     @DisplayName("TenantContext handling")
     class TenantContextHandling {
 
+        @Test
+        @DisplayName("a GENERATING postmortem whose tenant id is not valid does not stop the batch "
+                + "(backlog #0-92, found in review)")
+        void invalidTenantDoesNotStopGeneratingBatch() {
+            final Postmortem badTenant = Postmortem.createGenerating(
+                    UUID.randomUUID(), "Acme\nforged", "High CPU", Severity.CRITICAL,
+                    Instant.now().minusSeconds(600), Instant.now(), 10);
+            final Postmortem good = buildGeneratingPostmortem();
+            given(postmortemRepository.findStuckGenerating(any(), any())).willReturn(List.of(badTenant, good));
+            given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
+
+            scheduler.processGenerating();
+
+            then(geminiClient).should(times(1)).generate(anyString(), anyString());
+            then(persistenceService).should().markDraftAndPublish(
+                    eq(good.getId()), eq(good.getIncidentId()), eq("test-tenant"), any(), any(), anyInt());
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
+        @Test
+        @DisplayName("a FAILED postmortem whose tenant id is not valid does not stop the retry batch "
+                + "(backlog #0-92, found in review)")
+        void invalidTenantDoesNotStopRetryBatch() {
+            final Postmortem badTenant = buildFailedPostmortemForTenant("Acme\nforged");
+            final Postmortem good = buildFailedPostmortem();
+            given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
+                    .willReturn(List.of(badTenant, good));
+            given(persistenceService.incrementRetryCount(good.getId())).willReturn(1);
+            given(geminiClient.generate(anyString(), anyString())).willReturn("draft");
+
+            scheduler.retryFailedPostmortems();
+
+            then(geminiClient).should(times(1)).generate(anyString(), anyString());
+            then(persistenceService).should().markDraftAndPublish(
+                    eq(good.getId()), eq(good.getIncidentId()), eq("test-tenant"), any(), any(), anyInt());
+            assertThat(TenantContext.getOrNull()).isNull();
+        }
+
 
         @Test
         @DisplayName("should clear TenantContext after retry run")

@@ -2,6 +2,8 @@ package com.incidentplatform.shared.events;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.security.InvalidTenantIdException;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -84,6 +86,10 @@ class IncidentEventKafkaSenderTest {
             assertThat(new String(record.headers()
                     .lastHeader(IncidentEventTypes.HEADER_NAME).value()))
                     .isEqualTo(IncidentEventTypes.INCIDENT_OPENED);
+            // Backlog #0-91: the event's own tenant, not the thread's context.
+            assertThat(new String(record.headers()
+                    .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER).value()))
+                    .isEqualTo(TENANT_ID);
         }
 
         @Test
@@ -103,6 +109,9 @@ class IncidentEventKafkaSenderTest {
     @DisplayName("sendRawSync — blocking, for IncidentEventOutboxScheduler (backlog #36)")
     class SendRawSync {
 
+        /** An outbox payload names its own tenant, the row's (backlog #0-92). */
+        private static final String PAYLOAD = "{\"tenantId\":\"" + TENANT_ID + "\",\"raw\":\"payload\"}";
+
         @Test
         @DisplayName("sends with correct topic, key, and X-Event-Type header, " +
                 "from a pre-serialized payload")
@@ -111,8 +120,8 @@ class IncidentEventKafkaSenderTest {
                     .willReturn(CompletableFuture.completedFuture(sendResult));
 
             final UUID incidentId = UUID.randomUUID();
-            sender.sendRawSync(incidentId.toString(),
-                    IncidentEventTypes.INCIDENT_RESOLVED, "{\"raw\":\"payload\"}",
+            sender.sendRawSync(incidentId.toString(), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_RESOLVED, PAYLOAD,
                     Duration.ofSeconds(1));
 
             final ArgumentCaptor<ProducerRecord<String, String>> captor =
@@ -122,10 +131,39 @@ class IncidentEventKafkaSenderTest {
             final ProducerRecord<String, String> record = captor.getValue();
             assertThat(record.topic()).isEqualTo(TOPIC);
             assertThat(record.key()).isEqualTo(incidentId.toString());
-            assertThat(record.value()).isEqualTo("{\"raw\":\"payload\"}");
+            assertThat(record.value()).isEqualTo(PAYLOAD);
             assertThat(new String(record.headers()
                     .lastHeader(IncidentEventTypes.HEADER_NAME).value()))
                     .isEqualTo(IncidentEventTypes.INCIDENT_RESOLVED);
+            assertThat(new String(record.headers()
+                    .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER).value()))
+                    .isEqualTo(TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("refuses an invalid tenant before sending (backlog #0-91)")
+        void refusesInvalidTenant() {
+            assertThatThrownBy(() -> sender.sendRawSync(UUID.randomUUID().toString(), "Bad Tenant",
+                    IncidentEventTypes.INCIDENT_OPENED, "{\"tenantId\":\"Bad Tenant\"}", Duration.ofSeconds(1)))
+                    .isInstanceOf(InvalidTenantIdException.class);
+            then(kafkaTemplate).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("refuses a row whose tenant is not its payload's, before sending; quotes neither "
+                + "(found in review)")
+        void refusesTenantOtherThanPayloads() {
+            for (final String payload : new String[] {
+                    "{\"tenantId\":\"globex\"}", "{\"raw\":\"payload\"}", "{\"tenantId\":42}"}) {
+                assertThatThrownBy(() -> sender.sendRawSync(UUID.randomUUID().toString(), TENANT_ID,
+                        IncidentEventTypes.INCIDENT_OPENED, payload, Duration.ofSeconds(1)))
+                        .as(payload).isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageNotContaining("globex").hasMessageNotContaining(TENANT_ID);
+            }
+            assertThatThrownBy(() -> sender.sendRawSync(UUID.randomUUID().toString(), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_OPENED, "not-json", Duration.ofSeconds(1)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            then(kafkaTemplate).shouldHaveNoInteractions();
         }
 
         /**
@@ -144,8 +182,8 @@ class IncidentEventKafkaSenderTest {
                             new RuntimeException("Broker unreachable")));
 
             assertThatThrownBy(() -> sender.sendRawSync(
-                    UUID.randomUUID().toString(), IncidentEventTypes.INCIDENT_OPENED,
-                    "{}", Duration.ofSeconds(1)))
+                    UUID.randomUUID().toString(), TENANT_ID, IncidentEventTypes.INCIDENT_OPENED,
+                    PAYLOAD, Duration.ofSeconds(1)))
                     .isInstanceOf(ExecutionException.class);
         }
 
@@ -157,8 +195,8 @@ class IncidentEventKafkaSenderTest {
                     .willReturn(new CompletableFuture<>());
 
             assertThatThrownBy(() -> sender.sendRawSync(
-                    UUID.randomUUID().toString(), IncidentEventTypes.INCIDENT_OPENED,
-                    "{}", Duration.ofMillis(50)))
+                    UUID.randomUUID().toString(), TENANT_ID, IncidentEventTypes.INCIDENT_OPENED,
+                    PAYLOAD, Duration.ofMillis(50)))
                     .isInstanceOf(TimeoutException.class);
         }
 
@@ -169,8 +207,8 @@ class IncidentEventKafkaSenderTest {
                     .willReturn(CompletableFuture.completedFuture(sendResult));
 
             assertThatCode(() -> sender.sendRawSync(
-                    UUID.randomUUID().toString(), IncidentEventTypes.INCIDENT_OPENED,
-                    "{}", Duration.ofSeconds(1)))
+                    UUID.randomUUID().toString(), TENANT_ID, IncidentEventTypes.INCIDENT_OPENED,
+                    PAYLOAD, Duration.ofSeconds(1)))
                     .doesNotThrowAnyException();
         }
     }

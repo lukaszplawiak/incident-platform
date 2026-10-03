@@ -154,7 +154,7 @@ Incoming Webhooks can only post to a single channel. Bot Token (`xoxb-`) with `c
 Per-service history tables scatter the timeline across databases and require multi-service HTTP calls to reconstruct a full incident view. The `audit.events` topic acts as a single audit stream — any service publishes events and the consumer assembles them into a unified chronological view via one API endpoint. A producer does not send to Kafka from inside its database transaction: it writes the event to its own outbox table in that transaction, and a relay sends it afterwards, at least once; the consumer drops a resend by the event's id (backlog #0-84, every service that records audit events).
 
 **Why per-record TenantContext in Kafka listeners instead of the consumer interceptor?**
-`TenantKafkaConsumerInterceptor.onConsume()` receives an entire batch — setting TenantContext from the first record would contaminate subsequent records from different tenants. Reading `X-Tenant-Id` per-record directly in each `@KafkaListener` guarantees correctness regardless of batch composition. The interceptor is kept as a validation layer only.
+`TenantKafkaConsumerInterceptor.onConsume()` receives an entire batch — setting TenantContext from the first record would contaminate subsequent records from different tenants. Resolving the tenant per record in each `@KafkaListener` (`TenantKafkaRecordResolver`: the payload's valid tenant, which the `X-Tenant-Id` header must match) guarantees correctness regardless of batch composition. The interceptor is kept as a validation layer only.
 
 **Why Consumer-Driven Contracts for notification-service?**
 The notification consumer deserializes Kafka messages to `JsonNode` and extracts only the fields it needs. This decouples the consumer from the exact producer schema — a producer adding new fields to `IncidentOpenedEvent` won't break notification-service.
@@ -267,7 +267,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 
 ### Multi-Tenant Kafka — Per-Record Isolation
 
-All Kafka topics are multi-tenant. Every outgoing record is meant to carry `X-Tenant-Id`: the audit, alert and incident-event senders set it from the record's own tenant, and `TenantKafkaProducerInterceptor` adds it from `TenantContext` where none is set (it never overrides an explicit one; backlog #0-88). Four services do not register the interceptor yet, so their dead-letter records go without it (backlog #0-91). Each `@KafkaListener` reads it per-record and clears `TenantContext` in a `finally` block — guaranteeing no tenant leaks between records in the same batch.
+All Kafka topics are multi-tenant. A record's tenant is the `tenantId` in its payload; its `X-Tenant-Id` header is a copy, written by one helper (`TenantRecords`) that every sender uses, so code that does not parse the payload (MDC, metrics, dead-letter tooling) can read it (backlog #0-91). `TenantKafkaProducerInterceptor`, registered in every service that produces, only checks that the header is there and valid. Each `@KafkaListener` resolves the tenant per record (`TenantKafkaRecordResolver`: the payload's valid tenant, which the header must be there to match, else the record is dead-lettered and counted, backlog #0-92) and clears `TenantContext` in a `finally` block — guaranteeing no tenant leaks between records in the same batch. Every tenant id is a slug (`TenantIds`), so none can carry anything into a log line, a header or a metric tag.
 
 ---
 
@@ -426,9 +426,9 @@ Summary; details in [Resilience & Security](#security).
   in a service with an outbox table. A relay (ShedLock, one per service, taken only when a row is due) sends the
   rows in order, at least once; incident-service drops a resent event by its id
   (`audit_events.event_id`, unique per tenant, so one tenant's records cannot pre-empt another's), and treats
-  only that and the Kafka-offset key as duplicates. It takes each record's tenant from its `X-Tenant-Id`
-  header (the payload's only as a fallback) and rejects a record whose two disagree or whose payload names
-  none; a record it cannot store
+  only that and the Kafka-offset key as duplicates. It takes each record's tenant from its payload, which the
+  `X-Tenant-Id` header must match (`TenantKafkaRecordResolver`, as every consumer does), and rejects a record
+  whose two disagree or whose payload names none; a record it cannot store
   is acknowledged only once its dead-letter copy is in Kafka, and alerts (`AuditEventsRejected`, critical).
   The publisher refuses an event the trail could not store (no tenant, a payload over 256 KiB, a metadata key
   naming a secret) before it is written. A refusal whose transaction rolls back (a
@@ -440,6 +440,20 @@ Summary; details in [Resilience & Security](#security).
   without Kafka's metadata (`KAFKA_PRODUCER_MAX_BLOCK_MS`) instead of Kafka's default 60 s, except
   escalation-service's, whose escalation event is sent once (#0-4). A backlog older than 10 minutes alerts the
   operator by email (`AuditOutboxBacklog`, critical, read from the table, so a stopped relay shows too).
+- **Tenant id and Kafka tenant** (backlogs #0-91, #0-92): every tenant id is a slug of 3-63 `[a-z0-9-]`
+  (`TenantIds`), enforced by a `CHECK` on every table with a `tenant_id` in every service, when a token is issued and read
+  (`JwtUtils`, `JwtAuthFilter`), on the `X-Tenant-Id` header of auth-service's public endpoints (400),
+  in `TenantContext.set` and for every Kafka record: so no tenant id can carry a line break into a log line or
+  a new series into a metric. A Kafka record's tenant is its payload's; the header is a copy written only by
+  `TenantRecords` (no longer by the producer interceptor from the thread's context, which incident events
+  depended on). Consumers refuse a record whose payload tenant is invalid or whose header is missing or disagrees, dead-letter
+  it under no tenant, count it and alert (`KafkaRecordsTenantRejected`, critical); a record produced without a
+  valid header is counted and alerts (`KafkaRecordsWithoutTenant`, high, webhook only). The MDC takes only a valid header
+  (`_missing` / `_invalid` otherwise), and no metric is tagged with a value from a record (`kafka.records.received`
+  lost its `tenant` tag: a forged, well-formed header could add series without bound). A scheduler or relay
+  that reads a row back sets `TenantContext` inside that row's `try`, so a row `TenantContext` refuses fails
+  alone instead of ending the batch for every tenant (found in review); the `CHECK` keeps such a row from
+  being written at all.
 - **API keys** (backlog #0-89): in auth-service a key reaches only the team routes, and only with the scope
   `teams:read` / `teams:write` (the role checks kept); every other route refuses it, so a key cannot invite users,
   change roles, create keys or integrations or change tenant settings (`ApiKeyAccess`, deny by default). A
@@ -480,7 +494,16 @@ Open items from the audit and earlier, most important first within each area. Ea
   - The staging and prod overlays are swapped, so "prod" deploys to the staging namespace: backlog #0-29.
   - The Ingress has no TLS: backlog #0-75.
 - **Data stores**
-  - Redis has no password, Kafka no SASL/ACLs, and nothing uses TLS: backlog #0-66.
+  - Redis has no password, Kafka no SASL/ACLs, and nothing uses TLS: backlog #0-66. Until then anyone who
+    reaches the broker can produce records: one with a forged tenant is refused and dead-lettered (#0-92), but
+    each one also fires the critical `KafkaRecordsTenantRejected` alert and writes a dead-letter record, so the
+    alert can be set off on purpose, and a flood fills the dead-letter topic and the logs. The dead-letter
+    topics' content is untrusted for the same reason (any field, the tenant and the `X-Tenant-Unresolved`
+    marker included, can be forged): nothing reads them today, and a future reader or replayer must resolve
+    the tenant again from the original payload, as a consumer does.
+  - Every consumer but `AuditEventConsumer` acknowledges a poison pill before its dead-letter copy is written
+    (`DeadLetterPublisher.publish`, fire-and-forget): if that send fails, the record, a refused forged one
+    included, survives only as an ERROR log line: backlog #0-96.
   - All seven services share one database role that owns every table, so neither grants nor Row-Level Security
     separate one service's tables from another's, and a SQL injection can plant a trigger, view or function that
     runs as a superuser if a superuser touches a service table, even under `SET ROLE`: backlog #0-67.
@@ -504,15 +527,13 @@ Open items from the audit and earlier, most important first within each area. Ea
     backlog #0-82.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
-  - A Kafka record's `X-Tenant-Id` header reaches `TenantContext`, the MDC and ERROR lines unchecked, so a
-    producer can forge log lines with CR/LF in it: backlog #0-92.
+  - Logs are plain text with no escaping and nothing collects them: a value from outside that reaches a log line
+    (a Kafka header other than the tenant's, a payload field) can still split it, fields are not queryable, and
+    each container's logs go with it: backlog #0-94.
   - A notification channel's own error message quotes the mail or Slack library's text (an SMTP reply, a Slack
     error body), and reaches `notification_log` whole and the audit trail cut to 500 characters: backlog #0-93.
   - A customer tenant's only admin has no way back from a factor someone else enrolled with their password, or
     from a lost phone and lost backup codes: break-glass covers only the operator tenant: backlog #0-90.
-  - A Kafka record's `X-Tenant-Id` has two writers (explicit senders and the thread-context interceptor, which
-    four services do not register), so the dead-letter records of notification- and postmortem-service carry
-    none; consumers fall back to the payload. One explicit writer, the interceptor only validating: backlog #0-91.
   - A tenant id with data in other services but no user in auth-service can be provisioned, and its admin would
     see that data; the operator guide says to check first: backlog #0-85.
 - **Project**
@@ -1421,21 +1442,27 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `UnrecordedAuditEventsTest` (shared) | `audit.event.unrecorded` registered at zero for every declared event type, so `AuditEventUnrecorded` sees the first failure (backlog #0-84) |
 | `AuditOutboxPersistenceIntegrationTest` (notification-, escalation-, postmortem-service, Postgres) | The service's outbox migration takes the shared SQL and joins the JPA transaction; through the real service: the `notification_log` row, the level-2 escalation task, the postmortem's FAILED mark each commit or roll back with its audit event, under the action's tenant (backlog #0-84) |
 | `AuditTextTest` (shared) | Error text for an audit event: cut to 500 characters on one line (control characters and U+2028/U+2029 too), never inside a surrogate pair; an unexpected exception by its type only (backlog #0-84) |
-| `DeadLetterPublisherTest` (shared) | `publishAndWait` returns only once Kafka has the dead-letter copy; a failure or timeout is thrown (backlog #0-84) |
+| `TenantIdsTest`, `TenantRecordsTest` (shared) | The one tenant id format (slug), refused without quoting the value; every tenant record built with its header (backlog #0-91/#0-92) |
+| `TenantKafkaRecordResolverTest` (shared) | A record's tenant is its payload's; a header must match it; missing, invalid and mismatched tenants refused, counted (registered at zero) and never quoted (backlog #0-92) |
+| `TenantKafkaProducerInterceptorTest` (shared) | The interceptor writes no header any more: it counts records without a valid one, except a dead-letter record marked as tenant-less (`TenantRecords.withoutTenant`); the topic name alone exempts nothing (backlog #0-91) |
+| `TenantKafkaConsumerInterceptorTest`, `TenantKafkaRecordInterceptorTest` (shared) | Validation only on the poll thread (nothing dropped or rewritten); the MDC takes only a valid header (`_missing` / `_invalid` otherwise) and no metric is tagged with a record's value (backlog #0-92) |
+| Tenant-id CHECK guard (every service's Postgres integration test) | Every table with a `tenant_id` carries the slug `CHECK`; a new table without one fails (backlog #0-92) |
+| Scheduler and relay batches (`IncidentEventOutboxSchedulerTest`, `NotificationSchedulerTest`, `EscalationSchedulerTest`, `PostmortemRetrySchedulerTest`, `AuthEmailSchedulerTest`, `AuditOutboxRelayTest`) | A row whose tenant id `TenantContext` refuses fails alone; the next row is processed (backlog #0-92) |
+| `DeadLetterPublisherTest` (shared) | `publishAndWait` returns only once Kafka has the dead-letter copy; a failure or timeout is thrown (backlog #0-84); a record carries a valid tenant in its header or none, and its reason on one line (backlog #0-91/#0-92) |
 | `AuditPersistenceIntegrationTest` (incident-service, Postgres) | V12–V14: event-id dedup per tenant, the consumer's constraint names, the CONCURRENTLY index valid, the outbox joining the JPA transaction (backlog #0-84) |
 | `AuditEventTypesTest` (shared) | Audit event type values equal their names, are unique and fit the column; `NOTIFICATION_UNDELIVERABLE` is distinct from `NOTIFICATION_FAILED` |
 | `OperatorAlertServiceTest` | Content-free operator email, per tenant and reason rate limit, no email when unconfigured, a send failure never fails the caller |
-| `IncidentEventConsumerTest` (notification-service) | Header-based tenant resolution, TenantContext lifecycle, escalation level/target parsing, dead-lettering of invalid levels |
+| `IncidentEventConsumerTest` (notification-service) | Tenant from the payload, header required and equal (backlog #0-92), TenantContext lifecycle, escalation level/target parsing, dead-lettering of invalid levels |
 | `NotificationEscalationSchemaIntegrationTest` | V5/V6 migrations, `ddl-auto: validate`, tenant- and level-aware unique index and CHECK constraints, UNDELIVERABLE status and the first-lookup-failure column (Testcontainers, needs Docker) |
 | `EscalationServiceTest` | Level 1/2 scheduling, ACK cancellation, idempotency, severity timeouts |
-| `EscalationSchedulerTest` | Timer logic, level 2 scheduling after level 1, fault isolation |
-| `IncidentEventConsumerTest` (escalation-service) | Per-record tenant isolation, sequential records without leaks |
+| `EscalationSchedulerTest` | Timer logic, level 2 scheduling after level 1, fault isolation (a task with an invalid tenant id fails alone, backlog #0-92) |
+| `IncidentEventConsumerTest` (escalation-service) | Per-record tenant isolation, sequential records without leaks, a record without `X-Tenant-Id` dead-lettered (backlog #0-92) |
 | `PostmortemServiceTest` | Generation, Gemini failure handling, CRUD, audit event publishing |
 | `PostmortemRetrySchedulerTest` | Retry logic for FAILED postmortems, max retry limit; what a failure records: a fixed text for Gemini, the type for anything else, never a message (backlog #0-84) |
 | `AuditEventConsumerTest` (incident-service) | Audit events stored per record's tenant; duplicates by event id or offset; unstorable records dead-lettered, counted (counters registered at zero) and acknowledged only once Kafka has the copy (backlog #0-84) |
-| `IncidentEventConsumerTest` (postmortem-service) | Header tenant wins over payload tenant, ignored event types |
-| `JwtUtilsTest` | Token generation, validation, expiry, secret length validation |
-| `TenantContextTest` | ThreadLocal isolation between threads, TenantAwareTaskDecorator propagation |
+| `IncidentEventConsumerTest` (postmortem-service) | Tenant from the payload, header required and equal (a missing or mismatched header is dead-lettered), ignored event types |
+| `JwtUtilsTest` | Token generation, validation, expiry, secret length validation; no token issued for a tenant id that is not a slug (backlog #0-92) |
+| `TenantContextTest` | ThreadLocal isolation between threads, TenantAwareTaskDecorator propagation; an invalid tenant id refused before it reaches the MDC (backlog #0-92) |
 | `OncallScheduleServiceTest` | Schedule creation, overlap detection, current on-call resolution |
 
 ---
@@ -1452,9 +1479,10 @@ incident-platform/
 │       ├── events/                # Kafka event records: IncidentOpenedEvent, IncidentEscalatedEvent, ...
 │       ├── exception/             # GlobalExceptionHandler, BusinessException, ResourceNotFoundException
 │       ├── kafka/                 # TenantKafkaProducerInterceptor, TenantKafkaConsumerInterceptor,
-│       │                          # TenantKafkaRecordResolver, DeadLetterPublisher
-│       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, TenantAwareTaskDecorator,
-│                                  # ServiceTokenProvider
+│       │                          # TenantKafkaRecordResolver, TenantRecords, TenantResolutionException,
+│       │                          # DeadLetterPublisher
+│       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, TenantIds, InvalidTenantIdException,
+│                                  # TenantAwareTaskDecorator, ServiceTokenProvider
 │
 ├── auth-service/                  # port 8087 — identity and access management
 │   └── src/main/java/

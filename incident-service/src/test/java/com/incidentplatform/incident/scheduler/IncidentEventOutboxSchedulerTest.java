@@ -27,6 +27,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 
 /**
  * Backlog #36. Previously had no test file at all — this class didn't
@@ -91,6 +92,7 @@ class IncidentEventOutboxSchedulerTest {
 
         then(kafkaSender).should().sendRawSync(
                 eq(entry.getIncidentId().toString()),
+                eq(entry.getTenantId()),
                 eq(IncidentEventTypes.INCIDENT_OPENED),
                 eq(entry.getPayload()),
                 eq(SEND_TIMEOUT));
@@ -113,7 +115,7 @@ class IncidentEventOutboxSchedulerTest {
                 .willReturn(List.of(entry));
         willThrow(new java.util.concurrent.ExecutionException(
                 "Broker unreachable", new RuntimeException()))
-                .given(kafkaSender).sendRawSync(any(), any(), any(), any());
+                .given(kafkaSender).sendRawSync(any(), any(), any(), any(), any());
 
         scheduler.processPending();
 
@@ -132,7 +134,7 @@ class IncidentEventOutboxSchedulerTest {
         willThrow(new java.util.concurrent.ExecutionException(
                 "Broker unreachable", new RuntimeException()))
                 .given(kafkaSender).sendRawSync(
-                        eq(failing.getIncidentId().toString()), any(), any(), any());
+                        eq(failing.getIncidentId().toString()), any(), any(), any(), any());
         // succeeding entry's sendRawSync call succeeds (void, no stub needed)
 
         scheduler.processPending();
@@ -167,10 +169,69 @@ class IncidentEventOutboxSchedulerTest {
                 .willReturn(List.of(entry));
         willThrow(new java.util.concurrent.ExecutionException(
                 "Broker unreachable", new RuntimeException()))
-                .given(kafkaSender).sendRawSync(any(), any(), any(), any());
+                .given(kafkaSender).sendRawSync(any(), any(), any(), any(), any());
 
         scheduler.processPending();
 
         assertThat(TenantContext.getOrNull()).isNull();
+    }
+
+    @Test
+    @DisplayName("an entry whose tenant id is not valid does not stop the batch: the next entry is published "
+            + "(backlog #0-92, found in review)")
+    void invalidTenantEntryDoesNotStopBatch() throws Exception {
+        final IncidentEventOutbox badTenant = IncidentEventOutbox.pending(
+                UUID.randomUUID(), "Acme\nforged", IncidentEventTypes.INCIDENT_OPENED, "{}");
+        final IncidentEventOutbox good = buildEntry();
+        given(outboxRepository.findPendingOrderByCreatedAt(any(PageRequest.class)))
+                .willReturn(List.of(badTenant, good));
+
+        scheduler.processPending();
+
+        then(kafkaSender).should(never()).sendRawSync(
+                eq(badTenant.getIncidentId().toString()), any(), any(), any(), any());
+        then(kafkaSender).should().sendRawSync(
+                eq(good.getIncidentId().toString()), eq(TENANT_ID), any(), any(), any());
+        then(persistenceService).should().markPublished(good.getId());
+        // Recorded on the entry like a failed send, once (found in review).
+        then(persistenceService).should(times(1)).markFailed(eq(badTenant.getId()), any());
+        assertThat(TenantContext.getOrNull()).isNull();
+    }
+
+    @Test
+    @DisplayName("markFailed itself failing does not stop the batch either")
+    void markFailedFailureDoesNotStopBatch() throws Exception {
+        final IncidentEventOutbox failing = buildEntry();
+        final IncidentEventOutbox succeeding = buildEntry();
+        given(outboxRepository.findPendingOrderByCreatedAt(any(PageRequest.class)))
+                .willReturn(List.of(failing, succeeding));
+        willThrow(new java.util.concurrent.ExecutionException("Broker unreachable", new RuntimeException()))
+                .given(kafkaSender).sendRawSync(eq(failing.getIncidentId().toString()), any(), any(), any(), any());
+        willThrow(new IllegalStateException("database down"))
+                .given(persistenceService).markFailed(eq(failing.getId()), any());
+
+        scheduler.processPending();
+
+        then(persistenceService).should().markPublished(succeeding.getId());
+        // Not retried against the failing database (found in review).
+        then(persistenceService).should(times(1)).markFailed(eq(failing.getId()), any());
+    }
+
+    @Test
+    @DisplayName("an interrupted send keeps the thread's interrupt flag and still records the attempt "
+            + "(found in review)")
+    void interruptedSendRestoresFlag() throws Exception {
+        final IncidentEventOutbox entry = buildEntry();
+        given(outboxRepository.findPendingOrderByCreatedAt(any(PageRequest.class))).willReturn(List.of(entry));
+        willThrow(new InterruptedException("stopping")).given(kafkaSender).sendRawSync(any(), any(), any(), any(), any());
+
+        try {
+            scheduler.processPending();
+
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            then(persistenceService).should().markFailed(eq(entry.getId()), any());
+        } finally {
+            Thread.interrupted();
+        }
     }
 }

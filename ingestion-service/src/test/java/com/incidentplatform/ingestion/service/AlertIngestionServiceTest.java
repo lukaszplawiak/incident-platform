@@ -10,6 +10,7 @@ import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.security.InvalidTenantIdException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -26,6 +27,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -204,6 +206,35 @@ class AlertIngestionServiceTest {
             service.ingest(SOURCE, rawPayload, TENANT_ID, null);
 
             then(deduplicationService).should().releaseDedupKey(alert);
+        }
+
+        @Test
+        @DisplayName("releases the dedup key when the publish throws before sending, and lets the failure "
+                + "through (found in review)")
+        void releasesDedupKeyOnSynchronousFailure() {
+            final UnifiedAlertDto alert = buildAlert();
+            final JsonNode rawPayload = buildRawPayload();
+            given(normalizer.normalize(rawPayload, TENANT_ID, null))
+                    .willReturn(NormalizationResult.firingOnly(List.of(alert)));
+            given(deduplicationService.isDuplicate(alert)).willReturn(false);
+            given(kafkaProducer.publishFiring(alert)).willThrow(new IllegalStateException("producer closed"));
+
+            assertThatThrownBy(() -> service.ingest(SOURCE, rawPayload, TENANT_ID, null))
+                    .isInstanceOf(IllegalStateException.class);
+
+            then(deduplicationService).should().releaseDedupKey(alert);
+        }
+
+        @Test
+        @DisplayName("refuses a tenant id that is not a slug before normalizing or setting a dedup key "
+                + "(backlog #0-92, found in review)")
+        void refusesInvalidTenantFirst() {
+            assertThatThrownBy(() -> service.ingest(SOURCE, buildRawPayload(), "Acme\nforged", null))
+                    .isInstanceOf(InvalidTenantIdException.class);
+
+            then(normalizer).should(never()).normalize(any(), any(), any());
+            then(deduplicationService).shouldHaveNoInteractions();
+            then(kafkaProducer).shouldHaveNoInteractions();
         }
 
         @Test

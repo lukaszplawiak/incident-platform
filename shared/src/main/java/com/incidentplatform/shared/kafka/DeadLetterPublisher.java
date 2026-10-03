@@ -2,6 +2,9 @@ package com.incidentplatform.shared.kafka;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.audit.AuditText;
+import com.incidentplatform.shared.security.TenantIds;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,8 +44,22 @@ import java.util.concurrent.TimeoutException;
  *   "originalPayload": "<raw string from Kafka>"
  * }
  * }</pre>
+ *
+ * <h2>Changed (backlog #0-91/#0-92): the tenant and the reason</h2>
+ * The tenant is the failed record's resolved tenant, or {@code null} when it
+ * could not be resolved (consumers used to pass the string {@code "unknown"},
+ * which is itself a valid tenant id). A valid one goes into the record's
+ * {@code X-Tenant-Id} header (through {@link TenantRecords}, as every tenant
+ * record does), the key and the {@code tenantId} field; anything else is
+ * recorded as no tenant ({@code null} in the field, {@value #NO_TENANT} in the
+ * key, no header), never quoted. The reason is written and logged through
+ * {@link AuditText#error} (one line, at most 500 characters): a consumer's
+ * reason may carry an exception message quoting the poison pill it rejects.
  */
 public class DeadLetterPublisher {
+
+    /** The key's tenant part for a record whose tenant could not be resolved (not a valid tenant id). */
+    static final String NO_TENANT = "_none";
 
     private static final Logger log =
             LoggerFactory.getLogger(DeadLetterPublisher.class);
@@ -56,6 +73,16 @@ public class DeadLetterPublisher {
                                ObjectMapper objectMapper,
                                String deadLetterTopic,
                                String sourceService) {
+        // Found in review: a record whose tenant could not be resolved goes out
+        // through TenantRecords.withoutTenant, which takes only a dead-letter
+        // topic; a topic named otherwise would fail every such record at run
+        // time (and AuditEventConsumer would retry it for ever), so it fails
+        // the service's start instead.
+        if (deadLetterTopic == null
+                || !deadLetterTopic.endsWith(TenantKafkaProducerInterceptor.DEAD_LETTER_SUFFIX)) {
+            throw new IllegalArgumentException("A dead-letter topic name must end in "
+                    + TenantKafkaProducerInterceptor.DEAD_LETTER_SUFFIX + ": " + deadLetterTopic);
+        }
         this.kafkaTemplate = kafkaTemplate;
         this.objectMapper = objectMapper;
         this.deadLetterTopic = deadLetterTopic;
@@ -89,18 +116,20 @@ public class DeadLetterPublisher {
                                String tenantId,
                                String errorReason,
                                Duration timeout) {
+        final String tenant = TenantIds.isValid(tenantId) ? tenantId : null;
+        final String reason = AuditText.error(errorReason);
         final String dltPayload;
         try {
-            dltPayload = buildDltPayload(originalPayload, sourceTopic, tenantId, errorReason);
+            dltPayload = buildDltPayload(originalPayload, sourceTopic, tenant, reason);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Dead-letter record cannot be serialized", e);
         }
         try {
-            final var result = kafkaTemplate.send(deadLetterTopic, sourceService + ":" + tenantId, dltPayload)
+            final var result = kafkaTemplate.send(record(tenant, dltPayload))
                     .get(timeout.toMillis(), TimeUnit.MILLISECONDS);
             log.info("Message published to DLT: topic={}, partition={}, offset={}, sourceTopic={}, tenant={}, "
                             + "reason={}", deadLetterTopic, result.getRecordMetadata().partition(),
-                    result.getRecordMetadata().offset(), sourceTopic, tenantId, errorReason);
+                    result.getRecordMetadata().offset(), sourceTopic, tenant, reason);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while publishing to " + deadLetterTopic, e);
@@ -134,20 +163,20 @@ public class DeadLetterPublisher {
                            String sourceTopic,
                            String tenantId,
                            String errorReason) {
+        final String tenant = TenantIds.isValid(tenantId) ? tenantId : null;
+        final String reason = AuditText.error(errorReason);
         try {
             final String dltPayload = buildDltPayload(
-                    originalPayload, sourceTopic, tenantId, errorReason);
+                    originalPayload, sourceTopic, tenant, reason);
 
-            final String partitionKey = sourceService + ":" + tenantId;
-
-            kafkaTemplate.send(deadLetterTopic, partitionKey, dltPayload)
+            kafkaTemplate.send(record(tenant, dltPayload))
                     .whenComplete((result, ex) -> {
                         if (ex != null) {
                             log.error("Failed to publish to DLT: topic={}, " +
                                             "sourceTopic={}, tenant={}, reason={}. " +
                                             "Message may be LOST — manual intervention required.",
                                     deadLetterTopic, sourceTopic,
-                                    tenantId, errorReason, ex);
+                                    tenant, reason, ex);
                         } else {
                             log.info("Message published to DLT: topic={}, " +
                                             "partition={}, offset={}, sourceTopic={}, " +
@@ -155,15 +184,23 @@ public class DeadLetterPublisher {
                                     deadLetterTopic,
                                     result.getRecordMetadata().partition(),
                                     result.getRecordMetadata().offset(),
-                                    sourceTopic, tenantId, errorReason);
+                                    sourceTopic, tenant, reason);
                         }
                     });
 
         } catch (Exception e) {
             log.error("Unexpected error in DeadLetterPublisher: " +
                             "sourceTopic={}, tenant={}, originalError={}",
-                    sourceTopic, tenantId, errorReason, e);
+                    sourceTopic, tenant, reason, e);
         }
+    }
+
+    /** Headed by the tenant only when there is a valid one (see the class Javadoc). */
+    private ProducerRecord<String, String> record(String tenant, String dltPayload) {
+        final String key = sourceService + ":" + (tenant != null ? tenant : NO_TENANT);
+        return tenant != null
+                ? TenantRecords.forTenant(deadLetterTopic, key, dltPayload, tenant)
+                : TenantRecords.withoutTenant(deadLetterTopic, key, dltPayload);
     }
 
     private String buildDltPayload(String originalPayload,

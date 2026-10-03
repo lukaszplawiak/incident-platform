@@ -68,6 +68,9 @@ spring:
       # scheduling thread that long per run; the relay waits for
       # acknowledgements within audit.outbox.send-timeout (5 s) anyway.
         max.block.ms: ${KAFKA_PRODUCER_MAX_BLOCK_MS:5000}
+        # Backlog #0-91: checks that every record carries a valid tenant header
+        # (built by TenantRecords); it writes nothing.
+        interceptor.classes: com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor
 
   mail:
     host: ${MAIL_HOST:localhost}

@@ -7,6 +7,7 @@ import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.events.SourceType;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.security.InvalidTenantIdException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +28,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
@@ -346,6 +348,40 @@ class AlertKafkaProducerTest {
             producer.publishFiring(buildAlert());
 
             assertThat(counterValue()).isEqualTo(0.0);
+        }
+    }
+
+    /**
+     * Backlog #0-92 (found in review): the tenant comes from the authenticated
+     * API key, so this is a programming error, but it must not reach Kafka: the
+     * record is never built and the caller sees the refusal.
+     */
+    @Nested
+    @DisplayName("an invalid tenant id (backlog #0-92)")
+    class InvalidTenant {
+
+        @Test
+        @DisplayName("a firing alert is refused before anything is sent")
+        void firingRefused() {
+            final UnifiedAlertDto alert = new UnifiedAlertDto(
+                    UUID.randomUUID(), "Acme\nforged", "prometheus",
+                    SourceType.OPS, Severity.CRITICAL, "High CPU usage", "CPU exceeded 95%",
+                    Instant.now().minusSeconds(60), "prometheus:highcpu:server-1", Map.of(), null);
+
+            assertThatThrownBy(() -> producer.publishFiring(alert))
+                    .isInstanceOf(InvalidTenantIdException.class);
+            then(kafkaTemplate).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("a resolved notification is refused before anything is sent")
+        void resolvedRefused() {
+            final ResolvedAlertNotification notification = ResolvedAlertNotification.of(
+                    "Acme\nforged", "prometheus", "prometheus:highcpu:server-1", Instant.now());
+
+            assertThatThrownBy(() -> producer.publishResolved(notification))
+                    .isInstanceOf(InvalidTenantIdException.class);
+            then(kafkaTemplate).shouldHaveNoInteractions();
         }
     }
 }

@@ -3,12 +3,10 @@ package com.incidentplatform.shared.audit;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.shared.dto.AuditEventMessage;
-import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
+import com.incidentplatform.shared.kafka.TenantRecords;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.header.internals.RecordHeader;
 import org.springframework.kafka.core.KafkaTemplate;
 
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -26,19 +24,19 @@ import java.util.concurrent.CompletableFuture;
  * fire-and-forget {@code send}, used by services without an outbox, went in
  * #0-84's second step, once every service with audit events had one.
  *
- * <h2>Fixed (backlog #0-88): the X-Tenant-Id header is set here</h2>
- * Every record is meant to carry {@code X-Tenant-Id} (CLAUDE.md, Kafka), and
- * {@code TenantKafkaProducerInterceptor} adds it only from {@code TenantContext}
- * and only in services that register it. auth-service, notification-service,
- * postmortem-service and oncall-service do not, and audit events raised outside
- * a request (a login, a scheduled job, the break-glass command) have no
- * context; found in review, 151 of 155 local audit records had no header. The
- * audit message names its tenant, so the header is set from it, as
- * {@code AlertKafkaProducer} and {@code IncidentEventKafkaSender} do. Where the
- * interceptor also runs, it leaves a record that already has the header alone,
- * so the event's own tenant is the one consumers read (found in review: it used
- * to append the context's value, and consumers read the last header).
- * {@code AuditEventConsumer} stores the payload's tenant either way.
+ * <h2>The X-Tenant-Id header (backlogs #0-88, #0-91)</h2>
+ * The record is built by {@code TenantRecords} from the audit message's own
+ * tenant, which must be a valid tenant id; the header is a copy of it, and
+ * {@code TenantKafkaProducerInterceptor} writes nothing, only counts a record
+ * without a valid one. {@code AuditEventConsumer} takes the payload's tenant
+ * and refuses a header that is missing or names another (#0-92).
+ *
+ * <p>History: the interceptor used to add the header from {@code TenantContext},
+ * and only in the services that registered it; audit events raised outside a
+ * request (a login, a scheduled job, the break-glass command) have no context,
+ * so 151 of 155 local audit records had no header (found in the review of
+ * #0-88, which made this class set it). #0-91 then made {@code TenantRecords}
+ * the one writer for every sender.
  */
 class AuditEventKafkaSender {
 
@@ -72,14 +70,11 @@ class AuditEventKafkaSender {
         return kafkaTemplate.send(record(tenantId, payload));
     }
 
-    /** Keyed and headed by the event's tenant (see the class Javadoc). */
+    /**
+     * Keyed and headed by the event's tenant (see the class Javadoc), built by
+     * {@link TenantRecords} like every tenant record (backlog #0-91).
+     */
     private ProducerRecord<String, String> record(String tenantId, String payload) {
-        final ProducerRecord<String, String> record =
-                new ProducerRecord<>(auditEventsTopic, tenantId, payload);
-        if (tenantId != null) {
-            record.headers().add(new RecordHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
-                    tenantId.getBytes(StandardCharsets.UTF_8)));
-        }
-        return record;
+        return TenantRecords.forTenant(auditEventsTopic, tenantId, payload, tenantId);
     }
 }

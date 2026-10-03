@@ -1,5 +1,6 @@
 package com.incidentplatform.auth.dto;
 
+import com.incidentplatform.shared.security.TenantIds;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -12,8 +13,9 @@ import jakarta.validation.constraints.Size;
  * @param tenantId    a slug: lowercase letters, digits and hyphens, 3-63
  *                    characters, starting and ending with a letter or digit. It
  *                    ends up in tokens, headers, logs and every service's rows,
- *                    so new ids are kept plain. Reserved ids are refused by the
- *                    service.
+ *                    so ids are kept plain: the platform's one format
+ *                    ({@code TenantIds}, in {@code shared} since backlog #0-92).
+ *                    Reserved ids are refused by the service.
  * @param displayName how the tenant is shown to operators
  * @param adminEmail  who is invited as the tenant's first admin
  */

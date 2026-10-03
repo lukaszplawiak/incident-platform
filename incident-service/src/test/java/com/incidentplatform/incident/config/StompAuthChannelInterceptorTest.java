@@ -139,6 +139,22 @@ class StompAuthChannelInterceptorTest {
                     .isInstanceOf(MessagingException.class);
         }
 
+        @Test
+        @DisplayName("rejects a CONNECT whose tenantId claim is not a valid tenant id (backlog #0-92)")
+        void rejectsInvalidTenantClaim() {
+            given(jwtUtils.validateAndGetClaims("bad-tenant-token")).willReturn(Optional.of(claims));
+            given(jwtUtils.extractJti(claims)).willReturn(Optional.empty());
+            given(jwtUtils.extractUserId(claims)).willReturn(Optional.of(USER_ID));
+            given(jwtUtils.extractTenantId(claims)).willReturn(Optional.of("Acme\nforged"));
+
+            final Message<byte[]> message = connectMessage("Bearer bad-tenant-token");
+
+            assertThatThrownBy(() -> interceptor.preSend(message, null))
+                    .isInstanceOf(MessagingException.class)
+                    .hasMessageNotContaining("forged");
+            assertThat(StompHeaderAccessor.wrap(message).getUser()).isNull();
+        }
+
         /**
          * The actual regression test for the core vulnerability: a valid
          * token must result in a real {@link UserPrincipal}, correctly

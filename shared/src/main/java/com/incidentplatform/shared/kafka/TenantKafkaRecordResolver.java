@@ -2,14 +2,17 @@ package com.incidentplatform.shared.kafka;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.security.TenantIds;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.Header;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.EnumMap;
+import java.util.Map;
 
 /**
  * Parses a Kafka record's JSON payload and resolves its tenant, consistently
@@ -39,16 +42,31 @@ import java.nio.charset.StandardCharsets;
  * there's no reason to break from the established, consistent pattern the
  * rest of this codebase already uses for shared logic like this.
  *
- * <h2>Tenant resolution strategy</h2>
+ * <h2>Tenant resolution (changed in backlog #0-92)</h2>
+ * The payload's {@code tenantId} is the record's tenant; the
+ * {@code X-Tenant-Id} header is a copy of it, written by the sender through
+ * {@link TenantRecords} for code that reads a record without parsing it.
  * <ol>
- *   <li><b>Header</b> — reads {@code X-Tenant-Id} set by
- *       {@link TenantKafkaProducerInterceptor} (fast path, no deserialization needed).
- *   <li><b>Payload</b> — falls back to the {@code tenantId} field in the JSON body.
- *       This covers replay scenarios, manual publishes, or messages produced by a
- *       non-standard producer that skipped the interceptor.
- *   <li><b>Poison pill</b> — if absent in both, throws {@link IllegalArgumentException}
- *       so the caller's own catch block can route the record to its dead-letter topic.
+ *   <li>The payload must name a {@link com.incidentplatform.shared.security.TenantIds valid tenant id}.
+ *   <li>The header must be present, valid and equal to the payload's tenant.
+ *   <li>Anything else is a {@link TenantResolutionException} (an
+ *       {@code IllegalArgumentException}, so the consumer's poison-pill path
+ *       dead-letters it), counted in {@code kafka.records.tenant.rejected}
+ *       (tag {@code reason}, every reason registered at zero).
  * </ol>
+ * It used to take the header first, checked for nothing but blankness, and
+ * the payload only when the header was missing, without comparing them: a
+ * header could carry line breaks into every log line of the record's
+ * processing, or name another tenant than the record's own data (#0-92). No
+ * message or log line quotes either value.
+ *
+ * <p>A missing header was first accepted (logged, the record trusted on its
+ * payload alone, as records carried their tenant only in the payload before
+ * the header existed). Every sender now writes it ({@link TenantRecords}) and
+ * no record from before is kept (topics and database start empty), so a
+ * record without it was not built by the platform's code: refused like any
+ * other ({@code reason=header_missing}), which also ends a warning per record
+ * a producer could flood the logs with (found in review).
  *
  * <p>See {@link TenantKafkaConsumerInterceptor}'s own Javadoc for how this
  * fits into the platform's overall division of tenant-handling
@@ -58,49 +76,75 @@ import java.nio.charset.StandardCharsets;
 @Component
 public class TenantKafkaRecordResolver {
 
-    private static final Logger log =
-            LoggerFactory.getLogger(TenantKafkaRecordResolver.class);
+    static final String REJECTED_COUNTER = "kafka.records.tenant.rejected";
 
     private final ObjectMapper objectMapper;
+    private final Map<TenantResolutionException.Reason, Counter> rejected =
+            new EnumMap<>(TenantResolutionException.Reason.class);
 
-    public TenantKafkaRecordResolver(ObjectMapper objectMapper) {
+    public TenantKafkaRecordResolver(ObjectMapper objectMapper, MeterRegistry meterRegistry) {
         this.objectMapper = objectMapper;
+        for (final TenantResolutionException.Reason reason : TenantResolutionException.Reason.values()) {
+            rejected.put(reason, Counter.builder(REJECTED_COUNTER)
+                    .description("Consumed records whose tenant was refused and dead-lettered (backlog #0-92)")
+                    .tag("reason", reason.tag())
+                    .register(meterRegistry));
+        }
     }
 
+    /**
+     * @throws IllegalArgumentException for a payload that is not JSON; the
+     *         message names the problem, not the payload (Jackson's own message
+     *         quotes it), and the parser's exception is the cause
+     */
     public JsonNode parseJson(String value) {
         try {
             return objectMapper.readTree(value);
         } catch (IOException e) {
-            throw new IllegalArgumentException(
-                    "Unparseable JSON payload: " + e.getMessage(), e);
+            throw new IllegalArgumentException("Unparseable JSON payload ("
+                    + e.getClass().getSimpleName() + ")", e);
         }
     }
 
+    /**
+     * The record's tenant: the payload's, checked against its header (see the
+     * class Javadoc).
+     *
+     * @throws TenantResolutionException when the tenant cannot be trusted
+     */
     public String extractTenantId(ConsumerRecord<?, ?> record, JsonNode payload) {
-        // Step 1 — Kafka header (set by TenantKafkaProducerInterceptor)
+        final JsonNode field = payload.path("tenantId");
+        final String payloadTenantId = field.isTextual() ? field.asText() : null;
+        if (payloadTenantId == null || payloadTenantId.isBlank()) {
+            throw refuse(TenantResolutionException.Reason.MISSING, record, "the payload names no tenantId");
+        }
+        if (!TenantIds.isValid(payloadTenantId)) {
+            throw refuse(TenantResolutionException.Reason.INVALID, record,
+                    "the payload's tenantId is not a valid tenant id");
+        }
+
         final Header header = record.headers()
                 .lastHeader(TenantKafkaProducerInterceptor.TENANT_ID_HEADER);
-        if (header != null) {
-            final String tenantId = new String(header.value(), StandardCharsets.UTF_8);
-            if (!tenantId.isBlank()) {
-                return tenantId;
-            }
+        if (header == null) {
+            throw refuse(TenantResolutionException.Reason.HEADER_MISSING, record,
+                    "the X-Tenant-Id header is missing");
         }
-
-        // Step 2 — payload field (fallback for replay / non-interceptor producers)
-        final String payloadTenantId = payload.path("tenantId").asText(null);
-        if (payloadTenantId != null && !payloadTenantId.isBlank()) {
-            log.warn("X-Tenant-Id header missing — resolved tenantId from payload: " +
-                            "topic={}, partition={}, offset={}, tenantId={}",
-                    record.topic(), record.partition(), record.offset(), payloadTenantId);
-            return payloadTenantId;
+        final String headerTenantId = new String(header.value(), StandardCharsets.UTF_8);
+        if (!TenantIds.isValid(headerTenantId)) {
+            throw refuse(TenantResolutionException.Reason.INVALID, record,
+                    "the X-Tenant-Id header is not a valid tenant id");
         }
+        if (!headerTenantId.equals(payloadTenantId)) {
+            throw refuse(TenantResolutionException.Reason.MISMATCH, record,
+                    "the X-Tenant-Id header names another tenant than the payload");
+        }
+        return payloadTenantId;
+    }
 
-        // Step 3 — poison pill: tenantId absent in both header and payload
-        throw new IllegalArgumentException(
-                "Missing tenantId in both X-Tenant-Id header and payload.tenantId: " +
-                        "topic=" + record.topic() +
-                        ", partition=" + record.partition() +
-                        ", offset=" + record.offset());
+    private TenantResolutionException refuse(TenantResolutionException.Reason reason,
+                                              ConsumerRecord<?, ?> record, String what) {
+        rejected.get(reason).increment();
+        return new TenantResolutionException(reason, "Record tenant refused (" + what + "): topic="
+                + record.topic() + ", partition=" + record.partition() + ", offset=" + record.offset());
     }
 }

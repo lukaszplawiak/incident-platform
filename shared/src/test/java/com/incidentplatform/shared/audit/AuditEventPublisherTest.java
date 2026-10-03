@@ -111,6 +111,18 @@ class AuditEventPublisherTest {
         }
 
         @Test
+        @DisplayName("a tenant id that is not a slug is refused before the outbox, never quoted (backlog #0-92)")
+        void invalidTenant() {
+            for (final String tenant : java.util.List.of("Acme", "acme corp", "acme\nforged", "ab")) {
+                assertThatThrownBy(() -> publisher(outbox).publishAuth(UUID.randomUUID(), tenant,
+                        AuditEventTypes.USER_LOGIN, "auth-service", "u", "Login", Map.of()))
+                        .as(tenant).isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageContaining("invalid tenantId").hasMessageNotContaining(tenant);
+            }
+            then(outbox).shouldHaveNoInteractions();
+        }
+
+        @Test
         @DisplayName("metadata under a key that names a secret is refused; identifiers pass")
         void secretMetadataKey() {
             for (final String key : java.util.List.of("password", "newPassword", "client_secret", "mfaSecret",

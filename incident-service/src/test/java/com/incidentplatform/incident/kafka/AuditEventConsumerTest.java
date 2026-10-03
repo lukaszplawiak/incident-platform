@@ -28,6 +28,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.kafka.support.Acknowledgment;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 
@@ -35,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
 import static org.mockito.Mockito.never;
@@ -66,12 +68,20 @@ class AuditEventConsumerTest {
         objectMapper = new ObjectMapper()
                 .registerModule(new JavaTimeModule());
         consumer = new AuditEventConsumer(auditEventRepository, objectMapper, deadLetterPublisher,
-                new TenantKafkaRecordResolver(objectMapper), meters);
+                new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()), meters);
     }
 
     // ─── helpers ────────────────────────────────────────────────────────────
 
+    /** A record as every sender builds it (TenantRecords): the header copies the payload's tenant. */
     private ConsumerRecord<String, String> buildRecord(String payload) {
+        final ConsumerRecord<String, String> record = buildRecordWithoutHeader(payload);
+        record.headers().add(TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
+                TENANT_ID.getBytes(StandardCharsets.UTF_8));
+        return record;
+    }
+
+    private ConsumerRecord<String, String> buildRecordWithoutHeader(String payload) {
         return new ConsumerRecord<>(TOPIC, 0, 0L, TENANT_ID, payload);
     }
 
@@ -186,6 +196,8 @@ class AuditEventConsumerTest {
             // given
             final ConsumerRecord<String, String> record = new ConsumerRecord<>(
                     TOPIC, 3, 42L, TENANT_ID, buildAuditEventJson());
+            record.headers().add(TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
+                    TENANT_ID.getBytes(StandardCharsets.UTF_8));
 
             final ArgumentCaptor<AuditEvent> captor =
                     ArgumentCaptor.forClass(AuditEvent.class);
@@ -348,7 +360,7 @@ class AuditEventConsumerTest {
             then(acknowledgment).should().acknowledge();
             then(auditEventRepository).should(never()).save(any());
             // Backlog #0-84: not just a log line — dead-lettered and counted.
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), anyString(),
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
                     org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
             assertThat(meters.counter("audit.events.rejected", "reason", "unreadable").count()).isEqualTo(1.0);
         }
@@ -367,7 +379,7 @@ class AuditEventConsumerTest {
             then(acknowledgment).should().acknowledge();
             then(auditEventRepository).should(never()).save(any());
             // Backlog #0-84: not just a log line — dead-lettered and counted.
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), anyString(),
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
                     org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
             assertThat(meters.counter("audit.events.rejected", "reason", "unreadable").count()).isEqualTo(1.0);
         }
@@ -378,10 +390,24 @@ class AuditEventConsumerTest {
     class TenantAndDeadLetter {
 
         private ConsumerRecord<String, String> withHeader(String payload, String tenant) {
-            final ConsumerRecord<String, String> record = buildRecord(payload);
+            final ConsumerRecord<String, String> record = buildRecordWithoutHeader(payload);
             record.headers().add(TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
-                    tenant.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    tenant.getBytes(StandardCharsets.UTF_8));
             return record;
+        }
+
+        @Test
+        @DisplayName("a record without X-Tenant-Id is rejected, not stored, even with a valid payload tenant "
+                + "(backlog #0-92)")
+        void missingHeader() throws Exception {
+            consumer.consume(buildRecordWithoutHeader(buildAuditEventJson()), acknowledgment);
+
+            then(auditEventRepository).should(never()).save(any());
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
+                    eq("tenant_invalid: record tenant refused (header_missing)"),
+                    eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            assertThat(meters.counter("audit.events.rejected", "reason", "tenant_invalid").count()).isEqualTo(1.0);
+            then(acknowledgment).should().acknowledge();
         }
 
         @Test
@@ -410,7 +436,7 @@ class AuditEventConsumerTest {
             consumer.consume(withHeader(buildAuditEventJson(), "globex"), acknowledgment);
 
             then(auditEventRepository).should(never()).save(any());
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq("globex"),
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
                     org.mockito.ArgumentMatchers.startsWith("tenant_mismatch"),
                     eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
             assertThat(meters.counter("audit.events.rejected", "reason", "tenant_mismatch").count()).isEqualTo(1.0);
@@ -418,11 +444,12 @@ class AuditEventConsumerTest {
         }
 
         @Test
-        @DisplayName("an unreadable record is dead-lettered under its header's tenant, not as unknown")
-        void unreadableKeepsHeaderTenant() {
+        @DisplayName("an unreadable record is dead-lettered with no tenant: its header alone is not trusted "
+                + "(backlog #0-92)")
+        void unreadableHasNoTenant() {
             consumer.consume(withHeader("not-json", TENANT_ID), acknowledgment);
 
-            then(deadLetterPublisher).should().publishAndWait(eq("not-json"), eq(TOPIC), eq(TENANT_ID),
+            then(deadLetterPublisher).should().publishAndWait(eq("not-json"), eq(TOPIC), isNull(),
                     org.mockito.ArgumentMatchers.startsWith("unreadable"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
         }
 
@@ -436,8 +463,19 @@ class AuditEventConsumerTest {
             consumer.consume(withHeader(noTenant, TENANT_ID), acknowledgment);
 
             then(auditEventRepository).should(never()).save(any());
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
-                    eq("tenant_mismatch: the payload names no tenant"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
+                    eq("tenant_invalid: record tenant refused (missing)"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
+            assertThat(meters.counter("audit.events.rejected", "reason", "tenant_invalid").count()).isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("an invalid tenant header is rejected, never quoted (backlog #0-92)")
+        void invalidTenantHeader() throws Exception {
+            consumer.consume(withHeader(buildAuditEventJson(), "evil\nFAKE LOG LINE"), acknowledgment);
+
+            then(auditEventRepository).should(never()).save(any());
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
+                    eq("tenant_invalid: record tenant refused (invalid)"), eq(AuditEventConsumer.DEAD_LETTER_TIMEOUT));
         }
 
         @Test
@@ -469,7 +507,7 @@ class AuditEventConsumerTest {
             consumer.consume(withHeader("{\"tenantId\": top-secret}", TENANT_ID), acknowledgment);
 
             final ArgumentCaptor<String> reason = ArgumentCaptor.forClass(String.class);
-            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), eq(TENANT_ID),
+            then(deadLetterPublisher).should().publishAndWait(any(String.class), eq(TOPIC), isNull(),
                     reason.capture(), any());
             assertThat(reason.getValue()).startsWith("unreadable: invalid JSON (").contains("line 1")
                     .doesNotContain("top-secret");
@@ -479,7 +517,7 @@ class AuditEventConsumerTest {
         @DisplayName("a dead-letter copy Kafka did not take: not acknowledged, nacked to come again, not counted")
         void deadLetterFailureNacks() {
             org.mockito.BDDMockito.willThrow(new IllegalStateException("broker down")).given(deadLetterPublisher)
-                    .publishAndWait(anyString(), anyString(), anyString(), anyString(), any());
+                    .publishAndWait(anyString(), anyString(), any(), anyString(), any());
 
             consumer.consume(buildRecord("not-json"), acknowledgment);
 
@@ -499,7 +537,7 @@ class AuditEventConsumerTest {
         void rejectedCountersRegisteredAtZero() {
             assertThat(meters.find("audit.events.rejected").counters())
                     .extracting(counter -> counter.getId().getTag("reason"))
-                    .containsExactlyInAnyOrder("unreadable", "constraint", "tenant_mismatch");
+                    .containsExactlyInAnyOrder("unreadable", "constraint", "tenant_mismatch", "tenant_invalid");
         }
     }
 

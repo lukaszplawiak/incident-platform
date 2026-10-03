@@ -9,6 +9,7 @@ import com.incidentplatform.shared.kafka.DeadLetterPublisher;
 import com.incidentplatform.shared.kafka.TenantKafkaProducerInterceptor;
 import com.incidentplatform.shared.kafka.TenantKafkaRecordResolver;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.junit.jupiter.api.AfterEach;
@@ -23,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.support.Acknowledgment;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -62,7 +64,7 @@ class IncidentEventConsumerTest {
         // argument order also changed to match production.
         consumer = new IncidentEventConsumer(
                 notificationService, deadLetterPublisher,
-                new TenantKafkaRecordResolver(objectMapper));
+                new TenantKafkaRecordResolver(objectMapper, new SimpleMeterRegistry()));
     }
 
     @AfterEach
@@ -87,6 +89,11 @@ class IncidentEventConsumerTest {
         }
         return record;
     }
+    /** {@code payload} with its tenant replaced, so header and payload agree (backlog #0-92). */
+    private static String forTenant(String payload, String tenant) {
+        return payload.replace("\"" + TENANT_ID + "\"", "\"" + tenant + "\"");
+    }
+
 
     private String openedEvent() {
         return String.format("""
@@ -166,9 +173,10 @@ class IncidentEventConsumerTest {
     class TenantContextManagement {
 
         @Test
-        @DisplayName("should read tenantId from Kafka header not from event payload")
-        void shouldReadTenantIdFromHeader() {
-            // given
+        @DisplayName("dead-letters a record whose header names another tenant than its payload (backlog #0-92)")
+        void shouldDeadLetterTenantMismatch() {
+            // given — the payload is the record's tenant, the header only a
+            // copy (TenantKafkaRecordResolver); they disagree
             final String payloadWithDifferentTenant = String.format("""
                     {
                       "incidentId": "%s",
@@ -180,16 +188,39 @@ class IncidentEventConsumerTest {
             final ConsumerRecord<String, String> record =
                     buildRecord(payloadWithDifferentTenant, "header-tenant", IncidentEventTypes.INCIDENT_OPENED);
 
-            final ArgumentCaptor<String> tenantCaptor =
-                    ArgumentCaptor.forClass(String.class);
+            // when
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // then — processed under neither tenant
+            then(notificationService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(
+                    eq(payloadWithDifferentTenant), eq(TOPIC), isNull(), anyString());
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("dead-letters a record without X-Tenant-Id, even with a valid payload tenant (backlog #0-92)")
+        void shouldDeadLetterWhenTenantHeaderMissing() {
+            // given — every platform sender writes the header (TenantRecords)
+            final String payload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU",
+                      "severity": "CRITICAL",
+                      "occurredAt": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, Instant.now());
+
+            final ConsumerRecord<String, String> record =
+                    buildRecord(payload, null, IncidentEventTypes.INCIDENT_OPENED);
 
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then
-            then(notificationService).should().enqueue(
-                    any(), any(), tenantCaptor.capture(), any(), any(), anyInt(), any(), any());
-            assertThat(tenantCaptor.getValue()).isEqualTo("header-tenant");
+            // then — processed under no tenant
+            then(notificationService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().publish(eq(payload), eq(TOPIC), isNull(), anyString());
+            then(acknowledgment).should().acknowledge();
         }
 
         @Test
@@ -229,9 +260,9 @@ class IncidentEventConsumerTest {
         void shouldNotLeakTenantIdBetweenRecords() {
             // given
             final ConsumerRecord<String, String> recordA =
-                    buildRecord(openedEvent(), "tenant-a", IncidentEventTypes.INCIDENT_OPENED);
+                    buildRecord(forTenant(openedEvent(), "tenant-a"), "tenant-a", IncidentEventTypes.INCIDENT_OPENED);
             final ConsumerRecord<String, String> recordB =
-                    buildRecord(openedEvent(), "tenant-b", IncidentEventTypes.INCIDENT_OPENED);
+                    buildRecord(forTenant(openedEvent(), "tenant-b"), "tenant-b", IncidentEventTypes.INCIDENT_OPENED);
 
             final ArgumentCaptor<String> tenantCaptor =
                     ArgumentCaptor.forClass(String.class);
@@ -644,10 +675,11 @@ class IncidentEventConsumerTest {
             // when
             consumer.consumeIncidentEvent(record, acknowledgment);
 
-            // then — routed to DLT rather than silently discarded, tenantId
-            // reported as "unknown" since it was never resolved
+            // then — routed to DLT rather than silently discarded, with no
+            // tenant since none was resolved (backlog #0-91: it used to be
+            // the string "unknown", itself a valid tenant id)
             then(deadLetterPublisher).should().publish(
-                    eq(payloadWithoutTenantId), eq(TOPIC), eq("unknown"), anyString());
+                    eq(payloadWithoutTenantId), eq(TOPIC), isNull(), anyString());
             then(acknowledgment).should().acknowledge();
             then(notificationService).shouldHaveNoInteractions();
         }

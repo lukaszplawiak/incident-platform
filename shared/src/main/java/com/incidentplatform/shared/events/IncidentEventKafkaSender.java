@@ -1,7 +1,10 @@
 package com.incidentplatform.shared.events;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.kafka.TenantRecords;
+import com.incidentplatform.shared.security.TenantIds;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.slf4j.Logger;
@@ -30,6 +33,15 @@ import java.nio.charset.StandardCharsets;
  * Consolidating to one class makes that class of bug structurally impossible:
  * the header is part of {@link #send}, not something every producer must
  * remember to add.
+ *
+ * <h2>Fixed (backlog #0-91): the tenant header is set here</h2>
+ * Incident events carried no {@code X-Tenant-Id} of their own: the header came
+ * from {@code TenantKafkaProducerInterceptor}, which read the thread's
+ * {@code TenantContext}, so it was there only because both senders (the
+ * outbox scheduler, the escalation scheduler) happened to set that context
+ * first. Records are now built by {@link TenantRecords} from the event's own
+ * tenant. The key stays the incident id: it keeps one incident's events in
+ * order on one partition.
  *
  * <h2>Added for backlog #36: {@link #sendRawSync}</h2>
  * incident-service's {@code IncidentEventOutboxScheduler} needs to block
@@ -77,7 +89,7 @@ public class IncidentEventKafkaSender {
         try {
             final String payload = objectMapper.writeValueAsString(event);
             final ProducerRecord<String, String> record =
-                    buildRecord(event.incidentId().toString(), eventType, payload);
+                    buildRecord(event.incidentId().toString(), event.tenantId(), eventType, payload);
 
             kafkaTemplate.send(record)
                     .whenComplete((result, ex) -> {
@@ -121,16 +133,24 @@ public class IncidentEventKafkaSender {
      * shape if the event's Java record definition evolves between write
      * and publish).
      *
+     * @param tenantId the tenant of the event in {@code jsonPayload} (its outbox
+     *                 row's), for the record's tenant header (backlog #0-91)
+     * @throws IllegalArgumentException if {@code tenantId} is not a valid tenant
+     *         id, or is not the payload's own {@code tenantId}: every consumer
+     *         would refuse that record as a mismatch and dead-letter it, so it
+     *         is refused here, as the row's failed attempt, before it is sent
+     *         (found in review); neither value is quoted
      * @throws java.util.concurrent.ExecutionException if the send itself failed
      * @throws InterruptedException if the calling thread was interrupted while waiting
      * @throws java.util.concurrent.TimeoutException if the broker didn't acknowledge within {@code timeout}
      */
-    public void sendRawSync(String incidentId, String eventType, String jsonPayload,
+    public void sendRawSync(String incidentId, String tenantId, String eventType, String jsonPayload,
                             java.time.Duration timeout)
             throws java.util.concurrent.ExecutionException, InterruptedException,
             java.util.concurrent.TimeoutException {
+        requirePayloadTenant(tenantId, jsonPayload);
         final ProducerRecord<String, String> record =
-                buildRecord(incidentId, eventType, jsonPayload);
+                buildRecord(incidentId, tenantId, eventType, jsonPayload);
 
         kafkaTemplate.send(record)
                 .get(timeout.toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -139,14 +159,25 @@ public class IncidentEventKafkaSender {
                 eventType, incidentsLifecycleTopic, incidentId);
     }
 
+    private void requirePayloadTenant(String tenantId, String jsonPayload) {
+        TenantIds.requireValid(tenantId);
+        final JsonNode payloadTenant;
+        try {
+            payloadTenant = objectMapper.readTree(jsonPayload).path("tenantId");
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalArgumentException("Outbox payload is not JSON ("
+                    + e.getClass().getSimpleName() + ")", e);
+        }
+        if (!payloadTenant.isTextual() || !payloadTenant.asText().equals(tenantId)) {
+            throw new IllegalArgumentException(
+                    "Outbox row's tenant is not its payload's tenantId; not sent");
+        }
+    }
+
     private ProducerRecord<String, String> buildRecord(
-            String incidentId, String eventType, String payload) {
-        final ProducerRecord<String, String> record = new ProducerRecord<>(
-                incidentsLifecycleTopic,
-                null,
-                incidentId,
-                payload
-        );
+            String incidentId, String tenantId, String eventType, String payload) {
+        final ProducerRecord<String, String> record =
+                TenantRecords.forTenant(incidentsLifecycleTopic, incidentId, payload, tenantId);
         record.headers().add(new RecordHeader(
                 IncidentEventTypes.HEADER_NAME,
                 eventType.getBytes(StandardCharsets.UTF_8)

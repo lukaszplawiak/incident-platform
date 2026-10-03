@@ -95,7 +95,7 @@ class TenantKafkaRecordInterceptorTest {
         }
 
         @Test
-        @DisplayName("should set tenantId to 'unknown' when X-Tenant-Id header is missing")
+        @DisplayName("should set tenantId to '_missing' when X-Tenant-Id header is missing (backlog #0-92)")
         void shouldSetUnknownTenantIdWhenHeaderMissing() {
             // given
             final ConsumerRecord<String, String> record =
@@ -106,7 +106,19 @@ class TenantKafkaRecordInterceptorTest {
 
             // then
             assertThat(MDC.get(TenantKafkaRecordInterceptor.MDC_TENANT_ID))
-                    .isEqualTo("unknown");
+                    .isEqualTo(TenantKafkaRecordInterceptor.MISSING);
+        }
+
+        @Test
+        @DisplayName("an invalid header never reaches the MDC (backlog #0-92)")
+        void invalidHeaderNotInMdc() {
+            final ConsumerRecord<String, String> record =
+                    buildRecord("{}", "evil\nFAKE LOG LINE");
+
+            interceptor.intercept(record, consumer);
+
+            assertThat(MDC.get(TenantKafkaRecordInterceptor.MDC_TENANT_ID))
+                    .isEqualTo(TenantKafkaRecordInterceptor.INVALID);
         }
 
         @Test
@@ -174,67 +186,33 @@ class TenantKafkaRecordInterceptorTest {
     class Metrics {
 
         @Test
-        @DisplayName("should increment kafka.records.received counter with topic and tenant tags")
+        @DisplayName("should increment kafka.records.received per topic")
         void shouldIncrementReceivedCounter() {
-            // given
-            final ConsumerRecord<String, String> record =
-                    buildRecord("{}", TENANT_ID);
+            interceptor.intercept(buildRecord("{}", TENANT_ID), consumer);
+            interceptor.intercept(buildRecord("{}", "tenant-b"), consumer);
 
-            // when
-            interceptor.intercept(record, consumer);
-
-            // then
             final Counter counter = meterRegistry.find("kafka.records.received")
                     .tag("topic", TOPIC)
-                    .tag("tenant", TENANT_ID)
                     .counter();
 
             assertThat(counter).isNotNull();
-            assertThat(counter.count()).isEqualTo(1.0);
+            assertThat(counter.count()).isEqualTo(2.0);
         }
 
+        /**
+         * Found in the end-to-end test of #0-92: a forged but well-formed
+         * header used to open a series of its own, so a producer could add
+         * series without bound. No value from a record is a tag.
+         */
         @Test
-        @DisplayName("should increment counter separately for different tenants")
-        void shouldIncrementCounterSeparatelyPerTenant() {
-            // given
-            final ConsumerRecord<String, String> recordA =
-                    buildRecord("{}", "tenant-a");
-            final ConsumerRecord<String, String> recordB =
-                    buildRecord("{}", "tenant-b");
+        @DisplayName("carries no tenant tag: headers cannot add series (backlog #0-92)")
+        void noTenantTag() {
+            for (int i = 0; i < 20; i++) {
+                interceptor.intercept(buildRecord("{}", "forged-" + i), consumer);
+            }
 
-            // when
-            interceptor.intercept(recordA, consumer);
-            interceptor.intercept(recordA, consumer);
-            interceptor.intercept(recordB, consumer);
-
-            // then — tenant-a: 2, tenant-b: 1
-            assertThat(meterRegistry.find("kafka.records.received")
-                    .tag("topic", TOPIC).tag("tenant", "tenant-a")
-                    .counter().count()).isEqualTo(2.0);
-
-            assertThat(meterRegistry.find("kafka.records.received")
-                    .tag("topic", TOPIC).tag("tenant", "tenant-b")
-                    .counter().count()).isEqualTo(1.0);
-        }
-
-        @Test
-        @DisplayName("should use 'unknown' as tenant tag when header is missing")
-        void shouldUseUnknownTenantTagWhenHeaderMissing() {
-            // given
-            final ConsumerRecord<String, String> record =
-                    buildRecord("{}", null);
-
-            // when
-            interceptor.intercept(record, consumer);
-
-            // then
-            final Counter counter = meterRegistry.find("kafka.records.received")
-                    .tag("topic", TOPIC)
-                    .tag("tenant", "unknown")
-                    .counter();
-
-            assertThat(counter).isNotNull();
-            assertThat(counter.count()).isEqualTo(1.0);
+            assertThat(meterRegistry.find("kafka.records.received").counters()).singleElement()
+                    .satisfies(c -> assertThat(c.getId().getTag("tenant")).isNull());
         }
 
         @Test

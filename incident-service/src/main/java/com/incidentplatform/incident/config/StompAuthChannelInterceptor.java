@@ -2,6 +2,7 @@ package com.incidentplatform.incident.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.TenantIds;
 import com.incidentplatform.shared.security.TokenRevocationChecker;
 import com.incidentplatform.shared.security.UserPrincipal;
 import io.jsonwebtoken.Claims;
@@ -142,9 +143,15 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         final UUID userId = jwtUtils.extractUserId(claims)
                 .orElseThrow(() -> new MessagingException(
                         "Token missing required userId claim"));
+        // Backlog #0-92: the claim must be a valid tenant id, as JwtAuthFilter
+        // requires on HTTP (found in review: this path accepted any string).
         final String tenantId = jwtUtils.extractTenantId(claims)
-                .orElseThrow(() -> new MessagingException(
-                        "Token missing required tenantId claim"));
+                .filter(TenantIds::isValid)
+                .orElseThrow(() -> {
+                    log.warn("WebSocket CONNECT rejected — tenantId claim missing or not a valid tenant id");
+                    return new MessagingException(
+                            "Token missing a valid tenantId claim");
+                });
         final String email = jwtUtils.extractEmail(claims)
                 .orElseThrow(() -> new MessagingException(
                         "Token missing required email claim"));
@@ -183,9 +190,10 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
                 destination.substring(TENANT_TOPIC_PREFIX.length());
 
         if (!requestedTenantId.equals(userPrincipal.tenantId())) {
+            // The destination is the client's own text: not logged (#0-92).
             log.warn("WebSocket SUBSCRIBE rejected — userId={} (tenant={}) " +
-                            "attempted to subscribe to another tenant's topic: {}",
-                    userPrincipal.userId(), userPrincipal.tenantId(), destination);
+                            "attempted to subscribe to another tenant's topic",
+                    userPrincipal.userId(), userPrincipal.tenantId());
             throw new MessagingException(
                     "Not authorized to subscribe to this destination");
         }

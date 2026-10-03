@@ -537,6 +537,14 @@ jobs:
           amtool config routes test --config.file=alertmanager.yml \
             --verify.receivers=operator-email,platform-webhook \
             alertname=AuditEventUnrecorded scope=platform severity=critical
+          # Backlog #0-91/#0-92: a refused record's tenant is a lost event and
+          # possibly a forged record, so it reaches the operator by email too.
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=operator-email,platform-webhook \
+            alertname=KafkaRecordsTenantRejected scope=platform severity=critical
+          amtool config routes test --config.file=alertmanager.yml \
+            --verify.receivers=platform-webhook \
+            alertname=KafkaRecordsWithoutTenant scope=platform severity=high
 
   # ──────────────────────────────────────────────────────────
   # Job 5: Smoke test — boot the real stack via docker compose and

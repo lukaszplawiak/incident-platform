@@ -8,6 +8,7 @@ import com.incidentplatform.ingestion.normalizer.UnknownSourceException;
 import com.incidentplatform.shared.dto.UnifiedAlertDto;
 import com.incidentplatform.shared.events.ResolvedAlertNotification;
 import com.incidentplatform.shared.kafka.DeadLetterPublisher;
+import com.incidentplatform.shared.security.TenantIds;
 import com.incidentplatform.shared.security.UserPrincipal;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +17,7 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 import java.util.UUID;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -62,6 +64,11 @@ public class AlertIngestionService {
                                    JsonNode rawPayload,
                                    String tenantId,
                                    UUID teamId) {
+        // Backlog #0-92 (found in review): the tenant comes from the
+        // authenticated key or token, so this is a programming error; checked
+        // before anything is normalized or a dedup key is set, so a refusal
+        // leaves no key behind that would turn a later retry into a duplicate.
+        TenantIds.requireValid(tenantId);
         log.info("Starting ingestion: source={}, tenant={}, teamId={}",
                 source, tenantId, teamId);
 
@@ -128,12 +135,24 @@ public class AlertIngestionService {
                 // logging, this one handles the dedup-key compensation;
                 // kept apart deliberately rather than merged into one
                 // handler, so each class owns only its own concern.
-                kafkaProducer.publishFiring(alert)
-                        .whenComplete((sendResult, ex) -> {
-                            if (ex != null) {
-                                deduplicationService.releaseDedupKey(alert);
-                            }
-                        });
+                final CompletableFuture<?> sent;
+                try {
+                    sent = kafkaProducer.publishFiring(alert);
+                } catch (RuntimeException synchronousFailure) {
+                    // Thrown before anything was sent (other than the
+                    // serialization failure caught below, which is
+                    // dead-lettered): the key goes too, as for a failed
+                    // send (found in review: it stayed set).
+                    if (!(synchronousFailure instanceof AlertKafkaProducer.AlertPublishException)) {
+                        deduplicationService.releaseDedupKey(alert);
+                    }
+                    throw synchronousFailure;
+                }
+                sent.whenComplete((sendResult, ex) -> {
+                    if (ex != null) {
+                        deduplicationService.releaseDedupKey(alert);
+                    }
+                });
                 processed++;
             } catch (AlertKafkaProducer.AlertPublishException e) {
                 // Despite the class name, this can only be thrown from a JSON

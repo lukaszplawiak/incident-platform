@@ -5,6 +5,7 @@ import com.incidentplatform.escalation.service.EscalationService;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditOutbox;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.security.TenantIds;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -62,6 +63,25 @@ import static org.mockito.BDDMockito.willThrow;
 @Testcontainers
 @DisplayName("escalation-service audit outbox (Postgres, backlog #0-84)")
 class AuditOutboxPersistenceIntegrationTest {
+
+    /**
+     * Tables of this schema with a tenant_id column but no CHECK holding the
+     * platform's tenant id pattern ({@code TenantIds.SLUG}, the one parameter);
+     * backlog #0-92.
+     */
+    private static final String TENANT_ID_COLUMNS_WITHOUT_SLUG_CHECK = """
+            SELECT c.table_name FROM information_schema.columns c
+            JOIN information_schema.tables t
+              ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+             AND t.table_type = 'BASE TABLE'
+            WHERE c.table_schema = current_schema() AND c.column_name = 'tenant_id'
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_constraint k
+                WHERE k.conrelid = (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass
+                  AND k.contype = 'c'
+                  AND position(? IN pg_get_constraintdef(k.oid)) > 0)
+            ORDER BY c.table_name
+            """;
 
     /**
      * Minimal JPA configuration instead of the application class, whose
@@ -210,5 +230,21 @@ class AuditOutboxPersistenceIntegrationTest {
                 incidentId, "acme", null, Severity.HIGH, "Disk full")).hasMessage("unstorable");
 
         assertThat(level2Tasks(incidentId)).isZero();
+    }
+
+    /**
+     * Backlog #0-92 (found in review): every table of this service with a
+     * tenant_id carries the slug CHECK (V8); a scheduler that reads a row
+     * back sets TenantContext from it, which refuses anything else. A new
+     * table without the constraint fails here.
+     */
+    @Test
+    @DisplayName("every table with a tenant_id carries the tenant id slug CHECK (V8, backlog #0-92)")
+    void everyTenantIdColumnChecked() {
+        assertThat(jdbcTemplate.queryForList(TENANT_ID_COLUMNS_WITHOUT_SLUG_CHECK, String.class,
+                TenantIds.SLUG)).isEmpty();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+                        + "AND column_name = 'tenant_id'", Integer.class)).isGreaterThanOrEqualTo(2);
     }
 }

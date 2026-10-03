@@ -51,6 +51,7 @@ import com.incidentplatform.shared.exception.ResourceNotFoundException;
 import com.incidentplatform.shared.security.ReservedTenants;
 import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.TenantIds;
 import com.incidentplatform.shared.security.UserPrincipal;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
@@ -232,6 +233,25 @@ class AuthRepositoryIntegrationTest {
     }
 
     private static final String TENANT_ID = "test-tenant";
+
+    /**
+     * Tables of this schema with a tenant_id column but no CHECK holding the
+     * platform's tenant id pattern ({@code TenantIds.SLUG}, the one parameter);
+     * backlog #0-92.
+     */
+    private static final String TENANT_ID_COLUMNS_WITHOUT_SLUG_CHECK = """
+            SELECT c.table_name FROM information_schema.columns c
+            JOIN information_schema.tables t
+              ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+             AND t.table_type = 'BASE TABLE'
+            WHERE c.table_schema = current_schema() AND c.column_name = 'tenant_id'
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_constraint k
+                WHERE k.conrelid = (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass
+                  AND k.contype = 'c'
+                  AND position(? IN pg_get_constraintdef(k.oid)) > 0)
+            ORDER BY c.table_name
+            """;
 
     /** The bulk queries with {@code clearAutomatically} (see {@code bulkUpdateKeepsEarlierChange}). */
     enum BulkUpdate {
@@ -1904,6 +1924,67 @@ class AuthRepositoryIntegrationTest {
                     .singleElement().extracting(TenantDto::adminActive).isEqualTo(false);
             assertThat(tenants).filteredOn(t -> t.tenantId().equals(activeTenant))
                     .singleElement().extracting(TenantDto::adminActive).isEqualTo(true);
+        }
+
+        /**
+         * Backlog #0-92: every tenant id is a slug, enforced on every table
+         * with a tenant_id (V28). The constraint names are asserted: a check
+         * that matched by accident (another constraint) would pass on the
+         * exception type alone.
+         */
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("tenants and users refuse a tenant id that is not a slug, accept both length bounds (V28)")
+        void tenantIdMustBeSlug() {
+            for (final String bad : List.of("Bad Tenant", "evil\nline", "ab", "-acme", "acme-", "x".repeat(64))) {
+                assertThatThrownBy(() -> jdbcTemplate.update(
+                        "INSERT INTO tenants (tenant_id, display_name) VALUES (?, 'x')", bad))
+                        .as(bad).isInstanceOf(DataIntegrityViolationException.class)
+                        .hasMessageContaining("chk_tenants_tenant_id_slug");
+            }
+            // Outside the test transaction (a refused statement aborts a
+            // Postgres transaction), so what it writes is removed here.
+            final User user = persistUser("slug-check-" + UUID.randomUUID() + "@example.com",
+                    List.of("ROLE_RESPONDER"));
+            final String shortest = "a1b";
+            final String longest = "a" + "-".repeat(61) + "z";
+            try {
+                assertThatThrownBy(() -> jdbcTemplate.update(
+                        "UPDATE users SET tenant_id = 'Bad Tenant' WHERE id = ?", user.getId()))
+                        .isInstanceOf(DataIntegrityViolationException.class)
+                        .hasMessageContaining("chk_users_tenant_id_slug");
+                assertThatThrownBy(() -> jdbcTemplate.update(
+                        // A full copy of the row with another id and tenant: only the CHECK can refuse it.
+                        "INSERT INTO users SELECT * FROM jsonb_populate_record(NULL::users, "
+                                + "(SELECT to_jsonb(u) || jsonb_build_object('id', ?::uuid, 'tenant_id', 'Bad_Tenant') "
+                                + "FROM users u WHERE u.id = ?))", UUID.randomUUID(), user.getId()))
+                        .isInstanceOf(DataIntegrityViolationException.class)
+                        .hasMessageContaining("chk_users_tenant_id_slug");
+                for (final String ok : List.of(shortest, longest)) {
+                    assertThat(jdbcTemplate.update(
+                            "INSERT INTO tenants (tenant_id, display_name) VALUES (?, 'x')", ok))
+                            .as(ok).isEqualTo(1);
+                }
+            } finally {
+                jdbcTemplate.update("DELETE FROM users WHERE id = ?", user.getId());
+                jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id IN (?, ?)", shortest, longest);
+            }
+        }
+
+        /**
+         * Backlog #0-92 (found in review): the check is on every auth-service
+         * table with a tenant_id, not only tenants and users; a scheduler that
+         * reads a row back sets TenantContext from it. A new table without the
+         * constraint fails here.
+         */
+        @Test
+        @DisplayName("every table with a tenant_id carries the slug CHECK (V28)")
+        void everyTenantIdColumnChecked() {
+            assertThat(jdbcTemplate.queryForList(TENANT_ID_COLUMNS_WITHOUT_SLUG_CHECK, String.class,
+                    TenantIds.SLUG)).isEmpty();
+            assertThat(jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM information_schema.columns WHERE table_schema = current_schema() "
+                            + "AND column_name = 'tenant_id'", Integer.class)).isGreaterThanOrEqualTo(11);
         }
 
         @Test

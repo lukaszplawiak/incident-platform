@@ -1,6 +1,8 @@
 package com.incidentplatform.shared.audit;
 
+import com.incidentplatform.shared.security.InvalidTenantIdException;
 import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.TenantIds;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -297,7 +299,12 @@ public class AuditOutboxRelay {
             if (cause instanceof RecordTooLargeException
                     || cause instanceof RecordBatchTooLargeException
                     || cause instanceof SerializationException
-                    || cause instanceof InvalidRecordException) {
+                    || cause instanceof InvalidRecordException
+                    // Backlog #0-91: TenantContext / TenantRecords refuse a row
+                    // whose tenant is not a valid tenant id; a fault of that row,
+                    // not Kafka's. Only that type: any other bad argument is not
+                    // known to be the row's, so it pauses (found in review).
+                    || cause instanceof InvalidTenantIdException) {
                 return false;
             }
         }
@@ -315,12 +322,18 @@ public class AuditOutboxRelay {
         }
     }
 
-    /** A send that throws instead of failing its future is a failed send of that row. */
+    /**
+     * A send that throws instead of failing its future is a failed send of that
+     * row. That includes {@link TenantContext#set} refusing the row's tenant
+     * (backlog #0-92): it used to run before the {@code try}, so one such row
+     * ended the whole run, for every tenant (found in review); now it is that
+     * row's failure, backed off like a record Kafka refuses.
+     */
     private CompletableFuture<?> dispatch(AuditOutbox.Pending row) {
-        if (row.tenantId() != null) {
-            TenantContext.set(row.tenantId());
-        }
         try {
+            if (row.tenantId() != null) {
+                TenantContext.set(row.tenantId());
+            }
             return sender.sendForRelay(row.tenantId(), row.payload());
         } catch (RuntimeException e) {
             return CompletableFuture.failedFuture(e);
@@ -329,11 +342,16 @@ public class AuditOutboxRelay {
         }
     }
 
+    /**
+     * Runs {@code action} with the row's tenant in {@link TenantContext} for its
+     * log lines, or without one when the tenant is not a valid tenant id: the
+     * row's bookkeeping (marking it failed) must happen either way.
+     */
     private static void withTenant(AuditOutbox.Pending row, Runnable action) {
-        if (row.tenantId() != null) {
-            TenantContext.set(row.tenantId());
-        }
         try {
+            if (TenantIds.isValid(row.tenantId())) {
+                TenantContext.set(row.tenantId());
+            }
             action.run();
         } finally {
             TenantContext.clear();

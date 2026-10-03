@@ -58,16 +58,18 @@ class TenantContextTest {
         }
 
         @Test
-        @DisplayName("should not set null tenantId")
-        void shouldNotSetNullTenantId() {
-            TenantContext.set(null);
-            assertThat(TenantContext.getOrNull()).isNull();
+        @DisplayName("refuses a null tenantId instead of ignoring it, leaving the previous tenant untouched "
+                + "(backlog #0-92, found in review)")
+        void shouldRefuseNullTenantId() {
+            TenantContext.set("acme-corp");
+            assertThatThrownBy(() -> TenantContext.set(null)).isInstanceOf(InvalidTenantIdException.class);
+            assertThat(TenantContext.getOrNull()).isEqualTo("acme-corp");
         }
 
         @Test
-        @DisplayName("should not set blank tenantId")
-        void shouldNotSetBlankTenantId() {
-            TenantContext.set("   ");
+        @DisplayName("refuses a blank tenantId instead of ignoring it (backlog #0-92, found in review)")
+        void shouldRefuseBlankTenantId() {
+            assertThatThrownBy(() -> TenantContext.set("   ")).isInstanceOf(InvalidTenantIdException.class);
             assertThat(TenantContext.getOrNull()).isNull();
         }
     }
@@ -208,5 +210,15 @@ class TenantContextTest {
                     .as("Thread pool thread should have clean context after task")
                     .isNull();
         }
+    }
+
+    @Test
+    @DisplayName("refuses a value that is not a valid tenant id, without quoting it (backlog #0-92)")
+    void refusesInvalidTenantId() {
+        assertThatThrownBy(() -> TenantContext.set("evil\nFAKE LOG LINE"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .satisfies(e -> assertThat(e.getMessage()).doesNotContain("FAKE"));
+        assertThat(TenantContext.isSet()).isFalse();
+        assertThat(org.slf4j.MDC.get(TenantContext.MDC_TENANT_KEY)).isNull();
     }
 }
