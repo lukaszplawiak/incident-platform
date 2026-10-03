@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 /**
  * JWT utility — generates and validates JSON Web Tokens for both human
@@ -63,17 +62,6 @@ public class JwtUtils {
     public static final String CLAIM_MANAGED_TEAM_IDS = "managedTeamIds";
     public static final String CLAIM_SESSION_ID   = "sessionId";
     public static final String CLAIM_PURPOSE      = "purpose";
-
-    /**
-     * Shape accepted for the tenant id of a <em>service</em> token: 1-100
-     * characters, no whitespace or control characters. Tenant ids have no
-     * other format in this codebase (they are free-form strings), so this
-     * deliberately does not invent one; it only keeps a tenant id that came
-     * from a Kafka payload from carrying newlines into log lines or an absurd
-     * length into a signed claim and an outbound header.
-     */
-    private static final Pattern SERVICE_TENANT_ID_PATTERN =
-            Pattern.compile("^[^\\p{Cntrl}\\s]{1,100}$", Pattern.UNICODE_CHARACTER_CLASS);
 
     private static final int MIN_SECRET_BYTES = 64;
 
@@ -184,6 +172,9 @@ public class JwtUtils {
                                 String email, List<String> roles,
                                 List<UUID> teamIds, List<UUID> managedTeamIds,
                                 UUID sessionId) {
+        // Backlog #0-92: no token is issued for a tenant id outside the
+        // platform's one format (TenantIds), as none is accepted when read.
+        TenantIds.requireValid(tenantId);
         final Instant now        = Instant.now();
         final Instant expiration = now.plus(properties.accessTokenTtl());
 
@@ -338,19 +329,18 @@ public class JwtUtils {
 
     /**
      * Rejects a tenant id that must not go into a service token, an
-     * {@code X-Tenant-Id} header or a log line: null, blank, longer than 100
-     * characters, or containing whitespace or control characters.
+     * {@code X-Tenant-Id} header or a log line.
      *
-     * @throws IllegalArgumentException with a message that does not echo the
+     * <h2>Changed (backlog #0-92): the platform's one format</h2>
+     * It used to accept any 1-100 characters without whitespace or control
+     * characters (backlog #0-11), as tenant ids had no format then; it is now
+     * {@link TenantIds}, the slug every tenant id is.
+     *
+     * @throws InvalidTenantIdException with a message that does not echo the
      *         rejected value (it may itself contain the offending characters)
      */
     public static void requireValidServiceTenantId(String tenantId) {
-        if (tenantId == null || !SERVICE_TENANT_ID_PATTERN.matcher(tenantId).matches()) {
-            throw new IllegalArgumentException(
-                    "tenantId must be 1-100 characters with no whitespace or " +
-                            "control characters — a service token always acts " +
-                            "for a valid tenant");
-        }
+        TenantIds.requireValid(tenantId);
     }
 
     /**
@@ -469,6 +459,12 @@ public class JwtUtils {
                 .toList();
     }
 
+    /**
+     * The {@code tenantId} claim as it is, valid or not: {@link JwtAuthFilter}
+     * refuses a token whose claim is not a {@link TenantIds valid tenant id}
+     * (backlog #0-92), and needs the raw claim to refuse a purpose token that
+     * carries one at all.
+     */
     public Optional<String> extractTenantId(Claims claims) {
         return Optional.ofNullable(claims.get(CLAIM_TENANT_ID, String.class));
     }

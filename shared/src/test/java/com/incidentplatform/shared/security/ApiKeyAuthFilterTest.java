@@ -102,6 +102,23 @@ class ApiKeyAuthFilterTest {
     }
 
     @Test
+    @DisplayName("principal with an invalid tenant id (backlog #0-92): 401 like an invalid key, not a 500")
+    void invalidTenantRefused() throws Exception {
+        final UserPrincipal badTenant = new UserPrincipal(UUID.randomUUID(), "Acme\nforged", "api-key:am",
+                List.of(), List.of(), List.of(), true, List.of(ApiScopes.ALERTS_INGEST), null);
+
+        final Outcome outcome = run(filter(new ApiKeyLookupResult.Authenticated(badTenant)),
+                "/api/v1/alerts/prometheus", "ApiKey " + KEY);
+
+        assertThat(outcome.chainCalled()).isFalse();
+        assertThat(outcome.response().getStatus()).isEqualTo(401);
+        assertThat(outcome.response().getHeader("WWW-Authenticate"))
+                .isEqualTo("ApiKey realm=\"incident-platform\", error=\"invalid_token\"");
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        assertThat(TenantContext.isSet()).isFalse();
+    }
+
+    @Test
     @DisplayName("validator unavailable: 503 with Retry-After, so a sender retries")
     void unavailable() throws Exception {
         final Outcome outcome = run(filter(new ApiKeyLookupResult.Unavailable(Duration.ofSeconds(30))),

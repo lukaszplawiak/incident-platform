@@ -51,12 +51,14 @@ import java.util.Map;
  *   </tr>
  *   <tr>
  *     <td>{@link TenantKafkaRecordInterceptor}</td>
- *     <td>MDC enrichment, structured log, per-tenant metrics, processing timer</td>
+ *     <td>MDC enrichment, structured log, per-topic metrics (no tenant tag,
+ *         backlog #0-92), processing timer</td>
  *     <td>Spring listener thread</td>
  *   </tr>
  *   <tr>
  *     <td>{@link TenantKafkaRecordResolver}</td>
- *     <td>Enforcement — header → payload fallback → poison pill, injected
+ *     <td>Enforcement — the payload's valid tenant, which the header must be
+ *         there to match (backlog #0-92), else a poison pill; injected
  *         into and called by each {@code @KafkaListener} consumer (fixed,
  *         backlog #75: previously five separate, byte-for-byte identical
  *         private {@code extractTenantId()} methods, one per consumer

@@ -125,14 +125,22 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
         final ApiKeyLookupResult result = lookupService.lookup(credential.rawKey(), request);
         switch (result) {
-            case ApiKeyLookupResult.Authenticated authenticated ->
+            case ApiKeyLookupResult.Authenticated authenticated -> {
+                if (TenantIds.isValid(authenticated.principal().tenantId())) {
                     continueAuthenticated(authenticated.principal(), request, response, filterChain);
+                } else {
+                    // Backlog #0-92: TenantContext.set would throw (a 500); the
+                    // key is refused like an invalid one. Every tenants and
+                    // api_keys row is a slug (auth-service V28), so this is a
+                    // lookup that returned something it should not.
+                    log.error("API key lookup returned a principal whose tenant id is not valid, "
+                            + "refused: request={}", request.getRequestURI());
+                    refuseInvalid(credential, response);
+                }
+            }
             case ApiKeyLookupResult.Invalid invalid -> {
                 log.warn("Invalid or revoked API key for request to: {}", request.getRequestURI());
-                response.setHeader(HttpHeaders.WWW_AUTHENTICATE, credential.scheme()
-                        + " realm=\"" + REALM + "\", error=\"invalid_token\"");
-                writeError(response, HttpStatus.UNAUTHORIZED, ErrorCodes.UNAUTHORIZED,
-                        "The API key is not valid.");
+                refuseInvalid(credential, response);
             }
             case ApiKeyLookupResult.Unavailable unavailable -> {
                 log.warn("API key could not be checked, answering 503: request={}",
@@ -149,6 +157,13 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                         "Too many failed authentications from this client. Retry later.");
             }
         }
+    }
+
+    private void refuseInvalid(Credential credential, HttpServletResponse response) throws IOException {
+        response.setHeader(HttpHeaders.WWW_AUTHENTICATE, credential.scheme()
+                + " realm=\"" + REALM + "\", error=\"invalid_token\"");
+        writeError(response, HttpStatus.UNAUTHORIZED, ErrorCodes.UNAUTHORIZED,
+                "The API key is not valid.");
     }
 
     private void continueAuthenticated(UserPrincipal principal,

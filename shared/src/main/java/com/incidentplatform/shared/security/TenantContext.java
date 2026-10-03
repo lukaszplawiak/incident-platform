@@ -50,11 +50,26 @@ public final class TenantContext {
         );
     }
 
+    /**
+     * Sets the current thread's tenant, and the {@code tenantId} MDC key every
+     * log line carries.
+     *
+     * <h2>Changed (backlog #0-92): only a valid tenant id</h2>
+     * A value that is not a {@link TenantIds valid tenant id} is refused with
+     * an {@link InvalidTenantIdException} (its message does not quote the
+     * value): it would go into the MDC, so into every log line written while
+     * it is set. Every caller sets a tenant that was already checked where it
+     * entered (a token, a Kafka record, a database row), so a refusal here is
+     * a programming error.
+     *
+     * <p>Null and blank are refused the same way (found in review): they used
+     * to be logged and ignored, which left the thread without a tenant, or
+     * with the previous one, while the caller went on as if it had set one.
+     * A caller that may have no tenant checks first, as
+     * {@link TenantAwareTaskDecorator} does.
+     */
     public static void set(String tenantId) {
-        if (tenantId == null || tenantId.isBlank()) {
-            log.warn("Attempted to set null or blank tenantId in TenantContext");
-            return;
-        }
+        TenantIds.requireValid(tenantId);
         TENANT_ID.set(tenantId);
         MDC.put(MDC_TENANT_KEY, tenantId);
         log.debug("TenantContext set for tenant: {}", tenantId);

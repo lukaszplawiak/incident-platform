@@ -76,13 +76,12 @@ class AuditEventKafkaSenderTest {
     }
 
     @Test
-    @DisplayName("a record without a tenant goes without the header rather than failing")
-    void noTenantNoHeader() {
-        kafkaAnswers(CompletableFuture.completedFuture(null));
-
-        sender.sendForRelay(null, "{}");
-
-        assertThat(tenantHeader(sentRecord())).isNull();
+    @DisplayName("a record without a valid tenant is not sent (backlog #0-91: TenantRecords requires one)")
+    void noTenantNotSent() {
+        assertThatThrownBy(() -> sender.sendForRelay(null, "{}")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> sender.sendForRelay("Bad Tenant", "{}"))
+                .isInstanceOf(IllegalArgumentException.class);
+        Mockito.verifyNoInteractions(kafkaTemplate);
     }
 
     @Test

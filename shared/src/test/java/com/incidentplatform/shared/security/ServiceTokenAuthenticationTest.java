@@ -140,6 +140,17 @@ class ServiceTokenAuthenticationTest {
         }
 
         @Test
+        @DisplayName("rejects a tenant that is not a slug, even one the old rule accepted (backlog #0-92)")
+        void rejectsNonSlugTenant() {
+            // 1-100 printable characters without whitespace was the rule before #0-92.
+            for (final String tenant : List.of("Acme", "acme_corp", "acme.corp", "-acme", "ab", "t".repeat(64))) {
+                assertThatThrownBy(() -> jwtUtils.generateServiceToken(SERVICE_NAME, tenant, THIS_SERVICE))
+                        .isInstanceOf(IllegalArgumentException.class)
+                        .hasMessageNotContaining(tenant);
+            }
+        }
+
+        @Test
         @DisplayName("rejects a blank audience")
         void rejectsBlankAudience() {
             assertThatThrownBy(() -> jwtUtils.generateServiceToken(SERVICE_NAME, TENANT_ID, " "))
@@ -196,6 +207,18 @@ class ServiceTokenAuthenticationTest {
             authenticate(jwtUtils.generateServiceToken(SERVICE_NAME, TENANT_ID, THIS_SERVICE), null);
 
             assertThat(TenantContext.isSet()).isFalse();
+        }
+
+        @Test
+        @DisplayName("rejects a signed service token whose tenantId claim is not a slug (backlog #0-92)")
+        void rejectsInvalidTenantClaim() throws Exception {
+            final String token = tokenWith(SECRET, SERVICE_NAME, SERVICE_NAME, "Acme\nforged",
+                    List.of(SecurityRoles.ROLE_SERVICE), Duration.ofMinutes(5));
+
+            final Result result = authenticate(token, null);
+
+            assertThat(result.authentication()).isNull();
+            assertThat(result.tenantDownstream()).isNull();
         }
 
         @Test

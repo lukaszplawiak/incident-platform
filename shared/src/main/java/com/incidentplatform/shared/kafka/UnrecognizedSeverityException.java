@@ -11,11 +11,15 @@ public class UnrecognizedSeverityException extends RuntimeException {
     public UnrecognizedSeverityException(String rawSeverity,
                                          UUID incidentId,
                                          String operation) {
+        // Backlog #0-92: the message does not quote the raw value. It comes
+        // from the record's payload, and the message goes into log lines and
+        // the dead-letter reason; the value stays available through
+        // getRawSeverity() for a caller that needs it.
         super(String.format(
-                "Unrecognized severity value '%s' for incidentId=%s " +
+                "Unrecognized severity value for incidentId=%s " +
                         "during '%s'. Message skipped — check producer/consumer " +
                         "version compatibility.",
-                rawSeverity, incidentId, operation));
+                incidentId, operation));
         this.rawSeverity = rawSeverity;
         this.incidentId = incidentId;
         this.operation = operation;

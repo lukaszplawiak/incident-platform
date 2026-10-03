@@ -221,6 +221,15 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         final String tenantId = tenantIdOpt.get();
         final String email = emailOpt.get();
 
+        // Backlog #0-92: the claim is signed, but the secret is shared by every
+        // service (#0-13), and a tenant id outside the platform's one format
+        // would go on into logs, headers and queries. Refused, not repeated.
+        if (!TenantIds.isValid(tenantId)) {
+            log.warn("JWT token with an invalid tenantId claim rejected, request to: {}",
+                    request.getRequestURI());
+            return;
+        }
+
         TenantContext.set(tenantId);
         MDC.put(MDC_USER_ID, userId.toString());
 
@@ -269,11 +278,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             return;
         }
 
+        // Backlog #0-92: a tenant id outside the platform's one format is
+        // refused like a missing one.
         final String tenantId = jwtUtils.extractTenantId(claims)
-                .filter(t -> !t.isBlank())
+                .filter(TenantIds::isValid)
                 .orElse(null);
         if (tenantId == null) {
-            log.warn("Service token without tenantId claim rejected: " +
+            log.warn("Service token without a valid tenantId claim rejected: " +
                     "service={}, request={}", serviceName, request.getRequestURI());
             return;
         }
