@@ -191,8 +191,8 @@ that needs auth-service-owned tenant data pulls it over this kind of narrow HTTP
 briefly — not Kafka replication of that data. Without the audience check a token minted to call oncall-service
 would authenticate on every service, and any endpoint that is only `authenticated()` would accept it. No HTTP filter reads `X-Tenant-Id`; the header the
 clients still send is informational only. `ServiceTokenProvider.getToken(tenantId)` caches one token
-per (tenant, audience) (bounded; the tenant id comes from Kafka payloads and is validated: 1-100
-characters, no whitespace or control characters).
+per (tenant, audience) (bounded; the tenant id comes from Kafka payloads and is validated: since #0-92 a
+`TenantIds` slug, 3-63 `[a-z0-9-]`; it was 1-100 characters without whitespace or control characters).
 
 Known limitation (decided, not overlooked): all services share one HMAC secret, so any service can
 mint a token for any tenant and audience. Per-tenant, per-audience tokens stop a forged header and
@@ -249,7 +249,8 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   histories; a Java migration has no checksum), and `V20` archives that account where the password is
   still `changeme`.
 - **Tenant provisioning (#0-80)**: customer tenants are rows in auth-service's `tenants` table (V21,
-  backfilled from existing users; the other services still treat `tenant_id` as a plain string).
+  backfilled from existing users; since #0-92 every service's `tenant_id` has the slug `CHECK`, auth V28
+  reversing V21's keep-as-is backfill).
   An admin of `platform-operator`, with a JWT (never an API key, service or purpose token: `PlatformAccess`,
   checked in the filter chain and by `@PreAuthorize` on every method), calls `/api/v1/platform/tenants`:
   create (tenant row via `insertIfAbsent`, a native `ON CONFLICT DO NOTHING`, since `save()` would merge
@@ -323,12 +324,11 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     auth-service's relay sends it. The exit code does not depend on Kafka. Chosen over SQL (no email, no audit)
     and pgAudit/triggers (detection, not the audit trail). Until #0-84 it waited for Kafka's ack inside the
     transaction (`publishAuthConfirmed`, removed with its `audit-timeout` option).
-  - Audit records' `X-Tenant-Id` (found in this review): `AuditEventKafkaSender` (`shared`) sets the header from
-    the event's tenant, as `AlertKafkaProducer` / `IncidentEventKafkaSender` do, and
-    `TenantKafkaProducerInterceptor` no longer appends a second one from `TenantContext` to a record that has it
-    (consumers read the last header, so the context used to win). Before, 151 of 155 local audit records had
-    none: auth-, notification-, postmortem- and oncall-service don't register the producer interceptor, and
-    logins/jobs/commands have no `TenantContext`. Their dead-letter records still lack it: #0-91.
+  - Audit records' `X-Tenant-Id` (found in this review): every sender builds its records through `TenantRecords`
+    (#0-91), which writes the header from the payload's tenant; `TenantKafkaProducerInterceptor` writes nothing
+    and only counts a record without a valid header. History: before #0-88 151 of 155 local audit records had
+    no header (the interceptor stamped it from `TenantContext`, registered in only some services, and
+    logins/jobs/commands have none); #0-88 made the sender set it, #0-91 made `TenantRecords` the one writer.
   - V23's comment that a password reset removes a factor within the grace period predates #0-88; V23 stays
     unchanged (checksum), V24's header says so.
 - **Bulk UPDATEs flush before they clear** (found in #0-83): `@Modifying(clearAutomatically = true)` must
@@ -378,6 +378,39 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     revoke that revoked nothing publishes nothing. 429 + Retry-After
     (`RateLimitResponses`). `revokeCreatedBy` audits each integration as `INTEGRATION_REVOKED`, so the endpoint
     and the MFA reset (which also lists `keyIds` / `integrationIds`) leave the same trace.
+- **Tenant id and Kafka tenant** (#0-91, #0-92): one tenant id format, `TenantIds.SLUG` (shared; a `CHECK` on every
+  table with a `tenant_id`: auth V28, incident V15, notification V9, escalation V8, postmortem V6, oncall V7;
+  each service's integration test fails for a new table without one). Refused where it enters: `JwtUtils` issue (user and service tokens), `JwtAuthFilter`
+  read (invalid claim = unauthenticated), auth-service public `X-Tenant-Id` (400 via `AuthController.checkedTenant`),
+  `TenantContext.set` (`InvalidTenantIdException`, an IAE; null and blank too), `DevTokenController`,
+  `AuditEventPublisher.checkStorable`, `ApiKeyAuthFilter` (a lookup returning an invalid tenant = 401 like an
+  invalid key, not a 500 from `TenantContext.set`), STOMP `CONNECT` (`StompAuthChannelInterceptor`: claim
+  filtered by `TenantIds::isValid`; a SUBSCRIBE refusal does not log the client's destination). A new entry
+  point that takes a tenant needs the same explicit check. Kafka: the payload's
+  `tenantId` is the truth, the header a copy, written only by `TenantRecords.forTenant` (`IncidentEventKafkaSender`
+  had none before: it relied on the interceptor + ThreadLocal; `sendRawSync` now takes the tenant).
+  `TenantKafkaProducerInterceptor` writes nothing: counts `kafka.records.produced.tenant.invalid{missing|invalid}`
+  in Micrometer's global registry (Kafka instantiates it, not Spring); exempt only a dead-letter record built by
+  `TenantRecords.withoutTenant` (marker `X-Tenant-Unresolved`, on a `.dead-letter` topic: the topic name alone
+  exempts nothing); `AuditOutboxRelay` treats only `InvalidTenantIdException` as the row's fault; registered in
+  auth/ingestion/incident/notification/escalation/postmortem. `TenantKafkaRecordResolver(objectMapper,
+  meterRegistry)`: missing/invalid payload tenant or missing/invalid/mismatched header -> `TenantResolutionException`
+  (an IAE, so every listener's poison-pill path dead-letters it) + `kafka.records.tenant.rejected{reason}`
+  (`header_missing` too: every sender writes the header, so a record without one is not the platform's).
+  Every loop that sets `TenantContext` from a row (5 scheduler classes, postmortem's with two loops; `AuditOutboxRelay`) does it inside the
+  per-row `try`: one bad row must fail alone, not end the batch for every tenant (incident outbox: inside
+  `processOne`, so `markFailed` runs once; never a second `markFailed` against a failing database).
+  `IncidentEventKafkaSender.sendRawSync` refuses a row whose tenant is not its payload's `tenantId` (consumers
+  would dead-letter it as a mismatch). `AlertIngestionService.ingest` checks the tenant before normalizing or
+  setting a dedup key, and releases the key when the publish throws synchronously. A dead-letter topic must be
+  named `*.dead-letter` (`DeadLetterPublisher` refuses another name at construction: `withoutTenant` needs it).
+  `TenantKafkaRecordInterceptor` MDC: valid header, else
+  `_missing`/`_invalid` (not slugs, so never a real tenant; `"unknown"` was a valid slug); the MDC shows the
+  header's claim until the consumer resolves the record (a refused record's log lines carry the claimed
+  tenant in the MDC prefix and `tenant=null` in the message). `kafka.records.received` has no `tenant` tag any
+  more (a forged well-formed header opened a series per value: never tag a metric with a record's value). DLT: resolved tenant
+  or null (key `service:_none`, no header), reason through `AuditText.error`. Consumers set no placeholder
+  tenant. Alerts `KafkaRecordsTenantRejected` (critical) / `KafkaRecordsWithoutTenant` (high).
 - **Audit outbox** (#0-84, done in two PRs: #449 `shared` + auth- and incident-service; the second
   notification-, escalation- and postmortem-service): `AuditEventPublisher.publish*`
   INSERTs into the service's own table (`audit.outbox.table`: `auth_audit_outbox` V27,
@@ -459,9 +492,9 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     CONCURRENTLY` alone in its file so Flyway runs it outside a transaction). CONCURRENTLY needs
     `spring.flyway.postgresql.transactional-lock: false` (incident-service): with Flyway's default
     transactional lock the build waits forever on Flyway's own open transaction (seen in the migration test).
-    `AuditEventConsumer` resolves the tenant per record with `TenantKafkaRecordResolver` (header first,
-    payload fallback; it used to take the payload's), sets/clears `TenantContext`, and rejects a header/payload
-    mismatch. It acknowledges as duplicates only violations of `IDEMPOTENCY_KEYS` (V10 offset key, V13), by
+    `AuditEventConsumer` resolves the tenant per record with `TenantKafkaRecordResolver` (since #0-92: the
+    payload's valid tenant, a header must equal it), sets/clears `TenantContext`; a refused tenant is
+    `tenant_mismatch` or `tenant_invalid`, dead-lettered with no tenant. It acknowledges as duplicates only violations of `IDEMPOTENCY_KEYS` (V10 offset key, V13), by
     Hibernate's constraint name; any other violation, unreadable JSON or a tenant mismatch is rejected: ERROR
     log, `incidents.dead-letter` through `DeadLetterPublisher.publishAndWait` (acknowledged only once Kafka has
     the copy, else `nack(5 s)`), counter `audit.events.rejected{reason}` and alert `AuditEventsRejected`

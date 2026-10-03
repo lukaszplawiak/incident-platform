@@ -51,7 +51,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-36](#0-36-nothing-checks-entity-index-annotations-against-the-real-schema) | Nothing checks entity `@Index` annotations against the real schema | tech-debt | Low | Open |
 | [0-37](#0-37-ingest-rate-limiter-answers-429-which-alertmanager-drops-without-retry) | Ingest rate limiter answers 429, which Alertmanager drops without retry | design | Medium | Open |
 | [0-38](#0-38-integration-key-format-has-no-checksum-and-a-separator-inside-its-alphabet) | Integration key format has no checksum and a separator inside its alphabet | tech-debt | Low | Open |
-| [0-39](#0-39-kafka-tenant-resolution-no-headerpayload-match-check-producers-without-the-tenant-header) | Kafka tenant resolution: no header/payload match check, producers without the tenant header | tech-debt | Medium | Open |
 | [0-40](#0-40-dead-letter-topics-have-no-consumer-or-replay-tooling) | Dead-letter topics have no consumer or replay tooling | design | Medium | Open |
 | [0-41](#0-41-teamid-from-event-payloads-is-not-validated-against-the-tenants-teams) | `teamId` from event payloads is not validated against the tenant's teams | design | Low | Open |
 | [0-42](#0-42-kubernetes-mail_host-points-at-a-mailhog-that-does-not-exist) | Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist | bug | Low | Open |
@@ -85,9 +84,10 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
 | [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
 | [0-90](#0-90-a-customer-tenants-only-admin-has-no-way-back-from-a-factor-they-did-not-enrol) | A customer tenant's only admin has no way back from a factor they did not enrol | design | Medium | Open |
-| [0-91](#0-91-one-writer-for-the-x-tenant-id-header-of-every-kafka-record) | One writer for the X-Tenant-Id header of every Kafka record | design | Low | Open |
-| [0-92](#0-92-a-kafka-records-x-tenant-id-header-reaches-the-logs-unchecked) | A Kafka record's `X-Tenant-Id` header reaches the logs unchecked | bug | Low | Open |
 | [0-93](#0-93-notification-channel-errors-carry-third-party-text-into-notification_log-and-the-audit-trail) | Notification channel errors carry third-party text into `notification_log` and the audit trail | tech-debt | Low | Open |
+| [0-94](#0-94-logs-are-plain-text-with-no-structure-escaping-or-collection) | Logs are plain text, with no structure, escaping or collection | design | Medium | Open |
+| [0-95](#0-95-kafka-messages-have-no-envelope-correlation-id-schema-version-producer) | Kafka messages have no envelope (correlation id, schema version, producer) | design | Low | Open |
+| [0-96](#0-96-a-consumer-acknowledges-a-record-before-its-dead-letter-copy-is-written) | A consumer acknowledges a record before its dead-letter copy is written | design | Medium | Open |
 
 ---
 
@@ -653,22 +653,6 @@ Stored hashes need no migration, because the hash covers the full raw key.
 
 ---
 
-### 0-39. Kafka tenant resolution: no header/payload match check, producers without the tenant header
-
-**Type:** tech-debt · **Priority:** Medium · **Status:** Open (found by code reading, not run)
-
-**Problem.** `TenantKafkaRecordResolver` takes `X-Tenant-Id` first and falls back to the payload `tenantId`,
-without checking that the two agree when both are present. `AuditEventConsumer` ignores the header and trusts the
-payload. auth-service, notification-service and postmortem-service do not configure
-`TenantKafkaProducerInterceptor`, and `AuditEventKafkaSender` / `DeadLetterPublisher` do not stamp the header
-themselves. No authorization decision depends on this today; it is a consistency gap in the Kafka leg of the
-tenant-isolation invariant.
-
-**Work.** Every producer stamps the header; the resolver dead-letters a record whose header and payload tenant
-differ; `AuditEventConsumer` resolves through the resolver like the other consumers.
-
----
-
 ### 0-40. Dead-letter topics have no consumer or replay tooling
 
 **Type:** design · **Priority:** Medium · **Status:** Open
@@ -881,9 +865,15 @@ where it is defined: header first, payload `tenantId` fallback, dead-letter othe
 reserved tenant. `TenantKafkaConsumerInterceptor` has no test anywhere.
 
 **Work.** Unit tests in `shared` for each class's contract, starting with `TenantKafkaRecordResolver`
-and the two interceptors (a header/payload mismatch is #0-39, a separate decision). Until then, a PR
+and the two interceptors (a header/payload mismatch was #0-39, closed by #0-91/#0-92). Until then, a PR
 that changes one of them fails CI's changed-lines coverage gate unless it adds those tests, which is
 the intended pressure.
+
+**Progress (backlog #0-91/#0-92).** `TenantKafkaRecordResolver`, `TenantKafkaProducerInterceptor`,
+`TenantKafkaConsumerInterceptor` and `DeadLetterPublisher` now have their own tests in `shared`
+(`TenantKafkaRecordResolverTest`, `TenantKafkaProducerInterceptorTest`, `TenantKafkaConsumerInterceptorTest`,
+`DeadLetterPublisherTest`), and the header/payload mismatch (#0-39) is decided and tested. Left:
+`GlobalExceptionHandler`, `UnauthorizedEntryPoint`.
 
 **Also below 60% (instruction coverage, measured with #0-57), not tenant-critical:** auth-service
 `IntegrationService`, `TenantSettingsService`, `TenantSettings`, `TeamMember`, `Integration`;
@@ -964,7 +954,8 @@ the Postgres part is done: the Secret with #0-78, the default password in PR #44
 - **Redis** (`k8s/base/infrastructure/redis.yml`) runs `redis-server --appendonly yes` with no password. It holds
   the token revocation list and the rate-limit buckets, so any pod can un-revoke a token or reset a limit.
 - **Kafka** (`kafka.yml`) listens `PLAINTEXT` with no SASL and no ACLs. Any pod can produce to `alerts.raw` or
-  `incidents.lifecycle` with any `X-Tenant-Id`, and consumers trust that header (#0-39).
+  `incidents.lifecycle` for any tenant: since #0-92 consumers refuse a record whose header and payload disagree,
+  but a forged record naming one tenant in both is taken as that tenant's.
 - **Postgres** (done): since #0-78 the password comes from each overlay's `app-secrets` (`DB_PASSWORD`, passed to the
   six services that use the database and to the init script that creates the role), and the base no longer ships a
   Secret. `application.yml` used to fall back to `${DB_PASSWORD:incident_secret}`, so a run without the variable
@@ -1354,64 +1345,6 @@ the operator tenant's audit, rate-limited, a backlog decision):
 
 ---
 
-### 0-91. One writer for the X-Tenant-Id header of every Kafka record
-
-**Type:** design · **Priority:** Low · **Status:** Open (found in the review of #0-88)
-
-**Problem.** A record's tenant header has two writers. Senders that know the record's tenant set it
-explicitly (`AuditEventKafkaSender` since #0-88, `AlertKafkaProducer`, `IncidentEventKafkaSender`), and
-`TenantKafkaProducerInterceptor` adds it from `TenantContext`, a thread-local that a login, a scheduled
-job or a consumer thread does not have. Two writers produced two headers per record until #0-88 (consumers
-read the last, so the thread's context won over the record's own tenant); now the interceptor leaves an
-existing header alone. The interceptor is registered only in ingestion-, incident- and escalation-service,
-so auth-, notification-, postmortem- and oncall-service rely on explicit headers alone; the dead-letter
-records of notification- and postmortem-service (`DeadLetterPublisher`) have none. Checked locally before
-#0-88: 151 of 155 audit records had no header. Consumers fall back to the payload's `tenantId`
-(`TenantKafkaRecordResolver`), so nothing is misrouted today; a record whose payload cannot be parsed has
-no tenant at all. CLAUDE.md's "stamps X-Tenant-Id on every record" carries a footnote pointing here.
-
-**How production systems handle it.** One explicit writer: the tenant (with the other routing metadata:
-event type, correlation id) is set by the one component that builds the record, from the message itself,
-often as an envelope (CloudEvents-style attributes) or a publisher API that cannot be called without a
-tenant. Ambient thread context is not a source of record data. Interceptors, if any, validate (count and
-alert on a record without the header) rather than write.
-
-**Approach.** A tenant-aware publisher in `shared` that every producer uses (audit, dead-letter,
-incident events, alerts), taking the tenant as a required argument and setting key and header; turn
-`TenantKafkaProducerInterceptor` into a validator (a metric and a WARN for a header-less record, no
-writes) registered in all seven services; `DeadLetterPublisher` passes the failed record's resolved
-tenant (or its original header). On the consuming side, `TenantKafkaRecordResolver` takes the header
-first and the payload's `tenantId` only as a fallback, without comparing the two when both are
-present (found in the review of #0-88): a record whose header and payload disagree should go to the
-dead-letter topic rather than be processed under either tenant. Then make CLAUDE.md state the rule without a footnote. Relates to the
-envelope idea in `AlertKafkaProducer`'s TODO.
-
----
-
-### 0-92. A Kafka record's `X-Tenant-Id` header reaches the logs unchecked
-
-**Type:** bug · **Priority:** Low · **Status:** Open (found in the review of #0-84)
-
-**Problem.** `TenantKafkaRecordResolver.extractTenantId` (`shared`) returns the raw `X-Tenant-Id` header,
-checked only for being blank, and consumers put it into `TenantContext`, hence into the MDC of every log
-line (`[%X{tenantId}]` in the plain-text log pattern) and into their own ERROR lines and dead-letter
-reasons (`AuditEventConsumer`'s header/payload mismatch reason quotes both values). A header with CR/LF
-or other control characters forges or splits log lines. Anyone who can produce to a topic can set it,
-which today is any service (Kafka has no ACLs: #0-66). Not audit-specific: every consumer resolves its
-tenant the same way. The payload fallback (`tenantId` in the JSON) has the same shape.
-
-**How production systems handle it.** Validate identifiers at the trust boundary against their known
-format, and reject (dead-letter) a record that does not match, rather than escape it per log call; plus,
-as defence in depth, a structured (JSON) log encoder that escapes values.
-
-**Approach.** Decide the tenant-id format the platform guarantees (new tenants are slugs, `TenantIds.SLUG`,
-since #0-80, while ids that existed before are kept as they are; `ReservedTenants`; HTTP tenant ids come
-from signed tokens), then check it in
-`TenantKafkaRecordResolver` (header and payload alike): a record that does not match goes to the
-dead-letter topic with a reason that does not quote the value. Relates to #0-91 (one writer for the header).
-
----
-
 ### 0-93. Notification channel errors carry third-party text into `notification_log` and the audit trail
 
 **Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-84)
@@ -1429,6 +1362,87 @@ status, an error code) for anything persisted or shown; the provider's raw text 
 **Approach.** Give `NotificationException` a platform-authored reason (e.g. `SMTP_REJECTED`, `SLACK_HTTP_429`)
 used for `notification_log.error_message` (which today stores the whole message) and the audit event, and log
 the cause with its message where it is caught. postmortem-service already does this for Gemini (#0-84).
+
+---
+
+### 0-94. Logs are plain text, with no structure, escaping or collection
+
+**Type:** design · **Priority:** Medium · **Status:** Open (raised in the analysis of #0-91/#0-92; to be analysed as a whole)
+
+**Problem.** Every service logs plain text: six share the pattern
+`%d [%X{tenantId}] [%X{requestId}] [%X{userId}] %-5level %logger - %msg%n`, auth-service uses Spring Boot's
+default. No `logback*.xml`, no encoder escapes anything. So:
+- **Log injection.** Any value from outside that reaches a log line (a Kafka header such as `X-Event-Type`, a
+  payload field, an HTTP header, an exception message quoting a library's input) can carry CR/LF and forge or
+  split lines. #0-92 closes it for the tenant id only (a strict format checked at every entry); other fields
+  rely on each call site remembering not to log them raw (`notification` `IncidentEventConsumer` does,
+  others do not).
+- **No machine-readable fields.** The MDC keys (tenant, request, user, Kafka message id) are only positions in a
+  string, so filtering one tenant's or one request's lines, or correlating them across services, needs regexes.
+- **No collection.** Neither docker-compose nor `k8s/` runs a log collector or store (no Loki, Promtail, Fluent
+  Bit, Alloy, ELK): logs live in each container's stdout until it is replaced. An incident on the platform
+  itself is investigated container by container, and nothing alerts on log content.
+
+**How production systems handle it.** Structured (JSON) logs to stdout, one object per line, the encoder
+escaping every value; a common field schema (ECS or similar: timestamp, level, logger, message, trace and span
+ids, service, plus the platform's own tenant and request ids); a collector shipping them to a store queried by
+field, with retention and access control (logs carry tenant data); trace ids from OpenTelemetry linking logs,
+metrics and traces. Spring Boot 3.4+ (this project: 3.5) has built-in structured logging
+(`logging.structured.format.console=ecs|logstash|gelf`), so no extra encoder dependency is needed.
+
+**To analyse as a whole, before any change:**
+- format and field schema (ECS vs Logstash vs GELF), MDC keys mapped to fields, the same in all seven services;
+- local readability: JSON for containers, plain text for `spring-boot:run` (profile-dependent) or one format;
+- collection and storage: which stack (Loki + Alloy is the usual fit next to the existing Prometheus/Grafana/
+  Alertmanager), in compose and k8s, retention, who may read logs (they hold tenant content and PII: #0-48);
+- tracing: OpenTelemetry/Micrometer Tracing for trace ids in logs (none today);
+- what must never be logged (secrets, tokens, raw payloads) and how that is checked;
+- CI: the smoke test and anything that greps log output.
+
+### 0-95. Kafka messages have no envelope (correlation id, schema version, producer)
+
+**Type:** design · **Priority:** Low · **Status:** Open (a `TODO` in `AlertKafkaProducer` that cited no backlog
+item, found in the review of #0-91/#0-92)
+
+**Problem.** A record is its domain payload plus headers (`X-Tenant-Id`, a copy of the payload's tenant since
+#0-91; `X-Event-Type` on `incidents.lifecycle`). Nothing carries a correlation id from the alert through the
+incident to its notifications, a schema version, or the producing service and time, so tracing one alert
+across services, replaying with context or evolving a payload shape has nothing to go on.
+
+**Options.** A typed `KafkaEnvelope<T>` in `shared` (routing metadata next to the payload; every producer and
+consumer changes, a deserialization strategy for both shapes during a migration), or standard headers
+(W3C `traceparent` via Micrometer Tracing / OpenTelemetry, a schema-version header) with payloads unchanged.
+The tenant stays the payload's either way (#0-92). Justified together with tracing (#0-94) or when producers
+and consumers multiply; not before.
+
+### 0-96. A consumer acknowledges a record before its dead-letter copy is written
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the review of #0-91/#0-92)
+
+**Problem.** Every consumer except incident-service's `AuditEventConsumer` dead-letters a poison pill with
+`DeadLetterPublisher.publish`, which sends without waiting, and acknowledges the record at once: the incident
+consumers (`IncidentKafkaConsumer`, `IncidentEscalationEventConsumer`), the notification, escalation and
+postmortem `IncidentEventConsumer`s, and ingestion-service's `AlertIngestionService` (15 call sites). When that
+send fails (the broker briefly unreachable, the dead-letter topic's leader moving), the record is gone: its
+offset is committed and the only trace is an ERROR log line ("Message may be LOST"). Since #0-92 those
+records include every record whose tenant was refused (a missing or forged `X-Tenant-Id`, a mismatch), so a
+forged record's evidence can be lost with it, as can a real event a sender's bug made unreadable.
+`AuditEventConsumer` already uses `publishAndWait` (#0-84): it acknowledges only once the dead-letter copy is
+acknowledged, and leaves the record for redelivery otherwise.
+
+**Options.**
+- `publishAndWait` everywhere a record is acknowledged afterwards, as `AuditEventConsumer` does: no loss, but
+  a poison pill then holds its partition for up to the timeout (10 s) while Kafka is down, and redelivery
+  resends the dead-letter copy (at-least-once; the copy carries source topic, partition and offset to dedup on).
+- Spring Kafka's `DefaultErrorHandler` + `DeadLetterPublishingRecoverer` instead of each consumer's own
+  catch-and-publish: the container waits for the dead-letter send before committing, with backoff; one place
+  for all consumers, but the tenant-less record, the reason text (`AuditText`) and the `X-Tenant-Unresolved`
+  marker (#0-92) would move into a recoverer.
+- Keep fire-and-forget for ingestion (an HTTP request: the sender retries on 5xx) and wait only in Kafka
+  consumers.
+
+Decide together with how a dead-letter record is replayed (nothing reads those topics today; README
+"Infrastructure Hardening": their content is untrusted until Kafka ACLs, #0-66).
 
 ---
 
@@ -1466,6 +1480,9 @@ the cause with its message where it is caught. postmortem-service already does t
 | 0-88 | Since #0-83 a password reset by email removed a second factor still within the grace period, the only way then to undo a factor someone else enrolled with the owner's password, but one that let a mailbox alone undo MFA. A password reset now never touches MFA (NIST SP 800-63B; Okta, Entra ID, Google keep MFA on reset); `MfaService.removeFactorEnrolledWithinGrace` is gone. Instead an admin of the tenant resets another user's MFA (`POST /api/v1/users/{id}/mfa-reset`, `MfaService.resetMfaByAdmin`): factor, pending setup, backup codes and the sessions' MFA marks cleared, every session and unfinished login ended, audited as `MFA_RESET_BY_ADMIN` (`shared`, distinct from the self-service `MFA_DISABLED`). Any other user of the tenant that is not archived (deactivated ones too, so a stranger's factor goes before reactivation), admins included, never one's own account; only from the admin's own session passing the platform API's MFA rule (`MfaSessionStatusService.check`: MFA within 12 h, a factor whose MFA_ENABLED notice went out at least 24 h ago; a weaker "completed MFA" rule was found in review to let a password thief enrol a factor and reset everyone at once, or a 30-day refresh chain act weeks later), so an admin's password, a fresh factor or an API key gets 403. Resets are limited per admin and per tenant (`MfaResetRateLimiter`, fail-closed like the platform API's limiter, counted only for a reset about to happen, 429/503 with Retry-After, alerts `AdminMfaResetRateLimited` / `AdminMfaResetRateLimitUnavailable`; shared `RateLimitDecision` / `RedisTokenBuckets` with `PlatformRateLimiter`). Audit records now carry `X-Tenant-Id` from the event's tenant (`AuditEventKafkaSender`; most had none, the rest is #0-91), and the producer interceptor no longer appends a second, context-derived one. `publishAuthConfirmed` refuses to run on a request thread. The user is emailed with a notice of its own (`MFA_RESET`, V24), so a reset they did not ask for stands out from disabling MFA themselves. The MFA_ENABLED email now says: reset the password, then ask an administrator to reset MFA (in that order, or the old password's holder could enrol again). A single platform operator has no second admin: a one-off break-glass command of auth-service (`BreakGlassMfaResetRunner`, `--break-glass.mfa-reset.*`, started only by the subcommand `break-glass-mfa-reset` as the first argument (the options alone, or an environment variable left in a deployment, start nothing), no web server, no scheduled jobs (runner and scheduling share one marker condition, `BreakGlassCommand`), admins of `platform-operator` only, actor and reason without control, line-separator or formatting characters) runs the same reset, emailed, and audited as `MFA_RESET_BREAK_GLASS` with the operator's name, reason and `executedOn` (OS user and host of the process) through `AuditEventPublisher.publishAuthConfirmed` (`shared`), which waits for Kafka's acknowledgement inside the transaction, so a break-glass reset never happens unaudited; chosen over a SQL procedure, which could neither email nor audit. The platform API's grace period (#0-83) stays. A customer tenant's only admin has no remedy yet: #0-90; the admin reset's audit moves to #0-84's outbox. Testcontainers tests of the reset, the break-glass reset and its rollback without an audit acknowledgement, and a password reset that keeps a fresh factor | PR #447 |
 | 0-89 | A personal API key created with a stolen password outlived the owner's recovery, and in auth-service any API key was a full session of its owner: no route checked a scope, so an admin's personal key could invite a second admin, create a tenant key or an integration, change roles or the tenant's MFA policy, each a foothold that no reset takes back. Now an API key reaches only the routes `SecurityConfig` lists for keys, with the scope each names (`/api/v1/teams` with `teams:read` / `teams:write`, the role checks kept), and every other route refuses it (`ApiKeyAccess`, deny by default like the purpose token of #0-16; MFA setup already needed a live session). A password reset, an admin MFA reset and the break-glass reset revoke the user's personal keys in the same transaction (OWASP: recovering a compromised account ends every session and credential), the count in the action's audit event (`personalApiKeysRevoked`, also on archive) and the MFA_RESET email says so; a password change does it only on request (`revokePersonalApiKeys`, OWASP ASVS 3.3.3 "gives the option"; a routine change keeps them). Creating a key emails the account through the auth email outbox (`API_KEY_CREATED`, V25): a personal key its owner, a tenant key (an integration's too) the admin who created it, one email per key showing its id (the row names the key, `api_key_id`; not the prefix, part of the secret), never merged or superseded (OWASP ASVS 2.2.3; review: a 15-minute merge let a key made right after the owner's own hide behind its notice); the name, typed by the creator, is not shown. A user may create at most 20 keys per hour, revoked and integration keys included (`ApiKeyCreationLimit`, counted in Postgres on V26's index, 429 with Retry-After; review: the creator's user row is locked first, `FOR NO KEY UPDATE NOWAIT` (not `FOR UPDATE`, which the foreign-key locks of a login or a reset in flight would have turned into spurious 429s), so one user's parallel requests cannot all pass this limit and the active-key caps with a read-then-insert check, and one finding the row busy gets a 429 at once rather than waiting on a pooled connection; the creation and bulk revocation audit events are sent after commit on a bounded executor private to `AfterCommit` (alerted by `AuditEventsDropped` when its queue drops events; a bulk revoke that revoked nothing publishes nothing), as the connection was measured to be still held inside `afterCommit`, so neither the lock nor a connection waits on Kafka), which bounds those emails against a create-and-revoke loop. Tenant and integration keys are meant to outlive their creator, so a reset keeps them (found in review: one an intruder made would survive); instead every key records who created it and from which login session (V26, personal keys backfilled from their owner), the key list filters by creator (`GET /api/v1/api-keys?createdBy=`), an admin revokes every key a user created since a given time (`POST /api/v1/api-keys/revoke-created-by`, integrations with their keys, one audit event listing them; same rights as revoking one key, so no step-up or limit: revoking is the safe direction, and a tenant without MFA must be able to clean up), the admin MFA reset can do the same in its transaction (`revokeKeysCreatedSince`), and its email counts all the tenant keys the account created that still work (an archive records the same count, `unownedApiKeysKept`; both only count keys with a recorded creator). Tenant and integration keys from before V26 have no recorded creator and are revoked one by one; V26's backfill of personal keys is not covered by a test (the test database migrates from empty). An integration revoked in bulk, through the endpoint or the MFA reset, is also audited as `INTEGRATION_REVOKED`, and the MFA reset lists the revoked key and integration ids. Not done, on purpose: a step-up (MFA) to create a key, of little use once a key cannot create anything and the creator is told. Testcontainers tests that a creation is refused at once while the creator's row is locked, that parallel creations never exceed the limit, that the creation audit is published after commit off the request thread (a stalled publish holds no connection) and not at all on rollback; MockMvc test of every route with an admin's key holding every scope (HEAD, trailing slash and dot segments included), Testcontainers tests of the revocations, the creator columns and the outbox rows | PR #448 |
 | 0-84 | Audit events no longer go to Kafka from inside the action's transaction, fire-and-forget. Every service that records them (auth-, incident-, notification-, escalation-, postmortem-service) writes each event to its own outbox table (`<service>_audit_outbox`; auth V27, incident V14, notification V8, escalation V7, postmortem V5) in the transaction of the change it records, and `AuditOutboxRelay` (`shared`, ShedLock per table) sends committed rows, waiting for Kafka's acknowledgements batch by batch, retrying a failed row with backoff (5 s doubling to 5 min) and never giving it up; the relay pauses after Kafka itself failed, asks without a lock whether anything is due before taking its ShedLock lock (taking it is a write to the shared `shedlock` table), purges SENT rows after 7 days in chunks, at most 100 chunks a run. `AuditEventMessage.eventId` is new; incident-service's consumer deduplicates on `(tenant_id, event_id)` (V12, V13 built `CONCURRENTLY`), resolves the tenant header first, and sends any other unstorable record to `incidents.dead-letter` (`audit.events.rejected`, alert `AuditEventsRejected`). `AuditEventPublisher` exists only where `audit.outbox.table` is set (a bean of `AuditOutboxConfiguration`), so a service that injects it without an outbox does not start; the direct send (`AuditEventKafkaSender.send`, which lost an event whenever Kafka was slow or down) is gone, with `publishAuthConfirmed`, `AfterCommit` (#0-89's interim) and the inert `@Retryable`. The publisher refuses an event the trail cannot store (no tenant or resource, a field over its column, a metadata key naming a secret, a payload over 256 KiB), failing the action. A refusal whose transaction rolls back (`MFA_VERIFY_FAILED`) is audited after the rollback. In notification-service the `notification_log` row (or the UNDELIVERABLE status) and its audit event are one transaction; every failed send is now audited, not only a channel's own failure, and a delivered notification whose record cannot be written is no longer recorded as a failed send. In escalation-service `ESCALATION_SCHEDULED` is written with the level-2 task; `ESCALATION_FIRED` and `ESCALATION_NOTIFICATION_FAILED` follow a change already committed (or none), so a failure to write them, like a delivered notification's, is logged and counted (`audit.event.unrecorded`, alert `AuditEventUnrecorded`) rather than thrown. `max.block.ms` is 5 s in the producers of auth-, incident-, notification- and postmortem-service, so `send()` cannot hold the relay for Kafka's default 60 s; escalation-service keeps the default on purpose, as its escalation event is sent once and not retried (#0-4) and a shorter block would turn a brief outage into a lost escalation; its relay runs on its own virtual thread. `delivery.timeout.ms` is left at its default: the relay waits `send-timeout` for an acknowledgement, and a record delivered after that is resent and deduplicated by `eventId`. Table names are checked (plain lower-case, at most 45 characters, so the relay's lock name fits `shedlock.name`) in `AuditOutbox` itself as well as in its properties. Alerts `AuditOutboxBacklog` (oldest pending event over 10 min), `AuditEventsRejected`, `AuditEventUnrecorded`, all critical and emailed to the operator. An error goes into an event cut to 500 characters on one line, an unexpected exception by its type only (`AuditText`), a failed Gemini call as a fixed text: the trail is the tenant's to read, and a client library's message can quote a token-bearing URL or a response body. A failed send whose record cannot be written no longer stops the remaining channels, and an undeliverable notification alerts the operator even when its status write fails. The counters behind `AuditEventUnrecorded` and `AuditEventsRejected` exist at zero from startup (`UnrecordedAuditEvents`), so each alert fires on the first failure, not the second. Testcontainers tests per service (the migration takes the shared SQL; through the real service, the change and its audit event commit or roll back together, under the action's tenant) and a wiring test with Spring Boot's own Kafka beans. Log injection through the tenant header found in review: #0-92 | PRs #449, #450 |
+| 0-91 | A Kafka record's tenant header has one writer. `TenantRecords.forTenant` (`shared`) builds every tenant record (audit, alert, incident event, dead-letter), its tenant a required, checked argument written to `X-Tenant-Id`; the payload's `tenantId` is the record's tenant and the header its copy. Incident events had no header of their own until then: `IncidentEventKafkaSender` relied on `TenantKafkaProducerInterceptor`, which stamped it from the thread's `TenantContext` (CLAUDE.md said otherwise). The interceptor now writes nothing: registered in every service that produces (oncall has no Kafka), it counts a record without a valid header (`kafka.records.produced.tenant.invalid`, registered at zero, alert `KafkaRecordsWithoutTenant`), dead-letter records marked as tenant-less excepted (`TenantRecords.withoutTenant`, marker `X-Tenant-Unresolved`; the topic name alone used to exempt any record). `DeadLetterPublisher` heads a record with its resolved tenant, or with none (a `null` field, `_none` in the key) where consumers used to pass the string `"unknown"`, itself a valid tenant id; its reason goes on one line. Consumers no longer set a placeholder tenant | PR #TBD |
+| 0-92 | Every tenant id is a slug of 3-63 `[a-z0-9-]` (`TenantIds`, moved from auth-service to `shared`): a `CHECK` on every table with a `tenant_id`, in every service (auth V28, reversing V21's "backfilled ids kept as they are"; incident V15, notification V9, escalation V8, postmortem V6, oncall V7; the platform holds no data to keep; each service's integration test fails for a new table without one), checked when a token is issued (`JwtUtils`, user tokens too, the looser 1-100 rule of #0-11 gone) and read (`JwtAuthFilter`), on the `X-Tenant-Id` header of auth-service's public endpoints (400), by `TenantContext.set`, `DevTokenController`, `AuditEventPublisher`, the STOMP `CONNECT` and `ApiKeyAuthFilter` (a lookup returning an invalid tenant is a 401, not a 500). Every loop that sets `TenantContext` from a row (5 scheduler classes: incident outbox, notification, escalation, auth email and postmortem retry with its two loops; and `AuditOutboxRelay`) does it inside the row's `try`: one such row used to end the batch for every tenant (found in review). `TenantKafkaRecordResolver` takes the payload's tenant, which must be valid, and refuses a header that is missing, invalid or names another tenant (`TenantResolutionException` → dead-letter, `kafka.records.tenant.rejected{reason}` registered at zero, alert `KafkaRecordsTenantRejected`), never quoting either value; it used to take the raw header first, checked only for blankness. `TenantKafkaRecordInterceptor` puts only a valid header into the MDC (`_missing` / `_invalid` otherwise), and `kafka.records.received` lost its `tenant` tag (found in the end-to-end test: a forged but well-formed header, read before the record's tenant is resolved, opened a series per value, so any producer could add series without bound; no dashboard used the tag). `UnrecognizedSeverityException` and the JSON-parse message no longer quote the payload; poison-pill logs and dead-letter reasons are one line (`AuditText.error`). `IncidentEscalationEventConsumer`, which acknowledged a poison pill without keeping it, dead-letters it like every other consumer. Log injection through other fields, and structured logs: #0-94 | PR #TBD |
+| 0-39 | Closed by #0-91/#0-92: every producer writes the header (through `TenantRecords`), the resolver dead-letters a record whose header and payload tenant differ, and `AuditEventConsumer` resolves through it like every consumer | PR #TBD |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |
