@@ -253,6 +253,42 @@ class AuthEmailServiceTest {
         }
 
         @Test
+        @DisplayName("an MFA recovery notice says when the reset runs and links to cancelling it, nothing the operator wrote (backlog #0-90)")
+        void mfaRecoveryRequested() throws Exception {
+            final jakarta.mail.internet.MimeMessage message =
+                    new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+            given(mailSender.createMimeMessage()).willReturn(message);
+
+            emailService.sendMfaRecoveryRequested(RECIPIENT, RAW_TOKEN,
+                    java.time.Instant.parse("2026-10-07T12:34:56.789Z"));
+
+            then(mailSender).should().send(message);
+            assertThat(message.getSubject())
+                    .isEqualTo("Account recovery requested for your Incident Platform account");
+            assertThat((String) message.getContent())
+                    .contains("No earlier than <b>2026-10-07T12:34:56Z (UTC)</b>",
+                            APP_BASE_URL + "/mfa-recovery/cancel?token=" + RAW_TOKEN,
+                            "If you did not ask for this, cancel it now", "replace your password",
+                            "revoke your personal API keys");
+        }
+
+        @Test
+        @DisplayName("a completed recovery links to setting a new password (backlog #0-90)")
+        void mfaRecoveryCompleted() throws Exception {
+            final jakarta.mail.internet.MimeMessage message =
+                    new jakarta.mail.internet.MimeMessage((jakarta.mail.Session) null);
+            given(mailSender.createMimeMessage()).willReturn(message);
+
+            emailService.sendMfaRecoveryCompleted(RECIPIENT, RAW_TOKEN);
+
+            assertThat(message.getSubject())
+                    .isEqualTo("Your Incident Platform account was recovered: set a new password");
+            assertThat((String) message.getContent())
+                    .contains(APP_BASE_URL + "/reset-password?token=" + RAW_TOKEN, "15 minutes",
+                            "Forgot password", "second administrator");
+        }
+
+        @Test
         @DisplayName("a row without a key id still sends; the recipient address is escaped in the body (review)")
         void apiKeyCreatedWithoutIdEscapesRecipient() throws Exception {
             final jakarta.mail.internet.MimeMessage message =
@@ -271,7 +307,8 @@ class AuthEmailServiceTest {
     /** Backlog #0-89 (review): the escaped footer, in every template, not only the newest. */
     @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
     @org.junit.jupiter.params.provider.ValueSource(strings = {
-            "invite", "password reset", "MFA enabled", "MFA disabled", "MFA reset", "API key created"})
+            "invite", "password reset", "MFA enabled", "MFA disabled", "MFA reset", "API key created",
+            "MFA recovery requested", "MFA recovery completed"})
     @DisplayName("every auth email escapes the recipient address it shows")
     void everyTemplateEscapesRecipient(String template) throws Exception {
         final jakarta.mail.internet.MimeMessage message =
@@ -287,6 +324,8 @@ class AuthEmailServiceTest {
             case "MFA disabled" -> emailService.sendMfaChangeNotification(hostile, false, at);
             case "MFA reset" -> emailService.sendMfaResetNotification(hostile, at, 0);
             case "API key created" -> emailService.sendApiKeyCreatedNotification(hostile, at, null);
+            case "MFA recovery requested" -> emailService.sendMfaRecoveryRequested(hostile, RAW_TOKEN, at);
+            case "MFA recovery completed" -> emailService.sendMfaRecoveryCompleted(hostile, RAW_TOKEN);
             default -> throw new IllegalArgumentException(template);
         }
 

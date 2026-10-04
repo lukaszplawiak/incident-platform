@@ -19,6 +19,8 @@ How a customer tenant comes into existence, and how its first admin gets in. Bac
     could enrol a factor of their own. Every enable and disable emails the account's address, the grace
     period gives its owner that long to react (counted from when the email went out, so an SMTP delay
     does not shorten it): reset the password, then have another operator admin reset the factor (below).
+    In a customer tenant another admin of that tenant resets it; a customer tenant's only admin has the
+    operator's recovery ([below](#a-customer-tenants-only-admin-is-locked-out-of-mfa)).
     Disabling and re-enabling MFA (e.g. a new phone) starts the grace period again; so does it to send a
     lost notice again. A password reset never touches the factor (backlog #0-88).
 
@@ -47,10 +49,12 @@ How a customer tenant comes into existence, and how its first admin gets in. Bac
   tenant row, the admin user (no password, `ROLE_ADMIN`) and the invite email, in one transaction:
   if any of it fails, nothing is created. The admin sets their password by accepting the invite, as
   any invited user does. No password is in a migration, in configuration or in the API.
-- Once the tenant has an admin who has accepted, the operator has nothing more to do in it, and
-  cannot act in it: the platform API creates tenants, reissues the first invite while nobody in
-  the tenant can log in as an admin, and shows and lists tenants' metadata (never their data). Everything else
-  is the tenant admin's (users, teams, integrations, Slack, MFA policy).
+- Once the tenant has an admin who has accepted, the operator has nothing more to do in it and,
+  apart from the delayed, announced MFA recovery of a tenant's only admin
+  ([below](#a-customer-tenants-only-admin-is-locked-out-of-mfa), backlog #0-90), cannot act in it:
+  the platform API creates tenants, reissues the first invite while nobody in the tenant can log in
+  as an admin, and shows and lists tenants' metadata (never their data). Everything else is the
+  tenant admin's (users, teams, integrations, Slack, MFA policy).
 - Every action is audited twice: in the operator tenant (`TENANT_PROVISIONED`,
   `TENANT_ADMIN_REINVITED`: which operator did what to which tenant) and in the new tenant
   (`USER_CREATED`, `USER_INVITE_*`). The operator-tenant events carry the admin's email address, so
@@ -379,6 +383,99 @@ auth-service starts, with `OPERATOR_ADMIN_EMAIL` set).
   `429` also raises the critical `PlatformApiRateLimited` alert.
 - `503` + `Retry-After`: auth-service cannot reach Redis to check the limit, so it refuses rather
   than runs without one. Reads still work. Fix Redis; `PlatformApiRateLimitUnavailable` tracks it.
+
+## A customer tenant's only admin is locked out of MFA
+
+Inside a customer tenant an admin resets another user's MFA (`POST /api/v1/users/{id}/mfa-reset`). A
+tenant with a single admin has nobody to do that for the admin: a lost phone together with lost backup
+codes, or a factor someone else enrolled with the admin's password (the "MFA enabled" email warns
+them), locks the tenant's administration out. Then, and only then, an operator asks the platform to
+recover the account (backlog #0-90). It is the one thing the platform does inside a tenant that has an
+admin, so it is slow on purpose.
+
+**1. Verify the person outside the account.** The account's password and mailbox are what may have
+been taken, so neither proves anything. Use a channel known from before the request: a video call
+against an identity document or a face you know, a call back to a phone number from the contract or an
+earlier ticket (never one given in the request), a DNS TXT record you chose on the customer's own
+domain, a signed letter from the organisation. Write down what you checked: who, when, which number or
+record. The platform stores this; it does not check it (backlog #0-98).
+
+**2. Ask for the recovery.** Same rules as every platform call (operator admin, recent MFA login,
+factor older than 24 h, the write limits):
+
+```bash
+curl -s -X POST "http://localhost:8087/api/v1/platform/tenants/acme/mfa-recovery" \
+  -H "Authorization: Bearer $OP_TOKEN" -H "Content-Type: application/json" \
+  -d '{"userId":"<admin user id>","verificationMethod":"KNOWN_PHONE_CALLBACK",
+       "verificationNote":"Called J. Doe on the number in contract #123, 2026-10-04 10:15 UTC"}'
+```
+
+`verificationMethod` is one of `VIDEO_CALL`, `KNOWN_PHONE_CALLBACK`, `DNS_TXT_RECORD`,
+`SIGNED_DOCUMENT`, `OTHER`; the note is one line of at most 500 characters. Refused with `409` when
+the user is not an active admin with MFA and an accepted invite, when the tenant has another active
+admin (who resets the factor instead), or when a request for the user is already open; `400` for a
+reserved tenant (an operator admin has break-glass, above). The answer (`202`) is the request.
+
+**3. Wait.** Nothing has changed yet. The account is emailed "Account recovery requested" with a link
+that cancels it; once that email has been sent, the reset runs no earlier than 72 h later
+(`platform.mfa-recovery.waiting-period`, env `PLATFORM_MFA_RECOVERY_WAITING_PERIOD`, between 24 h
+and 7 days), within the scheduler's interval (5 minutes, `PLATFORM_MFA_RECOVERY_SCHEDULER_INTERVAL_MS`;
+`PLATFORM_MFA_RECOVERY_BATCH_SIZE` requests a run, 20). Every request alerts the operator (`PlatformMfaRecoveryRequested`, critical): with
+several operators, someone else sees it. Follow it with
+
+```bash
+curl -s "http://localhost:8087/api/v1/platform/tenants/acme/mfa-recovery" -H "Authorization: Bearer $OP_TOKEN"
+```
+
+(`noticeSentAt`, `executeNotBefore`, `status`, `closeReason`). A notice that cannot be sent within the
+security-notice deadline (24 h, or the MFA grace period if longer) expires the request
+(`EXPIRED`, `NOTICE_NOT_DELIVERED`, alert `PlatformMfaRecoveryExpired`): a reset the account was not
+told about does not happen. Fix the address or SMTP and ask again.
+
+**4. The reset.** Before it runs, the checks are made again: if the tenant has gained another active
+admin, the user is no longer an admin with MFA, or the operator who asked is no longer an active
+operator admin, the request is cancelled (`OTHER_ADMIN_EXISTS`, `NO_LONGER_APPLICABLE`,
+`OPERATOR_NO_LONGER_ADMIN`) and the operator alerted (`PlatformMfaRecoveryCancelledOnRecheck`,
+critical): a second admin that appeared during the wait may be the attacker's, so ask the customer,
+through the channel of step 1, whether they know it. A request the scheduler fails on stays open and
+is retried every run (`PlatformMfaRecoveryJobFailing`; the ERROR log "MFA recovery: could not" names
+it). Otherwise the factor, backup codes, every session, the personal API keys and
+the password go (the password is replaced with one nobody knows, as whoever enrolled a stranger's
+factor may still know the old one). The account gets "Your account was recovered: set a new password"
+with a 15-minute reset link (afterwards "Forgot password"), logs in with the new password and sets up
+MFA again. Tenant and integration keys stay; the admin can review them (`GET /api/v1/api-keys?createdBy=`).
+
+**Cancelling.** The account's link cancels it (single use, `POST /api/v1/auth/mfa-recovery/cancel`),
+and so can any operator:
+
+```bash
+curl -s -X POST "http://localhost:8087/api/v1/platform/mfa-recovery/<request id>/cancel" \
+  -H "Authorization: Bearer $OP_TOKEN"
+```
+
+A cancellation by the account alerts the operator (`PlatformMfaRecoveryCancelledByAccount`,
+critical): either its owner did not ask for it, and the verification of step 1 was fooled or the
+operator account misused, or the owner got back another way. Find out which before asking again.
+
+**What the platform cannot decide for you.** Whoever holds the account's mailbox can cancel every
+request, and whoever holds the admin's session can add a second admin, after which the platform keeps
+out (`OTHER_ADMIN_EXISTS`). That is the attacker of the case this exists for (a stranger's factor
+enrolled with a stolen password, the mailbox perhaps too). Both page the operator. From there it is a
+person's decision, through the channel of step 1: with the customer confirmed, the second admin
+(if the customer's own) resets the factor (`POST /api/v1/users/{id}/mfa-reset`); a second admin the
+customer does not know, or a mailbox that keeps cancelling, means the account is taken over, which
+the platform API cannot settle today (suspending a tenant is backlog #0-82).
+
+**An operator account found compromised.** Deactivating it (or removing its admin role) is enough
+for its open requests: each is cancelled when its time comes (`OPERATOR_NO_LONGER_ADMIN`). Cancel
+them at once anyway, so their accounts stop waiting: the list is per tenant, so first find the
+tenants from that operator's `MFA_RECOVERY_REQUESTED` events in the operator tenant (their metadata
+names `tenantId`), list each one's requests with the `GET` above, and cancel those still `PENDING`.
+
+Each step is audited in both tenants (`MFA_RECOVERY_REQUESTED`, `_CANCELLED`, `_EXECUTED`,
+`_EXPIRED`); the operator's note is only in the operator tenant's event. Afterwards, invite a second
+admin to the tenant: tenant settings (`GET /api/v1/tenants/settings`) show `singleAdmin: true` until
+there is one.
 
 ## Not here yet
 

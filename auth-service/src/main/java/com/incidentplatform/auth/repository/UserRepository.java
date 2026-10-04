@@ -131,17 +131,17 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             @Param("tenantId") String tenantId);
 
     /**
-     * Counts active (non-archived, non-anonymized, {@code active=true})
-     * users in a tenant holding the given role, excluding one specific
-     * user.
+     * Counts the tenant's active admins (or holders of another role) other
+     * than one user: active, not archived or anonymized, and with a password,
+     * i.e. an accepted invite — someone who can actually log in.
      *
-     * <p>Used by {@code UserManagementService}'s "last admin" guard —
-     * checking "if I exclude this user, are there other active admins
-     * left?" is exactly the question that needs answering before removing
-     * ROLE_ADMIN, deactivating, or archiving someone: excluding the
-     * subject of the operation and counting the rest tells you whether
-     * the operation would leave the tenant with zero administrators.
-     * {@code role} is bound as a typed {@link Role} parameter, not a
+     * <p>Used by {@code UserManagementService}'s "last admin" guard and by
+     * the operator-assisted MFA recovery's "only admin" rule (backlog #0-90),
+     * the one definition of an active admin. Corrected (backlog #0-90): the
+     * guard used to count an admin whose invite was never accepted, so the
+     * last admin who could log in could be demoted, deactivated or archived
+     * while a second admin's invite was pending, leaving nobody to run the
+     * tenant. {@code role} is bound as a typed {@link Role} parameter, not a
      * String — see the type-mismatch bug documented in
      * {@code OncallScheduleRepository.existsOverlappingForCreate} for why
      * a raw String parameter for an enum-mapped JPQL comparison is a real
@@ -153,12 +153,29 @@ public interface UserRepository extends JpaRepository<User, UUID> {
             WHERE u.tenantId = :tenantId
             AND r.role = :role
             AND u.active = true
+            AND u.passwordHash IS NOT NULL
             AND u.id != :excludeUserId
             """)
-    long countActiveUsersWithRoleExcluding(
+    long countActiveAcceptedUsersWithRoleExcluding(
             @Param("tenantId") String tenantId,
             @Param("role") Role role,
             @Param("excludeUserId") UUID excludeUserId);
+
+    /**
+     * The same count without an exclusion: how many active admins the tenant
+     * has (backlog #0-90: tenant settings warn its admins while it is one).
+     */
+    @Query("""
+            SELECT COUNT(DISTINCT u) FROM User u
+            JOIN u.roles r
+            WHERE u.tenantId = :tenantId
+            AND r.role = :role
+            AND u.active = true
+            AND u.passwordHash IS NOT NULL
+            """)
+    long countActiveAcceptedUsersWithRole(
+            @Param("tenantId") String tenantId,
+            @Param("role") Role role);
 
     /**
      * Whether a tenant has an active user holding the role who has accepted

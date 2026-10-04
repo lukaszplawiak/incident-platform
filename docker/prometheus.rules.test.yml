@@ -497,3 +497,110 @@ tests:
             exp_annotations:
               summary: "Admin MFA resets refused: rate limit unavailable"
               description: "auth-service could not reach Redis to check the MFA reset limit in the last 15 minutes and refused admin MFA resets. Check Redis and the MfaResetRateLimiter ERROR lines in the auth-service log.\n"
+
+  # Backlog #0-90: one MFA recovery request fires, and stops an hour later;
+  # the other outcomes of the same counter do not.
+  - interval: 1m
+    input_series:
+      - series: 'platform_mfa_recovery_total{job="auth-service",instance="auth-1",outcome="requested"}'
+        values: '0x10 1x80'
+      - series: 'platform_mfa_recovery_total{job="auth-service",instance="auth-1",outcome="executed"}'
+        values: '0x10 5x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PlatformMfaRecoveryRequested
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PlatformMfaRecoveryRequested
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "An MFA recovery of a customer tenant's only admin was requested"
+              description: "An operator asked the platform to reset a customer admin's MFA and password in the last hour; it runs after the waiting period unless cancelled. Check the MFA_RECOVERY_REQUESTED audit events in the platform-operator tenant (who asked, how the person was verified) and cancel through the platform API if nobody expected it.\n"
+      - eval_time: 85m
+        alertname: PlatformMfaRecoveryRequested
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PlatformMfaRecoveryCancelledByAccount
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'platform_mfa_recovery_total{job="auth-service",instance="auth-1",outcome="cancelled_by_account"}'
+        values: '0x10 1x80'
+      - series: 'platform_mfa_recovery_total{job="auth-service",instance="auth-1",outcome="cancelled_by_operator"}'
+        values: '0x10 3x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PlatformMfaRecoveryCancelledByAccount
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "An account cancelled the MFA recovery requested for it"
+              description: "A customer admin cancelled, from its notice, an MFA recovery an operator had requested. Find the MFA_RECOVERY_CANCELLED event in the platform-operator tenant, then review how the request was verified with the operator who made it.\n"
+      - eval_time: 15m
+        alertname: PlatformMfaRecoveryRequested
+        exp_alerts: []
+
+  # Review: an expired request (its notice never sent) fires, high.
+  - interval: 1m
+    input_series:
+      - series: 'platform_mfa_recovery_total{job="auth-service",instance="auth-1",outcome="expired"}'
+        values: '0x10 1x80'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PlatformMfaRecoveryExpired
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PlatformMfaRecoveryExpired
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+            exp_annotations:
+              summary: "An MFA recovery request expired: its notice was never sent"
+              description: "An MFA recovery request expired because the account's notice could not be emailed in time. Check AuthEmailPermanentlyFailed and SMTP, then ask for the recovery again (MFA_RECOVERY_EXPIRED in the platform-operator tenant names the tenant and user).\n"
+
+  # Security review: a cancellation on recheck fires; the job-failing alert
+  # needs failures for 15 minutes, so a single one does not page.
+  - interval: 1m
+    input_series:
+      - series: 'platform_mfa_recovery_total{job="auth-service",instance="auth-1",outcome="cancelled_on_recheck"}'
+        values: '0x10 1x80'
+      - series: 'platform_mfa_recovery_failures_total{job="auth-service",instance="auth-1"}'
+        values: '0x10 1x80'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: PlatformMfaRecoveryCancelledOnRecheck
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "An MFA recovery was cancelled when it was due to run"
+              description: "An MFA recovery no longer applied when its waiting period ended and was cancelled. The MFA_RECOVERY_CANCELLED event in the platform-operator tenant gives the reason (OTHER_ADMIN_EXISTS, NO_LONGER_APPLICABLE, OPERATOR_NO_LONGER_ADMIN); for a new admin, ask the customer through the verified channel whether they know it.\n"
+      - eval_time: 20m
+        alertname: PlatformMfaRecoveryJobFailing
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'platform_mfa_recovery_failures_total{job="auth-service",instance="auth-1"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PlatformMfaRecoveryJobFailing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: PlatformMfaRecoveryJobFailing
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+            exp_annotations:
+              summary: "MFA recovery requests keep failing in the scheduler"
+              description: "auth-service's MfaRecoveryScheduler failed on MFA recovery requests for the last 15 minutes. Its ERROR log \"MFA recovery: could not\" names the request and the cause.\n"

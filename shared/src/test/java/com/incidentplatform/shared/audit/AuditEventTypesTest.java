@@ -87,4 +87,17 @@ class AuditEventTypesTest {
                 .isEqualTo("MFA_RESET_BREAK_GLASS")
                 .isNotEqualTo(AuditEventTypes.MFA_RESET_BY_ADMIN);
     }
+
+    @Test
+    @DisplayName("operator-assisted MFA recovery has its own types, one per outcome (backlog #0-90)")
+    void mfaRecoveryTypes() {
+        assertThat(List.of(
+                AuditEventTypes.MFA_RECOVERY_REQUESTED,
+                AuditEventTypes.MFA_RECOVERY_CANCELLED,
+                AuditEventTypes.MFA_RECOVERY_EXECUTED,
+                AuditEventTypes.MFA_RECOVERY_EXPIRED))
+                .containsExactly("MFA_RECOVERY_REQUESTED", "MFA_RECOVERY_CANCELLED",
+                        "MFA_RECOVERY_EXECUTED", "MFA_RECOVERY_EXPIRED")
+                .doesNotContain(AuditEventTypes.MFA_RESET_BY_ADMIN, AuditEventTypes.MFA_RESET_BREAK_GLASS);
+    }
 }

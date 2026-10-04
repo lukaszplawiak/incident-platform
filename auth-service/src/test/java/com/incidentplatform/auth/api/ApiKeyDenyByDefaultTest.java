@@ -11,6 +11,7 @@ import com.incidentplatform.auth.service.IntegrationService;
 import com.incidentplatform.auth.service.InviteService;
 import com.incidentplatform.auth.service.LogoutService;
 import com.incidentplatform.auth.service.MfaService;
+import com.incidentplatform.auth.service.MfaRecoveryService;
 import com.incidentplatform.auth.service.PasswordService;
 import com.incidentplatform.auth.service.ResendInviteService;
 import com.incidentplatform.auth.service.SlackWorkspaceService;
@@ -100,6 +101,7 @@ class ApiKeyDenyByDefaultTest {
     private static final Set<String> PUBLIC_POSTS = Set.of(
             "/api/v1/auth/login", "/api/v1/auth/refresh", "/api/v1/auth/accept-invite",
             "/api/v1/auth/forgot-password", "/api/v1/auth/reset-password",
+            "/api/v1/auth/mfa-recovery/cancel",
             "/api/v1/auth/mfa/verify", "/api/v1/auth/mfa/verify-backup",
             "/api/v1/auth/mfa/setup-required", "/api/v1/auth/mfa/enable-required");
 
@@ -126,6 +128,7 @@ class ApiKeyDenyByDefaultTest {
     @MockitoBean private ResendInviteService resendInviteService;
     @MockitoBean private TenantSettingsService tenantSettingsService;
     @MockitoBean private TenantProvisioningService tenantProvisioningService;
+    @MockitoBean private MfaRecoveryService mfaRecoveryService;
     @MockitoBean private com.incidentplatform.auth.ratelimit.PlatformRateLimiter platformRateLimiter;
     @MockitoBean private SlackWorkspaceService slackWorkspaceService;
     @MockitoBean private IntegrationService integrationService;

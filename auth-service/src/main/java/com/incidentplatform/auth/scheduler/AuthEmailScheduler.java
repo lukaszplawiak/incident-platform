@@ -1,6 +1,7 @@
 package com.incidentplatform.auth.scheduler;
 
 import com.incidentplatform.auth.config.InviteEmailProperties;
+import com.incidentplatform.auth.config.MfaRecoveryProperties;
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
@@ -99,7 +100,7 @@ import java.util.Optional;
  * open while waiting on SMTP.
  */
 @Component
-@EnableConfigurationProperties(InviteEmailProperties.class)
+@EnableConfigurationProperties({InviteEmailProperties.class, MfaRecoveryProperties.class})
 public class AuthEmailScheduler {
 
     private static final Logger log =
@@ -138,6 +139,7 @@ public class AuthEmailScheduler {
     private final Duration processingBudget;
     private final Duration retention;
     private final Duration deadlineTolerance;
+    private final Duration recoveryWaitingPeriod;
     private final Map<AuthEmailType, Counter> sentCounters = new EnumMap<>(AuthEmailType.class);
     private final Map<AuthEmailType, Counter> failedCounters = new EnumMap<>(AuthEmailType.class);
     private final Map<AuthEmailType, Map<GiveUpReason, Counter>> giveUpCounters =
@@ -148,7 +150,8 @@ public class AuthEmailScheduler {
                               AuthEmailPersistenceService persistenceService,
                               InviteEmailProperties properties,
                               MeterRegistry meterRegistry,
-                              ApiKeyRepository apiKeyRepository) {
+                              ApiKeyRepository apiKeyRepository,
+                              MfaRecoveryProperties recoveryProperties) {
         this.outboxRepository   = outboxRepository;
         this.apiKeyRepository   = apiKeyRepository;
         this.emailService       = emailService;
@@ -157,6 +160,7 @@ public class AuthEmailScheduler {
         this.batchSize          = properties.batchSize();
         this.processingBudget   = validated(properties.processingBudget());
         this.retention          = properties.retention();
+        this.recoveryWaitingPeriod = recoveryProperties.waitingPeriod();
         // An attempt scheduled for the deadline itself is picked up at most one
         // interval later, and may wait behind a run's whole budget.
         this.deadlineTolerance  = Duration.ofMillis(properties.schedulerIntervalMs())
@@ -315,11 +319,12 @@ public class AuthEmailScheduler {
                         GiveUpReason.DEADLINE_PASSED, closed.reason(), entry.getId(),
                         entry.getEmailType(), entry.getEmail(), entry.getUserId());
             }
-            case Attempt.Send send -> send(entry, send);
+            case Attempt.Send send -> send(entry, send, now);
         }
     }
 
-    private void send(AuthEmailOutbox entry, Attempt.Send send) {
+    /** @param attemptAt when this attempt began (the instant {@code prepareAttempt} was given) */
+    private void send(AuthEmailOutbox entry, Attempt.Send send, Instant attemptAt) {
         final AuthEmailType type = entry.getEmailType();
         final int attemptNumber = entry.getAttempts() + 1;
         try {
@@ -337,6 +342,13 @@ public class AuthEmailScheduler {
                         apiKeyRepository.countActiveUnownedCreatedBy(entry.getTenantId(), entry.getUserId()));
                 case API_KEY_CREATED -> emailService.sendApiKeyCreatedNotification(
                         entry.getEmail(), entry.getCreatedAt(), entry.getApiKeyId());
+                // Backlog #0-90: the waiting period counts from the send recorded
+                // after this returns, so "not before", counted from the attempt's
+                // start, is never later than the reset (it can only be a little earlier).
+                case MFA_RECOVERY_REQUESTED -> emailService.sendMfaRecoveryRequested(
+                        entry.getEmail(), send.rawToken(), attemptAt.plus(recoveryWaitingPeriod));
+                case MFA_RECOVERY_COMPLETED -> emailService.sendMfaRecoveryCompleted(
+                        entry.getEmail(), send.rawToken());
             }
         } catch (Exception e) {
             failedCounters.get(type).increment();

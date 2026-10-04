@@ -14,7 +14,8 @@ import java.util.UUID;
 
 /**
  * Records the intent to send an invite or password-reset email (backlog #0-52),
- * or a security notification about an MFA change (backlog #0-83).
+ * or a security notification about an MFA change (backlog #0-83), or an
+ * operator's MFA recovery (backlog #0-90).
  *
  * <p>The only way request paths ({@code UserService}, {@code ResendInviteService},
  * {@code ForgotPasswordService}, {@code MfaService}) put anything into the auth
@@ -97,6 +98,36 @@ public class AuthEmailRequestService {
     public AuthEmailOutbox requestApiKeyCreatedNotification(User user, UUID apiKeyId) {
         return outboxRepository.save(AuthEmailOutbox.requestAboutApiKey(
                 user, apiKeyId, securityNotificationDeadline));
+    }
+
+    /**
+     * Queues the notice of an operator's MFA recovery request (backlog
+     * #0-90), naming the request; part of the caller's transaction. It carries
+     * the request's cancel link. Retried like the other security
+     * notifications, for {@link #securityNotificationDeadline()}: a request
+     * whose notice is not sent by then expires.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthEmailOutbox requestMfaRecoveryNotice(User user, UUID requestId) {
+        return outboxRepository.save(AuthEmailOutbox.requestAboutMfaRecovery(
+                user, requestId, securityNotificationDeadline));
+    }
+
+    /**
+     * Queues the email that an MFA recovery was carried out (backlog #0-90),
+     * with a password-reset link created when it is sent; part of the
+     * caller's transaction. Retried for the security-notice deadline, not the
+     * link's 15 minutes: the link is created at each attempt.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public AuthEmailOutbox requestMfaRecoveryCompleted(User user) {
+        return outboxRepository.save(AuthEmailOutbox.request(
+                user, AuthEmailType.MFA_RECOVERY_COMPLETED, securityNotificationDeadline));
+    }
+
+    /** How long a security notification is retried (at least 24 h). */
+    public Duration securityNotificationDeadline() {
+        return securityNotificationDeadline;
     }
 
     private AuthEmailOutbox request(User user, AuthEmailType type) {

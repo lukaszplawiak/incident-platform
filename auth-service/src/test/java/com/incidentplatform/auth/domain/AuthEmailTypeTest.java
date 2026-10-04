@@ -13,10 +13,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AuthEmailTypeTest {
 
     @Test
-    @DisplayName("only API_KEY_CREATED is never superseded by a newer request (backlog #0-89)")
+    @DisplayName("API_KEY_CREATED (backlog #0-89) and MFA_RECOVERY_REQUESTED (backlog #0-90) are never "
+            + "superseded by a newer request")
     void supersededByNewer() {
         for (final AuthEmailType type : AuthEmailType.values()) {
-            assertThat(type.supersededByNewer()).as(type.name()).isEqualTo(type != AuthEmailType.API_KEY_CREATED);
+            assertThat(type.supersededByNewer()).as(type.name()).isEqualTo(
+                    type != AuthEmailType.API_KEY_CREATED && type != AuthEmailType.MFA_RECOVERY_REQUESTED);
         }
     }
 
@@ -27,6 +29,15 @@ class AuthEmailTypeTest {
         assertThat(AuthEmailType.INVITE.tokenType()).isEqualTo(AuthToken.Type.INVITE);
         assertThat(AuthEmailType.PASSWORD_RESET.carriesToken()).isTrue();
         assertThat(AuthEmailType.PASSWORD_RESET.tokenType()).isEqualTo(AuthToken.Type.PASSWORD_RESET);
+    }
+
+    @Test
+    @DisplayName("an MFA recovery notice carries its cancel link, its completion a password-reset link (backlog #0-90)")
+    void mfaRecoveryTypesCarryTokens() {
+        assertThat(AuthEmailType.MFA_RECOVERY_REQUESTED.carriesToken()).isTrue();
+        assertThat(AuthEmailType.MFA_RECOVERY_REQUESTED.tokenType()).isEqualTo(AuthToken.Type.MFA_RECOVERY_CANCEL);
+        assertThat(AuthEmailType.MFA_RECOVERY_COMPLETED.carriesToken()).isTrue();
+        assertThat(AuthEmailType.MFA_RECOVERY_COMPLETED.tokenType()).isEqualTo(AuthToken.Type.PASSWORD_RESET);
     }
 
     @ParameterizedTest

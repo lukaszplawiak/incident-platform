@@ -53,6 +53,13 @@ public class AuthTokenService {
     static final int RESET_TTL_MINUTES  = 15;
     static final int MFA_SESSION_MINUTES = 5;
     static final int MFA_SETUP_REQUIRED_MINUTES = 10;
+    /**
+     * Lifetime of an MFA recovery cancel link (backlog #0-90): longer than the
+     * longest waiting period a deployment may set
+     * ({@code MfaRecoveryProperties.MAX_WAITING_PERIOD}), so the link works
+     * until its request ends, which invalidates it.
+     */
+    static final Duration MFA_RECOVERY_CANCEL_TTL = Duration.ofDays(14);
 
     private static final int TOKEN_BYTES = 32;
 
@@ -64,6 +71,7 @@ public class AuthTokenService {
         return switch (type) {
             case INVITE -> Duration.ofHours(INVITE_TTL_HOURS);
             case PASSWORD_RESET -> Duration.ofMinutes(RESET_TTL_MINUTES);
+            case MFA_RECOVERY_CANCEL -> MFA_RECOVERY_CANCEL_TTL;
             default -> throw new IllegalArgumentException(type + " is not sent by email");
         };
     }
@@ -295,6 +303,15 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
                                                                String tenantId) {
         return generate(user, tenantId, AuthToken.Type.PASSWORD_RESET,
                 Duration.ofMinutes(RESET_TTL_MINUTES), null);
+    }
+
+    /**
+     * Generates the cancel token of an MFA recovery notice (backlog #0-90),
+     * right before the notice is sent, like the invite and reset tokens.
+     */
+    @Transactional
+    public GeneratedToken generateMfaRecoveryCancelTokenWithEntity(User user, String tenantId) {
+        return generate(user, tenantId, AuthToken.Type.MFA_RECOVERY_CANCEL, MFA_RECOVERY_CANCEL_TTL, null);
     }
 
     /**

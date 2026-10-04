@@ -333,7 +333,9 @@ public class UserManagementService {
             return;
         }
 
-        final long otherActiveAdmins = userRepository.countActiveUsersWithRoleExcluding(
+        // Backlog #0-90: only admins who can log in (accepted invite) count;
+        // a pending invite used to let the last working admin be removed.
+        final long otherActiveAdmins = userRepository.countActiveAcceptedUsersWithRoleExcluding(
                 tenantId, Role.ROLE_ADMIN, user.getId());
 
         if (otherActiveAdmins == 0) {

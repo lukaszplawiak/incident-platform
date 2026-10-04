@@ -157,6 +157,40 @@ public class AuthEmailService {
         log.info("API key created notification sent: to={}", recipientEmail);
     }
 
+    /**
+     * Announces an operator's MFA recovery request to the account (backlog
+     * #0-90): the platform will reset its second factor and password no
+     * earlier than {@code notBefore}, unless the owner cancels with the link.
+     * Names no operator and repeats nothing the operator wrote: the account
+     * may be read by whoever took it, and the cancel link is all it needs.
+     *
+     * @param rawToken  the cancel token, in the link only, never logged
+     * @param notBefore the earliest time the reset can run (send time + waiting period)
+     * @throws InviteEmailException if SMTP send fails
+     */
+    public void sendMfaRecoveryRequested(String recipientEmail, String rawToken, Instant notBefore) {
+        send(recipientEmail,
+                "Account recovery requested for your Incident Platform account",
+                buildMfaRecoveryRequestedBody(recipientEmail, buildLink("/mfa-recovery/cancel", rawToken),
+                        notBefore));
+        log.info("MFA recovery notice sent: to={}", recipientEmail);
+    }
+
+    /**
+     * Tells the account its recovery was carried out (backlog #0-90): factor,
+     * password, sessions and personal API keys are gone, and the link sets a
+     * new password.
+     *
+     * @param rawToken a password-reset token, in the link only, never logged
+     * @throws InviteEmailException if SMTP send fails
+     */
+    public void sendMfaRecoveryCompleted(String recipientEmail, String rawToken) {
+        send(recipientEmail,
+                "Your Incident Platform account was recovered: set a new password",
+                buildMfaRecoveryCompletedBody(recipientEmail, buildLink("/reset-password", rawToken)));
+        log.info("MFA recovery completed email sent: to={}", recipientEmail);
+    }
+
     // ── private ───────────────────────────────────────────────────────────
 
     private void send(String recipientEmail, String subject, String htmlBody) {
@@ -327,6 +361,82 @@ public class AuthEmailService {
                 DateTimeFormatter.ISO_INSTANT.format(resetAt.truncatedTo(ChronoUnit.SECONDS)),
                 keysToReview,
                 footer(recipientEmail));
+    }
+
+    private String buildMfaRecoveryRequestedBody(String recipientEmail, String cancelLink, Instant notBefore) {
+        return String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #2c3e50;">Account recovery requested</h2>
+                    <p>The Incident Platform operator was asked to recover your account, because
+                       you are your organisation's only administrator and cannot use your second
+                       factor. The operator verified the request outside the platform.</p>
+                    <p>No earlier than <b>%s (UTC)</b> the platform will remove your second factor
+                       and backup codes, replace your password, revoke your personal API keys and
+                       sign you out everywhere. You will then get an email to set a new password.</p>
+                    <p style="color: #c0392b; font-weight: bold;">
+                        If you did not ask for this, cancel it now:
+                    </p>
+                    <p style="text-align: center; margin: 30px 0;">
+                        <a href="%s"
+                           style="background-color: #c0392b; color: white; padding: 12px 24px;
+                                  text-decoration: none; border-radius: 4px; font-weight: bold;">
+                            Cancel the recovery
+                        </a>
+                    </p>
+                    <p style="color: #7f8c8d; font-size: 12px;">
+                        Or copy this link into your browser:<br/>
+                        <a href="%s">%s</a>
+                    </p>
+                    <p style="color: #7f8c8d; font-size: 12px;">
+                        If you asked for this, no action is needed.
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #ecf0f1; margin: 30px 0;"/>
+                    <p style="color: #bdc3c7; font-size: 11px;">
+                        Incident Platform — sent to %s
+                    </p>
+                </body>
+                </html>
+                """,
+                DateTimeFormatter.ISO_INSTANT.format(notBefore.truncatedTo(ChronoUnit.SECONDS)),
+                cancelLink, cancelLink, cancelLink, footer(recipientEmail));
+    }
+
+    private String buildMfaRecoveryCompletedBody(String recipientEmail, String resetLink) {
+        return String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #2c3e50;">Your account was recovered</h2>
+                    <p>As requested, the platform removed the second factor and backup codes of
+                       your Incident Platform account, replaced its password, revoked its personal
+                       API keys and signed it out everywhere (a page already open may keep working
+                       for up to 15 minutes).</p>
+                    <p>Set a new password, then log in and set up MFA again with your own
+                       authenticator app:</p>
+                    <p style="text-align: center; margin: 30px 0;">
+                        <a href="%s"
+                           style="background-color: #3498db; color: white; padding: 12px 24px;
+                                  text-decoration: none; border-radius: 4px; font-weight: bold;">
+                            Set a new password
+                        </a>
+                    </p>
+                    <p style="color: #7f8c8d; font-size: 12px;">
+                        Or copy this link into your browser:<br/>
+                        <a href="%s">%s</a><br/>
+                        The link works for 15 minutes; after that use "Forgot password".
+                    </p>
+                    <p style="color: #c0392b;">
+                        Consider inviting a second administrator, so that next time someone in
+                        your organisation can reset your MFA.
+                    </p>
+                    <hr style="border: none; border-top: 1px solid #ecf0f1; margin: 30px 0;"/>
+                    <p style="color: #bdc3c7; font-size: 11px;">
+                        Incident Platform — sent to %s
+                    </p>
+                </body>
+                </html>
+                """,
+                resetLink, resetLink, resetLink, footer(recipientEmail));
     }
 
     private String buildApiKeyCreatedBody(String recipientEmail, Instant createdAt, UUID keyId) {

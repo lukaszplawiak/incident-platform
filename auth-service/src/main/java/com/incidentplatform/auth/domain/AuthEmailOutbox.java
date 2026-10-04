@@ -113,6 +113,10 @@ public class AuthEmailOutbox {
     @Column(name = "api_key_id", updatable = false)
     private UUID apiKeyId;
 
+    /** Backlog #0-90: the request an MFA_RECOVERY_REQUESTED notice announces; null for other types. */
+    @Column(name = "mfa_recovery_request_id", updatable = false)
+    private UUID mfaRecoveryRequestId;
+
     protected AuthEmailOutbox() {}
 
     /**
@@ -147,6 +151,18 @@ public class AuthEmailOutbox {
         return entry;
     }
 
+    /**
+     * The notice of an operator's MFA recovery request (backlog #0-90): the
+     * row names the request, so the scheduler records the notice on that
+     * request and no other when it is sent.
+     */
+    public static AuthEmailOutbox requestAboutMfaRecovery(User user, UUID requestId, Duration lifetime) {
+        final AuthEmailOutbox entry = request(user, AuthEmailType.MFA_RECOVERY_REQUESTED, lifetime);
+        entry.mfaRecoveryRequestId = Objects.requireNonNull(requestId, "requestId");
+        return entry;
+    }
+
+    public UUID getMfaRecoveryRequestId() { return mfaRecoveryRequestId; }
     public UUID getApiKeyId()            { return apiKeyId; }
     public UUID getId()                  { return id; }
     public UUID getUserId()              { return userId; }

@@ -1,6 +1,7 @@
 package com.incidentplatform.auth.scheduler;
 
 import com.incidentplatform.auth.config.InviteEmailProperties;
+import com.incidentplatform.auth.config.MfaRecoveryProperties;
 import com.incidentplatform.auth.domain.AuthEmailOutbox;
 import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
@@ -83,12 +84,16 @@ class AuthEmailSchedulerTest {
         TenantContext.clear();
     }
 
+    static final MfaRecoveryProperties RECOVERY =
+            new MfaRecoveryProperties(Duration.ofHours(72), 300_000L, 20);
+
     private AuthEmailScheduler scheduler(int batchSize, Duration budget) {
         final InviteEmailProperties properties = new InviteEmailProperties(
                 "noreply@test.com", "http://localhost:4200", batchSize, 30000L,
                 BACKOFF, budget, Duration.ofDays(30));
         return new AuthEmailScheduler(
-                outboxRepository, emailService, persistenceService, properties, meterRegistry, apiKeyRepository);
+                outboxRepository, emailService, persistenceService, properties, meterRegistry, apiKeyRepository,
+                RECOVERY);
     }
 
     private static AuthEmailOutbox entry(String email, AuthEmailType type, Duration lifetime) {
@@ -222,6 +227,45 @@ class AuthEmailSchedulerTest {
             then(emailService).should().sendMfaResetNotification("user@firma.pl", reset.getCreatedAt(), 2L);
             assertThat(count(AuthEmailScheduler.SEND_COUNTER, "type", "MFA_RESET", "outcome", "sent"))
                     .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("an MFA recovery notice carries its cancel token and a not-before at least the waiting period away (backlog #0-90)")
+        void sendsMfaRecoveryNotice() {
+            final User user = User.forTesting(UUID.randomUUID(), TENANT_ID, "admin@firma.pl", "hash", true,
+                    List.of("ROLE_ADMIN"));
+            final AuthEmailOutbox notice = AuthEmailOutbox.requestAboutMfaRecovery(user, UUID.randomUUID(),
+                    Duration.ofHours(24));
+            duePending(notice);
+            readyToSend(notice);
+            given(persistenceService.recordSent(any(), any())).willReturn(true);
+
+            scheduler.processPending();
+
+            final org.mockito.ArgumentCaptor<java.time.Instant> attemptAt =
+                    org.mockito.ArgumentCaptor.forClass(java.time.Instant.class);
+            then(persistenceService).should().prepareAttempt(eq(notice), attemptAt.capture(), any());
+            final org.mockito.ArgumentCaptor<java.time.Instant> notBefore =
+                    org.mockito.ArgumentCaptor.forClass(java.time.Instant.class);
+            then(emailService).should().sendMfaRecoveryRequested(eq("admin@firma.pl"), eq("raw-admin@firma.pl"),
+                    notBefore.capture());
+            assertThat(notBefore.getValue()).isEqualTo(attemptAt.getValue().plus(RECOVERY.waitingPeriod()));
+            assertThat(count(AuthEmailScheduler.SEND_COUNTER, "type", "MFA_RECOVERY_REQUESTED", "outcome", "sent"))
+                    .isEqualTo(1.0);
+        }
+
+        @Test
+        @DisplayName("a completed MFA recovery carries a password-reset token (backlog #0-90)")
+        void sendsMfaRecoveryCompleted() {
+            final AuthEmailOutbox completed = entry("admin@firma.pl", AuthEmailType.MFA_RECOVERY_COMPLETED,
+                    Duration.ofHours(24));
+            duePending(completed);
+            readyToSend(completed);
+            given(persistenceService.recordSent(any(), any())).willReturn(true);
+
+            scheduler.processPending();
+
+            then(emailService).should().sendMfaRecoveryCompleted("admin@firma.pl", "raw-admin@firma.pl");
         }
 
         @Test

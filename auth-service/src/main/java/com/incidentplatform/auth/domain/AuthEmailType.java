@@ -44,22 +44,42 @@ public enum AuthEmailType {
      * account (a personal key to its owner, a tenant key to the admin who
      * created it), so a key the owner did not create is noticed. No token.
      */
-    API_KEY_CREATED;
+    API_KEY_CREATED,
+
+    /**
+     * Notice of an operator's MFA recovery request (backlog #0-90): the
+     * platform will reset the account's second factor and password once the
+     * waiting period has passed since this email was sent, unless the account
+     * cancels. Carries a {@link AuthToken.Type#MFA_RECOVERY_CANCEL} token.
+     * Link: {@code {appBaseUrl}/mfa-recovery/cancel?token={rawToken}}.
+     * The row names its request ({@code mfa_recovery_request_id}).
+     */
+    MFA_RECOVERY_REQUESTED,
+
+    /**
+     * The recovery was carried out (backlog #0-90): factor, password and
+     * sessions were reset. Carries a password-reset token, as the old
+     * password no longer works. Link: {@code {appBaseUrl}/reset-password?token={rawToken}}.
+     */
+    MFA_RECOVERY_COMPLETED;
 
     /**
      * Whether a newer request of this type makes an unsent older one
      * pointless, so the scheduler closes the older one as SUPERSEDED. True for
      * every type but {@link #API_KEY_CREATED} (backlog #0-89, review): each of
      * those is about a different key, and dropping one would let a key made
-     * right after another go unannounced.
+     * right after another go unannounced; and {@link #MFA_RECOVERY_REQUESTED}
+     * (backlog #0-90), each the notice of its own request, which must not run
+     * without it.
      */
     public boolean supersededByNewer() {
-        return this != API_KEY_CREATED;
+        return this != API_KEY_CREATED && this != MFA_RECOVERY_REQUESTED;
     }
 
     /** Whether an email of this type carries a token (a link to act on). */
     public boolean carriesToken() {
-        return this == INVITE || this == PASSWORD_RESET;
+        return this == INVITE || this == PASSWORD_RESET
+                || this == MFA_RECOVERY_REQUESTED || this == MFA_RECOVERY_COMPLETED;
     }
 
     /**
@@ -70,7 +90,8 @@ public enum AuthEmailType {
     public AuthToken.Type tokenType() {
         return switch (this) {
             case INVITE -> AuthToken.Type.INVITE;
-            case PASSWORD_RESET -> AuthToken.Type.PASSWORD_RESET;
+            case PASSWORD_RESET, MFA_RECOVERY_COMPLETED -> AuthToken.Type.PASSWORD_RESET;
+            case MFA_RECOVERY_REQUESTED -> AuthToken.Type.MFA_RECOVERY_CANCEL;
             case MFA_ENABLED, MFA_DISABLED, MFA_RESET, API_KEY_CREATED ->
                     throw new IllegalStateException(this + " is a notification and carries no token");
         };

@@ -309,3 +309,14 @@ platform:
   mfa:
     max-session-age: ${PLATFORM_MFA_MAX_SESSION_AGE:PT12H}
     enrolment-grace: ${PLATFORM_MFA_ENROLMENT_GRACE:PT24H}
+  # Backlog #0-90: an operator's request to reset the MFA of a customer
+  # tenant's only admin (POST /api/v1/platform/tenants/{id}/mfa-recovery) runs
+  # only once waiting-period has passed since its notice was sent to the
+  # account, which can cancel it from that email; a request whose notice is not
+  # sent within the security-notice deadline (at least 24 h) expires. At most
+  # P7D, at least PT24H. MfaRecoveryScheduler executes due requests every
+  # scheduler-interval-ms.
+  mfa-recovery:
+    waiting-period: ${PLATFORM_MFA_RECOVERY_WAITING_PERIOD:PT72H}
+    scheduler-interval-ms: ${PLATFORM_MFA_RECOVERY_SCHEDULER_INTERVAL_MS:300000}
+    batch-size: ${PLATFORM_MFA_RECOVERY_BATCH_SIZE:20}

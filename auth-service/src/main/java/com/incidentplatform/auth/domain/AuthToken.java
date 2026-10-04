@@ -49,7 +49,18 @@ public class AuthToken {
          * authenticator app takes longer than typing a code from one already
          * set up.
          */
-        MFA_SETUP_REQUIRED
+        MFA_SETUP_REQUIRED,
+        /**
+         * Cancels an operator's MFA recovery request (backlog #0-90): emailed
+         * with the request's notice, consumed by the public
+         * {@code POST /api/v1/auth/mfa-recovery/cancel}. It can only stop a
+         * reset, never cause one: a mailbox alone cannot take the account with
+         * it, though it can keep stopping recoveries (each cancellation pages
+         * the operator; {@code MfaRecoveryService} has the accepted limit).
+         * Invalidated when the request ends; its lifetime only has to outlast
+         * the longest waiting period.
+         */
+        MFA_RECOVERY_CANCEL
     }
 
     @Id
