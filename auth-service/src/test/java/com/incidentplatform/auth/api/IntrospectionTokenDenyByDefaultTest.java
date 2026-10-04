@@ -123,6 +123,7 @@ class IntrospectionTokenDenyByDefaultTest {
     @MockitoBean private ResendInviteService resendInviteService;
     @MockitoBean private TenantSettingsService tenantSettingsService;
     @MockitoBean private TenantProvisioningService tenantProvisioningService;
+    @MockitoBean private com.incidentplatform.auth.service.TenantLifecycleService tenantLifecycleService;
     @MockitoBean private MfaRecoveryService mfaRecoveryService;
     @MockitoBean private com.incidentplatform.auth.ratelimit.PlatformRateLimiter platformRateLimiter;
     @MockitoBean private SlackWorkspaceService slackWorkspaceService;

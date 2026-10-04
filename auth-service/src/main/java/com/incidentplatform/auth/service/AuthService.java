@@ -37,6 +37,7 @@ public class AuthService {
     private final AuditEventPublisher auditEventPublisher;
     private final TeamMemberRepository teamMemberRepository;
     private final TenantSettingsService tenantSettingsService;
+    private final TenantAccessService tenantAccessService;
 
     public AuthService(UserRepository userRepository,
                        JwtUtils jwtUtils,
@@ -45,7 +46,8 @@ public class AuthService {
                        PasswordEncoder passwordEncoder,
                        AuditEventPublisher auditEventPublisher,
                        TeamMemberRepository teamMemberRepository,
-                       TenantSettingsService tenantSettingsService) {
+                       TenantSettingsService tenantSettingsService,
+                       TenantAccessService tenantAccessService) {
         this.userRepository        = userRepository;
         this.jwtUtils              = jwtUtils;
         this.bruteForceProtectionService = bruteForceProtectionService;
@@ -54,6 +56,7 @@ public class AuthService {
         this.auditEventPublisher   = auditEventPublisher;
         this.teamMemberRepository  = teamMemberRepository;
         this.tenantSettingsService = tenantSettingsService;
+        this.tenantAccessService = tenantAccessService;
     }
 
     @Transactional
@@ -108,6 +111,13 @@ public class AuthService {
 
         bruteForceProtectionService.recordSuccess(
                 BruteForceProtectionService.Scope.LOGIN, email, tenantId);
+
+        // ── 4. Tenant status (backlog #0-82) ───────────────────────────────
+        // After the password, so only someone who has it learns that the
+        // organisation is suspended; a read-only tenant still signs in. After
+        // recordSuccess too, on purpose: the password was right, so the
+        // failure counter resets even though no session follows.
+        tenantAccessService.requireCanSignIn(tenantId);
 
         // ── 5. MFA check ───────────────────────────────────────────────────
         // Two conditions trigger MFA second factor:

@@ -117,6 +117,8 @@ class PlatformTenantControllerSecurityTest {
     @Autowired private ObjectMapper objectMapper;
 
     @MockitoBean private TenantProvisioningService provisioningService;
+
+    @MockitoBean private com.incidentplatform.auth.service.TenantLifecycleService tenantLifecycleService;
     @MockitoBean private ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService;
     @MockitoBean private MfaSessionStatusService mfaSessionStatus;
     @MockitoBean private PlatformRateLimiter rateLimiter;
@@ -185,7 +187,8 @@ class PlatformTenantControllerSecurityTest {
     @DisplayName("operator admin: GET one tenant — 200, 404 when missing")
     void operatorAdminGetsOne() throws Exception {
         given(provisioningService.get("acme")).willReturn(
-                new TenantDto("acme", "Acme Corp", "admin@acme.test", false, Instant.now(), OPERATOR_ID));
+                new TenantDto("acme", "Acme Corp", "admin@acme.test", false, Instant.now(), OPERATOR_ID,
+                        com.incidentplatform.auth.domain.TenantStatus.ACTIVE, null, null, null, null, null));
         given(provisioningService.get("nope")).willThrow(
                 new ResourceNotFoundException("Tenant", "nope"));
 
@@ -210,7 +213,8 @@ class PlatformTenantControllerSecurityTest {
     @DisplayName("operator admin: list — 200, page size capped at 100, client sort ignored")
     void operatorAdminLists() throws Exception {
         given(provisioningService.list(any())).willReturn(new PageImpl<>(List.of(
-                new TenantDto("acme", "Acme Corp", "admin@acme.test", true, Instant.now(), OPERATOR_ID)),
+                new TenantDto("acme", "Acme Corp", "admin@acme.test", true, Instant.now(), OPERATOR_ID,
+                        com.incidentplatform.auth.domain.TenantStatus.ACTIVE, null, null, null, null, null)),
                 PageRequest.of(0, 100), 1));
 
         mockMvc.perform(get(TENANTS).param("size", "1000").param("sort", "displayName,asc")
@@ -425,5 +429,73 @@ class PlatformTenantControllerSecurityTest {
         // probing too), but is no provisioned tenant.
         then(rateLimiter).should().tryConsume(OPERATOR_ID);
         assertThat(meterRegistry.counter("platform.tenants.provisioned").count()).isEqualTo(before);
+    }
+
+    // ── suspend / resume (backlog #0-82) ─────────────────────────────────
+
+    private static final String SUSPEND = ONE + "/suspend";
+    private static final String RESUME = ONE + "/resume";
+    private static final String SUSPEND_BODY = "{\"mode\":\"READ_ONLY\",\"reason\":\"BILLING\",\"note\":\"Invoice unpaid\"}";
+
+    @Test
+    @DisplayName("operator admin: suspend and resume — 200 with the tenant, each using a limit token")
+    void suspendAndResume() throws Exception {
+        given(provisioningService.get("acme")).willReturn(new TenantDto("acme", "Acme Corp", "admin@acme.test", true,
+                Instant.now(), OPERATOR_ID, com.incidentplatform.auth.domain.TenantStatus.SUSPENDED,
+                com.incidentplatform.auth.domain.SuspensionMode.READ_ONLY,
+                com.incidentplatform.auth.domain.SuspensionReason.BILLING, "Invoice unpaid", Instant.now(), OPERATOR_ID));
+
+        mockMvc.perform(post(SUSPEND).header("Authorization", "Bearer " + operatorAdmin())
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("SUSPENDED"))
+                .andExpect(jsonPath("$.suspensionMode").value("READ_ONLY"));
+        verify(tenantLifecycleService).suspend(eq("acme"),
+                eq(com.incidentplatform.auth.domain.SuspensionMode.READ_ONLY),
+                eq(com.incidentplatform.auth.domain.SuspensionReason.BILLING), eq("Invoice unpaid"), any());
+
+        mockMvc.perform(post(RESUME).header("Authorization", "Bearer " + operatorAdmin())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"Paid\"}"))
+                .andExpect(status().isOk());
+        verify(tenantLifecycleService).resume(eq("acme"), eq("Paid"), any());
+        verify(rateLimiter, org.mockito.Mockito.times(2)).tryConsume(OPERATOR_ID);
+    }
+
+    @Test
+    @DisplayName("suspend and resume refuse a customer admin, an operator without MFA, an API key — nothing done")
+    void suspendForbidden() throws Exception {
+        // An operator admin's API key: the platform API needs a JWT session that completed MFA.
+        final UserPrincipal keyPrincipal = new UserPrincipal(OPERATOR_ID,
+                ReservedTenants.PLATFORM_OPERATOR, "ops@platform.test",
+                List.of(SecurityRoles.ROLE_ADMIN), List.of(), List.of(), true,
+                List.of("incidents:read"), null);
+        given(apiKeyLookupService.lookup(anyString(), any()))
+                .willReturn(new ApiKeyLookupResult.Authenticated(keyPrincipal));
+        for (final String bearer : List.of(token("acme", SecurityRoles.ROLE_ADMIN), operatorAdminWithoutMfa(),
+                "ipl_operator_personal_key")) {
+            mockMvc.perform(post(SUSPEND).header("Authorization", "Bearer " + bearer)
+                            .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
+                    .andExpect(status().isForbidden());
+            mockMvc.perform(post(RESUME).header("Authorization", "Bearer " + bearer)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"x\"}"))
+                    .andExpect(status().isForbidden());
+        }
+        verifyNoInteractions(tenantLifecycleService);
+    }
+
+    @Test
+    @DisplayName("suspend: limit reached — 429; a body without mode or note — 400 before the limit")
+    void suspendLimitedOrInvalid() throws Exception {
+        mockMvc.perform(post(SUSPEND).header("Authorization", "Bearer " + operatorAdmin())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"BILLING\",\"note\":\"\"}"))
+                .andExpect(status().isBadRequest());
+        verifyNoInteractions(rateLimiter);
+
+        given(rateLimiter.tryConsume(OPERATOR_ID)).willReturn(
+                new RateLimitDecision(RateLimitDecision.Outcome.LIMITED, 120));
+        mockMvc.perform(post(SUSPEND).header("Authorization", "Bearer " + operatorAdmin())
+                        .contentType(MediaType.APPLICATION_JSON).content(SUSPEND_BODY))
+                .andExpect(status().isTooManyRequests()).andExpect(header().string("Retry-After", "120"));
+        verifyNoInteractions(tenantLifecycleService);
     }
 }

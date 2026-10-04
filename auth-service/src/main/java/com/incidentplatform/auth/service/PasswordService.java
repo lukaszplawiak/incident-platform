@@ -44,17 +44,20 @@ public class PasswordService {
     private final PasswordEncoder passwordEncoder;
     private final AuditEventPublisher auditEventPublisher;
     private final ApiKeyService apiKeyService;
+    private final TenantAccessService tenantAccessService;
 
     public PasswordService(UserRepository userRepository,
                            AuthTokenService authTokenService,
                            PasswordEncoder passwordEncoder,
                            AuditEventPublisher auditEventPublisher,
-                           ApiKeyService apiKeyService) {
+                           ApiKeyService apiKeyService,
+                           TenantAccessService tenantAccessService) {
         this.userRepository  = userRepository;
         this.authTokenService = authTokenService;
         this.passwordEncoder = passwordEncoder;
         this.auditEventPublisher = auditEventPublisher;
         this.apiKeyService = apiKeyService;
+        this.tenantAccessService = tenantAccessService;
     }
 
 
@@ -96,8 +99,15 @@ public class PasswordService {
                 request.token(), AuthToken.Type.PASSWORD_RESET);
 
         final com.incidentplatform.auth.domain.User user = token.getUser();
+        final String newHash = passwordEncoder.encode(request.newPassword());
+        // Backlog #0-82: a password reset is account security, so a read-only
+        // tenant may; one suspended in full may not (it signs nobody in). After
+        // the hash, as InviteService: the check share-locks the tenant row. The
+        // reset token was consumed before it, safe only because a suspension
+        // never locks PASSWORD_RESET tokens (see InviteService).
+        tenantAccessService.requireCanSignIn(token.getTenantId());
 
-        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        user.setPasswordHash(newHash);
         // Backlog #0-83: an MFA setup begun but not enabled goes with the old
         // password too (found in review); hygiene, since nobody can finish it
         // without a live session after the reset.

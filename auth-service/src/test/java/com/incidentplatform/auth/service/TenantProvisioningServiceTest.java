@@ -219,9 +219,25 @@ class TenantProvisioningServiceTest {
     class Reissue {
 
         private void tenant(String firstAdminEmail) {
+            tenant(firstAdminEmail, com.incidentplatform.auth.domain.TenantStatus.ACTIVE);
+        }
+
+        private void tenant(String firstAdminEmail, com.incidentplatform.auth.domain.TenantStatus status) {
             final Tenant tenant = mock(Tenant.class);
-            given(tenant.getFirstAdminEmail()).willReturn(firstAdminEmail);
+            org.mockito.Mockito.lenient().when(tenant.getFirstAdminEmail()).thenReturn(firstAdminEmail);
+            given(tenant.getStatus()).willReturn(status);
             given(tenantRepository.findById(TENANT)).willReturn(Optional.of(tenant));
+        }
+
+        @org.junit.jupiter.api.Test
+        @DisplayName("refuses to reissue an invite into a suspended tenant (backlog #0-82)")
+        void suspendedTenantRefused() {
+            tenant(EMAIL, com.incidentplatform.auth.domain.TenantStatus.SUSPENDED);
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> service.reissueFirstAdminInvite(TENANT, OPERATOR))
+                    .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class)
+                    .hasMessageContaining("resume it");
+            org.mockito.BDDMockito.then(userRepository).shouldHaveNoInteractions();
         }
 
         private User pendingAdmin() {

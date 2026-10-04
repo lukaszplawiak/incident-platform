@@ -32,8 +32,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -538,23 +536,9 @@ public class MfaRecoveryService {
     private record Actor(String operatorSide, String customerSide) {
     }
 
-    /**
-     * Counts an outcome once its transaction has committed (review): a rolled-
-     * back request or reset must not raise the critical alerts on these counters.
-     * Outside a transaction (unit tests) it counts at once.
-     */
+    /** Counts an outcome once its transaction has committed (no critical alert on a rollback). */
     private void countAfterCommit(Outcome outcome) {
-        final Counter counter = counters.get(outcome);
-        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            counter.increment();
-            return;
-        }
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                counter.increment();
-            }
-        });
+        CommittedCounters.incrementAfterCommit(counters.get(outcome));
     }
 
     private static BusinessException pendingExists() {

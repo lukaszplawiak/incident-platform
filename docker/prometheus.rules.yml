@@ -534,6 +534,48 @@ groups:
             the last 15 minutes and refused admin MFA resets. Check Redis and
             the MfaResetRateLimiter ERROR lines in the auth-service log.
 
+      - alert: PlatformTenantSuspensionChanged
+        # Backlog #0-82: an operator suspended a tenant, changed how, or resumed
+        # one. Rare and with the widest effect an operator has on a customer, so
+        # every change is announced: with several operators a second pair of
+        # eyes, and for a taken-over operator session the way it gets noticed.
+        # Critical, so it reaches the operator by email outside the platform.
+        # Content-free: no tenant label; the WARN log and the TENANT_SUSPENDED /
+        # TENANT_RESUMED audit events in the platform-operator tenant name it.
+        expr: |
+          sum(increase(platform_tenant_lifecycle_total[1h])) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "A tenant was suspended or resumed"
+          description: >
+            An operator suspended a tenant, changed its suspension or resumed it
+            in the last hour. Check the TENANT_SUSPENDED and TENANT_RESUMED audit
+            events in the platform-operator tenant (who, which tenant, mode,
+            reason and note) and confirm it was expected.
+
+      - alert: PlatformTenantStatusRowMissing
+        # Backlog #0-82: auth-service looked up the status of a tenant that has
+        # users or keys but no row in tenants. Such a tenant gets full access
+        # and cannot be suspended (fail-open on purpose, so a gap locks nobody
+        # out). None should exist: V21 backfilled the table, provisioning and
+        # the operator bootstrap insert one. High, not critical: nothing is
+        # exposed by it, but a suspension of that tenant would silently not be
+        # possible. Content-free: the WARN log names the tenant once.
+        expr: |
+          sum(increase(platform_tenant_status_missing_total[15m])) > 0
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "A tenant has no row in the tenants table"
+          description: >
+            auth-service checked the status of a tenant without a tenants row in
+            the last 15 minutes; it has full access and cannot be suspended.
+            Find it in the auth-service WARN log ("Tenant has no row in
+            tenants") and insert its row.
+
       - alert: PlatformMfaRecoveryRequested
         # Backlog #0-90: an operator asked to reset the MFA of a customer
         # tenant's only admin, which runs after the waiting period (72 h)

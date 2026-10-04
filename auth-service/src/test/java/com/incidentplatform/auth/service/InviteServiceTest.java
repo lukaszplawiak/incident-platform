@@ -43,6 +43,7 @@ class InviteServiceTest {
 
     @Mock
     private AuditEventPublisher auditEventPublisher;
+    @Mock private TenantAccessService tenantAccessService;
 
     private InviteService service;
 
@@ -61,7 +62,7 @@ class InviteServiceTest {
     void setUp() {
         service = new InviteService(
                 authTokenService, userRepository,
-                ENCODER, auditEventPublisher);
+                ENCODER, auditEventPublisher, tenantAccessService);
     }
 
     // ── acceptInvite — success ────────────────────────────────────────────
@@ -179,5 +180,22 @@ class InviteServiceTest {
                 AuthToken.Type.INVITE,
                 Instant.now().plusSeconds(3600),
                 null);
+    }
+
+    @Test
+    @DisplayName("a suspended tenant cannot be joined: refused before the password is set (backlog #0-82)")
+    void suspendedTenantRefused() {
+        final AuthToken token = buildValidToken();
+        given(authTokenService.consumeToken(eq(RAW_TOKEN), eq(AuthToken.Type.INVITE))).willReturn(token);
+        org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.exception.BusinessException(
+                        com.incidentplatform.shared.exception.ErrorCodes.TENANT_READ_ONLY, "read-only",
+                        org.springframework.http.HttpStatus.FORBIDDEN))
+                .given(tenantAccessService).requireCanWrite(token.getTenantId());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> service.acceptInvite(new AcceptInviteRequest(RAW_TOKEN, NEW_PASSWORD)))
+                .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class);
+        then(userRepository).should(org.mockito.Mockito.never()).save(any());
+        then(auditEventPublisher).shouldHaveNoInteractions();
     }
 }

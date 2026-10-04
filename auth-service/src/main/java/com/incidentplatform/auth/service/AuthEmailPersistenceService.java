@@ -58,6 +58,7 @@ public class AuthEmailPersistenceService {
     private final AuthTokenService tokenService;
     private final UserRepository userRepository;
     private final MfaRecoveryRequestRepository recoveryRequestRepository;
+    private final TenantAccessService tenantAccessService;
     private final Counter mfaNoticeNotRecorded;
 
     public AuthEmailPersistenceService(AuthEmailOutboxRepository outboxRepository,
@@ -65,12 +66,14 @@ public class AuthEmailPersistenceService {
                                        AuthTokenService tokenService,
                                        UserRepository userRepository,
                                        MfaRecoveryRequestRepository recoveryRequestRepository,
+                                       TenantAccessService tenantAccessService,
                                        MeterRegistry meterRegistry) {
         this.outboxRepository = outboxRepository;
         this.tokenRepository  = tokenRepository;
         this.tokenService     = tokenService;
         this.userRepository   = userRepository;
         this.recoveryRequestRepository = recoveryRequestRepository;
+        this.tenantAccessService = tenantAccessService;
         this.mfaNoticeNotRecorded = Counter.builder("auth.mfa.notice.unrecorded")
                 .description("MFA_ENABLED notices sent that did not mark the user's current factor "
                         + "(backlog #0-83)")
@@ -88,6 +91,13 @@ public class AuthEmailPersistenceService {
         record Closed(AuthEmailStatus status, String reason) implements Attempt {}
         /** The entry was no longer PENDING or FAILED; nothing was done. */
         record AlreadyClosed() implements Attempt {}
+        /**
+         * Backlog #0-82: not sent now, as its tenant is suspended; tried again
+         * at {@code nextAttemptAt}, without counting an attempt, until its
+         * deadline. Resumed in time, it goes out; otherwise it is given up like
+         * any email past its deadline.
+         */
+        record Deferred(Instant nextAttemptAt) implements Attempt {}
     }
 
     /**
@@ -130,6 +140,13 @@ public class AuthEmailPersistenceService {
                     "deadline " + entry.getDeadline() + " passed before the email could be sent");
         }
 
+        if (pausedBySuspension(entry)) {
+            final Instant next = now.plus(SUSPENSION_DEFERRAL);
+            return outboxRepository.defer(entry.getId(), next) == 1
+                    ? new Attempt.Deferred(next)
+                    : new Attempt.AlreadyClosed();
+        }
+
         if (!entry.getEmailType().carriesToken()) {
             return new Attempt.Send(null, null);
         }
@@ -144,6 +161,29 @@ public class AuthEmailPersistenceService {
             case MFA_ENABLED, MFA_DISABLED, MFA_RESET, API_KEY_CREATED -> throw new IllegalStateException("unreachable: no token");
         };
         return new Attempt.Send(token.rawToken(), token.token().getId());
+    }
+
+    /** How long a suspended tenant's paused email waits before it is looked at again. */
+    static final Duration SUSPENSION_DEFERRAL = Duration.ofMinutes(5);
+
+    /**
+     * Backlog #0-82: the emails a suspended tenant cannot act on wait. An
+     * invite (joining is a write) in either mode; a password reset when the
+     * tenant is suspended in full (a read-only tenant may still reset). Security
+     * notices (MFA changes, API keys) and MFA recovery emails, which the
+     * platform sends to the account, go out regardless.
+     */
+    private boolean pausedBySuspension(AuthEmailOutbox entry) {
+        if (entry.getEmailType() != AuthEmailType.INVITE && entry.getEmailType() != AuthEmailType.PASSWORD_RESET) {
+            return false;
+        }
+        final com.incidentplatform.shared.security.TenantAccess access =
+                tenantAccessService.accessOf(entry.getTenantId());
+        return switch (access) {
+            case FULL -> false;
+            case READ_ONLY -> entry.getEmailType() == AuthEmailType.INVITE;
+            case NONE -> true;
+        };
     }
 
     private Attempt close(AuthEmailOutbox entry, AuthEmailStatus status, String reason) {

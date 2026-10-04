@@ -184,6 +184,12 @@ public class TenantProvisioningService {
         }
         final Tenant tenant = tenantRepository.findById(tenantId)
                 .orElseThrow(() -> new ResourceNotFoundException("Tenant", tenantId));
+        // Backlog #0-82: no invite into a suspended tenant; resume it first.
+        if (tenant.getStatus() != com.incidentplatform.auth.domain.TenantStatus.ACTIVE) {
+            throw new BusinessException(ErrorCodes.BUSINESS_RULE_VIOLATION,
+                    "Tenant '" + tenantId + "' is " + tenant.getStatus() + "; resume it before reissuing "
+                            + "its first admin's invite", HttpStatus.CONFLICT);
+        }
         if (tenant.getFirstAdminEmail() == null) {
             throw new BusinessException(ErrorCodes.BUSINESS_RULE_VIOLATION,
                     "Tenant '" + tenantId + "' was not provisioned through this API and has no "
@@ -192,7 +198,7 @@ public class TenantProvisioningService {
         if (userRepository.findByEmailAndTenantId(tenant.getFirstAdminEmail(), tenantId).isEmpty()) {
             throw new BusinessException(ErrorCodes.BUSINESS_RULE_VIOLATION,
                     "The first admin of tenant '" + tenantId + "' was archived or removed; an invite "
-                            + "is not reissued into a tenant that was wound down (backlog #0-82)",
+                            + "is not reissued into a tenant that was wound down (backlog #0-101)",
                     HttpStatus.CONFLICT);
         }
         final Outcome outcome = new TenantAdminReconciler(
@@ -248,8 +254,7 @@ public class TenantProvisioningService {
     }
 
     private static TenantDto toDto(Tenant tenant, boolean adminActive) {
-        return new TenantDto(tenant.getTenantId(), tenant.getDisplayName(),
-                tenant.getFirstAdminEmail(), adminActive, tenant.getCreatedAt(), tenant.getCreatedBy());
+        return TenantDto.from(tenant, adminActive);
     }
 
     private static boolean isBlank(String value) {
