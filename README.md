@@ -178,7 +178,7 @@ Label-based routing (RoutingRules matching on alert labels) requires DevOps team
 On-call schedule management is a distinct bounded context. A separate service allows independent scaling, independent deployment, and future extension (PagerDuty integration, calendar sync) without touching the notification pipeline.
 
 **Why tenants are created by a platform operator through an API, not by a seed or configuration?**
-A multi-tenant platform onboards customers while it runs. A Flyway seed gave every database the same admin with a known password (backlog #0-80), and a configuration entry per tenant would need a deployment change and a restart for each customer. Instead an admin of the reserved `platform-operator` tenant calls `POST /api/v1/platform/tenants`: the tenant row, its first admin (no password) and the invite email are written in one transaction, and the admin sets their own password by accepting the invite. It is the platform's one cross-tenant capability, kept narrow on purpose: create, reissue the first invite while the tenant has no admin, show and list metadata; JWT only, no API keys, a recent MFA login with an established factor (backlog #0-83); audited in both tenants. It reverses backlog #0-16's "no cross-tenant create tenant endpoint" for customer tenants only; the operator tenant still bootstraps itself. Guide: [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
+A multi-tenant platform onboards customers while it runs. A Flyway seed gave every database the same admin with a known password (backlog #0-80), and a configuration entry per tenant would need a deployment change and a restart for each customer. Instead an admin of the reserved `platform-operator` tenant calls `POST /api/v1/platform/tenants`: the tenant row, its first admin (no password) and the invite email are written in one transaction, and the admin sets their own password by accepting the invite. It is the platform's one cross-tenant capability, kept narrow on purpose: create, reissue the first invite while the tenant has no admin, show and list metadata, and, as the single exception inside a tenant that has an admin, the delayed, announced MFA recovery of its only admin (backlog #0-90); JWT only, no API keys, a recent MFA login with an established factor (backlog #0-83); audited in both tenants. It reverses backlog #0-16's "no cross-tenant create tenant endpoint" for customer tenants only; the operator tenant still bootstraps itself. Guide: [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
 
 ---
 
@@ -395,7 +395,8 @@ Summary; details in [Resilience & Security](#security).
 - **Tenant provisioning**: the one cross-tenant capability. Only an admin of the `platform-operator` tenant with a
   JWT (no API key, service or purpose token) reaches `/api/v1/platform/**`, checked in auth-service's filter chain
   and on every method; it creates a tenant with an invited first admin, reissues that invite while the tenant has
-  no admin, and shows and lists tenants' metadata, audited in the operator tenant. The Ingress routes it like
+  no admin, shows and lists tenants' metadata, and asks for the MFA recovery of a customer tenant's only admin
+  (below), audited in the operator tenant. The Ingress routes it like
   every auth-service path, so that rule is its only protection (backlog #0-80,
   [docs/tenant-provisioning.md](docs/tenant-provisioning.md)). Since backlog #0-83 the caller's session must have
   completed MFA within 12 h, with a factor whose "MFA enabled" email went out at least 24 h ago (checked on the server per
@@ -418,7 +419,28 @@ Summary; details in [Resilience & Security](#security).
   admin: a one-off break-glass command of auth-service does the same reset, audited as `MFA_RESET_BREAK_GLASS` with
   the operator's name and reason, its event written to the audit outbox in the reset's transaction and sent
   before the command exits when Kafka is reachable
-  ([docs/tenant-provisioning.md](docs/tenant-provisioning.md)).
+  ([docs/tenant-provisioning.md](docs/tenant-provisioning.md)). A customer tenant's only admin has the operator's
+  MFA recovery instead (next item).
+- **MFA recovery of a customer tenant's only admin** (backlog #0-90): the one action the platform takes inside a
+  tenant that has an admin, the narrow exception to #0-80. An operator who passes the platform API's rule asks for
+  it (`POST /api/v1/platform/tenants/{id}/mfa-recovery`, limited like the other platform writes) only for an
+  active admin with MFA who is the tenant's only active admin, recording how the person was verified outside the
+  account (method and note). Nothing happens then: the account is emailed a notice with a cancel link, and only
+  once 72 h (configurable, never under 24 h) have passed since that email was actually sent does a scheduled job reset the factor, backup codes,
+  sessions, personal API keys and the password (replaced by one nobody knows; the completion email carries a
+  password-reset link), after checking again that no other admin exists and that the operator who asked is still
+  an operator admin (a request from an account later deactivated does not run). A notice that never goes out
+  expires the request. The account (single-use link, `POST /api/v1/auth/mfa-recovery/cancel`) or any operator can cancel.
+  Audited in both tenants (`MFA_RECOVERY_*`; the operator's note only in the operator tenant), and every request
+  and every cancellation by the account or on that final check alerts the operator by email
+  (`PlatformMfaRecoveryRequested`, `PlatformMfaRecoveryCancelledByAccount`, `PlatformMfaRecoveryCancelledOnRecheck`,
+  critical, counted only once their transaction commits; a second admin added during the wait may be the
+  attacker's); an expired request raises `PlatformMfaRecoveryExpired` and one the scheduler keeps failing on
+  `PlatformMfaRecoveryJobFailing`. The customer tenant's trail names an operator only as `platform-operator`. Prevention: tenant settings show `activeAdmins` and
+  `singleAdmin`, so a tenant's admins see while one admin is all there is.
+- **One definition of an active admin** (backlog #0-90): active, not archived, with an accepted invite. The "last
+  admin" guard used to count an admin whose invite was pending, so the last admin who could log in could be
+  demoted, deactivated or archived.
 - **Audit trail through an outbox** (backlog #0-84, every service with audit events: auth-, incident-,
   notification-, escalation-, postmortem-service): an audit event is a row in the service's own outbox table,
   written in the transaction of the action it records, so a rolled-back action leaves no event, a committed one
@@ -547,8 +569,14 @@ Open items from the audit and earlier, most important first within each area. Ea
     each container's logs go with it: backlog #0-94.
   - A notification channel's own error message quotes the mail or Slack library's text (an SMTP reply, a Slack
     error body), and reaches `notification_log` whole and the audit trail cut to 500 characters: backlog #0-93.
-  - A customer tenant's only admin has no way back from a factor someone else enrolled with their password, or
-    from a lost phone and lost backup codes: break-glass covers only the operator tenant: backlog #0-90.
+  - The MFA recovery of a customer tenant's only admin (#0-90) verifies the person by procedure only: the platform
+    holds no contact of the tenant independent of the admin's own mailbox, and checks no DNS record itself:
+    backlog #0-98. Whoever holds the admin's mailbox can cancel every such recovery, and whoever holds the
+    admin's session can add a second admin, after which the platform keeps out; both page the operator and
+    are left to a person (accepted; suspending a taken-over tenant is backlog #0-82).
+  - The public token endpoints (`reset-password`, `accept-invite`, `mfa-recovery/cancel`) have no request limit:
+    a token is 32 random bytes, single-use, so guessing is out of reach, but an unauthenticated flood still costs a
+    lookup and a log line each: backlog #0-99.
   - A tenant id with data in other services but no user in auth-service can be provisioned, and its admin would
     see that data; the operator guide says to check first: backlog #0-85.
 - **Project**
@@ -1510,16 +1538,20 @@ incident-platform/
 │   └── src/main/java/
 │       ├── api/                   # AuthController, UserController, TeamController,
 │       │                          # ApiKeyController, IntegrationController, TenantSettingsController,
-│       │                          # PlatformTenantController (operator tenant provisioning)
+│       │                          # PlatformTenantController (operator tenant provisioning),
+│       │                          # PlatformMfaRecoveryController, MfaRecoveryCancelController (#0-90)
 │       ├── bootstrap/             # OperatorTenantBootstrap, TenantAdminReconciler
-│       ├── config/                # SecurityConfig, PlatformAccess, PlatformAccessDeniedHandler
+│       ├── config/                # SecurityConfig, PlatformAccess, PlatformAccessDeniedHandler,
+│       │                          # MfaRecoveryProperties
+│       ├── scheduler/             # AuthEmailScheduler, AuthTokenCleanupScheduler, MfaRecoveryScheduler
 │       ├── ratelimit/             # BruteForceProtectionService, PlatformRateLimiter (+ Config)
 │       ├── service/               # AuthService, UserService, TeamService, MfaService,
 │       │                          # ApiKeyService, IntegrationService, TenantSettingsService
 │       │                          # AuthTokenService, InviteService, ForgotPasswordService,
-│       │                          # TenantProvisioningService, MfaSessionStatusService
+│       │                          # TenantProvisioningService, MfaSessionStatusService,
+│       │                          # MfaRecoveryService (only admin's MFA recovery, #0-90)
 │       ├── domain/                # User, Team, TeamMember, ApiKey, Integration,
-│       │                          # AuthToken, MfaBackupCode, TenantSettings, Tenant
+│       │                          # AuthToken, MfaBackupCode, TenantSettings, Tenant, MfaRecoveryRequest
 │       └── repository/            # JPA repositories for all domain entities
 │
 ├── ingestion-service/             # port 8081 — alert ingestion

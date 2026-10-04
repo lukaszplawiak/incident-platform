@@ -317,7 +317,7 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     line-separator or formatting characters (U+2028/9, bidi overrides); email trimmed and matched exactly as
     stored (like login). The audit event also records `executedOn` (OS user and host of the process), since
     the actor is whatever name the operator types. The runner sets `TenantContext` to the operator tenant
-    (log MDC). A customer tenant's only admin: #0-90.
+    (log MDC). A customer tenant's only admin: the operator's MFA recovery (#0-90, below).
     Same code path as the admin reset, so the email goes out; audited as `MFA_RESET_BREAK_GLASS` into
     `auth_audit_outbox` in the reset's transaction (#0-84): no event row, no reset. After the commit the runner
     calls `AuditOutboxRelay.relayNow()` once and logs whether the event reached Kafka; if not, the running
@@ -331,6 +331,38 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     logins/jobs/commands have none); #0-88 made the sender set it, #0-91 made `TenantRecords` the one writer.
   - V23's comment that a password reset removes a factor within the grace period predates #0-88; V23 stays
     unchanged (checksum), V24's header says so.
+- **MFA recovery of a customer tenant's only admin (#0-90)**: `MfaRecoveryService` (+ `MfaRecoveryScheduler`,
+  `PlatformMfaRecoveryController`, public `MfaRecoveryCancelController`, table `mfa_recovery_requests`, V29). The
+  one place the platform acts inside a tenant with an admin, so its limits are the design: only an active admin
+  with MFA and an accepted invite who is the tenant's only one (checked at request and again at execution),
+  never a reserved tenant (break-glass), never at once. Non-obvious points:
+  - The waiting period counts from `notice_sent_at`, set by `AuthEmailPersistenceService.recordSent` when the
+    MFA_RECOVERY_REQUESTED email (row names the request, `mfa_recovery_request_id`; never superseded) is sent,
+    not from the request: a notice that never goes out means no reset (expiry after the security-notice
+    deadline + 1 h). The email's "not before" is computed at send time, so it can only be early, never late.
+  - The cancel token (`MFA_RECOVERY_CANCEL`) lives 14 days, more than the longest allowed waiting period (24 h to
+    7 days, checked in `MfaRecoveryProperties`: the floor so a variable cannot shrink the defence to seconds); every
+    close invalidates it, and the execution also invalidates earlier PASSWORD_RESET tokens. It can only stop a reset.
+  - The reset replaces the password with an encoded random value, not null: null means "invite pending" in
+    `existsActiveAcceptedUserWithRole`, `ResendInviteService`, `TenantAdminReconciler` and the outbox's
+    "invite already accepted", and would have reopened #0-80's reissue path for the tenant.
+  - Status changes are conditional UPDATEs from PENDING (`MfaRecoveryRequestRepository.close`, clear + flush):
+    `execute` re-reads the user after its claim because the claim cleared the persistence context.
+  - Audit in both tenants; the operator's note goes only to the operator tenant's event (it may name people or
+    numbers). Actor in the customer tenant: the constant `platform-operator` (no operator id, third review), in the
+    operator tenant the operator's id; executions/expiries are system events. Counters are incremented after commit
+    (`countAfterCommit`), so a rollback raises no critical alert. `execute` locks the target user row
+    (`findByIdAndTenantIdForUpdate`, NOWAIT) before its checks; a busy row is a counted, retried failure.
+  - Accepted limit: the mailbox holder can cancel every request and the session holder can add a second admin
+    (platform then keeps out). Both page the operator; resolving a takeover is a person's job (and #0-82).
+  - The execution rechecks the requester too (`operatorStillAdmin`: active operator admin with a password), so
+    deactivating a compromised operator neutralises its open requests (`OPERATOR_NO_LONGER_ADMIN`); any cancel at
+    that final check is alerted (`PlatformMfaRecoveryCancelledOnRecheck`), scheduler failures are counted
+    (`platform.mfa_recovery.failures`, alert `PlatformMfaRecoveryJobFailing`). Expiry uses its own conditional
+    UPDATE (`expireIfUndelivered`, also `notice_sent_at IS NULL`). `MfaRecoveryRequest` is `Persistable`
+    (assigned UUID, no `@Version`: otherwise `save` merges).
+  - "Active admin" is one query pair now, `countActiveAcceptedUsersWithRole[Excluding]` (active + password), used
+    by the last-admin guard too; tenant settings expose `activeAdmins` / `singleAdmin` as the prevention side.
 - **Bulk UPDATEs flush before they clear** (found in #0-83): `@Modifying(clearAutomatically = true)` must
   come with `flushAutomatically = true`. Hibernate flushes before a JPQL bulk statement only pending changes
   of the tables it touches, so an earlier change to another table in the same transaction (an outbox INSERT)
