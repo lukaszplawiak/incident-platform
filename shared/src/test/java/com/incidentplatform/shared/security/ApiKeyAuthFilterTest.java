@@ -131,6 +131,22 @@ class ApiKeyAuthFilterTest {
     }
 
     @Test
+    @DisplayName("paused (read-only tenant, backlog #0-82): 503 with Retry-After and TENANT_READ_ONLY, not AUTHENTICATION_UNAVAILABLE")
+    void paused() throws Exception {
+        final Outcome outcome = run(filter(new ApiKeyLookupResult.Paused(Duration.ofMinutes(5))),
+                "/api/v1/alerts/prometheus", "ApiKey " + KEY);
+
+        assertThat(outcome.chainCalled()).isFalse();
+        assertThat(outcome.response().getStatus()).isEqualTo(503);
+        assertThat(outcome.response().getHeader("Retry-After")).isEqualTo("300");
+        assertThat(outcome.response().getContentAsString())
+                .contains("TENANT_READ_ONLY")
+                .doesNotContain("AUTHENTICATION_UNAVAILABLE");
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        assertThat(TenantContext.isSet()).isFalse();
+    }
+
+    @Test
     @DisplayName("throttled: 429 with Retry-After of at least one second")
     void throttled() throws Exception {
         final Outcome outcome = run(filter(new ApiKeyLookupResult.Throttled(Duration.ZERO)),

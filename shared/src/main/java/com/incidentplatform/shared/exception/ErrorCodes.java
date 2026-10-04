@@ -39,6 +39,10 @@ public final class ErrorCodes {
     public static final String INVALID_TOKEN         = "INVALID_TOKEN";
     public static final String BUSINESS_RULE_VIOLATION = "BUSINESS_RULE_VIOLATION";
     public static final String ALREADY_EXISTS = "ALREADY_EXISTS";
+    /** Backlog #0-82: the tenant is suspended in full; every request of its users and keys is refused. */
+    public static final String TENANT_SUSPENDED = "TENANT_SUSPENDED";
+    /** Backlog #0-82: the tenant is suspended to read-only; a write is refused. */
+    public static final String TENANT_READ_ONLY = "TENANT_READ_ONLY";
 
     // ── Ingestion domain ─────────────────────────────────────────────────────
     public static final String NORMALIZATION_FAILED  = "NORMALIZATION_FAILED";

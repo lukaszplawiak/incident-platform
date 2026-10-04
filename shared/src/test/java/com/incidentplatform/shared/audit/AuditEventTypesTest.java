@@ -89,6 +89,14 @@ class AuditEventTypesTest {
     }
 
     @Test
+    @DisplayName("a tenant's suspension and resumption have their own types (backlog #0-82)")
+    void tenantSuspensionTypes() {
+        assertThat(List.of(AuditEventTypes.TENANT_SUSPENDED, AuditEventTypes.TENANT_RESUMED))
+                .containsExactly("TENANT_SUSPENDED", "TENANT_RESUMED")
+                .doesNotContain(AuditEventTypes.TENANT_PROVISIONED, AuditEventTypes.USER_STATUS_UPDATED);
+    }
+
+    @Test
     @DisplayName("operator-assisted MFA recovery has its own types, one per outcome (backlog #0-90)")
     void mfaRecoveryTypes() {
         assertThat(List.of(

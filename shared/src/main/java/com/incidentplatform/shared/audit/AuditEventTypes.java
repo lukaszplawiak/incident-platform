@@ -72,6 +72,15 @@ public final class AuditEventTypes {
     // events of the same action.
     public static final String TENANT_PROVISIONED      = "TENANT_PROVISIONED";
     public static final String TENANT_ADMIN_REINVITED  = "TENANT_ADMIN_REINVITED";
+    /**
+     * A platform operator suspended a tenant, or changed how (backlog #0-82):
+     * in full (nothing works) or read-only (reads go on, writes are refused).
+     * The mode, the reason and, in the operator tenant only, the operator's
+     * note are in the metadata. Recorded in both tenants.
+     */
+    public static final String TENANT_SUSPENDED        = "TENANT_SUSPENDED";
+    /** A platform operator resumed a suspended tenant (backlog #0-82). Both tenants. */
+    public static final String TENANT_RESUMED          = "TENANT_RESUMED";
 
 
     // ── Teams ────────────────────────────────────────────────────────────────

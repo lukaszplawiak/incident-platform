@@ -57,6 +57,12 @@ import java.util.UUID;
  *       alert is retried instead of lost;</li>
  *   <li>{@link ApiKeyLookupResult.Throttled} — too many failed attempts from
  *       this client: <b>429</b> with {@code Retry-After}.</li>
+ *   <li>{@link ApiKeyLookupResult.Paused} (backlog #0-82) — a valid key of a
+ *       read-only tenant, asked to write: <b>503</b> with {@code Retry-After}
+ *       and {@code TENANT_READ_ONLY} — the tenant's alerts are paused, not
+ *       refused, so the sender keeps them. Its own case, not
+ *       {@code Unavailable}: nothing failed, and an operator reading the log
+ *       or the sender reading the body must not chase an outage.</li>
  * </ul>
  * Before, an invalid key fell through to the entry point's generic 401, and an
  * unreachable validator could not be told apart from a wrong key at all.
@@ -101,6 +107,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         record Unavailable(Duration retryAfter) implements ApiKeyLookupResult { }
 
         record Throttled(Duration retryAfter) implements ApiKeyLookupResult { }
+
+        record Paused(Duration retryAfter) implements ApiKeyLookupResult { }
     }
 
     private final ApiKeyLookupService lookupService;
@@ -149,6 +157,13 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 writeError(response, HttpStatus.SERVICE_UNAVAILABLE,
                         ErrorCodes.AUTHENTICATION_UNAVAILABLE,
                         "The API key cannot be checked right now. Retry later.");
+            }
+            case ApiKeyLookupResult.Paused paused -> {
+                log.info("API key of a read-only tenant, write paused, answering 503: request={}",
+                        request.getRequestURI());
+                response.setHeader(HttpHeaders.RETRY_AFTER, seconds(paused.retryAfter()));
+                writeError(response, HttpStatus.SERVICE_UNAVAILABLE, ErrorCodes.TENANT_READ_ONLY,
+                        "The tenant is read-only: writes are paused until it is resumed. Retry later.");
             }
             case ApiKeyLookupResult.Throttled throttled -> {
                 response.setHeader(HttpHeaders.RETRY_AFTER, seconds(throttled.retryAfter()));
