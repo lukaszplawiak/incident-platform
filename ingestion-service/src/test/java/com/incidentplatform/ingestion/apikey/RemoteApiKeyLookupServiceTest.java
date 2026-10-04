@@ -69,7 +69,7 @@ class RemoteApiKeyLookupServiceTest {
     void activeKeyIsAuthenticated() {
         final UUID teamId = UUID.randomUUID();
         final IntrospectedApiKey key = key(teamId);
-        given(introspectionClient.introspect(HASH)).willReturn(Optional.of(key));
+        given(introspectionClient.introspect(HASH)).willReturn(new ApiKeyIntrospection.Active(key));
 
         final ApiKeyLookupResult result = service.lookup(RAW_KEY, request);
 
@@ -86,7 +86,7 @@ class RemoteApiKeyLookupServiceTest {
     @Test
     @DisplayName("a key without a team gets no teamIds")
     void keyWithoutTeam() {
-        given(introspectionClient.introspect(HASH)).willReturn(Optional.of(key(null)));
+        given(introspectionClient.introspect(HASH)).willReturn(new ApiKeyIntrospection.Active(key(null)));
 
         final UserPrincipal principal =
                 ((ApiKeyLookupResult.Authenticated) service.lookup(RAW_KEY, request)).principal();
@@ -120,7 +120,7 @@ class RemoteApiKeyLookupServiceTest {
     @Test
     @DisplayName("an unknown key is Invalid (401) and counted as a failure for the IP")
     void unknownKeyIsInvalid() {
-        given(introspectionClient.introspect(HASH)).willReturn(Optional.empty());
+        given(introspectionClient.introspect(HASH)).willReturn(new ApiKeyIntrospection.Inactive());
 
         assertThat(service.lookup(RAW_KEY, request)).isInstanceOf(ApiKeyLookupResult.Invalid.class);
         then(authFailureRateLimiter).should().recordFailure(CLIENT_IP);
@@ -138,9 +138,19 @@ class RemoteApiKeyLookupServiceTest {
     }
 
     @Test
+    @DisplayName("a read-only tenant's key is Paused (503) with the paused Retry-After, not Invalid and not a failure (backlog #0-82)")
+    void pausedIsUnavailableNotInvalid() {
+        given(introspectionClient.introspect(HASH)).willReturn(new ApiKeyIntrospection.Paused());
+
+        assertThat(service.lookup(RAW_KEY, request)).isEqualTo(
+                new ApiKeyLookupResult.Paused(RemoteApiKeyLookupService.PAUSED_RETRY_AFTER));
+        then(authFailureRateLimiter).should(never()).recordFailure(anyString());
+    }
+
+    @Test
     @DisplayName("only the hash reaches the introspection client, never the raw key")
     void onlyHashIsSent() {
-        given(introspectionClient.introspect(HASH)).willReturn(Optional.empty());
+        given(introspectionClient.introspect(HASH)).willReturn(new ApiKeyIntrospection.Inactive());
 
         service.lookup(RAW_KEY, request);
 

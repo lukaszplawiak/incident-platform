@@ -23,7 +23,6 @@ import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
@@ -112,10 +111,10 @@ class ApiKeyIntrospectionClientImplTest {
                      "expiresAt": "2030-01-01T00:00:00Z"}
                     """.formatted(keyId, teamId));
 
-            final Optional<IntrospectedApiKey> result = client.introspect(KEY_HASH);
+            final ApiKeyIntrospection result = client.introspect(KEY_HASH);
 
-            assertThat(result).contains(new IntrospectedApiKey(keyId, "platform-operator", teamId,
-                    List.of("alerts:ingest"), Instant.parse("2030-01-01T00:00:00Z")));
+            assertThat(result).isEqualTo(new ApiKeyIntrospection.Active(new IntrospectedApiKey(keyId, "platform-operator", teamId,
+                    List.of("alerts:ingest"), Instant.parse("2030-01-01T00:00:00Z"))));
         }
 
         @Test
@@ -126,7 +125,8 @@ class ApiKeyIntrospectionClientImplTest {
                     {"active": true, "keyId": "%s", "tenantId": "acme", "scopes": []}
                     """.formatted(keyId));
 
-            final IntrospectedApiKey key = client.introspect(KEY_HASH).orElseThrow();
+            final IntrospectedApiKey key =
+                    ((ApiKeyIntrospection.Active) client.introspect(KEY_HASH)).key();
 
             assertThat(key.teamId()).isNull();
             assertThat(key.expiresAt()).isNull();
@@ -134,11 +134,33 @@ class ApiKeyIntrospectionClientImplTest {
         }
 
         @Test
-        @DisplayName("{\"active\":false} is a normal answer: empty, not an exception")
+        @DisplayName("{\"active\":false} is a normal answer: Inactive, not an exception")
         void inactiveKeyIsEmpty() {
             stubAnswer(200, "{\"active\": false}");
 
-            assertThat(client.introspect(KEY_HASH)).isEmpty();
+            assertThat(client.introspect(KEY_HASH)).isEqualTo(new ApiKeyIntrospection.Inactive());
+        }
+
+        @Test
+        @DisplayName("{\"active\":false,\"paused\":true} is Paused, a normal answer (backlog #0-82)")
+        void pausedKey() {
+            stubAnswer(200, "{\"active\": false, \"paused\": true}");
+
+            assertThat(client.introspect(KEY_HASH)).isEqualTo(new ApiKeyIntrospection.Paused());
+        }
+
+        @Test
+        @DisplayName("paused never overrides active, and a non-boolean paused is not paused")
+        void pausedOnlyBesideInactive() {
+            final UUID keyId = UUID.randomUUID();
+            stubAnswer(200, """
+                    {"active": true, "paused": true, "keyId": "%s", "tenantId": "acme", "scopes": []}
+                    """.formatted(keyId));
+            assertThat(client.introspect(KEY_HASH)).isInstanceOf(ApiKeyIntrospection.Active.class);
+
+            wireMock.resetAll();
+            stubAnswer(200, "{\"active\": false, \"paused\": \"yes\"}");
+            assertThat(client.introspect(KEY_HASH)).isEqualTo(new ApiKeyIntrospection.Inactive());
         }
 
         @Test

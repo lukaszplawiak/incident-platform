@@ -30,7 +30,12 @@ import java.util.Optional;
  *   <li>Otherwise introspect (cached). Inactive → the failure is counted and the
  *       answer is {@code Invalid} (401). auth-service unreachable →
  *       {@code Unavailable} (503, so the sender retries), not counted as a
- *       failure: the client did nothing wrong.</li>
+ *       failure: the client did nothing wrong. A read-only tenant's key
+ *       (backlog #0-82) → {@code Paused} (503 with a longer
+ *       {@code Retry-After}), not counted either: its alerts are paused, not
+ *       refused. A key of a tenant suspended in full is {@code Inactive}, like
+ *       a revoked one, and counted: auth-service does not tell the two apart
+ *       (backlog #0-82 step 2 may).</li>
  * </ol>
  *
  * <h2>Principal</h2>
@@ -45,6 +50,13 @@ public class RemoteApiKeyLookupService implements ApiKeyAuthFilter.ApiKeyLookupS
 
     /** Retry-After when auth-service could not be asked. */
     static final Duration UNAVAILABLE_RETRY_AFTER = Duration.ofSeconds(30);
+
+    /**
+     * Retry-After for a read-only tenant's key (backlog #0-82). A suspension
+     * lasts hours or days, not seconds, so a sender that honours the header
+     * need not ask every 30 s; Alertmanager uses its own backoff anyway.
+     */
+    static final Duration PAUSED_RETRY_AFTER = Duration.ofMinutes(5);
 
     private final CachingApiKeyIntrospectionClient introspectionClient;
     private final AuthFailureRateLimiter authFailureRateLimiter;
@@ -72,17 +84,20 @@ public class RemoteApiKeyLookupService implements ApiKeyAuthFilter.ApiKeyLookupS
             return new ApiKeyLookupResult.Throttled(authFailureRateLimiter.retryAfter());
         }
 
-        final Optional<IntrospectedApiKey> key;
+        final ApiKeyIntrospection answer;
         try {
-            key = introspectionClient.introspect(keyHash);
+            answer = introspectionClient.introspect(keyHash);
         } catch (ApiKeyIntrospectionUnavailableException e) {
             return new ApiKeyLookupResult.Unavailable(UNAVAILABLE_RETRY_AFTER);
         }
-        if (key.isEmpty()) {
-            authFailureRateLimiter.recordFailure(clientIp);
-            return new ApiKeyLookupResult.Invalid();
-        }
-        return authenticated(key.get());
+        return switch (answer) {
+            case ApiKeyIntrospection.Active(IntrospectedApiKey key) -> authenticated(key);
+            case ApiKeyIntrospection.Paused paused -> new ApiKeyLookupResult.Paused(PAUSED_RETRY_AFTER);
+            case ApiKeyIntrospection.Inactive inactive -> {
+                authFailureRateLimiter.recordFailure(clientIp);
+                yield new ApiKeyLookupResult.Invalid();
+            }
+        };
     }
 
     private static ApiKeyLookupResult authenticated(IntrospectedApiKey key) {

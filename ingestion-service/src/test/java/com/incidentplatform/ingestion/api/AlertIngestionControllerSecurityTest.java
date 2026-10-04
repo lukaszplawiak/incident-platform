@@ -421,6 +421,23 @@ class AlertIngestionControllerSecurityTest {
         }
 
         @Test
+        @DisplayName("503 + Retry-After + TENANT_READ_ONLY for a read-only tenant's key — paused, not dropped (backlog #0-82)")
+        void pausedIs503() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(new ApiKeyAuthFilter.ApiKeyLookupResult.Paused(Duration.ofMinutes(5)));
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(header().string(HttpHeaders.RETRY_AFTER, "300"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.errorCode").value("TENANT_READ_ONLY"));
+            then(alertIngestionService).should(never()).ingest(any(), any(), any(), any());
+        }
+
+        @Test
         @DisplayName("429 + Retry-After when the client IP has too many failed authentications")
         void throttledIs429() throws Exception {
             given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))

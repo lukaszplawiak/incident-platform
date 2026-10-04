@@ -31,6 +31,12 @@ import java.util.concurrent.atomic.LongAdder;
  *   <li><b>Unknown / revoked / expired keys</b> — {@value #NEGATIVE_TTL_SECONDS} s,
  *       so a sender retrying a wrong key does not turn every retry into a call
  *       to auth-service, while a key created a moment ago works almost at once.</li>
+ *   <li><b>Paused keys are never cached</b> (a read-only tenant's key, backlog
+ *       #0-82): the sender is told to retry later anyway, so the calls are few,
+ *       and the first retry after the tenant is resumed goes through. A key
+ *       already in the positive cache when its tenant is suspended, read-only
+ *       or in full, keeps working for the rest of its TTL — the same window as
+ *       a revocation (a gap of backlog #0-82 until step 2).</li>
  *   <li><b>Failures are never cached</b>: {@link ApiKeyIntrospectionUnavailableException}
  *       propagates, so the next request asks again.</li>
  * </ul>
@@ -79,26 +85,31 @@ public class CachingApiKeyIntrospectionClient implements ApiKeyIntrospectionClie
     }
 
     @Override
-    public Optional<IntrospectedApiKey> introspect(String keyHash) {
+    public ApiKeyIntrospection introspect(String keyHash) {
         final Instant now = clock.instant();
         final Optional<IntrospectedApiKey> hit = active.get(keyHash, now);
         if (hit.isPresent()) {
-            return hit;
+            return new ApiKeyIntrospection.Active(hit.get());
         }
         if (inactive.get(keyHash, now).isPresent()) {
-            return Optional.empty();
+            return new ApiKeyIntrospection.Inactive();
         }
 
         // ApiKeyIntrospectionUnavailableException propagates from here without
         // reaching either put() — failures are never cached.
-        final Optional<IntrospectedApiKey> answer = delegate.introspect(keyHash);
-        if (answer.isPresent()) {
-            final Instant until = positiveExpiry(answer.get(), now);
-            if (until.isAfter(now)) {
-                active.put(keyHash, answer.get(), until, now);
+        final ApiKeyIntrospection answer = delegate.introspect(keyHash);
+        switch (answer) {
+            case ApiKeyIntrospection.Active(IntrospectedApiKey key) -> {
+                final Instant until = positiveExpiry(key, now);
+                if (until.isAfter(now)) {
+                    active.put(keyHash, key, until, now);
+                }
             }
-        } else {
-            inactive.put(keyHash, Boolean.TRUE, now.plusSeconds(NEGATIVE_TTL_SECONDS), now);
+            case ApiKeyIntrospection.Inactive inactiveAnswer ->
+                    inactive.put(keyHash, Boolean.TRUE, now.plusSeconds(NEGATIVE_TTL_SECONDS), now);
+            case ApiKeyIntrospection.Paused paused -> {
+                // Not cached: see the class Javadoc (backlog #0-82).
+            }
         }
         return answer;
     }

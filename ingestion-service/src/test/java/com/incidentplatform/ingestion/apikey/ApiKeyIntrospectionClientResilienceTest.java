@@ -138,7 +138,7 @@ class ApiKeyIntrospectionClientResilienceTest {
                         .withHeader("Content-Type", "application/json")
                         .withBody("{\"active\": false}")));
 
-        assertThat(client.introspect(freshHash())).isEmpty();
+        assertThat(client.introspect(freshHash())).isInstanceOf(ApiKeyIntrospection.Inactive.class);
         WIRE_MOCK.verify(2, postRequestedFor(urlPathEqualTo(PATH)));
     }
 
@@ -150,12 +150,31 @@ class ApiKeyIntrospectionClientResilienceTest {
                 .withBody("{\"active\": false}")));
 
         for (int i = 0; i < 20; i++) {
-            assertThat(client.introspect(freshHash())).isEmpty();
+            assertThat(client.introspect(freshHash())).isInstanceOf(ApiKeyIntrospection.Inactive.class);
         }
 
         final var breaker = circuitBreakerRegistry.circuitBreaker("api-key-introspection");
         assertThat(breaker.getState().name()).isEqualTo("CLOSED");
         assertThat(breaker.getMetrics().getNumberOfFailedCalls()).isZero();
+    }
+
+    @Test
+    @DisplayName("paused answers (read-only tenant, backlog #0-82) are successes: no open circuit, no retry, no fallback metric")
+    void pausedAnswersDoNotOpenTheCircuit() {
+        WIRE_MOCK.stubFor(post(urlPathEqualTo(PATH)).willReturn(aResponse().withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"active\": false, \"paused\": true}")));
+        final double fallbacksBefore = serverErrorFallbacks();
+
+        for (int i = 0; i < 20; i++) {
+            assertThat(client.introspect(freshHash())).isInstanceOf(ApiKeyIntrospection.Paused.class);
+        }
+
+        final var breaker = circuitBreakerRegistry.circuitBreaker("api-key-introspection");
+        assertThat(breaker.getState().name()).isEqualTo("CLOSED");
+        assertThat(breaker.getMetrics().getNumberOfFailedCalls()).isZero();
+        assertThat(serverErrorFallbacks()).isEqualTo(fallbacksBefore);
+        WIRE_MOCK.verify(20, postRequestedFor(urlPathEqualTo(PATH)));
     }
 
     @Test

@@ -11,7 +11,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -60,24 +59,24 @@ class CachingApiKeyIntrospectionClientTest {
         @DisplayName("are served from cache within the positive TTL")
         void cachedWithinTtl() {
             final IntrospectedApiKey key = key(null);
-            given(delegate.introspect(HASH)).willReturn(Optional.of(key));
+            given(delegate.introspect(HASH)).willReturn(new ApiKeyIntrospection.Active(key));
 
             cache.introspect(HASH);
             clock.advance(Duration.ofSeconds(CachingApiKeyIntrospectionClient.POSITIVE_TTL_SECONDS - 1));
 
-            assertThat(cache.introspect(HASH)).contains(key);
+            assertThat(cache.introspect(HASH)).isEqualTo(new ApiKeyIntrospection.Active(key));
             then(delegate).should(times(1)).introspect(HASH);
         }
 
         @Test
         @DisplayName("are asked again once the positive TTL has passed — the revocation window")
         void refreshedAfterTtl() {
-            given(delegate.introspect(HASH)).willReturn(Optional.of(key(null)), Optional.empty());
+            given(delegate.introspect(HASH)).willReturn(new ApiKeyIntrospection.Active(key(null)), new ApiKeyIntrospection.Inactive());
 
             cache.introspect(HASH);
             clock.advance(Duration.ofSeconds(CachingApiKeyIntrospectionClient.POSITIVE_TTL_SECONDS));
 
-            assertThat(cache.introspect(HASH)).isEmpty();
+            assertThat(cache.introspect(HASH)).isInstanceOf(ApiKeyIntrospection.Inactive.class);
             then(delegate).should(times(2)).introspect(HASH);
         }
 
@@ -85,21 +84,21 @@ class CachingApiKeyIntrospectionClientTest {
         @DisplayName("are never cached past the key's own expiresAt (RFC 7662 §4)")
         void cappedAtExpiresAt() {
             given(delegate.introspect(HASH))
-                    .willReturn(Optional.of(key(T0.plusSeconds(10))), Optional.empty());
+                    .willReturn(new ApiKeyIntrospection.Active(key(T0.plusSeconds(10))), new ApiKeyIntrospection.Inactive());
 
             cache.introspect(HASH);
             clock.advance(Duration.ofSeconds(10));
 
-            assertThat(cache.introspect(HASH)).isEmpty();
+            assertThat(cache.introspect(HASH)).isInstanceOf(ApiKeyIntrospection.Inactive.class);
             then(delegate).should(times(2)).introspect(HASH);
         }
 
         @Test
         @DisplayName("an answer that has already expired is returned but not cached")
         void alreadyExpiredNotCached() {
-            given(delegate.introspect(HASH)).willReturn(Optional.of(key(T0.minusSeconds(1))));
+            given(delegate.introspect(HASH)).willReturn(new ApiKeyIntrospection.Active(key(T0.minusSeconds(1))));
 
-            assertThat(cache.introspect(HASH)).isPresent();
+            assertThat(cache.introspect(HASH)).isInstanceOf(ApiKeyIntrospection.Active.class);
             assertThat(cache.activeSize()).isZero();
         }
 
@@ -107,7 +106,7 @@ class CachingApiKeyIntrospectionClientTest {
         @DisplayName("findCached sees a cached key without calling auth-service or counting a hit")
         void findCachedPeeks() {
             final IntrospectedApiKey key = key(null);
-            given(delegate.introspect(HASH)).willReturn(Optional.of(key));
+            given(delegate.introspect(HASH)).willReturn(new ApiKeyIntrospection.Active(key));
             cache.introspect(HASH);
 
             assertThat(cache.findCached(HASH)).contains(key);
@@ -125,7 +124,7 @@ class CachingApiKeyIntrospectionClientTest {
         @Test
         @DisplayName("are cached for the short negative TTL only")
         void negativeTtl() {
-            given(delegate.introspect(HASH)).willReturn(Optional.empty());
+            given(delegate.introspect(HASH)).willReturn(new ApiKeyIntrospection.Inactive());
 
             cache.introspect(HASH);
             cache.introspect(HASH);
@@ -139,8 +138,8 @@ class CachingApiKeyIntrospectionClientTest {
         @Test
         @DisplayName("go to a separate map, so random keys cannot push valid keys out")
         void separateMaps() {
-            given(delegate.introspect(anyString())).willReturn(Optional.empty());
-            given(delegate.introspect(HASH)).willReturn(Optional.of(key(null)));
+            given(delegate.introspect(anyString())).willReturn(new ApiKeyIntrospection.Inactive());
+            given(delegate.introspect(HASH)).willReturn(new ApiKeyIntrospection.Active(key(null)));
 
             cache.introspect(HASH);
             for (int i = 0; i < CachingApiKeyIntrospectionClient.MAX_ENTRIES + 5; i++) {
@@ -158,7 +157,7 @@ class CachingApiKeyIntrospectionClientTest {
         @Test
         @DisplayName("a full map is purged of expired entries before a put is skipped")
         void purgesExpiredWhenFull() {
-            given(delegate.introspect(anyString())).willReturn(Optional.empty());
+            given(delegate.introspect(anyString())).willReturn(new ApiKeyIntrospection.Inactive());
             for (int i = 0; i < CachingApiKeyIntrospectionClient.MAX_ENTRIES; i++) {
                 cache.introspect("old-" + i);
             }
@@ -175,6 +174,26 @@ class CachingApiKeyIntrospectionClientTest {
     }
 
     @Nested
+    @DisplayName("paused keys (backlog #0-82)")
+    class PausedKeys {
+
+        @Test
+        @DisplayName("are never cached, in either map: the first retry after resume goes through")
+        void notCached() {
+            given(delegate.introspect(HASH))
+                    .willReturn(new ApiKeyIntrospection.Paused(), new ApiKeyIntrospection.Active(key(null)));
+
+            assertThat(cache.introspect(HASH)).isEqualTo(new ApiKeyIntrospection.Paused());
+            assertThat(cache.activeSize()).isZero();
+            assertThat(cache.inactiveSize()).isZero();
+            assertThat(cache.findCached(HASH)).isEmpty();
+
+            assertThat(cache.introspect(HASH)).isInstanceOf(ApiKeyIntrospection.Active.class);
+            then(delegate).should(times(2)).introspect(HASH);
+        }
+    }
+
+    @Nested
     @DisplayName("failures")
     class Failures {
 
@@ -183,14 +202,14 @@ class CachingApiKeyIntrospectionClientTest {
         void notCached() {
             given(delegate.introspect(HASH))
                     .willThrow(new ApiKeyIntrospectionUnavailableException("down", null))
-                    .willReturn(Optional.of(key(null)));
+                    .willReturn(new ApiKeyIntrospection.Active(key(null)));
 
             assertThatThrownBy(() -> cache.introspect(HASH))
                     .isInstanceOf(ApiKeyIntrospectionUnavailableException.class);
             assertThat(cache.activeSize()).isZero();
             assertThat(cache.inactiveSize()).isZero();
 
-            assertThat(cache.introspect(HASH)).isPresent();
+            assertThat(cache.introspect(HASH)).isInstanceOf(ApiKeyIntrospection.Active.class);
         }
     }
 
