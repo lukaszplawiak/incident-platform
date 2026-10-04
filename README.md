@@ -359,6 +359,15 @@ in Settings).
 - **No dev profile outside dev** (backlog #0-63): only `k8s/overlays/dev` sets `SPRING_PROFILES_ACTIVE`, and CI
   fails if the rendered staging or prod overlay sets any Spring profile. The base used to set `dev` for every
   overlay, which would have exposed incident-service's unauthenticated `/dev/token` in prod.
+- **No profile configuration or literal secret in a jar** (backlog #0-81): CI fails on a committed
+  `application-<profile>.*` under `*/src/main/resources`, a base `application.*` with a
+  `spring.config.activate.on-profile` document or a `spring.profiles.active` / `include` / `default` / `group` (in a jar it
+  would apply everywhere, past the manifest check above), or a secret, encryption key, private key or API key there
+  (any key ending in `secret`, `encryption-key`, `private-key`, `api-key`, kebab or camelCase) that is not a `${VAR}`
+  without default (`.github/scripts/check-packaged-profiles.sh`; postmortem-service's `gemini.api-key` lost its
+  placeholder default for it). The `test` profiles, with a hard-coded JWT secret and MFA
+  key, used to ship in three services' jars and images; a run with that profile outside the manifests would have
+  used them, which the check above cannot see.
 - **Schema validation**: CI renders base and all three overlays and validates them with `kubeconform -strict`.
 
 ### Data stores
@@ -558,7 +567,6 @@ Open items from the audit and earlier, most important first within each area. Ea
   - Mutable image tags in k8s and compose, and k8s third-party images not tracked by Renovate: backlog #0-71.
 - **Application**
   - Swagger UI and the OpenAPI documents are public in every profile: backlog #0-73.
-  - The `test` profiles, with hard-coded keys, ship inside the jars of three services: backlog #0-81.
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
   - A tenant cannot be suspended or offboarded: its users, API keys and data stay until someone edits the database:
     backlog #0-82.
@@ -582,6 +590,8 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Project**
   - No `SECURITY.md`, no private vulnerability reporting, no Dependabot alerts: backlog #0-74.
 - **Local stack**
+  - A jar built on a developer's machine (`./mvnw package`) contains their gitignored `application-local.yml`
+    with real local secrets; images and CI-built jars do not: backlog #0-100.
   - Every docker-compose port is published on all interfaces, Postgres included, where the admin is a superuser with
     the password from `docker/.env` (the template's is a known dev value): backlog #0-72.
 
