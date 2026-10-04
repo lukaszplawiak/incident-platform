@@ -1228,7 +1228,7 @@ suspended tenant's records in a table and replay them on resume (a record cannot
 blocking its partition), schedulers skip the tenant, STOMP connections close; (3) offboarding, its own
 item: #0-101.
 
-**Progress.** Step 1: PR #TBD (V30, `TenantLifecycleService`, `TenantAccessService`,
+**Progress.** Step 1: PR #456 (V30, `TenantLifecycleService`, `TenantAccessService`,
 `TenantStatusFilter`; see the README "Tenant suspension" control). Decided in the review of step 1: a
 `SECURITY` suspension must be `FULL` (400 in `TenantLifecycleService`, CHECK
 `chk_tenants_security_suspension_full` in V30), since read-only keeps an intruder's sessions and the
