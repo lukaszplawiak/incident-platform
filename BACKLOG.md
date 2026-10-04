@@ -78,7 +78,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
 | [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
-| [0-81](#0-81-test-profiles-with-hard-coded-keys-ship-inside-the-service-jars) | Test profiles with hard-coded keys ship inside the service jars | tech-debt | Low | Open |
 | [0-82](#0-82-suspend-and-offboard-a-tenant) | Suspend and offboard a tenant | design | Medium | Open |
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
@@ -89,6 +88,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-97](#0-97-kafka-consumers-on-defaulterrorhandler-and-a-dead-letter-replay) | Kafka consumers on `DefaultErrorHandler`, and a dead-letter replay | design | Low | Open |
 | [0-98](#0-98-mfa-recovery-verifies-the-person-by-procedure-only) | MFA recovery verifies the person by procedure only | design | Low | Open |
 | [0-99](#0-99-public-token-endpoints-have-no-request-limit) | Public token endpoints have no request limit | security | Low | Open |
+| [0-100](#0-100-a-locally-built-jar-contains-the-developers-application-localyml) | A locally built jar contains the developer's `application-local.yml` | tech-debt | Low | Open |
 
 ---
 
@@ -1184,30 +1184,6 @@ when the services have taken every other connection, which is the reserve's purp
 
 ---
 
-### 0-81. Test profiles with hard-coded keys ship inside the service jars
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-66)
-
-**Problem.** `application-test.yml` lives in `src/main/resources` of auth-service, incident-service
-and ingestion-service, so it is packaged into the jar and the image. The auth and incident copies
-hard-code `jwt.secret`, and auth's also `mfa.encryption-key`. A deployment that activates the
-`test` profile loads them, wherever the matching environment variable is absent (an environment
-variable such as `JWT_SECRET` outranks a profile file).
-- **Staging and prod:** the #0-63 CI check already rejects any Spring profile in their rendered
-  manifests, `test` included.
-- **Dev:** the dev overlay is allowed to set a profile.
-- **Elsewhere:** a run outside the manifests is not covered by that check.
-
-Where `test` is active today, the JWT part fails closed: the hard-coded `jwt.secret` is 52 characters
-and `JwtUtils` refuses anything under 64, so the service does not start. That protection is
-accidental and JWT-only. auth-service's MFA key has a valid length and would be used as it is.
-
-**Approach.** Move the test profiles to `src/test/resources`, where tests still find them and the jar
-does not contain them, or delete them if no test activates them. That removes the cause, which the
-#0-63 check cannot.
-
----
-
 ### 0-82. Suspend and offboard a tenant
 
 **Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-80)
@@ -1454,6 +1430,29 @@ through); 429 with Retry-After; the WARN for an invalid token sampled or counted
 
 ---
 
+### 0-100. A locally built jar contains the developer's `application-local.yml`
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found while closing #0-81)
+
+**Problem.** Each service reads a developer's `application-local.yml` from `src/main/resources`
+(`make run-*`, `spring-boot:run -Dspring-boot.run.profiles=local`). It is gitignored and
+`.dockerignore`d, so it is never committed and never reaches an image or a CI-built jar. But
+`./mvnw package` on a developer's machine puts it into `target/*.jar` as
+`BOOT-INF/classes/application-local.yml`, with that developer's real local secrets (JWT secret,
+MFA and Slack encryption keys, database password, Gemini API key). A jar copied off the machine,
+or run elsewhere with the `local` profile, carries them.
+
+**Approach.** Exclude `application-local.*` from the jar in `service-parent` (`maven-jar-plugin`
+`excludes`), so `spring-boot:run`, which reads `target/classes`, keeps working; a test (or a CI
+step on a freshly packaged jar) that the jar has no `application-local`. Alternatively move the
+local file out of the source tree (`./config/application-local.yml` next to the module, which
+Spring Boot also loads from the working directory), which needs the README "Step 2" templates and
+the Makefile changed.
+
+**When.** Whenever `service-parent` is next touched, or before anyone hands a locally built jar on.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -1493,6 +1492,7 @@ through); 429 with Retry-After; the WARN for an invalid token sampled or counted
 | 0-90 | A customer tenant with one admin had nobody to reset that admin's MFA (since #0-88 a password reset keeps the factor and another admin resets it), so a factor enrolled with a stolen password, or a lost phone and lost backup codes, locked the tenant out for good; break-glass covers only `platform-operator`. Now an operator admin who passes `PlatformAccess` asks for an MFA recovery (`POST /api/v1/platform/tenants/{id}/mfa-recovery`, `PlatformMfaRecoveryController`, counted by `PlatformRateLimiter`), the narrow exception to #0-80's "never inside a tenant with an admin": only for an active admin with MFA and an accepted invite who is the tenant's only one, with the verification outside the account recorded (`MfaVerificationMethod`, a one-line note), at most one open request per user (V29's partial unique index). Nothing changes then (as GitHub's 2FA recovery, AWS root MFA, Okta/Entra super-admin recovery; NIST SP 800-63B: tell the account): the account is emailed `MFA_RECOVERY_REQUESTED` with a single-use cancel link (`AuthToken.Type.MFA_RECOVERY_CANCEL`, public `POST /api/v1/auth/mfa-recovery/cancel`), and `MfaRecoveryScheduler` (ShedLock) runs the reset only once `platform.mfa-recovery.waiting-period` (72 h, 24 h to 7 days) has passed since that email was actually sent (`notice_sent_at`, as #0-83's notice); a request whose notice is not sent within the security-notice deadline expires. Before the reset the checks run again (another admin appeared → `OTHER_ADMIN_EXISTS`; no longer an admin with MFA → `NO_LONGER_APPLICABLE`). The reset (`MfaService.resetForRecovery`) is the admin reset plus the password, replaced by the hash of random bytes nobody keeps (not null: a null password means "invite pending" and would have made the tenant look admin-less), as a stranger with a factor may still know the stolen password; `MFA_RECOVERY_COMPLETED` carries a password-reset link. Every status change is one conditional UPDATE from PENDING, so a cancellation racing the execution is decided by the database. Audited in both tenants (`MFA_RECOVERY_REQUESTED` / `_CANCELLED` / `_EXECUTED` / `_EXPIRED`, `shared`; the operator's note only in the operator tenant), alerted on every request and every cancellation by the account (`PlatformMfaRecoveryRequested`, `PlatformMfaRecoveryCancelledByAccount`, critical, content-free). Added in review: the execution also rechecks the operator who asked (no longer an active operator admin → `OPERATOR_NO_LONGER_ADMIN`), so a request filed from an account later found compromised does not run; a cancellation on that final check is alerted (`PlatformMfaRecoveryCancelledOnRecheck`, critical: a second admin added during the wait may be the attacker's); a request the scheduler keeps failing on is counted and alerted (`PlatformMfaRecoveryJobFailing`), as the oldest is retried first and could hold the batch back; expiry repeats "notice not sent" in its UPDATE; a closed request without a reset must name its reason (V29 CHECK); the entity is `Persistable`, so a new request is inserted, not merged. Second review: the waiting period may not be set under 24 h (a variable must not shrink the defence to seconds), the execution also invalidates earlier password-reset links, an executed request carries no close reason (CHECK), and each half of the scheduler run survives the other's failed query. Third review: the customer tenant's trail names an operator only as `platform-operator`; the outcome counters count after commit (no critical alert on a rollback); the execution locks the target's row before its checks; an expired request is alerted (`PlatformMfaRecoveryExpired`); a notice's "not before" counts from its send attempt; that the mailbox holder can cancel every request and the session holder can add a second admin is documented as an accepted limit. Public token endpoints without a request limit: #0-99. Prevention: tenant settings return `activeAdmins` and `singleAdmin`. One definition of an active admin (active, invite accepted) now also in the "last admin" guard, which counted a pending invite and so let the last admin who could log in be removed (found while designing this). Not done: verifying the person by the platform itself: #0-98. Testcontainers tests of the whole flow (notice, waiting period, reset, cancel link, recheck, expiry, index, constraints) | PR #454 |
 | 0-96 | A consumer acknowledged a poison pill before its dead-letter copy was written (`DeadLetterPublisher.publish`, fire-and-forget, 15 call sites): a failed send lost it, a refused forged record's evidence included, with only an ERROR line. The fire-and-forget path is gone: a consumer hands such a record to `DeadLetterPublisher.deadLetterThenAcknowledge`, which acknowledges it once Kafka has the copy and `nack`s it otherwise (the way `AuditEventConsumer` already did, #0-84); the copy names its `sourcePartition` and `sourceOffset`, so one stored twice (at least once) can be told apart. Three more of the same kind were found and fixed: a transient failure was "not acknowledged, Kafka redelivers", which in `MANUAL_IMMEDIATE` mode it does not, the next record's acknowledgement commits the offset past it (shown on a real broker by `DeadLetterPublisherKafkaIntegrationTest`, Testcontainers Kafka) — every consumer now `nack`s it (`redeliverLater`, 5 s, `kafka.records.redelivery.requested{reason}`); a record without `X-Event-Type` was acknowledged and dropped (notification, escalation, postmortem, `IncidentEscalationEventConsumer`) and is now dead-lettered; and the rule for "transient" (#47: `TransientDataAccessException` only) took a database outage for a poison pill, since Spring gives it as `DataAccessResourceFailureException` (non-transient) or `CannotCreateTransactionException` (no `DataAccessException`), so escalation and postmortem dead-lettered every event while the database was down. One rule in `shared` now, `KafkaFailures`, for all six consumers; anything else is dead-lettered, as #47 decided (notification-service and `IncidentKafkaConsumer` used to call every exception transient). `IncidentEscalationEventConsumer`'s listener was `@Transactional` and acknowledged inside the transaction, before the commit where the `@Version` conflict of #40 is thrown: the write moved to `IncidentCommandService.recordEscalationLevel`, committed before the acknowledgement. ingestion-service waits for an alert's dead-letter copy and answers 503 with `Retry-After` (`INGESTION_UNAVAILABLE`) when Kafka does not take it. Bounds added in review, so that no record holds a partition, every tenant on it, for ever: a copy waits at most 5 s in all (`DeadLetterPublisher.deadLetterTemplate`, a producer of its own with a 2 s metadata block — escalation-service's producer keeps Kafka's 60 s on purpose, #0-84); each consumer refuses to start unless `max.poll.records` such waits fit in half of `max.poll.interval.ms` (raised from 30 s to 120 s in incident, escalation and postmortem; a `nack`'s delay pauses the partition, `pausedForNack` in spring-kafka 3.3, and does not count); a record failing past `kafka.consumer.redelivery-deadline` (30 min, `RecordRedeliveries`) is dead-lettered, counted (`kafka.records.redelivery.gave_up`) and alerted (`KafkaRecordRedeliveryGaveUp`, critical; `KafkaRecordRedeliveryStuck`, high, after 15 min of nacks); a copy's payload is cut to 128 KiB (UTF-8, marked `originalPayloadTruncated`) so it always fits in a record; a dead-letter reason and its log line keep a message only when the platform wrote it content-free (`KafkaFailures.reason`: a refused tenant, an unknown severity, `UnreadableRecordException`), any other exception by type and the platform's frame (a parser's message quotes the record; `GenericNormalizer` no longer quotes an invalid severity). ingestion-service's producer blocks at most 5 s (was Kafka's 60 s, on the request thread), a request's copies are awaited together under one deadline, a payload is copied once however many of its alerts fail to serialize, and the dedup keys of alerts a lost copy was to keep are released, or the sender's retry was answered as a duplicate and the alert lost; the copies' deadline counts from the wait and no copy starts after one failed (second review). Accepted: a database outage longer than the deadline dead-letters one record per partition per deadline (an audit event then missing from the trail until replayed, #0-97, raising both `AuditEventsRejected` and `KafkaRecordRedeliveryGaveUp`). A record without `X-Event-Type` keeps its tenant in the copy when it has a trustworthy one (`TenantKafkaRecordResolver.trustedTenantOrNull`, not counted). Real-broker test `DeadLetterPublisherKafkaIntegrationTest`, Postgres test `IncidentEscalationLevelIntegrationTest`. `DefaultErrorHandler` and a dead-letter replay: #0-97 | PR #453 |
 | 0-39 | Closed by #0-91/#0-92: every producer writes the header (through `TenantRecords`), the resolver dead-letters a record whose header and payload tenant differ, and `AuditEventConsumer` resolves through it like every consumer | PR #452 |
+| 0-81 | `application-test.yml` sat in `src/main/resources` of auth-, incident- and ingestion-service, so it shipped in every jar and image, the auth and incident copies with a hard-coded `jwt.secret` and auth's with a valid `mfa.encryption-key`, applied wherever the `test` profile was switched on. No test activated that profile any more (its only user, `BaseIntegrationTest`, went with backlog #45; tests set their keys with `@TestPropertySource`), so the three files are deleted rather than moved to `src/test/resources`. A CI step in "Build, Test & Coverage" (`.github/scripts/check-packaged-profiles.sh`, its cases in `test-packaged-profiles.sh` run first) fails on any committed `application-<profile>.{yml,yaml,properties}` under `*/src/main/resources` or its `config/`, on a profile document (a `spring.config.activate.on-profile` key, nested or dotted, not the words in a comment) in a base `application.*`, on a base `application.*` that switches a profile on (`spring.profiles.active` / `include` / `default` / `group`: in the jar it would apply in every environment, past #0-63's check of the manifests), and (review) on a key ending in `secret`, `encryption-key`, `private-key` or `api-key` (any case, kebab or camelCase) in a base `application.*` that is not a `${VAR}` placeholder without default, quoted or not, since a key written straight into the base file ships just the same (postmortem-service's `gemini.api-key` lost its `your-api-key-here` default for it; compose and every overlay set `GEMINI_API_KEY`); it has no allow-list (review: an empty, untested one), so a profile in a jar needs a backlog decision and a change to the script. This closes what #0-63's manifest check could not (a run outside the manifests). The developer's gitignored `application-local.yml` in locally built jars: #0-100 | PR #TBD |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |
