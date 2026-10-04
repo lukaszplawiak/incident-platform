@@ -104,6 +104,34 @@ public final class AuditEventTypes {
      * Its own type, so every use of break-glass can be found by type.
      */
     public static final String MFA_RESET_BREAK_GLASS      = "MFA_RESET_BREAK_GLASS";
+    /**
+     * A platform operator asked to reset the second factor of a customer
+     * tenant's only admin (backlog #0-90), after verifying the person outside
+     * the account's own channels. Recorded in both tenants: the operator
+     * tenant's event carries the operator's verification note, the customer
+     * tenant's only the method. Nothing changes yet: the reset waits until the
+     * account has been told for the waiting period, and the account can cancel it.
+     */
+    public static final String MFA_RECOVERY_REQUESTED     = "MFA_RECOVERY_REQUESTED";
+    /**
+     * A {@link #MFA_RECOVERY_REQUESTED} request ended without a reset: cancelled
+     * by the account (the link in its notice), by an operator, or when the
+     * reset no longer applied at its time (another admin appeared, the factor
+     * was already gone). The reason is in the metadata. Both tenants.
+     */
+    public static final String MFA_RECOVERY_CANCELLED     = "MFA_RECOVERY_CANCELLED";
+    /**
+     * The waiting period of a {@link #MFA_RECOVERY_REQUESTED} request ended
+     * uncancelled and the platform reset the admin's factor, password and
+     * sessions (backlog #0-90). Written by the platform, not a person. Both tenants.
+     */
+    public static final String MFA_RECOVERY_EXECUTED      = "MFA_RECOVERY_EXECUTED";
+    /**
+     * A {@link #MFA_RECOVERY_REQUESTED} request was given up because its notice
+     * never reached the account: a reset the account was never told about must
+     * not happen. Both tenants.
+     */
+    public static final String MFA_RECOVERY_EXPIRED       = "MFA_RECOVERY_EXPIRED";
     public static final String MFA_VERIFY_SUCCESS         = "MFA_VERIFY_SUCCESS";
     public static final String MFA_VERIFY_FAILED          = "MFA_VERIFY_FAILED";
     public static final String MFA_BACKUP_CODE_USED       = "MFA_BACKUP_CODE_USED";
