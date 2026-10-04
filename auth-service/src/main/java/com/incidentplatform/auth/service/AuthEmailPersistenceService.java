@@ -6,6 +6,7 @@ import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
+import com.incidentplatform.auth.repository.MfaRecoveryRequestRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
 import io.micrometer.core.instrument.Counter;
@@ -56,17 +57,20 @@ public class AuthEmailPersistenceService {
     private final AuthTokenRepository tokenRepository;
     private final AuthTokenService tokenService;
     private final UserRepository userRepository;
+    private final MfaRecoveryRequestRepository recoveryRequestRepository;
     private final Counter mfaNoticeNotRecorded;
 
     public AuthEmailPersistenceService(AuthEmailOutboxRepository outboxRepository,
                                        AuthTokenRepository tokenRepository,
                                        AuthTokenService tokenService,
                                        UserRepository userRepository,
+                                       MfaRecoveryRequestRepository recoveryRequestRepository,
                                        MeterRegistry meterRegistry) {
         this.outboxRepository = outboxRepository;
         this.tokenRepository  = tokenRepository;
         this.tokenService     = tokenService;
         this.userRepository   = userRepository;
+        this.recoveryRequestRepository = recoveryRequestRepository;
         this.mfaNoticeNotRecorded = Counter.builder("auth.mfa.notice.unrecorded")
                 .description("MFA_ENABLED notices sent that did not mark the user's current factor "
                         + "(backlog #0-83)")
@@ -109,6 +113,10 @@ public class AuthEmailPersistenceService {
                 ? "user no longer exists"
                 : entry.getEmailType() == AuthEmailType.INVITE && user.get().getPasswordHash() != null
                 ? "invite already accepted"
+                // Backlog #0-90: a cancel link for a request that already ended is no use.
+                : entry.getEmailType() == AuthEmailType.MFA_RECOVERY_REQUESTED
+                        && !recoveryRequestRepository.isPending(entry.getMfaRecoveryRequestId())
+                ? "MFA recovery request no longer pending"
                 : entry.getEmailType().supersededByNewer()
                         && outboxRepository.existsByUserIdAndEmailTypeAndCreatedAtAfter(
                         entry.getUserId(), entry.getEmailType(), entry.getCreatedAt())
@@ -129,8 +137,10 @@ public class AuthEmailPersistenceService {
                 entry.getUserId(), entry.getEmailType().tokenType(), now);
         final GeneratedToken token = switch (entry.getEmailType()) {
             case INVITE -> tokenService.generateInviteTokenWithEntity(user.get(), entry.getTenantId());
-            case PASSWORD_RESET ->
+            case PASSWORD_RESET, MFA_RECOVERY_COMPLETED ->
                     tokenService.generatePasswordResetTokenWithEntity(user.get(), entry.getTenantId());
+            case MFA_RECOVERY_REQUESTED ->
+                    tokenService.generateMfaRecoveryCancelTokenWithEntity(user.get(), entry.getTenantId());
             case MFA_ENABLED, MFA_DISABLED, MFA_RESET, API_KEY_CREATED -> throw new IllegalStateException("unreachable: no token");
         };
         return new Attempt.Send(token.rawToken(), token.token().getId());
@@ -143,7 +153,8 @@ public class AuthEmailPersistenceService {
     }
 
     /**
-     * Marks the entry SENT. For an MFA_ENABLED notice it also records, on the
+     * Marks the entry SENT. For an MFA recovery notice it records on the
+     * request that the notice went out (backlog #0-90). For an MFA_ENABLED notice it also records, on the
      * user, that the current factor's notice went out (backlog #0-83): the
      * platform API's grace period counts from there, and the fact must outlive
      * the outbox purge. Same transaction, so the two never disagree.
@@ -174,6 +185,14 @@ public class AuthEmailPersistenceService {
             log.warn("MFA_ENABLED notice sent but it marks no current factor (MFA disabled or re-enrolled "
                             + "since, or already recorded): entry={}, user={}, tenant={}, requestedAt={}",
                     entry.getId(), entry.getUserId(), entry.getTenantId(), entry.getCreatedAt());
+        }
+        // Backlog #0-90: the request's waiting period counts from here. A
+        // request cancelled while its notice was being sent records nothing,
+        // which is harmless: it is over.
+        if (entry.getEmailType() == AuthEmailType.MFA_RECOVERY_REQUESTED
+                && recoveryRequestRepository.recordNoticeSent(entry.getMfaRecoveryRequestId(), now) != 1) {
+            log.info("MFA recovery notice sent for a request no longer pending: entry={}, request={}, tenant={}",
+                    entry.getId(), entry.getMfaRecoveryRequestId(), entry.getTenantId());
         }
         return true;
     }

@@ -46,6 +46,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.notNull;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
+import static org.mockito.Mockito.never;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("MfaService")
@@ -1216,6 +1217,44 @@ class MfaServiceTest {
             user.enableMfa();
         }
         return user;
+    }
+
+    @Nested
+    @DisplayName("resetForRecovery (backlog #0-90)")
+    class ResetForRecovery {
+
+        @Test
+        @DisplayName("resets like the admin reset, replaces the password with one nobody knows, and emails the completion")
+        void resetsFactorAndPassword() {
+            final User user = buildUserWithMfa("old-password");
+            user.storePendingMfaSecret("half-finished-setup");
+            given(apiKeyService.revokeAllPersonalKeysForUser(USER_ID, TENANT_ID)).willReturn(3);
+
+            assertThat(service.resetForRecovery(user, TENANT_ID)).isEqualTo(3);
+
+            assertThat(user.isMfaEnabled()).isFalse();
+            assertThat(user.getMfaPendingSecret()).isNull();
+            assertThat(user.getPasswordHash()).as("still an accepted account, not an open invite").isNotNull();
+            assertThat(passwordEncoder.matches("old-password", user.getPasswordHash())).isFalse();
+            then(backupCodeRepository).should().deleteAllByUserId(USER_ID);
+            then(authTokenService).should().forgetMfaOfAllSessions(USER_ID, TENANT_ID);
+            then(authTokenService).should().invalidateLoginContinuationTokens(USER_ID);
+            then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
+            then(authEmailRequestService).should().requestMfaRecoveryCompleted(user);
+            then(authEmailRequestService).should(never()).requestMfaResetNotification(any());
+            // The caller (MfaRecoveryService) audits it, in both tenants.
+            then(auditEventPublisher).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("two recoveries leave two different unusable passwords")
+        void unusablePasswordIsRandom() {
+            final User first = buildUserWithMfa("pw");
+            final User second = buildUserWithMfa("pw");
+            service.resetForRecovery(first, TENANT_ID);
+            service.resetForRecovery(second, TENANT_ID);
+            assertThat(first.getPasswordHash()).isNotEqualTo(second.getPasswordHash());
+        }
     }
 
     private User buildUserWithMfa(String rawPassword) {

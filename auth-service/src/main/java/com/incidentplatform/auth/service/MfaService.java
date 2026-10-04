@@ -33,11 +33,14 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -65,6 +68,7 @@ public class MfaService {
     private final TotpService totpService;
     private final AesEncryptionService aesEncryptionService;
     private final PasswordEncoder passwordEncoder;
+    private final SecureRandom secureRandom = new SecureRandom();
     private final JwtUtils jwtUtils;
     private final AuditEventPublisher auditEventPublisher;
     private final BruteForceProtectionService bruteForceProtectionService;
@@ -301,7 +305,7 @@ public class MfaService {
             throw new RateLimitRefusedException(limit);
         }
 
-        final int keysRevoked = resetFactorAndSessions(user, tenantId);
+        final int keysRevoked = resetFactorAndSessions(user, tenantId, false);
         final Map<String, Object> metadata = new java.util.HashMap<>(Map.of(
                 "resetBy", admin.userId().toString(),
                 ApiKeyService.AUDIT_PERSONAL_KEYS_REVOKED, String.valueOf(keysRevoked)));
@@ -344,7 +348,8 @@ public class MfaService {
      *
      * <p>Limited to admins of the {@code platform-operator} tenant: a customer
      * tenant's admins reset each other, and the platform never acts inside a
-     * tenant with an admin (#0-80; a customer tenant's only admin is #0-90).
+     * tenant with an admin (#0-80), except for the delayed, announced recovery
+     * of a customer tenant's only admin ({@code MfaRecoveryService}, #0-90).
      * The actor and reason go into the log and the audit trail, so control
      * characters (a forged log line) are refused.
      *
@@ -383,7 +388,7 @@ public class MfaService {
                     HttpStatus.CONFLICT);
         }
 
-        final int keysRevoked = resetFactorAndSessions(user, tenantId);
+        final int keysRevoked = resetFactorAndSessions(user, tenantId, false);
 
         final String auditActor = "break-glass:" + actor.strip();
         auditEventPublisher.publishAuth(
@@ -965,10 +970,40 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
     }
 
     /**
-     * Shared by {@link #resetMfaByAdmin} and {@link #resetMfaBreakGlass}:
-     * the factor goes, and so does every session and unfinished login of the
-     * user (the usual reason is a compromised account), and the user gets
-     * the "an administrator reset your MFA" email.
+     * The reset of an operator's MFA recovery request (backlog #0-90), called
+     * by {@code MfaRecoveryService} in its transaction once the waiting period
+     * has passed: what an admin reset does, and the password goes too.
+     *
+     * <p>Why the password: the admin's factor may be a stranger's, enrolled
+     * with a stolen password, and the stranger may still have that password.
+     * An admin reset (#0-88) relies on the owner resetting the password first;
+     * a recovery cannot, as nobody inside the tenant checks the order. The
+     * password is replaced with the hash of 32 random bytes nobody keeps, not
+     * with null: a null password means "invite not accepted" across
+     * auth-service (the tenant would look admin-less, #0-80), whereas this
+     * account stays an accepted one that simply cannot log in until its owner
+     * sets a new password. The owner is emailed MFA_RECOVERY_COMPLETED, which
+     * carries a password-reset link (otherwise forgot-password), then logs in
+     * with the new password alone and enrols a factor again.
+     *
+     * @return the number of personal API keys revoked, for the audit event
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public int resetForRecovery(User user, String tenantId) {
+        final byte[] unusable = new byte[32];
+        secureRandom.nextBytes(unusable);
+        user.setPasswordHash(passwordEncoder.encode(HexFormat.of().formatHex(unusable)));
+        user.discardPendingMfaSecret();
+        return resetFactorAndSessions(user, tenantId, true);
+    }
+
+    /**
+     * Shared by {@link #resetMfaByAdmin}, {@link #resetMfaBreakGlass} and
+     * {@link #resetForRecovery}: the factor goes, and so does every session
+     * and unfinished login of the user (the usual reason is a compromised
+     * account), and the user gets the email of the case: "an administrator
+     * reset your MFA", or for a recovery (backlog #0-90) "your account was
+     * recovered, set a new password".
      *
      * <p>Backlog #0-89: the user's personal API keys are revoked too. A key
      * created by whoever had the password would otherwise outlive the
@@ -977,9 +1012,13 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
      *
      * @return the number of personal API keys revoked, for the audit event
      */
-    private int resetFactorAndSessions(User user, String tenantId) {
+    private int resetFactorAndSessions(User user, String tenantId, boolean recovery) {
         clearFactor(user, tenantId);
-        authEmailRequestService.requestMfaResetNotification(user);
+        if (recovery) {
+            authEmailRequestService.requestMfaRecoveryCompleted(user);
+        } else {
+            authEmailRequestService.requestMfaResetNotification(user);
+        }
         authTokenService.invalidateLoginContinuationTokens(user.getId());
         authTokenService.invalidateAllRefreshTokens(user.getId());
         return apiKeyService.revokeAllPersonalKeysForUser(user.getId(), tenantId);

@@ -166,6 +166,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/accept-invite").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/forgot-password").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/reset-password").permitAll()
+                        // Backlog #0-90: the cancel link of an MFA recovery notice; the
+                        // token names the user and tenant.
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa-recovery/cancel").permitAll()
                         // MFA verify — public because client holds only mfaToken, not JWT
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/verify").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/mfa/verify-backup").permitAll()

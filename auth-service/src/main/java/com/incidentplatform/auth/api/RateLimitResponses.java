@@ -18,7 +18,11 @@ final class RateLimitResponses {
     }
 
     static ResponseEntity<Void> refused(RateLimitRefusedException refused) {
-        final RateLimitDecision decision = refused.decision();
+        return refused(refused.decision());
+    }
+
+    /** The same for a decision a controller checked itself (the platform API's limiter). */
+    static <T> ResponseEntity<T> refused(RateLimitDecision decision) {
         final HttpStatus status = decision.outcome() == RateLimitDecision.Outcome.LIMITED
                 ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.SERVICE_UNAVAILABLE;
         return ResponseEntity.status(status)

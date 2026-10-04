@@ -534,6 +534,105 @@ groups:
             the last 15 minutes and refused admin MFA resets. Check Redis and
             the MfaResetRateLimiter ERROR lines in the auth-service log.
 
+      - alert: PlatformMfaRecoveryRequested
+        # Backlog #0-90: an operator asked to reset the MFA of a customer
+        # tenant's only admin, which runs after the waiting period (72 h)
+        # unless cancelled. Rare and powerful, so every request is announced:
+        # with several operators this is a second pair of eyes, and for a
+        # taken-over operator session the way it gets noticed in time. Critical,
+        # so it reaches the operator by email outside the platform.
+        # Content-free: no tenant label; the WARN log and the
+        # MFA_RECOVERY_REQUESTED audit event name tenant, user and operator.
+        expr: |
+          sum(increase(platform_mfa_recovery_total{outcome="requested"}[1h])) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "An MFA recovery of a customer tenant's only admin was requested"
+          description: >
+            An operator asked the platform to reset a customer admin's MFA and
+            password in the last hour; it runs after the waiting period unless
+            cancelled. Check the MFA_RECOVERY_REQUESTED audit events in the
+            platform-operator tenant (who asked, how the person was verified)
+            and cancel through the platform API if nobody expected it.
+
+      - alert: PlatformMfaRecoveryCancelledByAccount
+        # Backlog #0-90: the account an MFA recovery was for cancelled it from
+        # its notice. Either its owner did not ask for the recovery (the
+        # operator may have been deceived, or the operator account misused) or
+        # the owner got back in another way. Either way an operator must find
+        # out which. Critical, content-free, like the alert above.
+        expr: |
+          sum(increase(platform_mfa_recovery_total{outcome="cancelled_by_account"}[1h])) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "An account cancelled the MFA recovery requested for it"
+          description: >
+            A customer admin cancelled, from its notice, an MFA recovery an
+            operator had requested. Find the MFA_RECOVERY_CANCELLED event in the
+            platform-operator tenant, then review how the request was verified
+            with the operator who made it.
+
+      - alert: PlatformMfaRecoveryCancelledOnRecheck
+        # Backlog #0-90 (security review): when its waiting period ended, an
+        # MFA recovery no longer applied and was cancelled: the tenant had
+        # gained another admin, the user lost the admin role or the factor, or
+        # the operator who asked is no longer an operator admin. A second admin
+        # appearing during the wait may be whoever holds the locked-out
+        # admin's session, so an operator looks at every such case. Critical,
+        # content-free.
+        expr: |
+          sum(increase(platform_mfa_recovery_total{outcome="cancelled_on_recheck"}[1h])) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "An MFA recovery was cancelled when it was due to run"
+          description: >
+            An MFA recovery no longer applied when its waiting period ended and
+            was cancelled. The MFA_RECOVERY_CANCELLED event in the
+            platform-operator tenant gives the reason (OTHER_ADMIN_EXISTS,
+            NO_LONGER_APPLICABLE, OPERATOR_NO_LONGER_ADMIN); for a new admin,
+            ask the customer through the verified channel whether they know it.
+
+      - alert: PlatformMfaRecoveryExpired
+        # Backlog #0-90 (review): an MFA recovery request expired because its
+        # notice could not be sent to the account within the security-notice
+        # deadline (24 h or more); the locked-out admin is still locked out and
+        # the auth email path is likely broken. High, content-free.
+        expr: |
+          sum(increase(platform_mfa_recovery_total{outcome="expired"}[1h])) > 0
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "An MFA recovery request expired: its notice was never sent"
+          description: >
+            An MFA recovery request expired because the account's notice could
+            not be emailed in time. Check AuthEmailPermanentlyFailed and SMTP,
+            then ask for the recovery again (MFA_RECOVERY_EXPIRED in the
+            platform-operator tenant names the tenant and user).
+
+      - alert: PlatformMfaRecoveryJobFailing
+        # Backlog #0-90 (performance review): the scheduler could not execute or
+        # expire a request. It stays PENDING and is retried every run, oldest
+        # first, so a request that keeps failing would hold back the others.
+        expr: |
+          sum(increase(platform_mfa_recovery_failures_total[30m])) > 0
+        for: 15m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "MFA recovery requests keep failing in the scheduler"
+          description: >
+            auth-service's MfaRecoveryScheduler failed on MFA recovery requests
+            for the last 15 minutes. Its ERROR log "MFA recovery: could not"
+            names the request and the cause.
+
       - alert: HighHttpErrorRate
         # Fire when > 1% of requests to any service return 5xx
         expr: |

@@ -56,7 +56,11 @@ import java.util.Set;
  *   <li>it never sets a password: the admin sets their own by accepting the
  *       invite, exactly as for any user ({@link UserService#createUser});</li>
  *   <li>once the tenant has an admin, everything inside it is theirs; the
- *       operator cannot act in it.</li>
+ *       operator cannot act in it, with one exception (backlog #0-90): the
+ *       MFA recovery of a customer tenant's only admin
+ *       ({@link MfaRecoveryService}), which changes nothing until the account
+ *       has been told for a waiting period and can cancel it, and stops when
+ *       the tenant has another admin to do it.</li>
  * </ul>
  * Every action is audited twice: in the operator tenant ({@code TENANT_*}, who did
  * what to which tenant) and in the new tenant ({@code USER_CREATED},

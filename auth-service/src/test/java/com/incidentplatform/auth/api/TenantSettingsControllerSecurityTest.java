@@ -32,6 +32,7 @@ import static org.mockito.BDDMockito.given;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -93,7 +94,7 @@ class TenantSettingsControllerSecurityTest {
     }
 
     private TenantSettingsDto buildSettingsDto(boolean mfaRequired) {
-        return new TenantSettingsDto(TENANT_ID, mfaRequired);
+        return TenantSettingsDto.of(TENANT_ID, mfaRequired, 2);
     }
 
     /** See TeamControllerSecurityTest's identical helper for why not @WithMockUser. */
@@ -193,7 +194,10 @@ class TenantSettingsControllerSecurityTest {
             given(tenantSettingsService.getSettings()).willReturn(buildSettingsDto(false));
 
             mockMvc.perform(get("/api/v1/tenants/settings").with(principal("ROLE_ADMIN")))
-                    .andExpect(status().isOk());
+                    .andExpect(status().isOk())
+                    // Backlog #0-90: the admins' warning is part of the answer.
+                    .andExpect(jsonPath("$.activeAdmins").value(2))
+                    .andExpect(jsonPath("$.singleAdmin").value(false));
         }
 
         @Test

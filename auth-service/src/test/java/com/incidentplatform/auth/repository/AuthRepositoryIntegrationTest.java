@@ -9,6 +9,10 @@ import com.incidentplatform.auth.domain.AuthEmailStatus;
 import com.incidentplatform.auth.domain.AuthEmailType;
 import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.MfaBackupCode;
+import com.incidentplatform.auth.domain.MfaRecoveryCloseReason;
+import com.incidentplatform.auth.domain.MfaRecoveryRequest;
+import com.incidentplatform.auth.domain.MfaRecoveryStatus;
+import com.incidentplatform.auth.domain.MfaVerificationMethod;
 import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.SlackWorkspace;
 import com.incidentplatform.auth.domain.Team;
@@ -37,6 +41,7 @@ import com.incidentplatform.auth.service.AuthTokenService;
 import com.incidentplatform.auth.service.IntegrationService;
 import com.incidentplatform.auth.service.ForgotPasswordService;
 import com.incidentplatform.auth.service.InviteService;
+import com.incidentplatform.auth.service.MfaRecoveryService;
 import com.incidentplatform.auth.service.MfaService;
 import com.incidentplatform.auth.service.MfaSessionStatusService;
 import com.incidentplatform.auth.service.PasswordService;
@@ -207,6 +212,8 @@ class AuthRepositoryIntegrationTest {
     @Autowired private ForgotPasswordService forgotPasswordService;
     @Autowired private AuthEmailPersistenceService authEmailPersistenceService;
     @Autowired private MfaService mfaService;
+    @Autowired private MfaRecoveryService mfaRecoveryService;
+    @Autowired private MfaRecoveryRequestRepository mfaRecoveryRequestRepository;
     @Autowired private ApiKeyService apiKeyService;
     @Autowired private ApplicationContext applicationContext;
     @Autowired private PlatformTransactionManager transactionManager;
@@ -257,7 +264,7 @@ class AuthRepositoryIntegrationTest {
     enum BulkUpdate {
         REVOKE_PERSONAL_API_KEYS, TOUCH_API_KEY, INVALIDATE_ALL_REFRESH_TOKENS, INVALIDATE_SESSION,
         INVALIDATE_OTHER_SESSIONS, DELETE_EXPIRED_TOKENS, CLEAR_MFA_VERIFIED, DELETE_BACKUP_CODES,
-        RECORD_MFA_NOTICE
+        RECORD_MFA_NOTICE, RECORD_RECOVERY_NOTICE, CLOSE_RECOVERY_REQUEST
     }
 
     private User persistUser(String email, List<String> roleNames) {
@@ -1299,6 +1306,362 @@ class AuthRepositoryIntegrationTest {
     }
 
     /**
+     * Backlog #0-90: the operator-assisted MFA recovery of a customer tenant's
+     * only admin, through the real services and V29 — the waiting period counts
+     * from the notice's send, the account's cancel link stops it, the reset takes
+     * factor, password, sessions and personal keys, and the checks run again.
+     */
+    @Nested
+    @DisplayName("MFA recovery of a tenant's only admin (backlog #0-90)")
+    class MfaRecovery {
+
+        private static final java.time.Duration NO_TOLERANCE = java.time.Duration.ZERO;
+        private UUID operatorId;
+        private UserPrincipal operator;
+        private String tenant;
+
+        /** A real operator admin: execution checks the requester is still one (security review). */
+        @org.junit.jupiter.api.BeforeEach
+        void operatorAdmin() {
+            final User op = userRepository.saveAndFlush(User.forTesting(null, ReservedTenants.PLATFORM_OPERATOR,
+                    "ops-" + UUID.randomUUID() + "@platform.test", "hash", true, List.of("ROLE_ADMIN")));
+            operatorId = op.getId();
+            operator = new UserPrincipal(operatorId, ReservedTenants.PLATFORM_OPERATOR, op.getEmail(),
+                    List.of("ROLE_ADMIN"), List.of());
+        }
+
+        private void flushAndClear() {
+            entityManager.flush();
+            entityManager.clear();
+        }
+
+        /** A fresh tenant whose only admin has a factor, a backup code, a session and a personal key. */
+        private User soleAdminWithMfa() {
+            tenant = "recovery-" + UUID.randomUUID().toString().substring(0, 8);
+            tenantRepository.insertIfAbsent(tenant, "Recovery test", "admin@" + tenant + ".test", operatorId);
+            final User admin = User.forTesting(null, tenant, "admin@" + tenant + ".test",
+                    passwordEncoder.encode("old-password"), true, List.of("ROLE_ADMIN"));
+            admin.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+            admin.enableMfa();
+            userRepository.saveAndFlush(admin);
+            mfaBackupCodeRepository.saveAndFlush(MfaBackupCode.create(admin, "backup-code-hash"));
+            return admin;
+        }
+
+        private UUID personalKey(User owner) {
+            final String hash = UUID.randomUUID().toString().replace("-", "")
+                    + UUID.randomUUID().toString().replace("-", "");
+            return apiKeyRepository.saveAndFlush(ApiKey.createPersonal(
+                    tenant, "personal key", hash, hash.substring(0, 8), List.of("teams:read"), null, owner)).getId();
+        }
+
+        private boolean keyRevoked(UUID keyId) {
+            return jdbcTemplate.queryForObject("SELECT revoked_at IS NOT NULL FROM api_keys WHERE id = ?",
+                    Boolean.class, keyId);
+        }
+
+        private MfaRecoveryRequest request(User admin) {
+            final UUID id = mfaRecoveryService.request(tenant, admin.getId(),
+                    MfaVerificationMethod.VIDEO_CALL, "Video call, ID card checked", operator).getId();
+            flushAndClear();
+            return mfaRecoveryRequestRepository.findById(id).orElseThrow();
+        }
+
+        /** What AuthEmailScheduler does for the notice: token, send, record. Returns the cancel token. */
+        private String sendNotice(User admin) {
+            final AuthEmailOutbox notice = authEmailOutboxRepository
+                    .findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(admin.getId(), AuthEmailType.MFA_RECOVERY_REQUESTED)
+                    .orElseThrow();
+            final var attempt = (AuthEmailPersistenceService.Attempt.Send)
+                    authEmailPersistenceService.prepareAttempt(notice, Instant.now(), NO_TOLERANCE);
+            assertThat(authEmailPersistenceService.recordSent(notice, Instant.now())).isTrue();
+            flushAndClear();
+            return attempt.rawToken();
+        }
+
+        private void noticeSentHoursAgo(MfaRecoveryRequest request, int hours) {
+            jdbcTemplate.update("UPDATE mfa_recovery_requests SET notice_sent_at = now() - make_interval(hours => ?) "
+                    + "WHERE id = ?", hours, request.getId());
+            flushAndClear();
+        }
+
+        private MfaRecoveryRequest reload(MfaRecoveryRequest request) {
+            flushAndClear();
+            return mfaRecoveryRequestRepository.findById(request.getId()).orElseThrow();
+        }
+
+        @Test
+        @DisplayName("request → notice sent → nothing before 72 h → reset of factor, password, sessions and keys")
+        void fullRecovery() {
+            final User admin = soleAdminWithMfa();
+            final String refresh = authTokenService.generateRefreshToken(admin, tenant, UUID.randomUUID(), Instant.now());
+            final UUID personalKey = personalKey(admin);
+            final String oldHash = admin.getPasswordHash();
+
+            final MfaRecoveryRequest request = request(admin);
+            assertThat(request.getStatus()).isEqualTo(MfaRecoveryStatus.PENDING);
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_recovery_request_id FROM auth_email_outbox "
+                    + "WHERE user_id = ? AND email_type = 'MFA_RECOVERY_REQUESTED'", UUID.class, admin.getId()))
+                    .isEqualTo(request.getId());
+            assertThat(mfaRecoveryService.findDue(20)).as("notice not sent yet").isEmpty();
+
+            final String cancelToken = sendNotice(admin);
+            assertThat(reload(request).getNoticeSentAt()).isNotNull();
+            assertThat(mfaRecoveryService.findDue(20)).as("waiting period running").isEmpty();
+            assertThat(mfaRecoveryService.execute(request.getId())).as("not due: refused").isFalse();
+
+            noticeSentHoursAgo(request, 73);
+            assertThat(mfaRecoveryService.findDue(20)).extracting(MfaRecoveryRequest::getId).contains(request.getId());
+            TenantContext.set(tenant);
+            try {
+                assertThat(mfaRecoveryService.execute(request.getId())).isTrue();
+                flushAndClear();
+            } finally {
+                TenantContext.clear();
+            }
+
+            assertThat(reload(request).getStatus()).isEqualTo(MfaRecoveryStatus.EXECUTED);
+            final java.util.Map<String, Object> row = jdbcTemplate.queryForMap(
+                    "SELECT mfa_enabled, mfa_secret, password_hash FROM users WHERE id = ?", admin.getId());
+            assertThat(row).containsEntry("mfa_enabled", false).containsEntry("mfa_secret", null);
+            assertThat((String) row.get("password_hash")).isNotNull().isNotEqualTo(oldHash);
+            assertThat(passwordEncoder.matches("old-password", (String) row.get("password_hash"))).isFalse();
+            assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM mfa_backup_codes WHERE user_id = ?",
+                    Integer.class, admin.getId())).isZero();
+            assertThat(keyRevoked(personalKey)).isTrue();
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh)).isInstanceOf(BusinessException.class);
+            assertThat(jdbcTemplate.queryForList("SELECT email_type FROM auth_email_outbox WHERE user_id = ? "
+                    + "ORDER BY created_at", String.class, admin.getId()))
+                    .containsExactly("MFA_RECOVERY_REQUESTED", "MFA_RECOVERY_COMPLETED");
+            assertThatThrownBy(() -> mfaRecoveryService.cancelByAccount(cancelToken))
+                    .as("the cancel link dies with the request").isInstanceOf(BusinessException.class);
+            assertThat(mfaRecoveryService.execute(request.getId())).as("runs once").isFalse();
+        }
+
+        @Test
+        @DisplayName("the account's cancel link stops the reset; the link works once")
+        void cancelledByAccount() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            final String cancelToken = sendNotice(admin);
+
+            assertThat(mfaRecoveryService.cancelByAccount(cancelToken)).isTrue();
+            final MfaRecoveryRequest cancelled = reload(request);
+            assertThat(cancelled.getStatus()).isEqualTo(MfaRecoveryStatus.CANCELLED);
+            assertThat(cancelled.getCloseReason()).isEqualTo(MfaRecoveryCloseReason.CANCELLED_BY_ACCOUNT);
+            assertThat(cancelled.getClosedBy()).isEqualTo(admin.getId());
+
+            noticeSentHoursAgo(request, 100);
+            assertThat(mfaRecoveryService.findDue(20)).extracting(MfaRecoveryRequest::getId)
+                    .doesNotContain(request.getId());
+            assertThat(mfaRecoveryService.execute(request.getId())).isFalse();
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, admin.getId())).isTrue();
+            assertThatThrownBy(() -> mfaRecoveryService.cancelByAccount(cancelToken))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("a notice of a request cancelled before it went out is not sent")
+        void noticeOfCancelledRequestSuperseded() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            mfaRecoveryService.cancelByOperator(request.getId(), operator);
+            flushAndClear();
+            final AuthEmailOutbox notice = authEmailOutboxRepository
+                    .findFirstByUserIdAndEmailTypeOrderByCreatedAtDesc(admin.getId(), AuthEmailType.MFA_RECOVERY_REQUESTED)
+                    .orElseThrow();
+
+            assertThat(authEmailPersistenceService.prepareAttempt(notice, Instant.now(), NO_TOLERANCE))
+                    .isInstanceOf(AuthEmailPersistenceService.Attempt.Closed.class);
+        }
+
+        @Test
+        @DisplayName("one open request per user: the service says 409, the partial unique index holds under a race")
+        void oneOpenRequestPerUser() {
+            final User admin = soleAdminWithMfa();
+            request(admin);
+            flushAndClear();
+            assertThatThrownBy(() -> request(admin)).isInstanceOfSatisfying(BusinessException.class,
+                    e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+            assertThatThrownBy(() -> mfaRecoveryRequestRepository.saveAndFlush(MfaRecoveryRequest.open(tenant,
+                    admin.getId(), operatorId, MfaVerificationMethod.OTHER, "race", Instant.now())))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("uq_mfa_recovery_requests_pending_user");
+        }
+
+        @Test
+        @DisplayName("a second admin who appeared during the wait cancels the reset (OTHER_ADMIN_EXISTS)")
+        void otherAdminAppeared() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            sendNotice(admin);
+            userRepository.saveAndFlush(User.forTesting(null, tenant, "second@" + tenant + ".test",
+                    "hash", true, List.of("ROLE_ADMIN")));
+            noticeSentHoursAgo(request, 73);
+
+            assertThat(mfaRecoveryService.execute(request.getId())).isFalse();
+            assertThat(reload(request).getCloseReason()).isEqualTo(MfaRecoveryCloseReason.OTHER_ADMIN_EXISTS);
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, admin.getId())).isTrue();
+        }
+
+        @Test
+        @DisplayName("a request whose notice never went out expires")
+        void undeliveredExpires() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            flushAndClear();
+            assertThat(mfaRecoveryService.findUndelivered(20)).extracting(MfaRecoveryRequest::getId)
+                    .doesNotContain(request.getId());
+            jdbcTemplate.update("UPDATE mfa_recovery_requests SET created_at = now() - INTERVAL '3 days' "
+                    + "WHERE id = ?", request.getId());
+            flushAndClear();
+
+            assertThat(mfaRecoveryService.findUndelivered(20)).extracting(MfaRecoveryRequest::getId)
+                    .contains(request.getId());
+            assertThat(mfaRecoveryService.expire(request.getId())).isTrue();
+            final MfaRecoveryRequest expired = reload(request);
+            assertThat(expired.getStatus()).isEqualTo(MfaRecoveryStatus.EXPIRED);
+            assertThat(expired.getCloseReason()).isEqualTo(MfaRecoveryCloseReason.NOTICE_NOT_DELIVERED);
+        }
+
+        @Test
+        @DisplayName("an admin whose invite is pending is not an active admin: the sole working admin can be recovered, "
+                + "and cannot be demoted")
+        void pendingInviteIsNotAnAdmin() {
+            final User admin = soleAdminWithMfa();
+            userRepository.saveAndFlush(User.forTesting(null, tenant, "invited@" + tenant + ".test",
+                    null, true, List.of("ROLE_ADMIN")));
+
+            assertThat(userRepository.countActiveAcceptedUsersWithRoleExcluding(tenant, Role.ROLE_ADMIN, admin.getId()))
+                    .isZero();
+            assertThat(userRepository.countActiveAcceptedUsersWithRole(tenant, Role.ROLE_ADMIN)).isEqualTo(1);
+            assertThat(request(admin).getStatus()).isEqualTo(MfaRecoveryStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("a request of an operator deactivated during the wait is cancelled, not run (security review)")
+        void operatorDeactivatedDuringWait() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            sendNotice(admin);
+            jdbcTemplate.update("UPDATE users SET active = false WHERE id = ?", operatorId);
+            noticeSentHoursAgo(request, 73);
+
+            assertThat(mfaRecoveryService.execute(request.getId())).isFalse();
+            assertThat(reload(request).getCloseReason()).isEqualTo(MfaRecoveryCloseReason.OPERATOR_NO_LONGER_ADMIN);
+            assertThat(jdbcTemplate.queryForObject("SELECT mfa_enabled FROM users WHERE id = ?",
+                    Boolean.class, admin.getId())).isTrue();
+        }
+
+        @Test
+        @DisplayName("a user is found only in the tenant named; each tenant's list holds its own requests alone")
+        void tenantScoped() {
+            final User adminOfA = soleAdminWithMfa();
+            final String tenantA = tenant;
+            final UUID requestOfA = request(adminOfA).getId();
+            final User adminOfB = soleAdminWithMfa();
+            final String tenantB = tenant;
+            final UUID requestOfB = request(adminOfB).getId();
+
+            assertThatThrownBy(() -> mfaRecoveryService.request(tenantA, adminOfB.getId(),
+                    MfaVerificationMethod.VIDEO_CALL, "wrong tenant", operator))
+                    .isInstanceOf(ResourceNotFoundException.class);
+            assertThat(mfaRecoveryService.list(tenantA, org.springframework.data.domain.PageRequest.of(0, 20)))
+                    .extracting(MfaRecoveryRequest::getId).containsExactly(requestOfA);
+            assertThat(mfaRecoveryService.list(tenantB, org.springframework.data.domain.PageRequest.of(0, 20)))
+                    .extracting(MfaRecoveryRequest::getId).containsExactly(requestOfB);
+        }
+
+        @Test
+        @DisplayName("a cancel link of one tenant does not close a request recorded under another (review)")
+        void cancelLinkOfAnotherTenant() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            final String cancelToken = sendNotice(admin);
+            // A row that disagrees with its user's tenant: the check holds even then.
+            final String otherTenant = "recovery-other-" + UUID.randomUUID().toString().substring(0, 6);
+            jdbcTemplate.update("UPDATE mfa_recovery_requests SET tenant_id = ? WHERE id = ?",
+                    otherTenant, request.getId());
+            flushAndClear();
+
+            assertThat(mfaRecoveryService.cancelByAccount(cancelToken)).isFalse();
+            assertThat(reload(request).getStatus()).isEqualTo(MfaRecoveryStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("a password-reset link requested before the reset dies with it (security review)")
+        void earlierResetLinkInvalidated() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            sendNotice(admin);
+            final String earlierReset = authTokenService.generatePasswordResetTokenWithEntity(admin, tenant).rawToken();
+            flushAndClear();
+            noticeSentHoursAgo(request, 73);
+
+            TenantContext.set(tenant);
+            try {
+                assertThat(mfaRecoveryService.execute(request.getId())).isTrue();
+                flushAndClear();
+            } finally {
+                TenantContext.clear();
+            }
+            assertThatThrownBy(() -> authTokenService.consumeToken(earlierReset, AuthToken.Type.PASSWORD_RESET))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("expiry loses to a notice recorded after the request was read (review)")
+        void expiryLosesToRecordedNotice() {
+            final User admin = soleAdminWithMfa();
+            final MfaRecoveryRequest request = request(admin);
+            assertThat(mfaRecoveryRequestRepository.expireIfUndelivered(request.getId(),
+                    MfaRecoveryCloseReason.NOTICE_NOT_DELIVERED, Instant.now())).isEqualTo(1);
+            flushAndClear();
+
+            final User other = soleAdminWithMfa();
+            final MfaRecoveryRequest sent = request(other);
+            sendNotice(other);
+            assertThat(mfaRecoveryRequestRepository.expireIfUndelivered(sent.getId(),
+                    MfaRecoveryCloseReason.NOTICE_NOT_DELIVERED, Instant.now())).isZero();
+            assertThat(reload(sent).getStatus()).isEqualTo(MfaRecoveryStatus.PENDING);
+        }
+
+        @Test
+        @DisplayName("V29 refuses a close reason on an executed request (review)")
+        void executedHasNoReason() {
+            final User admin = soleAdminWithMfa();
+            assertThatThrownBy(() -> jdbcTemplate.update("INSERT INTO mfa_recovery_requests (id, tenant_id, user_id, "
+                            + "requested_by, verification_method, verification_note, status, created_at, closed_at, "
+                            + "close_reason) VALUES (?, ?, ?, ?, 'VIDEO_CALL', 'n', 'EXECUTED', now(), now(), "
+                            + "'CANCELLED_BY_ACCOUNT')", UUID.randomUUID(), tenant, admin.getId(), operatorId))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("chk_mfa_recovery_requests_executed_no_reason");
+        }
+
+        /** One violation per test: Postgres aborts the transaction at the first. */
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+        @org.junit.jupiter.params.provider.CsvSource({
+                "chk_mfa_recovery_requests_closed, recovery-ok, VIDEO_CALL, EXECUTED, false",
+                "chk_mfa_recovery_requests_method, recovery-ok, EMAIL, PENDING, false",
+                "chk_mfa_recovery_requests_status, recovery-ok, VIDEO_CALL, DONE, true",
+                "chk_mfa_recovery_requests_close_reason_set, recovery-ok, VIDEO_CALL, CANCELLED, true",
+                "chk_mfa_recovery_requests_tenant_id_slug, Bad Tenant, VIDEO_CALL, PENDING, false"})
+        @DisplayName("V29 refuses a closed row without closed_at, an unknown method or status, a malformed tenant")
+        void constraints(String constraint, String tenantId, String method, String status, boolean closed) {
+            final User admin = soleAdminWithMfa();
+            assertThatThrownBy(() -> jdbcTemplate.update("INSERT INTO mfa_recovery_requests (id, tenant_id, user_id, "
+                            + "requested_by, verification_method, verification_note, status, created_at, closed_at) "
+                            + "VALUES (?, ?, ?, ?, ?, 'n', ?, now(), CASE WHEN ? THEN now() END)",
+                    UUID.randomUUID(), tenantId, admin.getId(), operatorId, method, status, closed))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining(constraint);
+        }
+    }
+
+    /**
      * Backlog #0-51: {@code chk_auth_token_type} listed three token types
      * while {@link AuthToken.Type} had five, so every MFA token INSERT failed
      * on a real database and MFA login was a 500. Storing one token of every
@@ -2268,6 +2631,9 @@ class AuthRepositoryIntegrationTest {
                 case CLEAR_MFA_VERIFIED -> authTokenRepository.clearMfaVerified(userId, TENANT_ID);
                 case DELETE_BACKUP_CODES -> mfaBackupCodeRepository.deleteAllByUserId(userId);
                 case RECORD_MFA_NOTICE -> userRepository.recordMfaEnabledNoticeSent(userId, TENANT_ID, now, now);
+                case RECORD_RECOVERY_NOTICE -> mfaRecoveryRequestRepository.recordNoticeSent(UUID.randomUUID(), now);
+                case CLOSE_RECOVERY_REQUEST -> mfaRecoveryRequestRepository.close(
+                        UUID.randomUUID(), MfaRecoveryStatus.EXPIRED, null, null, now);
             }
             entityManager.clear();
 
@@ -2559,12 +2925,12 @@ class AuthRepositoryIntegrationTest {
         }
 
         @Test
-        @DisplayName("countActiveUsersWithRoleExcluding excludes the given user from the count")
-        void countActiveUsersWithRoleExcludingExcludesGivenUser() {
+        @DisplayName("countActiveAcceptedUsersWithRoleExcluding excludes the given user from the count")
+        void countActiveAcceptedUsersWithRoleExcludingExcludesGivenUser() {
             final User admin1 = persistUser("admin1@example.com", List.of("ROLE_ADMIN"));
             persistUser("admin2@example.com", List.of("ROLE_ADMIN"));
 
-            final long count = userRepository.countActiveUsersWithRoleExcluding(
+            final long count = userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, admin1.getId());
 
             // Only admin2 counted — admin1 is the excluded user.
@@ -2572,12 +2938,12 @@ class AuthRepositoryIntegrationTest {
         }
 
         @Test
-        @DisplayName("countActiveUsersWithRoleExcluding does not count a different role")
-        void countActiveUsersWithRoleExcludingDoesNotCountDifferentRole() {
+        @DisplayName("countActiveAcceptedUsersWithRoleExcluding does not count a different role")
+        void countActiveAcceptedUsersWithRoleExcludingDoesNotCountDifferentRole() {
             final User admin = persistUser("solo-admin@example.com", List.of("ROLE_ADMIN"));
             persistUser("responder@example.com", List.of("ROLE_RESPONDER"));
 
-            final long count = userRepository.countActiveUsersWithRoleExcluding(
+            final long count = userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, admin.getId());
 
             assertThat(count).isZero();

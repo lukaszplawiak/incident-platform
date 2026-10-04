@@ -1,8 +1,10 @@
 package com.incidentplatform.auth.service;
 
+import com.incidentplatform.auth.domain.Role;
 import com.incidentplatform.auth.domain.TenantSettings;
 import com.incidentplatform.auth.dto.TenantSettingsDto;
 import com.incidentplatform.auth.repository.TenantSettingsRepository;
+import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.security.TenantContext;
@@ -22,18 +24,21 @@ public class TenantSettingsService {
 
     private final TenantSettingsRepository settingsRepository;
     private final AuditEventPublisher auditEventPublisher;
+    private final UserRepository userRepository;
 
     public TenantSettingsService(TenantSettingsRepository settingsRepository,
-                                 AuditEventPublisher auditEventPublisher) {
+                                 AuditEventPublisher auditEventPublisher,
+                                 UserRepository userRepository) {
         this.settingsRepository = settingsRepository;
         this.auditEventPublisher = auditEventPublisher;
+        this.userRepository = userRepository;
     }
 
     @Transactional(readOnly = true)
     public TenantSettingsDto getSettings() {
         final String tenantId = TenantContext.get();
         final TenantSettings settings = getOrCreateDefaults(tenantId);
-        return new TenantSettingsDto(tenantId, settings.isMfaRequired());
+        return TenantSettingsDto.of(tenantId, settings.isMfaRequired(), activeAdmins(tenantId));
     }
 
     @Transactional
@@ -58,7 +63,16 @@ public class TenantSettingsService {
         log.info("Tenant MFA policy updated: tenant={}, mfaRequired={}, by={}",
                 tenantId, mfaRequired, principal.userId());
 
-        return new TenantSettingsDto(tenantId, mfaRequired);
+        return TenantSettingsDto.of(tenantId, mfaRequired, activeAdmins(tenantId));
+    }
+
+    /**
+     * Backlog #0-90: the settings warn a tenant's admins while it has one
+     * active admin, the prevention side of the operator's MFA recovery (a
+     * second admin can reset the first one's MFA at once, #0-88).
+     */
+    private long activeAdmins(String tenantId) {
+        return userRepository.countActiveAcceptedUsersWithRole(tenantId, Role.ROLE_ADMIN);
     }
 
     /**

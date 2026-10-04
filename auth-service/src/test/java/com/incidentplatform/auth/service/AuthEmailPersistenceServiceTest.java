@@ -7,6 +7,7 @@ import com.incidentplatform.auth.domain.AuthToken;
 import com.incidentplatform.auth.domain.User;
 import com.incidentplatform.auth.repository.AuthEmailOutboxRepository;
 import com.incidentplatform.auth.repository.AuthTokenRepository;
+import com.incidentplatform.auth.repository.MfaRecoveryRequestRepository;
 import com.incidentplatform.auth.repository.UserRepository;
 import com.incidentplatform.auth.service.AuthEmailPersistenceService.Attempt;
 import com.incidentplatform.auth.service.AuthTokenService.GeneratedToken;
@@ -49,6 +50,7 @@ class AuthEmailPersistenceServiceTest {
     @Mock private AuthTokenRepository tokenRepository;
     @Mock private AuthTokenService tokenService;
     @Mock private UserRepository userRepository;
+    @Mock private MfaRecoveryRequestRepository recoveryRequestRepository;
 
     private AuthEmailPersistenceService service;
 
@@ -62,7 +64,7 @@ class AuthEmailPersistenceServiceTest {
     void setUp() {
         meters = new SimpleMeterRegistry();
         service = new AuthEmailPersistenceService(
-                outboxRepository, tokenRepository, tokenService, userRepository, meters);
+                outboxRepository, tokenRepository, tokenService, userRepository, recoveryRequestRepository, meters);
         user = User.forTesting(UUID.randomUUID(), TENANT_ID, "user@firma.pl", null, true,
                 List.of("ROLE_RESPONDER"));
     }
@@ -115,6 +117,52 @@ class AuthEmailPersistenceServiceTest {
 
             assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE)).isInstanceOf(Attempt.Send.class);
             then(tokenRepository).should().invalidateValidTokens(eq(user.getId()), eq(AuthToken.Type.INVITE), any());
+        }
+
+        @Test
+        @DisplayName("an MFA recovery notice of an open request gets a cancel token (backlog #0-90)")
+        void mfaRecoveryNoticeToken() {
+            final UUID requestId = UUID.randomUUID();
+            final AuthEmailOutbox entry = AuthEmailOutbox.requestAboutMfaRecovery(user, requestId, Duration.ofHours(24));
+            userExists();
+            given(recoveryRequestRepository.isPending(requestId)).willReturn(true);
+            final AuthToken token = AuthToken.create(user, TENANT_ID, "h", AuthToken.Type.MFA_RECOVERY_CANCEL,
+                    Instant.now().plusSeconds(3600));
+            given(tokenService.generateMfaRecoveryCancelTokenWithEntity(user, TENANT_ID))
+                    .willReturn(new GeneratedToken("raw", token));
+            final Instant now = Instant.now();
+
+            assertThat(service.prepareAttempt(entry, now, TOLERANCE)).isEqualTo(new Attempt.Send("raw", token.getId()));
+            then(tokenRepository).should().invalidateValidTokens(user.getId(), AuthToken.Type.MFA_RECOVERY_CANCEL, now);
+            then(outboxRepository).should(never()).existsByUserIdAndEmailTypeAndCreatedAtAfter(any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("an MFA recovery notice of a request that has ended is SUPERSEDED, unsent (backlog #0-90)")
+        void mfaRecoveryNoticeOfEndedRequest() {
+            final UUID requestId = UUID.randomUUID();
+            final AuthEmailOutbox entry = AuthEmailOutbox.requestAboutMfaRecovery(user, requestId, Duration.ofHours(24));
+            userExists();
+            given(recoveryRequestRepository.isPending(requestId)).willReturn(false);
+            given(outboxRepository.close(entry.getId(), AuthEmailStatus.SUPERSEDED,
+                    "MFA recovery request no longer pending")).willReturn(1);
+
+            assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE)).isEqualTo(new Attempt.Closed(
+                    AuthEmailStatus.SUPERSEDED, "MFA recovery request no longer pending"));
+            then(tokenService).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("a completed MFA recovery carries a password-reset token (backlog #0-90)")
+        void mfaRecoveryCompletedToken() {
+            final AuthEmailOutbox entry = request(AuthEmailType.MFA_RECOVERY_COMPLETED, Duration.ofHours(24));
+            userExists();
+            noNewerRequest();
+            given(tokenService.generatePasswordResetTokenWithEntity(user, TENANT_ID)).willReturn(new GeneratedToken(
+                    "raw", AuthToken.create(user, TENANT_ID, "h", AuthToken.Type.PASSWORD_RESET, Instant.now())));
+
+            assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE)).isInstanceOf(Attempt.Send.class);
+            then(tokenRepository).should().invalidateValidTokens(eq(user.getId()), eq(AuthToken.Type.PASSWORD_RESET), any());
         }
 
         @Test
@@ -280,6 +328,22 @@ class AuthEmailPersistenceServiceTest {
             assertThat(service.recordSent(entry, now)).as("already closed: nothing recorded").isFalse();
             then(userRepository).should(org.mockito.Mockito.times(1))
                     .recordMfaEnabledNoticeSent(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("a sent MFA recovery notice starts its request's waiting period, once (backlog #0-90)")
+        void recordSentMfaRecoveryNotice() {
+            final UUID requestId = UUID.randomUUID();
+            final AuthEmailOutbox entry = AuthEmailOutbox.requestAboutMfaRecovery(user, requestId, Duration.ofHours(24));
+            final Instant now = Instant.now();
+            given(outboxRepository.markSent(entry.getId(), now)).willReturn(1, 1, 0);
+            given(recoveryRequestRepository.recordNoticeSent(requestId, now)).willReturn(1, 0);
+
+            assertThat(service.recordSent(entry, now)).isTrue();
+            assertThat(service.recordSent(entry, now)).as("request cancelled meanwhile: still SENT").isTrue();
+            assertThat(service.recordSent(entry, now)).as("already closed: nothing recorded").isFalse();
+            then(recoveryRequestRepository).should(org.mockito.Mockito.times(2)).recordNoticeSent(requestId, now);
+            then(userRepository).shouldHaveNoInteractions();
         }
 
         @Test

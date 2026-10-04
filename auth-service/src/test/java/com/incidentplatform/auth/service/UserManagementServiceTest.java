@@ -104,7 +104,7 @@ class UserManagementServiceTest {
             final User user = buildUser("ROLE_ADMIN");
             given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(userRepository.countActiveUsersWithRoleExcluding(
+            given(userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, USER_ID))
                     .willReturn(0L);
 
@@ -123,7 +123,7 @@ class UserManagementServiceTest {
             final User user = buildUser("ROLE_ADMIN");
             given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(userRepository.countActiveUsersWithRoleExcluding(
+            given(userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, USER_ID))
                     .willReturn(1L);
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
@@ -147,7 +147,7 @@ class UserManagementServiceTest {
                     new UpdateUserRolesRequest(List.of("ROLE_ADMIN", "ROLE_RESPONDER")));
 
             then(userRepository).should(never())
-                    .countActiveUsersWithRoleExcluding(any(), any(), any());
+                    .countActiveAcceptedUsersWithRoleExcluding(any(), any(), any());
         }
     }
 
@@ -188,7 +188,7 @@ class UserManagementServiceTest {
             final User user = buildUser("ROLE_ADMIN");
             given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(userRepository.countActiveUsersWithRoleExcluding(
+            given(userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, USER_ID))
                     .willReturn(0L);
 
@@ -207,7 +207,7 @@ class UserManagementServiceTest {
             final User user = buildUser("ROLE_ADMIN");
             given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(userRepository.countActiveUsersWithRoleExcluding(
+            given(userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, USER_ID))
                     .willReturn(1L);
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
@@ -230,7 +230,7 @@ class UserManagementServiceTest {
             service.updateStatus(USER_ID, new UpdateUserStatusRequest(true));
 
             then(userRepository).should(never())
-                    .countActiveUsersWithRoleExcluding(any(), any(), any());
+                    .countActiveAcceptedUsersWithRoleExcluding(any(), any(), any());
         }
     }
 
@@ -307,7 +307,7 @@ class UserManagementServiceTest {
             final User user = buildUser("ROLE_ADMIN");
             given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(userRepository.countActiveUsersWithRoleExcluding(
+            given(userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, USER_ID))
                     .willReturn(0L);
 
@@ -326,7 +326,7 @@ class UserManagementServiceTest {
             final User user = buildUser("ROLE_ADMIN");
             given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID))
                     .willReturn(Optional.of(user));
-            given(userRepository.countActiveUsersWithRoleExcluding(
+            given(userRepository.countActiveAcceptedUsersWithRoleExcluding(
                     TENANT_ID, Role.ROLE_ADMIN, USER_ID))
                     .willReturn(1L);
             given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));

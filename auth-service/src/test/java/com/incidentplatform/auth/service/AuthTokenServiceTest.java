@@ -128,6 +128,37 @@ class AuthTokenServiceTest {
         }
     }
 
+    // ── generateMfaRecoveryCancelTokenWithEntity (backlog #0-90) ─────────
+
+    @Nested
+    @DisplayName("generateMfaRecoveryCancelTokenWithEntity (backlog #0-90)")
+    class GenerateMfaRecoveryCancelToken {
+
+        @Test
+        @DisplayName("persists an MFA_RECOVERY_CANCEL token living 14 days, the raw token only in the result")
+        void persistsCancelToken() {
+            final var generated = service.generateMfaRecoveryCancelTokenWithEntity(user, TENANT_ID);
+
+            final ArgumentCaptor<AuthToken> captor = ArgumentCaptor.forClass(AuthToken.class);
+            then(tokenRepository).should().save(captor.capture());
+            final AuthToken saved = captor.getValue();
+            assertThat(saved.getType()).isEqualTo(AuthToken.Type.MFA_RECOVERY_CANCEL);
+            assertThat(saved.getExpiresAt()).isBetween(
+                    Instant.now().plus(java.time.Duration.ofDays(14)).minusSeconds(5),
+                    Instant.now().plus(java.time.Duration.ofDays(14)).plusSeconds(5));
+            assertThat(saved.getTokenHash()).isNotEqualTo(generated.rawToken());
+            assertThat(AuthTokenService.emailTokenLifetime(AuthToken.Type.MFA_RECOVERY_CANCEL))
+                    .isEqualTo(java.time.Duration.ofDays(14));
+        }
+
+        @Test
+        @DisplayName("the cancel link outlives the longest waiting period a deployment may set")
+        void outlivesLongestWaitingPeriod() {
+            assertThat(AuthTokenService.MFA_RECOVERY_CANCEL_TTL)
+                    .isGreaterThan(com.incidentplatform.auth.config.MfaRecoveryProperties.MAX_WAITING_PERIOD);
+        }
+    }
+
     // ── generateRefreshToken ──────────────────────────────────────────────
 
     @Nested
