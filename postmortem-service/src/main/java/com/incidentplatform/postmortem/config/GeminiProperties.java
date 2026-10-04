@@ -19,9 +19,11 @@ import org.springframework.validation.annotation.Validated;
  * <h2>Security note — api-key</h2>
  * The API key is a secret and must never be committed to source control.
  * Always inject via environment variable: {@code GEMINI_API_KEY}.
- * The default value {@code "your-api-key-here"} in {@code application.yml}
- * is a placeholder — the application will start but Gemini calls will fail
- * with 401 until a real key is provided.
+ * {@code application.yml} has no default (backlog #0-81: a secret in the base
+ * config is a {@code ${VAR}} without default, checked in CI), so a run without
+ * the variable does not start. docker-compose passes a placeholder
+ * ({@code your-api-key-here}) that starts the service with Gemini calls
+ * failing with 401 until a real key is provided.
  *
  * <h2>YAML configuration</h2>
  * <pre>{@code

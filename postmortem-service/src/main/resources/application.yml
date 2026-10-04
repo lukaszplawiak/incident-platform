@@ -123,7 +123,9 @@ kafka:
     retention-days: ${DEAD_LETTER_RETENTION_DAYS:30}
 
 gemini:
-  api-key: ${GEMINI_API_KEY:your-api-key-here}
+  # Backlog #0-81: no default; compose and every k8s overlay set GEMINI_API_KEY,
+  # a local run takes it from application-local.yml.
+  api-key: ${GEMINI_API_KEY}
   base-url: https://generativelanguage.googleapis.com
   model: gemini-2.0-flash
   timeout-seconds: ${GEMINI_TIMEOUT_SECONDS:30}
