@@ -78,7 +78,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
 | [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
-| [0-82](#0-82-suspend-and-offboard-a-tenant) | Suspend and offboard a tenant | design | Medium | Open |
+| [0-82](#0-82-suspend-and-offboard-a-tenant) | Suspend and offboard a tenant (offboarding: #0-101) | design | Medium | In progress |
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
 | [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
@@ -89,6 +89,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-98](#0-98-mfa-recovery-verifies-the-person-by-procedure-only) | MFA recovery verifies the person by procedure only | design | Low | Open |
 | [0-99](#0-99-public-token-endpoints-have-no-request-limit) | Public token endpoints have no request limit | security | Low | Open |
 | [0-100](#0-100-a-locally-built-jar-contains-the-developers-application-localyml) | A locally built jar contains the developer's `application-local.yml` | tech-debt | Low | Open |
+| [0-101](#0-101-offboard-a-tenant) | Offboard a tenant | design | Medium | Open |
 
 ---
 
@@ -1186,10 +1187,10 @@ when the services have taken every other connection, which is the reserve's purp
 
 ### 0-82. Suspend and offboard a tenant
 
-**Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-80)
+**Type:** design · **Priority:** Medium · **Status:** In progress, step 1 of 2 (split out of #0-80; offboarding moved to #0-101)
 
-**Problem.** Since #0-80 a platform operator creates tenants (`POST /api/v1/platform/tenants`), but
-nothing ends one. A customer who stops paying, breaches terms or leaves keeps logging in, its
+**Problem.** (As written before step 1.) Since #0-80 a platform operator creates tenants
+(`POST /api/v1/platform/tenants`), but nothing ends one. A customer who stops paying, breaches terms or leaves keeps logging in, its
 Integration API keys keep filing alerts, and its data stays in all seven services. Today the only
 lever is archiving its users one by one in the database.
 
@@ -1210,10 +1211,42 @@ lever is archiving its users one by one in the database.
   Slack workspace) and in Redis. Needs an orchestrated, resumable job across services, a retention
   decision for the audit log, and the same PII considerations as #0-48.
 
-**Approach.** Design first. Add a `status` column to `tenants` (V21 deliberately has none) with
+**Approach.** (The original sketch; what was decided, and what step 1 did, follows below under
+**Decided** and **Progress**.) Design first. Add a `status` column to `tenants` (V21 deliberately has none) with
 `ACTIVE` / `SUSPENDED` / `OFFBOARDING` / `OFFBOARDED`, operator endpoints under
 `/api/v1/platform/tenants/{id}` with the same `PlatformAccess` rule, audit events in the operator
 tenant, and the enforcement points above. Suspension first; offboarding is larger and can follow.
+
+**Decided (2026-10-04, from the enterprise pattern: Azure tenant life cycle, AWS SaaS Lens).** Two
+suspension modes, `FULL` (a taken-over tenant, a terms breach) and `READ_ONLY` (a billing hold: reads,
+account security), with a reason and a note; background work of a suspended tenant is paused and
+resumed, not dropped; three steps: (1) the status, the operator API and enforcement in auth-service
+plus a shared filter every chain carries; (2) enforcement everywhere: the other services read the
+status (a cached pull from auth-service, like notification-service's Slack workspace; last known value
+when auth-service is down), `TenantStatusFilter` closes the access-token window, Kafka consumers park a
+suspended tenant's records in a table and replay them on resume (a record cannot be held without
+blocking its partition), schedulers skip the tenant, STOMP connections close; (3) offboarding, its own
+item: #0-101.
+
+**Progress.** Step 1: PR #TBD (V30, `TenantLifecycleService`, `TenantAccessService`,
+`TenantStatusFilter`; see the README "Tenant suspension" control). Decided in the review of step 1: a
+`SECURITY` suspension must be `FULL` (400 in `TenantLifecycleService`, CHECK
+`chk_tenants_security_suspension_full` in V30), since read-only keeps an intruder's sessions and the
+account-security writes it allows (others' MFA, deactivation). In step 1 already: a read-only
+tenant's alerts are paused, not refused: introspection answers `paused:true` and ingestion-service
+503 + `Retry-After` (Alertmanager retries 5xx, drops 4xx), as a successful answer so its circuit
+breaker is not tripped for every tenant; a full suspension's alerts get 401. Left for step 2 (or a
+foreign key): a tenant with users but no `tenants` row has full access and cannot be suspended — none
+should exist; it is counted, alerted (`PlatformTenantStatusRowMissing`) and logged once. Also left for
+step 2 (found in the review of step 1): a key ingestion-service cached in the minute before a full
+suspension still files alerts for the rest of that minute; a fully suspended tenant's key is answered
+like a revoked one, so its sender's retries count against the IP's failed-authentication limit (a
+shared NAT could throttle others); a sign-in refused for suspension is neither audited nor counted;
+`findByIdForUpdate` (suspend, resume) waits without a `lock_timeout` (sign-ins are bounded at 3 s); the other services will need a short-lived cache
+of the status (5-10 s), not a lookup per request; a short cache (5-10 s) of ingestion's paused
+introspection answers, so a sender that ignores Retry-After cannot turn every alert into an
+auth-service call; a sign-in that loses a deadlock to a suspension's session cleanup gets a 500,
+not 503 + Retry-After. Step 2: open.
 
 ---
 
@@ -1290,7 +1323,8 @@ approves it (four eyes), so a thief who holds both the password and the mailbox 
 the platform API alone. Needs at least two operator admins, and a recovery path for a deployment
 with one (suggested in the review of #0-83).
 
-**When.** If the platform API gains more powerful actions (#0-82), or a deployment has several
+**When.** If the platform API gains more powerful actions (suspension, #0-82, has landed and is
+alerted on every change; offboarding, #0-101, would be the next), or a deployment has several
 operators.
 
 ---
@@ -1450,6 +1484,27 @@ Spring Boot also loads from the working directory), which needs the README "Step
 the Makefile changed.
 
 **When.** Whenever `service-parent` is next touched, or before anyone hands a locally built jar on.
+
+---
+
+### 0-101. Offboard a tenant
+
+**Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-82)
+
+**Problem.** A tenant can be suspended (#0-82) but not ended: a customer who leaves keeps its data in all
+seven services (incidents, audit, notifications, on-call, postmortems, users, teams, keys, Slack
+workspace) and in Redis, with no export and no deletion short of editing the databases.
+
+**Approach.** The pattern of Azure's tenant life cycle and AWS SaaS Lens: on request, suspend the tenant
+in full and move it to `OFFBOARDING`; export its data (a signed link to the account owner for a limited
+time); a grace period in which it can still be resumed; then an orchestrated, resumable, idempotent
+deletion in every service (an internal per-service "delete tenant" step, the orchestrator in auth-service
+recording each one), Redis included; then `OFFBOARDED`, a tombstone that keeps the id taken (ties into
+#0-85). Decide first: the export format, the grace period, the audit trail's retention (often longer than
+the customer), backups, and whether the destructive step needs a second operator (#0-87). Run it from an
+approval, keep a tested runbook.
+
+**When.** Before the first customer leaves, or the first erasure request for a whole organisation.
 
 ---
 

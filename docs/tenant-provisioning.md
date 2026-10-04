@@ -1,7 +1,8 @@
 # Tenant provisioning
 
 How a customer tenant comes into existence, and how its first admin gets in. Background: backlog
-#0-80 (fixed); suspending and offboarding a tenant is backlog #0-82 (open).
+#0-80 (fixed); suspending a tenant: backlog #0-82 ([below](#suspend-or-resume-a-tenant)); offboarding
+it: backlog #0-101 (open).
 
 ## The model
 
@@ -53,11 +54,14 @@ How a customer tenant comes into existence, and how its first admin gets in. Bac
   apart from the delayed, announced MFA recovery of a tenant's only admin
   ([below](#a-customer-tenants-only-admin-is-locked-out-of-mfa), backlog #0-90), cannot act in it:
   the platform API creates tenants, reissues the first invite while nobody in the tenant can log in
-  as an admin, and shows and lists tenants' metadata (never their data). Everything else is the
-  tenant admin's (users, teams, integrations, Slack, MFA policy).
+  as an admin, suspends and resumes a tenant ([below](#suspend-or-resume-a-tenant), backlog #0-82:
+  its status, never data inside it), and shows and lists tenants' metadata (never their data).
+  Everything else is the tenant admin's (users, teams, integrations, Slack, MFA policy).
 - Every action is audited twice: in the operator tenant (`TENANT_PROVISIONED`,
-  `TENANT_ADMIN_REINVITED`: which operator did what to which tenant) and in the new tenant
-  (`USER_CREATED`, `USER_INVITE_*`). The operator-tenant events carry the admin's email address, so
+  `TENANT_ADMIN_REINVITED`, `TENANT_SUSPENDED`, `TENANT_RESUMED`: which operator did what to which
+  tenant, with the operator's note) and in the customer tenant (`USER_CREATED`, `USER_INVITE_*`;
+  `TENANT_SUSPENDED` / `TENANT_RESUMED` with actor `platform-operator`, mode and reason, without the
+  note). The operator-tenant events carry the admin's email address, so
   an erasure request for that person covers them too (anonymizing a user does not touch the audit
   log; backlog #0-48).
 
@@ -266,7 +270,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
     [Tenants that existed before V21](#tenants-that-existed-before-v21).
   - *archived or removed*: the first admin's account was archived or anonymized. The reissue never
     creates a user, so it does not invite anyone back into a tenant that was wound down; reopening one
-    needs a tenant status (backlog #0-82).
+    is not something the API does (a tenant's end of life is backlog #0-101).
   - *users need a person to fix them*: see below.
   - *reserved by the platform*: `platform-operator` and `system` are not managed through this API;
     the operator tenant invites its own admin (`OPERATOR_ADMIN_EMAIL`, README "Step 5").
@@ -308,8 +312,8 @@ Then decide with the customer:
   ```
 
 - **First admin archived or anonymized**: the tenant was wound down on purpose, by its admins or
-  by an erasure request. The API does not reopen it; reopening a tenant needs a tenant status
-  (backlog #0-82). Until then, provision the customer under a new id.
+  by an erasure request. The API does not reopen it (a tenant's end of life is backlog #0-101). Provision
+  the customer under a new id.
 
 Record every such change and its reason in your ticketing system: a database edit publishes no audit
 event.
@@ -463,8 +467,10 @@ out (`OTHER_ADMIN_EXISTS`). That is the attacker of the case this exists for (a 
 enrolled with a stolen password, the mailbox perhaps too). Both page the operator. From there it is a
 person's decision, through the channel of step 1: with the customer confirmed, the second admin
 (if the customer's own) resets the factor (`POST /api/v1/users/{id}/mfa-reset`); a second admin the
-customer does not know, or a mailbox that keeps cancelling, means the account is taken over, which
-the platform API cannot settle today (suspending a tenant is backlog #0-82).
+customer does not know, or a mailbox that keeps cancelling, means the account is taken over: suspend
+the tenant in full ([below](#suspend-or-resume-a-tenant)), which ends every session and stops its
+keys, settle it with the customer, recover its admin (a recovery runs while the tenant is suspended)
+and resume it.
 
 **An operator account found compromised.** Deactivating it (or removing its admin role) is enough
 for its open requests: each is cancelled when its time comes (`OPERATOR_NO_LONGER_ADMIN`). Cancel
@@ -477,7 +483,80 @@ Each step is audited in both tenants (`MFA_RECOVERY_REQUESTED`, `_CANCELLED`, `_
 admin to the tenant: tenant settings (`GET /api/v1/tenants/settings`) show `singleAdmin: true` until
 there is one.
 
+## Suspend or resume a tenant
+
+A customer who stops paying, breaches the terms, or whose accounts are in someone else's hands is
+suspended, not deleted (backlog #0-82): its data stays and resuming brings everything back. Same rules
+as every platform call (operator admin, recent MFA login, factor older than 24 h, the write limits).
+Two modes:
+
+- **`FULL`** (a taken-over tenant, a terms breach): nothing works for its users and API keys. Every
+  session and unfinished login of the tenant ends at once; sign-ins, accepting invites and password
+  resets are refused, 403 `TENANT_SUSPENDED`. Its API keys are answered like unknown ones, 401, in
+  auth-service and in ingestion-service: Alertmanager drops an alert refused with a 4xx, so alerts
+  sent during a full suspension are lost, which is the point of it. (A key ingestion-service checked in
+  the minute before the suspension may still file alerts for the rest of that minute, its cache.)
+- **`READ_ONLY`** (a billing hold): its users still log in and read; every write is 403
+  `TENANT_READ_ONLY`, accepting an invite included, except account security: logout, password
+  change, MFA, and an admin revoking an API key (one, or every key a user created) or an
+  integration, deactivating a user or resetting their MFA, so a billing hold never stops anyone
+  from securing their account or shutting out a leaked key. Reactivating a user is refused. A
+  password reset also works: it is a public path that refuses only a full suspension.
+  Sessions stay. Alerts are paused,
+  not lost: ingestion-service answers them 503 with `Retry-After: 300` and `TENANT_READ_ONLY`, so
+  Alertmanager retries with its own backoff and sends alerts that are still firing again at its next
+  interval; they are filed once the tenant is resumed (an alert that resolved in the meantime is not
+  filed as firing). A key already checked in the minute before the suspension may still
+  file alerts for the rest of that minute (ingestion-service's cache, the same window as revoking a
+  key).
+
+```bash
+curl -s -X POST "http://localhost:8087/api/v1/platform/tenants/acme/suspend" \
+  -H "Authorization: Bearer $OP_TOKEN" -H "Content-Type: application/json" \
+  -d '{"mode":"READ_ONLY","reason":"BILLING","note":"Invoice 2026-09 unpaid, ticket #4411"}'
+```
+
+`reason` is `SECURITY`, `BILLING`, `TERMS` or `OTHER`; a `SECURITY` suspension must be `FULL` (400
+otherwise): read-only keeps the sessions of whoever took the accounts over, and lets an admin reset
+others' MFA and deactivate them. Whatever the label, suspend any tenant you suspect was taken over
+in `FULL`: the rule keys on the reason, so a takeover filed as `OTHER` would not be caught by it.
+`note` is one line of at most 500 characters,
+kept in the operator tenant's audit trail. The same call changes how a suspended tenant is suspended
+(read-only to full ends the sessions then; the first suspension's time is kept). To resume:
+
+```bash
+curl -s -X POST "http://localhost:8087/api/v1/platform/tenants/acme/resume" \
+  -H "Authorization: Bearer $OP_TOKEN" -H "Content-Type: application/json" \
+  -d '{"note":"Paid in full"}'
+```
+
+`GET /api/v1/platform/tenants/acme` shows `status`, `suspensionMode`, `suspensionReason`,
+`suspensionNote`, `suspendedAt` and `suspendedBy`.
+
+What a suspension does and does not do:
+
+- Nothing is deleted or revoked: resumed, its API keys work again and its users log in again. The
+  sessions a full suspension ended stay ended.
+- An invite (and, in full, a password-reset email) waits while the tenant is suspended and goes out
+  once it is resumed, if it is still within its deadline; otherwise send it again. Security notices
+  (MFA changes, API keys) and MFA recovery emails go out regardless.
+- An operator-assisted MFA recovery (above) is not stopped: it is the platform's own action, and a
+  taken-over tenant is typically suspended in full, its admin recovered, and then resumed.
+- `platform-operator` cannot be suspended (it would lock the operators out of the API that resumes it).
+- Two operators acting on one tenant at once are serialised (a row lock); a login, refresh or MFA
+  login racing a full suspension either finishes before it, and its session is ended with the
+  others, or is refused. A sign-in that has to wait more than 3 s for a suspension in progress gets
+  503 with `Retry-After` and can simply retry.
+- **Not yet in the other services** (the second step of #0-82): an access token issued before the
+  suspension still works in them for up to its 15 minutes (auth-service refuses it at once), and
+  work already in the platform (alerts accepted before the suspension, notifications, escalations,
+  postmortems) goes on.
+
+Every suspension, change and resumption is audited in both tenants (`TENANT_SUSPENDED`,
+`TENANT_RESUMED`; the note only in the operator tenant's) and alerts the operator
+(`PlatformTenantSuspensionChanged`, critical).
+
 ## Not here yet
 
-Suspending a tenant (refusing its logins, API keys and tokens) and offboarding it (exporting and
-deleting its data in all seven services) are backlog #0-82.
+Offboarding a tenant (exporting and deleting its data in all seven services, with a grace period
+and a retention decision for the audit trail) is backlog #0-101.

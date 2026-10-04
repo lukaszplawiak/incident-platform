@@ -257,9 +257,10 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
   over an assigned id, #0-47; plus the first admin through `UserService.createUser` in the new tenant's
   `TenantContext`, one transaction; refused if the id has users, archived ones included), reissue the
   first invite (`TenantAdminReconciler`, shared with `OperatorTenantBootstrap`; never creates a user, so an
-  archived first admin is not revived, #0-82), show and list metadata. This is the one cross-tenant capability, a narrow reversal
-  of #0-16; audit types `TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` in the operator tenant.
-  Suspension and offboarding: #0-82. Guide: docs/tenant-provisioning.md.
+  archived first admin is not revived; a tenant's end of life is #0-101), show and list metadata. This is the one cross-tenant capability, a narrow reversal
+  of #0-16; audit types `TENANT_PROVISIONED` / `TENANT_ADMIN_REINVITED` in the operator tenant, and `TENANT_SUSPENDED`
+  / `TENANT_RESUMED` (#0-82) in both the operator and the customer tenant (the operator's note only in the former).
+  Suspension: #0-82 (below); offboarding: #0-101. Guide: docs/tenant-provisioning.md.
 - **Platform API step-up and limit (#0-83)**: `PlatformAccess` also requires that the access token's
   session completed MFA within `platform.mfa.max-session-age` (12 h) and that the MFA_ENABLED notice of the
   account's current factor was sent at least `platform.mfa.enrolment-grace` (24 h) ago.
@@ -354,7 +355,8 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (`countAfterCommit`), so a rollback raises no critical alert. `execute` locks the target user row
     (`findByIdAndTenantIdForUpdate`, NOWAIT) before its checks; a busy row is a counted, retried failure.
   - Accepted limit: the mailbox holder can cancel every request and the session holder can add a second admin
-    (platform then keeps out). Both page the operator; resolving a takeover is a person's job (and #0-82).
+    (platform then keeps out). Both page the operator; resolving a takeover is a person's job, with suspension
+    in full (#0-82) as the operator's lever.
   - The execution rechecks the requester too (`operatorStillAdmin`: active operator admin with a password), so
     deactivating a compromised operator neutralises its open requests (`OPERATOR_NO_LONGER_ADMIN`); any cancel at
     that final check is alerted (`PlatformMfaRecoveryCancelledOnRecheck`), scheduler failures are counted
@@ -363,6 +365,53 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (assigned UUID, no `@Version`: otherwise `save` merges).
   - "Active admin" is one query pair now, `countActiveAcceptedUsersWithRole[Excluding]` (active + password), used
     by the last-admin guard too; tenant settings expose `activeAdmins` / `singleAdmin` as the prevention side.
+- **Tenant suspension (#0-82, step 1; update when step 2 lands)**: `TenantLifecycleService` (suspend/resume), `TenantAccessService` (status
+  -> `TenantAccess`, guards for public paths), V30 columns on `tenants`, `TenantStatusFilter` in `shared`. Non-obvious:
+  - The filter is built inside `buildCommonSecurity` from the context's `TenantStatusProvider`, not declared as a
+    bean: a filter bean is also registered as a plain servlet filter outside the chain. A context without a provider
+    (a test slice) gets FULL. Services' own chains get it automatically because they all call `buildCommonSecurity`.
+  - Only a `UserPrincipal` (person or API key) is checked; service tokens pass (their background work is paused where
+    it is consumed/scheduled, the second step). Read-only allows GET/HEAD/OPTIONS plus the service's
+    `tenant-status.read-only.allowed-writes`: `"METHOD /ant/pattern"` entries (auth-service: logout, password change,
+    MFA setup/enable/disable, and an admin's key/integration revoke, revoke-created-by, user status and MFA reset),
+    matched on `UrlPathHelper`'s path within the application (decoded, `;params` removed, `//` collapsed) and the
+    request's method; a `.`/`..` segment never matches; an entry without a write method fails at startup. Bare
+    patterns were rejected in review: they admitted every method on a path, so a write added later under an allowed
+    prefix would pass silently. `PATCH /users/{id}/status` also reactivates, which `UserManagementService.updateStatus`
+    refuses with `requireCanWrite`. Because those writes include resetting/disabling others' MFA and deactivating
+    users, `suspend` refuses `READ_ONLY` with reason `SECURITY` (400; also CHECK
+    `chk_tenants_security_suspension_full` in V30): a taken-over tenant must be FULL. A new account-security route must be added there; public paths (reset, invite)
+    are checked by `TenantAccessService` instead.
+  - API keys: one choke point, `ApiKeyIntrospectionService.resolve`. FULL -> no key (401, alerts dropped); READ_ONLY ->
+    keys still read in auth-service, and ingestion's introspection answers `{"active":false,"paused":true}` for a
+    valid TENANT key (only after every other check, so "paused" never vouches for a bad key). ingestion parses it into
+    `ApiKeyIntrospection.Paused` (a sealed result, not `Optional`), not cached, not a failure for the IP limiter ->
+    shared `ApiKeyLookupResult.Paused` -> 503 + `Retry-After: 300` + `TENANT_READ_ONLY`, so Alertmanager retries.
+    Deliberately a 200 answer, not a 5xx from auth-service: a 5xx would trip ingestion's circuit breaker and
+    fallback metric for every tenant.
+  - Status transitions lock the tenant row (`TenantRepository.findByIdForUpdate`, `FOR NO KEY UPDATE`, waits) so two
+    operators cannot both read the same previous mode. `requireCanSignIn`/`requireCanWrite` read the status `FOR SHARE`
+    (`findStatusForSignIn`, `MANDATORY` transaction), which conflicts with it: a login racing a FULL suspension
+    commits its refresh token before the session cleanup or reads SUSPENDED (without it the token would revive on
+    resume). Lock ORDER matters: tenant row first, token rows second, as the suspension does; refresh and MFA check the
+    tenant (via `peekToken`) before `consumeToken`, which row-locks the token. The opposite order deadlocked (40P01,
+    reproduced by mutation). A sign-in waits at most 3 s (`setLocalLockTimeout`, i.e. `SET LOCAL lock_timeout`), then
+    `TenantStatusBusyException` -> 503 + Retry-After 5 (`TenantStatusBusyHandler`, highest-precedence advice): auth's
+    pool is 5 connections. Invite/reset hash the password before taking the lock. Two-thread Testcontainers tests
+    (login, refresh, backup code, lock timeout, two operators) pin all of it; they wait on `pg_stat_activity`
+    `wait_event_type = 'Lock'`, not a sleep. The per-request filter lookup is unlocked.
+  - A tenant without a `tenants` row: FULL access, counted (`platform.tenant.status.missing`, alert
+    `PlatformTenantStatusRowMissing`), WARN once per tenant.
+  - FULL ends sessions (`AuthTokenRepository.invalidateSessionsOfTenant`: REFRESH + MFA continuations), keeps invite
+    and reset links (refused while suspended, valid again after resume). The MFA-recovery cancel link is not checked:
+    it works throughout, like the rest of #0-90. Nothing revoked, so resume is complete.
+  - The auth email outbox defers (no attempt counted) INVITE in either mode and PASSWORD_RESET in FULL; security
+    notices and MFA recovery emails go out. MFA recovery (#0-90) is NOT paused: it is the operator's own action, the
+    takeover flow is suspend FULL -> recover -> resume.
+  - Customer-side audit events use a name-based UUID of the tenant id as resource and `platform-operator` as actor;
+    the operator-side event has the operator's id and the note.
+  - `rotateRefreshToken` now refuses a deactivated user, `updateStatus(false)` ends the user's sessions, and a
+    personal key of a deactivated owner does not resolve: user deactivation used to be login-only.
 - **Bulk UPDATEs flush before they clear** (found in #0-83): `@Modifying(clearAutomatically = true)` must
   come with `flushAutomatically = true`. Hibernate flushes before a JPQL bulk statement only pending changes
   of the tables it touches, so an earlier change to another table in the same transaction (an outbox INSERT)

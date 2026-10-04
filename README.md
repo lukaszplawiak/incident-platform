@@ -178,7 +178,7 @@ Label-based routing (RoutingRules matching on alert labels) requires DevOps team
 On-call schedule management is a distinct bounded context. A separate service allows independent scaling, independent deployment, and future extension (PagerDuty integration, calendar sync) without touching the notification pipeline.
 
 **Why tenants are created by a platform operator through an API, not by a seed or configuration?**
-A multi-tenant platform onboards customers while it runs. A Flyway seed gave every database the same admin with a known password (backlog #0-80), and a configuration entry per tenant would need a deployment change and a restart for each customer. Instead an admin of the reserved `platform-operator` tenant calls `POST /api/v1/platform/tenants`: the tenant row, its first admin (no password) and the invite email are written in one transaction, and the admin sets their own password by accepting the invite. It is the platform's one cross-tenant capability, kept narrow on purpose: create, reissue the first invite while the tenant has no admin, show and list metadata, and, as the single exception inside a tenant that has an admin, the delayed, announced MFA recovery of its only admin (backlog #0-90); JWT only, no API keys, a recent MFA login with an established factor (backlog #0-83); audited in both tenants. It reverses backlog #0-16's "no cross-tenant create tenant endpoint" for customer tenants only; the operator tenant still bootstraps itself. Guide: [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
+A multi-tenant platform onboards customers while it runs. A Flyway seed gave every database the same admin with a known password (backlog #0-80), and a configuration entry per tenant would need a deployment change and a restart for each customer. Instead an admin of the reserved `platform-operator` tenant calls `POST /api/v1/platform/tenants`: the tenant row, its first admin (no password) and the invite email are written in one transaction, and the admin sets their own password by accepting the invite. It is the platform's one cross-tenant capability, kept narrow on purpose: create, reissue the first invite while the tenant has no admin, show and list metadata, suspend and resume a tenant (backlog #0-82), and, as the single exception inside a tenant that has an admin, the delayed, announced MFA recovery of its only admin (backlog #0-90); JWT only, no API keys, a recent MFA login with an established factor (backlog #0-83); audited in both tenants. It reverses backlog #0-16's "no cross-tenant create tenant endpoint" for customer tenants only; the operator tenant still bootstraps itself. Guide: [docs/tenant-provisioning.md](docs/tenant-provisioning.md).
 
 ---
 
@@ -251,7 +251,7 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 
 - **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set explicitly
 - **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts only `aud=auth-service`, on its one internal endpoint for a tenant's Slack workspace — backlog #0-30) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
-- **Alert source authentication** (backlog #0-16): external alert sources — a tenant's Alertmanager, Wazuh, and the platform's own Alertmanager (as the reserved `platform-operator` tenant) — send an Integration API key (`Authorization: ApiKey ipl_…` or `Bearer ipl_…`). ingestion-service sends only its SHA-256 to auth-service's introspection endpoint, with a tenant-less *purpose token* that auth-service accepts on that one route and nowhere else, and caches active keys for at most 60 s (the revocation window). A definite "no" is `401`; "can't check right now" is `503` + `Retry-After`, because Alertmanager retries 5xx but drops every 4xx. ingestion-service accepts no service tokens. Tenant ids `platform-operator` and `system` are reserved
+- **Alert source authentication** (backlog #0-16): external alert sources — a tenant's Alertmanager, Wazuh, and the platform's own Alertmanager (as the reserved `platform-operator` tenant) — send an Integration API key (`Authorization: ApiKey ipl_…` or `Bearer ipl_…`). ingestion-service sends only its SHA-256 to auth-service's introspection endpoint, with a tenant-less *purpose token* that auth-service accepts on that one route and nowhere else, and caches active keys for at most 60 s (the revocation window). A definite "no" is `401`; "can't check right now" is `503` + `Retry-After`, because Alertmanager retries 5xx but drops every 4xx. A valid key of a tenant suspended read-only also gets `503`, with `Retry-After: 300` and `TENANT_READ_ONLY` (its alerts are paused, not refused); a tenant suspended in full gets `401` (backlog #0-82). ingestion-service accepts no service tokens. Tenant ids `platform-operator` and `system` are reserved
 - **Dev endpoints**: `DevTokenController` (`GET /dev/token`, an unauthenticated token for any tenant and role) is gated with `@Profile({"local", "dev"})`, plus a startup guard that refuses to run outside those profiles. The guard cannot help if a deployment sets the dev profile itself, which the k8s base ConfigMap did for every overlay, prod included (backlog #0-63). Now only `k8s/overlays/dev` sets `SPRING_PROFILES_ACTIVE`, docker-compose sets none, and CI fails if the rendered staging or prod overlay sets any Spring profile
 - **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8097) — never co-located with the business API
 - **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in access logs
@@ -404,8 +404,8 @@ Summary; details in [Resilience & Security](#security).
 - **Tenant provisioning**: the one cross-tenant capability. Only an admin of the `platform-operator` tenant with a
   JWT (no API key, service or purpose token) reaches `/api/v1/platform/**`, checked in auth-service's filter chain
   and on every method; it creates a tenant with an invited first admin, reissues that invite while the tenant has
-  no admin, shows and lists tenants' metadata, and asks for the MFA recovery of a customer tenant's only admin
-  (below), audited in the operator tenant. The Ingress routes it like
+  no admin, shows and lists tenants' metadata, suspends and resumes tenants, and asks for the MFA recovery of a
+  customer tenant's only admin (both below), audited in the operator tenant. The Ingress routes it like
   every auth-service path, so that rule is its only protection (backlog #0-80,
   [docs/tenant-provisioning.md](docs/tenant-provisioning.md)). Since backlog #0-83 the caller's session must have
   completed MFA within 12 h, with a factor whose "MFA enabled" email went out at least 24 h ago (checked on the server per
@@ -450,6 +450,25 @@ Summary; details in [Resilience & Security](#security).
 - **One definition of an active admin** (backlog #0-90): active, not archived, with an accepted invite. The "last
   admin" guard used to count an admin whose invite was pending, so the last admin who could log in could be
   demoted, deactivated or archived.
+- **Tenant suspension** (backlog #0-82): an operator suspends a tenant (`POST /api/v1/platform/tenants/{id}/suspend`,
+  `/resume`; a `SECURITY` reason requires `FULL`, also enforced by a CHECK; `platform-operator` itself cannot be
+  suspended), in full (nothing works: in auth-service every session ends at once, sign-ins, invites, password
+  resets and API keys are refused; the other services until step 2, see the gaps) or read-only (reads go on,
+  writes are 403 except account security: logout, password, MFA, and an admin revoking a key (one, or every key
+  a user created) or an integration, deactivating a user or resetting their MFA, each listed with its HTTP method,
+  reactivating a user refused; alerts are paused, not lost: ingestion-service answers them 503 +
+  `Retry-After: 300` + `TENANT_READ_ONLY`, so Alertmanager retries them until the tenant is resumed). The status
+  lives in auth-service's `tenants` table (V30). Transitions take a row lock on the tenant (`FOR NO KEY UPDATE`,
+  waits) before a status-guarded UPDATE, so two operators are serialised; sign-ins, invites and resets take a
+  share lock on the same row, taken before any token is consumed (the suspension's order: tenant, then tokens), so a
+  sign-in racing a full suspension either commits before the suspension's session cleanup or reads the suspension;
+  it waits at most 3 s, then gets 503 + `Retry-After`. A
+  `TenantStatusFilter` from `shared`, added by `buildCommonSecurity` to every service's chain, refuses a suspended
+  tenant's users and keys (in auth-service only until step 2: the other services' provider says FULL), and auth-service's public paths (login, refresh, MFA, invite, reset) check it
+  themselves. Nothing is deleted or revoked, so a resumed tenant works as before. Invites (and, in full,
+  password-reset emails) wait while it lasts. Audited in both tenants, alerted on every change
+  (`PlatformTenantSuspensionChanged`, critical). Deactivating a single user now also ends their sessions, and a
+  refresh or a personal API key of a deactivated user is refused (until then deactivation only stopped new logins).
 - **Audit trail through an outbox** (backlog #0-84, every service with audit events: auth-, incident-,
   notification-, escalation-, postmortem-service): an audit event is a row in the service's own outbox table,
   written in the transaction of the action it records, so a rolled-back action leaves no event, a committed one
@@ -568,8 +587,18 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Application**
   - Swagger UI and the OpenAPI documents are public in every profile: backlog #0-73.
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
-  - A tenant cannot be suspended or offboarded: its users, API keys and data stay until someone edits the database:
-    backlog #0-82.
+  - Tenant suspension is enforced in auth-service only so far: until the other services read the tenant's status
+    (the second step of backlog #0-82), an access token issued before a suspension still works in them for up to
+    15 minutes, and work already in the platform (accepted alerts, notifications, escalations, postmortems) goes on.
+  - A key of a tenant suspended in full may still file alerts for up to 60 s, if ingestion-service checked it in
+    the minute before (its positive cache, the revocation window): backlog #0-82 step 2. Such a key's retries also
+    count against the sender IP's failed-authentication limit, like a revoked key's.
+  - A sign-in refused because its tenant is suspended is neither audited nor counted, and a suspension or
+    resumption waits for the tenant's row lock without a timeout (sign-ins are bounded at 3 s): backlog #0-82 step 2.
+  - A tenant with users but no `tenants` row (none should exist) has full access and cannot be suspended; counted,
+    alerted (`PlatformTenantStatusRowMissing`) and logged once: backlog #0-82 (a foreign key would close it).
+  - A tenant cannot be offboarded: its data stays in all seven services until someone edits the databases:
+    backlog #0-101.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
   - Logs are plain text with no escaping and nothing collects them: a value from outside that reaches a log line
@@ -581,7 +610,7 @@ Open items from the audit and earlier, most important first within each area. Ea
     holds no contact of the tenant independent of the admin's own mailbox, and checks no DNS record itself:
     backlog #0-98. Whoever holds the admin's mailbox can cancel every such recovery, and whoever holds the
     admin's session can add a second admin, after which the platform keeps out; both page the operator and
-    are left to a person (accepted; suspending a taken-over tenant is backlog #0-82).
+    are left to a person (accepted; the operator's lever is suspending the tenant in full, #0-82).
   - The public token endpoints (`reset-password`, `accept-invite`, `mfa-recovery/cancel`) have no request limit:
     a token is 32 random bytes, single-use, so guessing is out of reach, but an unauthenticated flood still costs a
     lookup and a log line each: backlog #0-99.
@@ -1042,7 +1071,8 @@ docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafan
 > restart), then delete the old integration. ingestion-service caches a key's validity for at most
 > 60 s, so a revoked key stops working within a minute. If auth-service is down, ingest answers
 > `503` + `Retry-After` and Alertmanager retries; a wrong or revoked key gets `401`, which it does
-> not retry.
+> not retry. A key of a tenant suspended read-only gets `503` + `Retry-After: 300` +
+> `TENANT_READ_ONLY` (paused), one of a tenant suspended in full `401` (backlog #0-82).
 
 ### Step 6 — Verify all services are up
 
@@ -1542,7 +1572,8 @@ incident-platform/
 │       │                          # DeadLetterPublisher, DeadLetterNotStoredException, KafkaFailures,
 │       │                          # RecordRedeliveries, UnreadableRecordException
 │       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, TenantIds, InvalidTenantIdException,
-│                                  # TenantAwareTaskDecorator, ServiceTokenProvider
+│                                  # TenantAwareTaskDecorator, ServiceTokenProvider,
+│                                  # TenantStatusFilter + TenantStatusProvider (tenant suspension, #0-82)
 │
 ├── auth-service/                  # port 8087 — identity and access management
 │   └── src/main/java/
@@ -1559,7 +1590,8 @@ incident-platform/
 │       │                          # ApiKeyService, IntegrationService, TenantSettingsService
 │       │                          # AuthTokenService, InviteService, ForgotPasswordService,
 │       │                          # TenantProvisioningService, MfaSessionStatusService,
-│       │                          # MfaRecoveryService (only admin's MFA recovery, #0-90)
+│       │                          # MfaRecoveryService (only admin's MFA recovery, #0-90),
+│       │                          # TenantLifecycleService, TenantAccessService (suspension, #0-82)
 │       ├── domain/                # User, Team, TeamMember, ApiKey, Integration,
 │       │                          # AuthToken, MfaBackupCode, TenantSettings, Tenant, MfaRecoveryRequest
 │       └── repository/            # JPA repositories for all domain entities
