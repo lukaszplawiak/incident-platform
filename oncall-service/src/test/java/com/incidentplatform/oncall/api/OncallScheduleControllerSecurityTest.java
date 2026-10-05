@@ -146,6 +146,18 @@ class OncallScheduleControllerSecurityTest {
     @MockitoBean
     private IncidentEventKafkaSender incidentEventKafkaSender;
 
+    // Replaces AuthServiceTenantStatusProvider (backlog #0-82 step 2): this slice
+    // loads application.yml, whose auth-service.base-url would create it. Every
+    // tenant here is active; the status filter is tested in shared.
+    @MockitoBean
+    private com.incidentplatform.shared.security.TenantStatusProvider tenantStatusProvider;
+
+    @org.junit.jupiter.api.BeforeEach
+    void tenantsActive() {
+        given(tenantStatusProvider.accessOf(org.mockito.ArgumentMatchers.anyString()))
+                .willReturn(com.incidentplatform.shared.security.TenantAccess.FULL);
+    }
+
     private static final String TENANT_ID = "test-tenant";
     private static final UUID SCHEDULE_ID = UUID.randomUUID();
     private static final UUID PRINCIPAL_USER_ID = UUID.randomUUID();

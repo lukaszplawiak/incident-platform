@@ -207,6 +207,8 @@ incident-service:
 
 # Backlog #0-21/#0-30: SlackWorkspaceClient — the first call this service
 # makes into auth-service, to read a tenant's Slack workspace connection.
+# Since backlog #0-82 step 2 also where TenantStatusFilter asks a tenant's
+# status (AuthServiceTenantStatusProvider in shared).
 auth-service:
   base-url: ${AUTH_SERVICE_URL:http://localhost:8087}
 

@@ -91,6 +91,18 @@ class OncallServiceTokenAuthenticationTest {
     @MockitoBean
     private IncidentEventKafkaSender incidentEventKafkaSender;
 
+    // Replaces AuthServiceTenantStatusProvider (backlog #0-82 step 2): this slice
+    // loads application.yml, whose auth-service.base-url would create it. Every
+    // tenant here is active; the status filter is tested in shared.
+    @MockitoBean
+    private com.incidentplatform.shared.security.TenantStatusProvider tenantStatusProvider;
+
+    @org.junit.jupiter.api.BeforeEach
+    void tenantsActive() {
+        given(tenantStatusProvider.accessOf(org.mockito.ArgumentMatchers.anyString()))
+                .willReturn(com.incidentplatform.shared.security.TenantAccess.FULL);
+    }
+
     @Test
     @DisplayName("200 for a service token, and the service sees the tenant from the token")
     void serviceTokenReachesTheController() throws Exception {

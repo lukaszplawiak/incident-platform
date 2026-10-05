@@ -467,6 +467,8 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       WEBSOCKET_ALLOWED_ORIGINS: ${WEBSOCKET_ALLOWED_ORIGINS:-http://localhost:4200,http://localhost:3000}
+      # Backlog #0-82 step 2: TenantStatusFilter asks auth-service each tenant's status.
+      AUTH_SERVICE_URL: http://auth-service:8087
     depends_on:
       postgres:
         condition: service_healthy
@@ -560,6 +562,8 @@ services:
       JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       ONCALL_SERVICE_URL: http://oncall-service:8086
+      # Backlog #0-82 step 2: TenantStatusFilter asks auth-service each tenant's status.
+      AUTH_SERVICE_URL: http://auth-service:8087
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
       postgres:
@@ -599,6 +603,8 @@ services:
       JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
       KAFKA_BOOTSTRAP_SERVERS: kafka:9094
       INCIDENT_SERVICE_URL: http://incident-service:8082
+      # Backlog #0-82 step 2: TenantStatusFilter asks auth-service each tenant's status.
+      AUTH_SERVICE_URL: http://auth-service:8087
       GEMINI_API_KEY: ${GEMINI_API_KEY:-your-api-key-here}
       GEMINI_TIMEOUT_SECONDS: ${GEMINI_TIMEOUT_SECONDS:-30}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
@@ -638,6 +644,8 @@ services:
       JWT_ACCESS_TOKEN_TTL: ${JWT_ACCESS_TOKEN_TTL:-PT15M}
       JWT_REFRESH_TOKEN_TTL: ${JWT_REFRESH_TOKEN_TTL:-P30D}
       JWT_SERVICE_TOKEN_TTL: ${JWT_SERVICE_TOKEN_TTL:-PT1H}
+      # Backlog #0-82 step 2: TenantStatusFilter asks auth-service each tenant's status.
+      AUTH_SERVICE_URL: http://auth-service:8087
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     depends_on:
       postgres:
