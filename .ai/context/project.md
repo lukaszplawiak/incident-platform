@@ -185,8 +185,9 @@ have. Every service-to-service HTTP call was a 401, hidden because the clients f
 filter now recognises a token by its `serviceName` claim and builds a `ServicePrincipal`
 (`ROLE_SERVICE`, tenant from the signed claim), but only if the token's `aud` claim names the
 service that received it (`ServiceNames`; a filter built without a service name accepts none).
-auth-service accepted none until backlog #0-21/#0-30; it now accepts `aud=auth-service` for one
-`ROLE_SERVICE` endpoint, `GET /api/v1/internal/slack-workspace`. Decided in #0-30: another service
+auth-service accepted none until backlog #0-21/#0-30; it now accepts `aud=auth-service` for two
+`ROLE_SERVICE` endpoints, `GET /api/v1/internal/slack-workspace` and, since #0-82,
+`GET /api/v1/internal/tenant-status` (read by every other service). Decided in #0-30: another service
 that needs auth-service-owned tenant data pulls it over this kind of narrow HTTP call and caches it
 briefly — not Kafka replication of that data. Without the audience check a token minted to call oncall-service
 would authenticate on every service, and any endpoint that is only `authenticated()` would accept it. No HTTP filter reads `X-Tenant-Id`; the header the
@@ -365,13 +366,13 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (assigned UUID, no `@Version`: otherwise `save` merges).
   - "Active admin" is one query pair now, `countActiveAcceptedUsersWithRole[Excluding]` (active + password), used
     by the last-admin guard too; tenant settings expose `activeAdmins` / `singleAdmin` as the prevention side.
-- **Tenant suspension (#0-82, step 1; update when step 2 lands)**: `TenantLifecycleService` (suspend/resume), `TenantAccessService` (status
+- **Tenant suspension (#0-82, steps 1 and 2a; 2b = pausing schedulers is open)**: `TenantLifecycleService` (suspend/resume), `TenantAccessService` (status
   -> `TenantAccess`, guards for public paths), V30 columns on `tenants`, `TenantStatusFilter` in `shared`. Non-obvious:
   - The filter is built inside `buildCommonSecurity` from the context's `TenantStatusProvider`, not declared as a
     bean: a filter bean is also registered as a plain servlet filter outside the chain. A context without a provider
     (a test slice) gets FULL. Services' own chains get it automatically because they all call `buildCommonSecurity`.
-  - Only a `UserPrincipal` (person or API key) is checked; service tokens pass (their background work is paused where
-    it is consumed/scheduled, the second step). Read-only allows GET/HEAD/OPTIONS plus the service's
+  - Only a `UserPrincipal` (person or API key) is checked; service tokens pass (their background work is not paused
+    yet: step 2b pauses it in the schedulers). Read-only allows GET/HEAD/OPTIONS plus the service's
     `tenant-status.read-only.allowed-writes`: `"METHOD /ant/pattern"` entries (auth-service: logout, password change,
     MFA setup/enable/disable, and an admin's key/integration revoke, revoke-created-by, user status and MFA reset),
     matched on `UrlPathHelper`'s path within the application (decoded, `;params` removed, `//` collapsed) and the
@@ -382,13 +383,48 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     users, `suspend` refuses `READ_ONLY` with reason `SECURITY` (400; also CHECK
     `chk_tenants_security_suspension_full` in V30): a taken-over tenant must be FULL. A new account-security route must be added there; public paths (reset, invite)
     are checked by `TenantAccessService` instead.
-  - API keys: one choke point, `ApiKeyIntrospectionService.resolve`. FULL -> no key (401, alerts dropped); READ_ONLY ->
+  - Other services (step 2a): `AuthServiceTenantStatusProvider` (`shared`), registered when `auth-service.base-url`
+    is set (all six; a new service must set it or it silently gets "always FULL"), asks
+    `GET /api/v1/internal/tenant-status` (auth's second ROLE_SERVICE endpoint, answers only `TenantAccess`) with a
+    service token for the tenant. Cache 10 s, one call per tenant at a time (the others get the expired entry
+    meanwhile, or wait for the call, at most `FOLLOWER_WAIT` 5 s, then FULL). On failure the last known answer
+    HOWEVER OLD (static stability; a time limit on it was rejected: it abandons a known suspension, and with a
+    rejected token for good); FULL only for a tenant never answered for; either way kept another TTL (a per-tenant
+    breaker, no resilience4j in shared). A full cache (10 000 tenants; purged at most once per TTL, not on every
+    request) purges expired entries but never a known suspension: in an outage every entry is expired, and purging
+    one would turn the suspension into FULL. Background refreshes are claimed per tenant (a set), one at a time. A leader re-reads the
+    cache after winning the in-flight slot; a leader that dies with an Error fails its followers rather than leave
+    them waiting. `knownAccessOf` (a default method on `TenantStatusProvider`) never waits: cached status, FULL if
+    none, and a refresh on a virtual thread when missing or expired; STOMP CONNECT (message-channel pool) and the
+    WebSocket sweep use it, so an outage cannot tie up those threads. Alert `TenantStatusCacheFull` on
+    `cache.puts.skipped`. Counted in
+    `service_client_fallback_total{client="tenant-status"}`: alert `TenantStatusLookupFailing` (outage, high,
+    reason!="auth") and `TenantStatusLookupRejected` (reason="auth", critical, no `for`: a misconfigured token does
+    not heal). CI `check-tenant-status-config.sh` fails a service without `auth-service.base-url`. Durations are read
+    with Boot's `Binder`, not `@Value`/`getProperty`: those do not convert "PT10S" outside a Boot context (found by
+    the context-runner test). In a `@WebMvcTest` slice that loads `application.yml` the provider is created too:
+    mock `TenantStatusProvider` there, and stub it (a Mockito default `null` would NPE the filter's switch).
+  - STOMP (incident-service): `StompAuthChannelInterceptor` refuses CONNECT for a known NONE (`knownAccessOf`: a tenant
+    the instance has not cached yet connects, and the sweep closes it within two sweeps) and binds session -> tenant in
+    `TenantWebSocketSessions`, a `WebSocketHandlerDecoratorFactory` that tracks sockets and sweeps every 10 s, closing
+    NONE tenants' sessions with 1008; a session is unbound only after its close succeeded (a failed close is retried
+    next sweep), and a lookup that throws skips that tenant only. Deliberately no ShedLock: sessions are per replica.
+    The only `@MessageMapping` (`/incidents/refresh`) reads, so a READ_ONLY session cannot write through STOMP.
+    Binding relies on STOMP's session id being the `WebSocketSession` id (true for the plain `/ws` endpoint, no
+    SockJS); a CONNECT whose socket is untracked is WARNed and counted (`websocket.sessions.unbound`).
+  - API keys: one choke point, `ApiKeyIntrospectionService.resolve`. FULL -> no key in auth-service; for ingestion
+    a valid TENANT key answers `{"active":false,"suspended":true}` (step 2a; after the key's own checks, like paused)
+    -> `ApiKeyIntrospection.Suspended` -> shared `ApiKeyLookupResult.Suspended` -> 403 `TENANT_SUSPENDED`, NOT
+    counted by the IP limiter (a suspended tenant's retrying sender would throttle a shared NAT); READ_ONLY ->
     keys still read in auth-service, and ingestion's introspection answers `{"active":false,"paused":true}` for a
     valid TENANT key (only after every other check, so "paused" never vouches for a bad key). ingestion parses it into
-    `ApiKeyIntrospection.Paused` (a sealed result, not `Optional`), not cached, not a failure for the IP limiter ->
+    `ApiKeyIntrospection.Paused` (a sealed result, not `Optional`), cached 5 s with the negative answers (step 2a;
+    it used to be never cached), not a failure for the IP limiter ->
     shared `ApiKeyLookupResult.Paused` -> 503 + `Retry-After: 300` + `TENANT_READ_ONLY`, so Alertmanager retries.
     Deliberately a 200 answer, not a 5xx from auth-service: a 5xx would trip ingestion's circuit breaker and
-    fallback metric for every tenant.
+    fallback metric for every tenant. A key cached as active (60 s) before a suspension is caught by the chain's
+    `TenantStatusFilter` within 10 s; ingestion sets `tenant-status.read-only.retry-after: PT5M`, so the filter's
+    read-only refusal there is 503 + Retry-After too, never a 4xx that Alertmanager would drop.
   - Status transitions lock the tenant row (`TenantRepository.findByIdForUpdate`, `FOR NO KEY UPDATE`, waits) so two
     operators cannot both read the same previous mode. `requireCanSignIn`/`requireCanWrite` read the status `FOR SHARE`
     (`findStatusForSignIn`, `MANDATORY` transaction), which conflicts with it: a login racing a FULL suspension
@@ -397,7 +433,21 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     tenant (via `peekToken`) before `consumeToken`, which row-locks the token. The opposite order deadlocked (40P01,
     reproduced by mutation). A sign-in waits at most 3 s (`setLocalLockTimeout`, i.e. `SET LOCAL lock_timeout`), then
     `TenantStatusBusyException` -> 503 + Retry-After 5 (`TenantStatusBusyHandler`, highest-precedence advice): auth's
-    pool is 5 connections. Invite/reset hash the password before taking the lock. Two-thread Testcontainers tests
+    pool is 5 connections. Suspend/resume wait at most 5 s (`TenantLifecycleService.LOCK_TIMEOUT`, not reset after
+    the lookup: the token cleanup's waits are bounded too), and since step 2a any `PessimisticLockingFailureException`
+    reaching the web layer (lock timeout, a deadlock's loser) is 503 + Retry-After `RESOURCE_BUSY`, not 500
+    (callers that map a busy row themselves, like `ApiKeyCreationLimit`'s 429, catch it first). A sign-in refused for
+    suspension throws `TenantSuspendedSignInException` (`requireCanSignIn` / `requireCanJoin` for the invite, with
+    user and `SignInFlow`); `SignInRefusalHandler` (web layer, so after the rollback) has `SignInRefusals` write
+    `USER_SIGN_IN_REFUSED_TENANT_SUSPENDED` and count `auth.signin.refused{flow,access,outcome}`. Bounded per user (the
+    rollback gives an invite/reset token back, so a refusal can be replayed without end): each refusal
+    `recordFailure`s `BruteForceProtectionService.Scope.SUSPENDED_SIGN_IN` (user id), and over the limit the answer is
+    429 + Retry-After, no event (#0-89's rule: bound the action, never the audit). Not atomic (parallel refusals can
+    overshoot a little) and, like every Redis limiter here, fail-open without Redis (accepted, README gap). Counting it
+    against the LOGIN lockout instead was rejected: it bounds only login and locks a resumed tenant's users out. Each
+    caller passes its own `SignInFlow`, `issueTokens` included. It looks the recorder up
+    lazily (`ObjectProvider`) so `@WebMvcTest` slices still start. `requireCanWrite` stays for non-sign-in writes
+    (reactivation), not audited as a sign-in. Invite/reset hash the password before taking the lock. Two-thread Testcontainers tests
     (login, refresh, backup code, lock timeout, two operators) pin all of it; they wait on `pg_stat_activity`
     `wait_event_type = 'Lock'`, not a sleep. The per-request filter lookup is unlocked.
   - A tenant without a `tenants` row: FULL access, counted (`platform.tenant.status.missing`, alert

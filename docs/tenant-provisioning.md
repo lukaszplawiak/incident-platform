@@ -61,7 +61,8 @@ it: backlog #0-101 (open).
   `TENANT_ADMIN_REINVITED`, `TENANT_SUSPENDED`, `TENANT_RESUMED`: which operator did what to which
   tenant, with the operator's note) and in the customer tenant (`USER_CREATED`, `USER_INVITE_*`;
   `TENANT_SUSPENDED` / `TENANT_RESUMED` with actor `platform-operator`, mode and reason, without the
-  note). The operator-tenant events carry the admin's email address, so
+  note). While the tenant is suspended, each sign-in it refuses is also in the customer tenant's
+  trail (`USER_SIGN_IN_REFUSED_TENANT_SUSPENDED`, a few per user, see "Suspend or resume a tenant"). The operator-tenant events carry the admin's email address, so
   an erasure request for that person covers them too (anonymizing a user does not touch the audit
   log; backlog #0-48).
 
@@ -492,10 +493,13 @@ Two modes:
 
 - **`FULL`** (a taken-over tenant, a terms breach): nothing works for its users and API keys. Every
   session and unfinished login of the tenant ends at once; sign-ins, accepting invites and password
-  resets are refused, 403 `TENANT_SUSPENDED`. Its API keys are answered like unknown ones, 401, in
-  auth-service and in ingestion-service: Alertmanager drops an alert refused with a 4xx, so alerts
-  sent during a full suspension are lost, which is the point of it. (A key ingestion-service checked in
-  the minute before the suspension may still file alerts for the rest of that minute, its cache.)
+  resets are refused, 403 `TENANT_SUSPENDED`, and each refusal is audited in the tenant
+  (`USER_SIGN_IN_REFUSED_TENANT_SUSPENDED`). An access token already issued is refused in every
+  service within 10 s (each service keeps auth-service's answer that long), and its users' live
+  WebSocket sessions are closed within about 20 s. Its API keys get 403 `TENANT_SUSPENDED` in ingestion-service (not
+  counted against the sender's IP, so its retries throttle nobody else) and are answered like unknown
+  ones in auth-service: Alertmanager drops an alert refused with a 4xx, so alerts sent during a full
+  suspension are lost, which is the point of it.
 - **`READ_ONLY`** (a billing hold): its users still log in and read; every write is 403
   `TENANT_READ_ONLY`, accepting an invite included, except account security: logout, password
   change, MFA, and an admin revoking an API key (one, or every key a user created) or an
@@ -506,9 +510,7 @@ Two modes:
   not lost: ingestion-service answers them 503 with `Retry-After: 300` and `TENANT_READ_ONLY`, so
   Alertmanager retries with its own backoff and sends alerts that are still firing again at its next
   interval; they are filed once the tenant is resumed (an alert that resolved in the meantime is not
-  filed as firing). A key already checked in the minute before the suspension may still
-  file alerts for the rest of that minute (ingestion-service's cache, the same window as revoking a
-  key).
+  filed as firing). A key already checked before the suspension gets the same answer within 10 s.
 
 ```bash
 curl -s -X POST "http://localhost:8087/api/v1/platform/tenants/acme/suspend" \
@@ -547,10 +549,20 @@ What a suspension does and does not do:
   login racing a full suspension either finishes before it, and its session is ended with the
   others, or is refused. A sign-in that has to wait more than 3 s for a suspension in progress gets
   503 with `Retry-After` and can simply retry.
-- **Not yet in the other services** (the second step of #0-82): an access token issued before the
-  suspension still works in them for up to its 15 minutes (auth-service refuses it at once), and
-  work already in the platform (alerts accepted before the suspension, notifications, escalations,
-  postmortems) goes on.
+- Every service asks auth-service for the tenant's status and keeps the answer 10 s, so a
+  suspension or resumption takes up to 10 s to reach them all. If auth-service is down a service
+  keeps the last status it knew for as long as the outage lasts (alert `TenantStatusLookupFailing`):
+  a suspension made or lifted meanwhile reaches it once auth-service is back, and a tenant it has
+  never asked about (after the service restarted, say) is let in until then. If auth-service
+  refuses a service's token (`TenantStatusLookupRejected`, critical) that service learns of no new
+  suspension until its configuration is fixed.
+- Every refused sign-in is in the tenant's audit trail. A user who keeps trying (the right
+  password, an old invite or reset link) gets 429 after a few attempts, for the brute-force
+  window, and those attempts are not audited one by one; it has no effect once the tenant is
+  resumed.
+- **Not yet**: work already in the platform (alerts accepted before the suspension, notifications,
+  escalations, postmortems of its incidents) goes on; pausing it is the second part of step 2 of
+  #0-82.
 
 Every suspension, change and resumption is audited in both tenants (`TENANT_SUSPENDED`,
 `TENANT_RESUMED`; the note only in the operator tenant's) and alerts the operator
