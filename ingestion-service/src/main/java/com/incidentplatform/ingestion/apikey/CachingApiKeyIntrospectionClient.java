@@ -31,12 +31,18 @@ import java.util.concurrent.atomic.LongAdder;
  *   <li><b>Unknown / revoked / expired keys</b> — {@value #NEGATIVE_TTL_SECONDS} s,
  *       so a sender retrying a wrong key does not turn every retry into a call
  *       to auth-service, while a key created a moment ago works almost at once.</li>
- *   <li><b>Paused keys are never cached</b> (a read-only tenant's key, backlog
- *       #0-82): the sender is told to retry later anyway, so the calls are few,
- *       and the first retry after the tenant is resumed goes through. A key
- *       already in the positive cache when its tenant is suspended, read-only
- *       or in full, keeps working for the rest of its TTL — the same window as
- *       a revocation (a gap of backlog #0-82 until step 2).</li>
+ *   <li><b>Keys of a suspended tenant</b> (backlog #0-82), paused (read-only)
+ *       or suspended (in full) — {@value #NEGATIVE_TTL_SECONDS} s too, in the
+ *       same map. Changed in step 2: a paused answer used to be never cached,
+ *       on the reasoning that a sender told to retry later calls rarely; a
+ *       sender that ignores {@code Retry-After} would then turn every alert
+ *       into a call to auth-service (found in the review of step 1). A resumed
+ *       tenant's alerts go through at most this much later.</li>
+ *   <li>A key already in the positive cache when its tenant is suspended keeps
+ *       authenticating for the rest of its TTL, but no longer works: since
+ *       step 2 of #0-82 the chain's {@code TenantStatusFilter} refuses the
+ *       tenant within its own status cache's TTL (10 s), whatever this cache
+ *       holds.</li>
  *   <li><b>Failures are never cached</b>: {@link ApiKeyIntrospectionUnavailableException}
  *       propagates, so the next request asks again.</li>
  * </ul>
@@ -44,7 +50,8 @@ import java.util.concurrent.atomic.LongAdder;
  * <h2>Two bounded maps, not one</h2>
  * Keyed by the key's hash. Each map holds at most {@value #MAX_ENTRIES}
  * entries, and they are separate so that a stream of random keys (each a
- * negative entry) cannot push valid keys out of the cache. When a map is full,
+ * negative entry) cannot push valid keys out of the cache. The negative map
+ * keeps which "no" it was (inactive, paused, suspended). When a map is full,
  * expired entries are purged first; if it is still full the entry is not cached
  * (correct, just uncached) and counted in {@code cache.puts.skipped}.
  * A generic cache library is backlog #0-33, whose trigger ("a third cache")
@@ -64,7 +71,8 @@ public class CachingApiKeyIntrospectionClient implements ApiKeyIntrospectionClie
     private final ApiKeyIntrospectionClient delegate;
     private final Clock clock;
     private final BoundedTtlCache<IntrospectedApiKey> active;
-    private final BoundedTtlCache<Boolean> inactive;
+    /** Every answer but {@code Active}. */
+    private final BoundedTtlCache<ApiKeyIntrospection> inactive;
 
     // @Autowired: two constructors, Spring must be told which one.
     @Autowired
@@ -91,8 +99,9 @@ public class CachingApiKeyIntrospectionClient implements ApiKeyIntrospectionClie
         if (hit.isPresent()) {
             return new ApiKeyIntrospection.Active(hit.get());
         }
-        if (inactive.get(keyHash, now).isPresent()) {
-            return new ApiKeyIntrospection.Inactive();
+        final Optional<ApiKeyIntrospection> negative = inactive.get(keyHash, now);
+        if (negative.isPresent()) {
+            return negative.get();
         }
 
         // ApiKeyIntrospectionUnavailableException propagates from here without
@@ -106,10 +115,11 @@ public class CachingApiKeyIntrospectionClient implements ApiKeyIntrospectionClie
                 }
             }
             case ApiKeyIntrospection.Inactive inactiveAnswer ->
-                    inactive.put(keyHash, Boolean.TRUE, now.plusSeconds(NEGATIVE_TTL_SECONDS), now);
-            case ApiKeyIntrospection.Paused paused -> {
-                // Not cached: see the class Javadoc (backlog #0-82).
-            }
+                    inactive.put(keyHash, answer, now.plusSeconds(NEGATIVE_TTL_SECONDS), now);
+            case ApiKeyIntrospection.Paused paused ->
+                    inactive.put(keyHash, answer, now.plusSeconds(NEGATIVE_TTL_SECONDS), now);
+            case ApiKeyIntrospection.Suspended suspended ->
+                    inactive.put(keyHash, answer, now.plusSeconds(NEGATIVE_TTL_SECONDS), now);
         }
         return answer;
     }

@@ -148,6 +148,16 @@ class RemoteApiKeyLookupServiceTest {
     }
 
     @Test
+    @DisplayName("a key of a tenant suspended in full is Suspended (403), not Invalid, and not counted against "
+            + "the sender's IP (backlog #0-82 step 2)")
+    void suspendedIsNotAFailure() {
+        given(introspectionClient.introspect(HASH)).willReturn(new ApiKeyIntrospection.Suspended());
+
+        assertThat(service.lookup(RAW_KEY, request)).isEqualTo(new ApiKeyLookupResult.Suspended());
+        then(authFailureRateLimiter).should(never()).recordFailure(anyString());
+    }
+
+    @Test
     @DisplayName("only the hash reaches the introspection client, never the raw key")
     void onlyHashIsSent() {
         given(introspectionClient.introspect(HASH)).willReturn(new ApiKeyIntrospection.Inactive());

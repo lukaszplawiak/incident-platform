@@ -121,7 +121,17 @@ ingestion:
 # auth-service answers which tenant an Integration API key belongs to
 # (POST /api/v1/internal/api-keys/introspect, backlog #0-16, the #0-30 pattern).
 auth-service:
+  # Also where TenantStatusFilter asks a tenant's status (backlog #0-82, step 2;
+  # AuthServiceTenantStatusProvider in shared, cached tenant-status.cache.ttl).
   base-url: ${AUTH_SERVICE_URL:http://localhost:8087}
+
+tenant-status:
+  read-only:
+    # Backlog #0-82, step 2: here a write is an alert, and an alert source drops
+    # an alert answered 4xx and retries one answered 5xx. A read-only tenant's
+    # alert is paused, not refused: 503 + this Retry-After, the same as its key's
+    # paused introspection answer (RemoteApiKeyLookupService.PAUSED_RETRY_AFTER).
+    retry-after: PT5M
 
 deduplication:
   ttl: ${DEDUPLICATION_TTL:PT5M}

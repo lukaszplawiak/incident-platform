@@ -90,7 +90,8 @@ public class ApiKeyIntrospectionClientImpl implements ApiKeyIntrospectionClient 
         // must not open the circuit and lock out every valid key. The same for
         // {"active":false,"paused":true} (backlog #0-82): a read-only tenant
         // is no failure of auth-service, and must not trip the breaker for
-        // every tenant or count as a client fallback.
+        // every tenant or count as a client fallback. And for
+        // {"active":false,"suspended":true} (step 2 of #0-82), for the same reason.
         return parse(body);
     }
 
@@ -116,8 +117,11 @@ public class ApiKeyIntrospectionClientImpl implements ApiKeyIntrospectionClient 
         }
         if (json == null || !json.path("active").asBoolean(false)) {
             // Only a literal true counts: anything else is the definite "no".
-            return json != null && json.path("paused").asBoolean(false)
-                    ? new ApiKeyIntrospection.Paused()
+            if (json != null && json.path("paused").asBoolean(false)) {
+                return new ApiKeyIntrospection.Paused();
+            }
+            return json != null && json.path("suspended").asBoolean(false)
+                    ? new ApiKeyIntrospection.Suspended()
                     : new ApiKeyIntrospection.Inactive();
         }
         final List<String> scopes = new ArrayList<>();
