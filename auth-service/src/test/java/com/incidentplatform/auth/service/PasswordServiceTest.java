@@ -454,7 +454,9 @@ class PasswordServiceTest {
         org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.exception.BusinessException(
                         com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
                         org.springframework.http.HttpStatus.FORBIDDEN))
-                .given(tenantAccessService).requireCanSignIn(token.getTenantId());
+                .given(tenantAccessService).requireCanSignIn(org.mockito.ArgumentMatchers.eq(token.getTenantId()),
+                        org.mockito.ArgumentMatchers.eq(user.getId()),
+                        org.mockito.ArgumentMatchers.eq(com.incidentplatform.auth.service.SignInFlow.PASSWORD_RESET));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.resetPassword(
                         new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID))

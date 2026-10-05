@@ -292,7 +292,8 @@ class AuthTokenServiceTest {
             org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.exception.BusinessException(
                             com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
                             org.springframework.http.HttpStatus.FORBIDDEN))
-                    .given(tenantAccessService).requireCanSignIn(TENANT_ID);
+                    .given(tenantAccessService).requireCanSignIn(org.mockito.ArgumentMatchers.eq(TENANT_ID),
+                            org.mockito.ArgumentMatchers.eq(stored.getUser().getId()), org.mockito.ArgumentMatchers.eq(SignInFlow.REFRESH));
 
             assertThatThrownBy(() -> service.rotateRefreshToken("raw-refresh-token"))
                     .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class);

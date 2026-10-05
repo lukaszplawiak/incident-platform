@@ -30,6 +30,7 @@ import static org.mockito.BDDMockito.given;
 class TenantAccessServiceTest {
 
     private static final String TENANT = "acme";
+    private static final java.util.UUID USER = java.util.UUID.randomUUID();
 
     @Mock private TenantRepository tenantRepository;
 
@@ -75,20 +76,44 @@ class TenantAccessServiceTest {
     }
 
     @Test
-    @DisplayName("sign-in: refused only when suspended in full, 403 TENANT_SUSPENDED")
+    @DisplayName("sign-in: refused only when suspended in full, 403 TENANT_SUSPENDED, as the refusal "
+            + "SignInRefusalHandler records (who, which flow)")
     void signIn() {
         status(TenantStatus.SUSPENDED, SuspensionMode.READ_ONLY);
-        assertThatCode(() -> service().requireCanSignIn(TENANT)).doesNotThrowAnyException();
+        assertThatCode(() -> service().requireCanSignIn(TENANT, USER, SignInFlow.LOGIN)).doesNotThrowAnyException();
         status(TenantStatus.SUSPENDED, SuspensionMode.FULL);
-        assertThatThrownBy(() -> service().requireCanSignIn(TENANT))
-                .isInstanceOfSatisfying(BusinessException.class, e -> {
+        assertThatThrownBy(() -> service().requireCanSignIn(TENANT, USER, SignInFlow.REFRESH))
+                .isInstanceOfSatisfying(TenantSuspendedSignInException.class, e -> {
                     assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.FORBIDDEN);
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCodes.TENANT_SUSPENDED);
+                    assertThat(e.tenantId()).isEqualTo(TENANT);
+                    assertThat(e.userId()).isEqualTo(USER);
+                    assertThat(e.flow()).isEqualTo(SignInFlow.REFRESH);
+                    assertThat(e.access()).isEqualTo(TenantAccess.NONE);
                 });
     }
 
     @Test
-    @DisplayName("write without a principal: refused when suspended in either mode, with the mode's code")
+    @DisplayName("joining (invite): refused when suspended in either mode, recorded like a sign-in")
+    void join() {
+        status(TenantStatus.ACTIVE, null);
+        assertThatCode(() -> service().requireCanJoin(TENANT, USER, SignInFlow.ACCEPT_INVITE))
+                .doesNotThrowAnyException();
+        status(TenantStatus.SUSPENDED, SuspensionMode.READ_ONLY);
+        assertThatThrownBy(() -> service().requireCanJoin(TENANT, USER, SignInFlow.ACCEPT_INVITE))
+                .isInstanceOfSatisfying(TenantSuspendedSignInException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(ErrorCodes.TENANT_READ_ONLY);
+                    assertThat(e.access()).isEqualTo(TenantAccess.READ_ONLY);
+                });
+        status(TenantStatus.SUSPENDED, SuspensionMode.FULL);
+        assertThatThrownBy(() -> service().requireCanJoin(TENANT, USER, SignInFlow.ACCEPT_INVITE))
+                .isInstanceOfSatisfying(TenantSuspendedSignInException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCodes.TENANT_SUSPENDED));
+    }
+
+    @Test
+    @DisplayName("write (not a sign-in): refused when suspended in either mode, with the mode's code, "
+            + "not recorded as a sign-in")
     void write() {
         status(TenantStatus.ACTIVE, null);
         assertThatCode(() -> service().requireCanWrite(TENANT)).doesNotThrowAnyException();
@@ -107,10 +132,11 @@ class TenantAccessServiceTest {
     void signInUsesLockedLookup() {
         given(tenantRepository.findStatusForSignIn(TENANT)).willReturn(Optional.empty());
 
-        service().requireCanSignIn(TENANT);
+        service().requireCanSignIn(TENANT, USER, SignInFlow.LOGIN);
+        service().requireCanJoin(TENANT, USER, SignInFlow.ACCEPT_INVITE);
         service().requireCanWrite(TENANT);
 
-        org.mockito.BDDMockito.then(tenantRepository).should(org.mockito.Mockito.times(2)).findStatusForSignIn(TENANT);
+        org.mockito.BDDMockito.then(tenantRepository).should(org.mockito.Mockito.times(3)).findStatusForSignIn(TENANT);
         org.mockito.BDDMockito.then(tenantRepository).should(org.mockito.Mockito.never()).findStatus(TENANT);
     }
 
@@ -121,7 +147,8 @@ class TenantAccessServiceTest {
         final TenantAccessService service = service();
 
         // Both entry points share the bounded lookup.
-        for (final Runnable check : List.<Runnable>of(() -> service.requireCanSignIn(TENANT),
+        for (final Runnable check : List.<Runnable>of(() -> service.requireCanSignIn(TENANT, USER, SignInFlow.LOGIN),
+                () -> service.requireCanJoin(TENANT, USER, SignInFlow.ACCEPT_INVITE),
                 () -> service.requireCanWrite(TENANT))) {
             org.mockito.Mockito.clearInvocations(tenantRepository);
             check.run();
@@ -139,7 +166,7 @@ class TenantAccessServiceTest {
         given(tenantRepository.findStatusForSignIn(TENANT)).willThrow(
                 new org.springframework.dao.CannotAcquireLockException("lock timeout"));
 
-        assertThatThrownBy(() -> service().requireCanSignIn(TENANT))
+        assertThatThrownBy(() -> service().requireCanSignIn(TENANT, USER, SignInFlow.LOGIN))
                 .isInstanceOfSatisfying(TenantStatusBusyException.class, e -> {
                     assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
                     assertThat(e.retryAfter()).isEqualTo(TenantAccessService.SIGN_IN_RETRY_AFTER);

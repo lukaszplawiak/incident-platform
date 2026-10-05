@@ -85,6 +85,7 @@ public class ApiKeyIntrospectionService {
         record Active(ActiveApiKey key) implements Resolution { }
         record Refused() implements Resolution { }
         record Paused() implements Resolution { }
+        record Suspended() implements Resolution { }
     }
 
     /**
@@ -100,6 +101,14 @@ public class ApiKeyIntrospectionService {
      * alert into ingestion-service); a read-only tenant's key that passes every
      * other check is then {@link Resolution.Paused}, not refused — the work is
      * paused, not dropped, so the sender is told to come back later.
+     *
+     * <p>Step 2 of #0-82: a key of a tenant suspended in full that passes every
+     * other check is {@link Resolution.Suspended}, so ingestion-service can
+     * refuse it without counting a failed authentication against the sender's
+     * IP (found in the review of step 1: the sender's retries could throttle
+     * every client behind a shared NAT). The suspension is now checked after
+     * the key's own checks, for the same reason as the read-only one: a key
+     * refused anyway is not told its tenant is suspended.
      */
     private Resolution resolve(String keyHash, Predicate<ApiKey> accepted, boolean writes) {
         final Optional<ApiKey> keyOpt = apiKeyRepository.findActiveByHash(keyHash);
@@ -113,12 +122,6 @@ public class ApiKeyIntrospectionService {
             log.debug("API key expired: keyId={}", apiKey.getId());
             return new Resolution.Refused();
         }
-        final TenantAccess access = tenantAccessService.accessOf(apiKey.getTenantId());
-        if (access == TenantAccess.NONE) {
-            log.debug("API key of a suspended tenant refused: keyId={}, tenant={}",
-                    apiKey.getId(), apiKey.getTenantId());
-            return new Resolution.Refused();
-        }
         if (!apiKey.isTenant() && apiKey.getOwnerUser() != null && !apiKey.getOwnerUser().isActive()) {
             log.debug("Personal API key of a deactivated user refused: keyId={}", apiKey.getId());
             return new Resolution.Refused();
@@ -129,7 +132,14 @@ public class ApiKeyIntrospectionService {
             return new Resolution.Refused();
         }
         // After `accepted`: a key that would be refused anyway is not told
-        // its tenant is paused — that would say the key is otherwise valid.
+        // its tenant is suspended or paused — that would say the key is
+        // otherwise valid.
+        final TenantAccess access = tenantAccessService.accessOf(apiKey.getTenantId());
+        if (access == TenantAccess.NONE) {
+            log.debug("API key of a suspended tenant refused: keyId={}, tenant={}",
+                    apiKey.getId(), apiKey.getTenantId());
+            return new Resolution.Suspended();
+        }
         if (writes && access == TenantAccess.READ_ONLY) {
             log.debug("API key of a read-only tenant paused for a write: keyId={}, tenant={}",
                     apiKey.getId(), apiKey.getTenantId());
@@ -151,6 +161,9 @@ public class ApiKeyIntrospectionService {
      * 503 + {@code Retry-After}, so Alertmanager keeps it and retries instead
      * of dropping it on a 401. A successful answer, not a 5xx, so ingestion's
      * circuit breaker does not count a paused tenant as auth-service failing.
+     * A valid TENANT key of a tenant suspended in full gets
+     * {@code active:false, suspended:true} (step 2 of #0-82): refused, but not
+     * counted as a failed authentication by ingestion-service.
      */
     @Transactional(readOnly = true)
     public ApiKeyIntrospectionResponse introspect(String keyHash) {
@@ -163,6 +176,7 @@ public class ApiKeyIntrospectionService {
                     active.apiKey().getScopes(),
                     active.apiKey().getExpiresAt());
             case Resolution.Paused paused -> ApiKeyIntrospectionResponse.pausedForWrites();
+            case Resolution.Suspended suspended -> ApiKeyIntrospectionResponse.suspendedTenant();
             case Resolution.Refused refused -> ApiKeyIntrospectionResponse.inactive();
         };
     }

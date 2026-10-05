@@ -146,20 +146,39 @@ class ApiKeyIntrospectionServiceTest {
     @DisplayName("tenant suspension and deactivated owners (backlog #0-82)")
     class Suspension {
 
+        // Lenient: a key its own checks refuse is refused before its tenant's
+        // status is read (step 2 of #0-82), so some tests never reach it.
         private void access(com.incidentplatform.shared.security.TenantAccess access) {
-            given(tenantAccessService.accessOf(TENANT)).willReturn(access);
+            org.mockito.Mockito.lenient().when(tenantAccessService.accessOf(TENANT)).thenReturn(access);
         }
 
         @Test
-        @DisplayName("suspended in full: no key resolves, for auth-service or for ingestion, and none is marked used")
+        @DisplayName("suspended in full: no key resolves; ingestion hears suspended (not a wrong key, step 2), "
+                + "and none is marked used")
         void fullSuspension() {
             final ApiKey apiKey = key(null, null);
             given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(apiKey));
             access(com.incidentplatform.shared.security.TenantAccess.NONE);
 
             assertThat(service.resolve(HASH)).isEmpty();
-            assertThat(service.introspect(HASH)).isEqualTo(ApiKeyIntrospectionResponse.inactive());
+            final ApiKeyIntrospectionResponse response = service.introspect(HASH);
+            assertThat(response).isEqualTo(ApiKeyIntrospectionResponse.suspendedTenant());
+            assertThat(response.active()).isFalse();
+            assertThat(response.tenantId()).isNull();
             then(usageRecorder).should(never()).recordUsage(any());
+        }
+
+        @Test
+        @DisplayName("suspended in full: a PERSONAL key is plain inactive for ingestion, never suspended "
+                + "(suspended would say it is valid)")
+        void fullSuspensionPersonalKeyPlainInactive() {
+            final ApiKey personal = ApiKey.createPersonal(TENANT, "my-script", HASH, "abcdefgh",
+                    List.of("alerts:ingest"), null, owner());
+            ReflectionTestUtils.setField(personal, "id", UUID.randomUUID());
+            given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(personal));
+            access(com.incidentplatform.shared.security.TenantAccess.NONE);
+
+            assertThat(service.introspect(HASH)).isEqualTo(ApiKeyIntrospectionResponse.inactive());
         }
 
         @Test
@@ -200,6 +219,8 @@ class ApiKeyIntrospectionServiceTest {
                     .isEqualTo("{\"active\":false,\"paused\":true}");
             assertThat(mapper.writeValueAsString(ApiKeyIntrospectionResponse.inactive()))
                     .isEqualTo("{\"active\":false}");
+            assertThat(mapper.writeValueAsString(ApiKeyIntrospectionResponse.suspendedTenant()))
+                    .isEqualTo("{\"active\":false,\"suspended\":true}");
         }
 
         @Test

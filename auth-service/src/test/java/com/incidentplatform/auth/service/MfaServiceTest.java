@@ -282,7 +282,8 @@ class MfaServiceTest {
             org.mockito.BDDMockito.willThrow(new BusinessException(
                             com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
                             org.springframework.http.HttpStatus.FORBIDDEN))
-                    .given(tenantAccessService).requireCanSignIn(TENANT_ID);
+                    .given(tenantAccessService).requireCanSignIn(org.mockito.ArgumentMatchers.eq(TENANT_ID), org.mockito.ArgumentMatchers.any(),
+                            org.mockito.ArgumentMatchers.eq(SignInFlow.MFA_VERIFY));
 
             assertThatThrownBy(() -> service.verifyMfaToken("raw-mfa-token", "123456"))
                     .isInstanceOf(BusinessException.class);
@@ -312,7 +313,8 @@ class MfaServiceTest {
                     .isInstanceOf(BusinessException.class);
 
             final org.mockito.InOrder order = org.mockito.Mockito.inOrder(tenantAccessService, authTokenService);
-            order.verify(tenantAccessService).requireCanSignIn(TENANT_ID);
+            order.verify(tenantAccessService).requireCanSignIn(org.mockito.ArgumentMatchers.eq(TENANT_ID), org.mockito.ArgumentMatchers.any(),
+                    org.mockito.ArgumentMatchers.eq(SignInFlow.MFA_VERIFY));
             order.verify(authTokenService).consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION);
         }
 
@@ -719,7 +721,8 @@ class MfaServiceTest {
                     .isInstanceOf(BusinessException.class);
 
             final org.mockito.InOrder order = org.mockito.Mockito.inOrder(tenantAccessService, authTokenService);
-            order.verify(tenantAccessService).requireCanSignIn(TENANT_ID);
+            order.verify(tenantAccessService).requireCanSignIn(org.mockito.ArgumentMatchers.eq(TENANT_ID), org.mockito.ArgumentMatchers.any(),
+                    org.mockito.ArgumentMatchers.eq(SignInFlow.MFA_SETUP_REQUIRED));
             order.verify(authTokenService).consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED);
         }
 
@@ -761,6 +764,10 @@ class MfaServiceTest {
             assertThat(response.login().refreshToken()).isEqualTo("refresh-token");
             assertThat(response.login().mfaSetupRequired()).isFalse();
             then(backupCodeRepository).should().saveAll(any());
+            // Both checks of this sign-in name its own flow, the one before the token
+            // and the one issueTokens repeats (review of #0-82 step 2: it said MFA_VERIFY).
+            then(tenantAccessService).should(org.mockito.Mockito.times(2)).requireCanSignIn(TENANT_ID, USER_ID,
+                    SignInFlow.MFA_SETUP_REQUIRED);
         }
 
         @Test

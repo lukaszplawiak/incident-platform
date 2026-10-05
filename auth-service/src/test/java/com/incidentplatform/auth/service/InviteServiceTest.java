@@ -190,7 +190,9 @@ class InviteServiceTest {
         org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.exception.BusinessException(
                         com.incidentplatform.shared.exception.ErrorCodes.TENANT_READ_ONLY, "read-only",
                         org.springframework.http.HttpStatus.FORBIDDEN))
-                .given(tenantAccessService).requireCanWrite(token.getTenantId());
+                .given(tenantAccessService).requireCanJoin(org.mockito.ArgumentMatchers.eq(token.getTenantId()),
+                        org.mockito.ArgumentMatchers.eq(token.getUser().getId()),
+                        org.mockito.ArgumentMatchers.eq(com.incidentplatform.auth.service.SignInFlow.ACCEPT_INVITE));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(
                         () -> service.acceptInvite(new AcceptInviteRequest(RAW_TOKEN, NEW_PASSWORD)))

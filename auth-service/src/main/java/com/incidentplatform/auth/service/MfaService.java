@@ -515,7 +515,7 @@ public class MfaService {
                 BruteForceProtectionService.Scope.MFA,
                 session.lockoutIdentifier(), session.tenantId());
 
-        return MfaAttempt.completed(issueTokens(user, session.tenantId()));
+        return MfaAttempt.completed(issueTokens(user, session.tenantId(), SignInFlow.MFA_VERIFY));
     }
 
     // ── Setup (forced flow — tenant requires MFA, no access token yet) ─────
@@ -559,8 +559,10 @@ public class MfaService {
     public MfaEnableWithLoginResponse enableMfaWithSetupToken(
             String rawSetupToken, String totpCode) {
         // Backlog #0-82: tenant first, then the token, as in resolveAndCheckMfaSession.
-        tenantAccessService.requireCanSignIn(authTokenService.peekToken(
-                rawSetupToken, AuthToken.Type.MFA_SETUP_REQUIRED).getTenantId());
+        final AuthToken peekedSetup = authTokenService.peekToken(
+                rawSetupToken, AuthToken.Type.MFA_SETUP_REQUIRED);
+        tenantAccessService.requireCanSignIn(peekedSetup.getTenantId(), peekedSetup.getUser().getId(),
+                SignInFlow.MFA_SETUP_REQUIRED);
         final AuthToken setupToken = authTokenService.consumeToken(
                 rawSetupToken, AuthToken.Type.MFA_SETUP_REQUIRED);
 
@@ -575,7 +577,7 @@ public class MfaService {
         log.info("MFA enabled via tenant-required flow, completing login: userId={}, tenant={}",
                 user.getId(), tenantId);
 
-        final LoginResponse loginResponse = issueTokens(user, tenantId);
+        final LoginResponse loginResponse = issueTokens(user, tenantId, SignInFlow.MFA_SETUP_REQUIRED);
 
         return new MfaEnableWithLoginResponse(plainCodes, loginResponse);
     }
@@ -651,7 +653,7 @@ public class MfaService {
         log.warn("MFA backup code used: userId={}, tenant={}, remaining={}",
                 user.getId(), session.tenantId(), remaining);
 
-        return MfaAttempt.completed(issueTokens(user, session.tenantId()));
+        return MfaAttempt.completed(issueTokens(user, session.tenantId(), SignInFlow.MFA_VERIFY));
     }
 
     // ── Backup codes status ───────────────────────────────────────────────
@@ -718,7 +720,7 @@ public class MfaService {
         // locked before a token row, in the order a suspension locks them
         // (found in review: the other order deadlocks with it). issueTokens
         // checks again, inside the lock this already holds.
-        tenantAccessService.requireCanSignIn(tenantId);
+        tenantAccessService.requireCanSignIn(tenantId, peeked.getUser().getId(), SignInFlow.MFA_VERIFY);
 
         final AuthToken consumed = authTokenService.consumeToken(
                 rawMfaToken, AuthToken.Type.MFA_SESSION);
@@ -921,12 +923,13 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
         return true;
     }
 
-    private LoginResponse issueTokens(User user, String tenantId) {
+    /** @param flow the way in, as the refusal's audit names it (review of #0-82 step 2) */
+    private LoginResponse issueTokens(User user, String tenantId, SignInFlow flow) {
         // Backlog #0-82: the one place an MFA login (code, backup code, setup
         // required) becomes a session; a tenant suspended in full gets none.
         // Its callers already took this lock before consuming their token; this
         // is the guard for any future caller, and re-reads under the lock held.
-        tenantAccessService.requireCanSignIn(tenantId);
+        tenantAccessService.requireCanSignIn(tenantId, user.getId(), flow);
         final List<UUID> teamIds =
                 teamMemberRepository.findTeamIdsByUserIdAndTenantId(
                         user.getId(), tenantId);

@@ -1800,7 +1800,8 @@ class AuthRepositoryIntegrationTest {
         void lockTimeoutResetAfterCheck() {
             final String before = jdbcTemplate.queryForObject("SHOW lock_timeout", String.class);
             applicationContext.getBean(com.incidentplatform.auth.service.TenantAccessService.class)
-                    .requireCanSignIn(tenant);
+                    .requireCanSignIn(tenant, java.util.UUID.randomUUID(),
+                            com.incidentplatform.auth.service.SignInFlow.LOGIN);
             assertThat(jdbcTemplate.queryForObject("SHOW lock_timeout", String.class)).isEqualTo(before);
         }
 
@@ -1832,6 +1833,125 @@ class AuthRepositoryIntegrationTest {
                 release.countDown();
                 holder.get(10, TimeUnit.SECONDS);
                 assertThat(login().accessToken()).as("works once the lock is gone").isNotBlank();
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+                deleteCommittedTenant();
+            }
+        }
+
+        /**
+         * What TenantStatusBusyHandler maps to 503 is PessimisticLockingFailureException;
+         * these two pin that PostgreSQL's lock failures reach the web layer as that
+         * type through the JPA repositories (found in review: the handler was tested
+         * with a synthetic exception only, so a different translation would leave
+         * the 500 it replaced).
+         */
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a lock timeout (55P03) on the tenant row surfaces as PessimisticLockingFailureException "
+                + "(backlog #0-82 step 2)")
+        void lockTimeoutTranslation() throws Exception {
+            final CountDownLatch locked = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                final var holder = holdTenantLock(pool, locked, release, () -> { });
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+                final var attempt = pool.submit(() -> new TransactionTemplate(transactionManager)
+                        .executeWithoutResult(status -> {
+                            tenantRepository.setLocalLockTimeout("200ms");
+                            tenantRepository.findByIdForUpdate(tenant);
+                        }));
+                final java.util.concurrent.ExecutionException failed = org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.ExecutionException.class, () -> attempt.get(15, TimeUnit.SECONDS));
+                assertThat(failed.getCause())
+                        .isInstanceOf(org.springframework.dao.PessimisticLockingFailureException.class);
+                release.countDown();
+                holder.get(10, TimeUnit.SECONDS);
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+                deleteCommittedTenant();
+            }
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a deadlock (40P01) between two tenant rows surfaces as PessimisticLockingFailureException in the "
+                + "transaction Postgres aborts, and the other commits (backlog #0-82 step 2)")
+        void deadlockTranslation() throws Exception {
+            final String other = "suspend-" + UUID.randomUUID().toString().substring(0, 8);
+            tenantRepository.insertIfAbsent(other, "Deadlock test", "admin@" + other + ".test", operatorId);
+            final CountDownLatch firstLocked = new CountDownLatch(1);
+            final CountDownLatch secondLocked = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                final var one = pool.submit(() -> lockBoth(tenant, other, firstLocked, secondLocked));
+                final var two = pool.submit(() -> lockBoth(other, tenant, secondLocked, firstLocked));
+                final List<Throwable> outcomes = new java.util.ArrayList<>();
+                for (final var future : List.of(one, two)) {
+                    try {
+                        future.get(20, TimeUnit.SECONDS);
+                    } catch (java.util.concurrent.ExecutionException e) {
+                        outcomes.add(e.getCause());
+                    }
+                }
+                assertThat(outcomes).as("exactly one of the two is the deadlock's victim").hasSize(1);
+                assertThat(outcomes.get(0))
+                        .isInstanceOf(org.springframework.dao.PessimisticLockingFailureException.class);
+            } finally {
+                pool.shutdownNow();
+                jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", other);
+                deleteCommittedTenant();
+            }
+        }
+
+        /** Locks {@code first}, waits until the other transaction holds its first row, then locks {@code second}. */
+        private void lockBoth(String first, String second, CountDownLatch mineLocked, CountDownLatch theirsLocked) {
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                tenantRepository.findByIdForUpdate(first);
+                mineLocked.countDown();
+                try {
+                    assertThat(theirsLocked.await(10, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+                tenantRepository.findByIdForUpdate(second);
+            });
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a suspension held longer than its lock timeout behind another change is answered 503 and "
+                + "changes nothing (backlog #0-82 step 2)")
+        void suspensionGivesUpAfterLockTimeout() throws Exception {
+            final CountDownLatch locked = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                final var holder = holdTenantLock(pool, locked, release, () -> { });
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+                final long started = System.nanoTime();
+                final var attempt = pool.submit(() -> tenantLifecycleService.suspend(tenant,
+                        com.incidentplatform.auth.domain.SuspensionMode.FULL,
+                        com.incidentplatform.auth.domain.SuspensionReason.TERMS, "blocked", operator));
+                final java.util.concurrent.ExecutionException failed = org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.ExecutionException.class, () -> attempt.get(20, TimeUnit.SECONDS));
+                final long waitedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+                assertThat(failed.getCause()).isInstanceOfSatisfying(
+                        com.incidentplatform.auth.service.TenantStatusBusyException.class,
+                        e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+                // Lower bound only, as for the sign-in: the wait was the 5 s lock timeout.
+                assertThat(waitedMs).as("waited for the lock timeout").isGreaterThanOrEqualTo(4_500L);
+                release.countDown();
+                holder.get(10, TimeUnit.SECONDS);
+                assertThat(jdbcTemplate.queryForObject("SELECT status FROM tenants WHERE tenant_id = ?",
+                        String.class, tenant)).as("rolled back whole").isEqualTo("ACTIVE");
             } finally {
                 release.countDown();
                 pool.shutdownNow();

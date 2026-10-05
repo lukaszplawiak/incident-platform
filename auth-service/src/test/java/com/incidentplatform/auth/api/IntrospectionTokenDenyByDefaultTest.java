@@ -128,6 +128,16 @@ class IntrospectionTokenDenyByDefaultTest {
     @MockitoBean private com.incidentplatform.auth.ratelimit.PlatformRateLimiter platformRateLimiter;
     @MockitoBean private SlackWorkspaceService slackWorkspaceService;
     @MockitoBean private IntegrationService integrationService;
+    // Backlog #0-82 step 2: InternalTenantStatusController needs it. It is also the
+    // chain's TenantStatusProvider here, so it answers FULL: these tests are about
+    // which principal reaches a route, not about suspension.
+    @MockitoBean private com.incidentplatform.auth.service.TenantAccessService tenantAccessService;
+
+    @org.junit.jupiter.api.BeforeEach
+    void tenantsActive() {
+        org.mockito.BDDMockito.given(tenantAccessService.accessOf(org.mockito.ArgumentMatchers.anyString()))
+                .willReturn(com.incidentplatform.shared.security.TenantAccess.FULL);
+    }
 
     private String introspectionToken() {
         return jwtUtils.generatePurposeToken(
