@@ -49,6 +49,12 @@ class StompAuthChannelInterceptorTest {
     @Mock
     private Claims claims;
 
+    @Mock
+    private com.incidentplatform.shared.security.TenantStatusProvider tenantStatusProvider;
+
+    @Mock
+    private TenantWebSocketSessions tenantWebSocketSessions;
+
     private StompAuthChannelInterceptor interceptor;
 
     private static final UUID USER_ID = UUID.randomUUID();
@@ -57,7 +63,8 @@ class StompAuthChannelInterceptorTest {
 
     @BeforeEach
     void setUp() {
-        interceptor = new StompAuthChannelInterceptor(jwtUtils, revocationChecker);
+        interceptor = new StompAuthChannelInterceptor(jwtUtils, revocationChecker, tenantStatusProvider,
+                tenantWebSocketSessions);
     }
 
     private static Message<byte[]> connectMessage(String authHeaderValue) {
@@ -163,9 +170,57 @@ class StompAuthChannelInterceptorTest {
          * correctly identifiable, replacing the broken thread-local
          * TenantContext IncidentWebSocketController used to rely on.
          */
+        private void validToken() {
+            given(jwtUtils.validateAndGetClaims("good-token")).willReturn(Optional.of(claims));
+            given(jwtUtils.extractJti(claims)).willReturn(Optional.of("jti-456"));
+            given(revocationChecker.isRevoked("jti-456")).willReturn(false);
+            given(jwtUtils.extractUserId(claims)).willReturn(Optional.of(USER_ID));
+            given(jwtUtils.extractTenantId(claims)).willReturn(Optional.of(TENANT_ID));
+            given(jwtUtils.extractEmail(claims)).willReturn(Optional.of(EMAIL));
+            given(jwtUtils.extractRoles(claims)).willReturn(List.of("ROLE_RESPONDER"));
+            given(jwtUtils.extractTeamIds(claims)).willReturn(List.of());
+            given(jwtUtils.extractManagedTeamIds(claims)).willReturn(List.of());
+        }
+
+        private Message<byte[]> connectInSession(String sessionId) {
+            final StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
+            accessor.addNativeHeader("Authorization", "Bearer good-token");
+            accessor.setSessionId(sessionId);
+            accessor.setLeaveMutable(true);
+            return MessageBuilder.createMessage(new byte[0], accessor.getMessageHeaders());
+        }
+
+        @Test
+        @DisplayName("rejects a CONNECT of a tenant suspended in full, and tracks no session (backlog #0-82 step 2)")
+        void rejectsSuspendedTenant() {
+            validToken();
+            given(tenantStatusProvider.knownAccessOf(TENANT_ID))
+                    .willReturn(com.incidentplatform.shared.security.TenantAccess.NONE);
+            final Message<byte[]> message = connectInSession("s-1");
+
+            assertThatThrownBy(() -> interceptor.preSend(message, null))
+                    .isInstanceOf(MessagingException.class);
+            assertThat(StompHeaderAccessor.wrap(message).getUser()).isNull();
+            org.mockito.BDDMockito.then(tenantWebSocketSessions).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("a read-only tenant connects (it may read), and the session is bound to its tenant")
+        void readOnlyTenantConnectsAndIsTracked() {
+            validToken();
+            given(tenantStatusProvider.knownAccessOf(TENANT_ID))
+                    .willReturn(com.incidentplatform.shared.security.TenantAccess.READ_ONLY);
+
+            interceptor.preSend(connectInSession("s-2"), null);
+
+            org.mockito.BDDMockito.then(tenantWebSocketSessions).should().bind("s-2", TENANT_ID);
+        }
+
         @Test
         @DisplayName("attaches a correctly-populated UserPrincipal on a valid token")
         void attachesPrincipalOnValidToken() {
+            given(tenantStatusProvider.knownAccessOf(TENANT_ID))
+                    .willReturn(com.incidentplatform.shared.security.TenantAccess.FULL);
             given(jwtUtils.validateAndGetClaims("good-token")).willReturn(Optional.of(claims));
             given(jwtUtils.extractJti(claims)).willReturn(Optional.of("jti-456"));
             given(revocationChecker.isRevoked("jti-456")).willReturn(false);

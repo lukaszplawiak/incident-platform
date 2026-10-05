@@ -2,7 +2,9 @@ package com.incidentplatform.incident.config;
 
 import com.incidentplatform.shared.security.JwtAuthFilter;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.TenantAccess;
 import com.incidentplatform.shared.security.TenantIds;
+import com.incidentplatform.shared.security.TenantStatusProvider;
 import com.incidentplatform.shared.security.TokenRevocationChecker;
 import com.incidentplatform.shared.security.UserPrincipal;
 import io.jsonwebtoken.Claims;
@@ -80,6 +82,14 @@ import java.util.UUID;
  * reimplemented — same validation logic, same revocation check via
  * {@link TokenRevocationChecker}, for both transports this service
  * exposes.
+ *
+ * <h2>Added (backlog #0-82, step 2): a suspended tenant</h2>
+ * The HTTP chain's {@code TenantStatusFilter} does not see STOMP frames, so
+ * {@code CONNECT} asks the same {@link TenantStatusProvider}, without waiting
+ * on auth-service ({@link TenantStatusProvider#knownAccessOf}): a tenant known
+ * to be suspended in full is refused (a read-only one connects: it may read). The
+ * session's tenant is then handed to {@link TenantWebSocketSessions}, which
+ * closes the sessions a suspension finds already open.
  */
 @Component
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
@@ -91,11 +101,17 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
     private final JwtUtils jwtUtils;
     private final TokenRevocationChecker revocationChecker;
+    private final TenantStatusProvider tenantStatusProvider;
+    private final TenantWebSocketSessions tenantWebSocketSessions;
 
     public StompAuthChannelInterceptor(JwtUtils jwtUtils,
-                                       TokenRevocationChecker revocationChecker) {
+                                       TokenRevocationChecker revocationChecker,
+                                       TenantStatusProvider tenantStatusProvider,
+                                       TenantWebSocketSessions tenantWebSocketSessions) {
         this.jwtUtils = jwtUtils;
         this.revocationChecker = revocationChecker;
+        this.tenantStatusProvider = tenantStatusProvider;
+        this.tenantWebSocketSessions = tenantWebSocketSessions;
     }
 
     @Override
@@ -159,10 +175,19 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
         final List<UUID> teamIds = jwtUtils.extractTeamIds(claims);
         final List<UUID> managedTeamIds = jwtUtils.extractManagedTeamIds(claims);
 
+        // knownAccessOf, not accessOf (found in review): CONNECT runs on the
+        // message channel's thread pool, which must not wait on auth-service; a
+        // tenant not known yet connects, and the sweep closes it if suspended.
+        if (tenantStatusProvider.knownAccessOf(tenantId) == TenantAccess.NONE) {
+            log.warn("WebSocket CONNECT rejected — tenant suspended: userId={}, tenant={}", userId, tenantId);
+            throw new MessagingException("Organisation suspended");
+        }
+
         final UserPrincipal principal = new UserPrincipal(
                 userId, tenantId, email, roles, teamIds, managedTeamIds);
 
         accessor.setUser(principal);
+        tenantWebSocketSessions.bind(accessor.getSessionId(), tenantId);
 
         log.info("WebSocket CONNECT authenticated: userId={}, tenant={}",
                 userId, tenantId);
