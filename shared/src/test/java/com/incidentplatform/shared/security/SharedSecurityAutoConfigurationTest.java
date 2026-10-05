@@ -180,6 +180,46 @@ class SharedSecurityAutoConfigurationTest {
                         .isEqualTo(TenantAccess.NONE));
     }
 
+    @Test
+    @DisplayName("backlog #0-82 step 2: with auth-service.base-url the status is asked of auth-service; "
+            + "a provider the service declares still wins")
+    void authServiceProviderWhenUrlSet() {
+        final ApplicationContextRunnerCustomizer remote = runner -> runner
+                .withPropertyValues("auth-service.base-url=http://auth-service:8087")
+                .withBean(io.micrometer.core.instrument.MeterRegistry.class,
+                        io.micrometer.core.instrument.simple.SimpleMeterRegistry::new)
+                .withBean(com.incidentplatform.shared.observability.ClientFallbackMetrics.class)
+                .withBean(ServiceTokenProvider.class,
+                        () -> org.mockito.Mockito.mock(ServiceTokenProvider.class));
+        remote.apply(contextRunner).run(context -> assertThat(context.getBean(TenantStatusProvider.class))
+                .isInstanceOf(AuthServiceTenantStatusProvider.class));
+        remote.apply(contextRunner)
+                .withBean(TenantStatusProvider.class, () -> tenantId -> TenantAccess.NONE)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(TenantStatusProvider.class);
+                    assertThat(context.getBean(TenantStatusProvider.class))
+                            .isNotInstanceOf(AuthServiceTenantStatusProvider.class);
+                });
+    }
+
+    @Test
+    @DisplayName("backlog #0-82 step 2: tenant-status.read-only.retry-after reaches the chain's filter")
+    void retryAfterReachesFilter() {
+        contextRunner.withPropertyValues("tenant-status.read-only.retry-after=PT5M").run(context -> {
+            final org.springframework.security.web.SecurityFilterChain chain =
+                    context.getBean(org.springframework.security.web.SecurityFilterChain.class);
+            final Object filter = chain.getFilters().get(indexOf(chain, TenantStatusFilter.class));
+            assertThat(org.springframework.test.util.ReflectionTestUtils.getField(filter, "readOnlyRetryAfter"))
+                    .isEqualTo(java.time.Duration.ofMinutes(5));
+        });
+    }
+
+    @FunctionalInterface
+    private interface ApplicationContextRunnerCustomizer {
+        org.springframework.boot.test.context.runner.WebApplicationContextRunner apply(
+                org.springframework.boot.test.context.runner.WebApplicationContextRunner runner);
+    }
+
     private static int indexOf(org.springframework.security.web.SecurityFilterChain chain, Class<?> type) {
         for (int i = 0; i < chain.getFilters().size(); i++) {
             if (type.isInstance(chain.getFilters().get(i))) {

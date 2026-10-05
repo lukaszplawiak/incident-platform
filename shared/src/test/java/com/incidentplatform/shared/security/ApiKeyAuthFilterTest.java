@@ -147,6 +147,21 @@ class ApiKeyAuthFilterTest {
     }
 
     @Test
+    @DisplayName("suspended in full (backlog #0-82 step 2): 403 TENANT_SUSPENDED, no WWW-Authenticate, no Retry-After")
+    void suspended() throws Exception {
+        final Outcome outcome = run(filter(new ApiKeyLookupResult.Suspended()),
+                "/api/v1/alerts/prometheus", "ApiKey " + KEY);
+
+        assertThat(outcome.chainCalled()).isFalse();
+        assertThat(outcome.response().getStatus()).isEqualTo(403);
+        assertThat(outcome.response().getContentAsString()).contains("TENANT_SUSPENDED");
+        assertThat(outcome.response().getHeader("WWW-Authenticate")).isNull();
+        assertThat(outcome.response().getHeader("Retry-After")).isNull();
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        assertThat(TenantContext.isSet()).isFalse();
+    }
+
+    @Test
     @DisplayName("throttled: 429 with Retry-After of at least one second")
     void throttled() throws Exception {
         final Outcome outcome = run(filter(new ApiKeyLookupResult.Throttled(Duration.ZERO)),

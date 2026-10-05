@@ -94,6 +94,10 @@ class AuditEventTypesTest {
         assertThat(List.of(AuditEventTypes.TENANT_SUSPENDED, AuditEventTypes.TENANT_RESUMED))
                 .containsExactly("TENANT_SUSPENDED", "TENANT_RESUMED")
                 .doesNotContain(AuditEventTypes.TENANT_PROVISIONED, AuditEventTypes.USER_STATUS_UPDATED);
+        assertThat(AuditEventTypes.USER_SIGN_IN_REFUSED_TENANT_SUSPENDED)
+                .isEqualTo("USER_SIGN_IN_REFUSED_TENANT_SUSPENDED")
+                .isNotEqualTo(AuditEventTypes.USER_LOGIN_FAILED)
+                .hasSizeLessThanOrEqualTo(100);
     }
 
     @Test

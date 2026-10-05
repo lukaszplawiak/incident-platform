@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -20,6 +21,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.UrlPathHelper;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -66,6 +68,16 @@ import java.util.Set;
  * is routed elsewhere. Spring Security's firewall already rejects such paths
  * before this filter; this is the second line, and it fails closed.
  *
+ * <h2>A read-only refusal that asks to retry (backlog #0-82, step 2)</h2>
+ * A service that sets {@code tenant-status.read-only.retry-after} answers a
+ * read-only tenant's refused write 503 + {@code Retry-After} instead of 403.
+ * ingestion-service does: there a write is an alert, and an alert source such
+ * as Alertmanager drops an alert answered 4xx and keeps and retries one
+ * answered 5xx. A read-only tenant's alerts are paused, not refused — the
+ * answer its key's introspection already gives (503, {@code Retry-After: 300})
+ * — and this keeps it so for a key ingestion-service cached as active before
+ * the suspension.
+ *
  * <p>Built in {@code buildCommonSecurity}, not declared as a bean: a filter
  * bean would also be registered as a plain servlet filter, outside the chain.
  */
@@ -81,6 +93,8 @@ public class TenantStatusFilter extends OncePerRequestFilter {
     private final TenantStatusProvider provider;
     private final ObjectMapper objectMapper;
     private final List<AllowedWrite> allowedWrites;
+    /** {@code null}: a read-only refusal is 403; otherwise 503 with this Retry-After. */
+    private final Duration readOnlyRetryAfter;
     private final AntPathMatcher matcher = new AntPathMatcher();
     private final UrlPathHelper urlPathHelper = new UrlPathHelper();
 
@@ -96,9 +110,27 @@ public class TenantStatusFilter extends OncePerRequestFilter {
      */
     public TenantStatusFilter(TenantStatusProvider provider, ObjectMapper objectMapper,
                               List<String> allowedWrites) {
+        this(provider, objectMapper, allowedWrites, null);
+    }
+
+    /**
+     * @param readOnlyRetryAfter {@code null} to refuse a read-only tenant's
+     *                           write with 403; otherwise it is refused with 503
+     *                           and this {@code Retry-After} (a whole number of
+     *                           seconds, at least one)
+     * @throws IllegalArgumentException also for a {@code readOnlyRetryAfter}
+     *         shorter than one second
+     */
+    public TenantStatusFilter(TenantStatusProvider provider, ObjectMapper objectMapper,
+                              List<String> allowedWrites, Duration readOnlyRetryAfter) {
         this.provider = Objects.requireNonNull(provider, "provider");
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
         this.allowedWrites = allowedWrites.stream().map(TenantStatusFilter::parse).toList();
+        if (readOnlyRetryAfter != null && readOnlyRetryAfter.toSeconds() < 1) {
+            throw new IllegalArgumentException("tenant-status.read-only.retry-after must be at least one second: "
+                    + readOnlyRetryAfter);
+        }
+        this.readOnlyRetryAfter = readOnlyRetryAfter;
     }
 
     private static AllowedWrite parse(String entry) {
@@ -122,13 +154,19 @@ public class TenantStatusFilter extends OncePerRequestFilter {
         final TenantAccess access = provider.accessOf(principal.tenantId());
         switch (access) {
             case FULL -> chain.doFilter(request, response);
-            case NONE -> refuse(response, request, principal, ErrorCodes.TENANT_SUSPENDED,
+            case NONE -> refuse(response, request, principal, HttpStatus.FORBIDDEN, ErrorCodes.TENANT_SUSPENDED,
                     "This organisation's account is suspended. Contact the platform operator.");
             case READ_ONLY -> {
                 if (SAFE_METHODS.contains(request.getMethod()) || allowedWrite(request)) {
                     chain.doFilter(request, response);
+                } else if (readOnlyRetryAfter != null) {
+                    response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(readOnlyRetryAfter.toSeconds()));
+                    refuse(response, request, principal, HttpStatus.SERVICE_UNAVAILABLE,
+                            ErrorCodes.TENANT_READ_ONLY,
+                            "This organisation's account is suspended to read-only: "
+                                    + "changes are paused until it is resumed. Retry later.");
                 } else {
-                    refuse(response, request, principal, ErrorCodes.TENANT_READ_ONLY,
+                    refuse(response, request, principal, HttpStatus.FORBIDDEN, ErrorCodes.TENANT_READ_ONLY,
                             "This organisation's account is suspended to read-only: "
                                     + "changes are refused until it is resumed.");
                 }
@@ -158,16 +196,16 @@ public class TenantStatusFilter extends OncePerRequestFilter {
     }
 
     private void refuse(HttpServletResponse response, HttpServletRequest request, UserPrincipal principal,
-                        String errorCode, String message) throws IOException {
+                        HttpStatus status, String errorCode, String message) throws IOException {
         log.info("Request of a suspended tenant refused: tenant={}, user={}, apiKey={}, method={}, code={}",
                 principal.tenantId(), principal.userId(), principal.isApiKey(), request.getMethod(), errorCode);
         final String fromHeader = response.getHeader("X-Request-Id");
         final String requestId = fromHeader != null && !fromHeader.isBlank()
                 ? fromHeader : Objects.requireNonNullElse(MDC.get("requestId"), "unknown");
-        response.setStatus(HttpStatus.FORBIDDEN.value());
+        response.setStatus(status.value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
         objectMapper.writeValue(response.getWriter(),
-                ErrorResponse.of(HttpStatus.FORBIDDEN.value(), errorCode, message, requestId));
+                ErrorResponse.of(status.value(), errorCode, message, requestId));
     }
 }
