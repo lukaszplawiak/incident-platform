@@ -2,9 +2,12 @@ package com.incidentplatform.auth.api;
 
 import com.incidentplatform.auth.dto.ProvisionTenantRequest;
 import com.incidentplatform.auth.dto.ProvisionTenantResponse;
+import com.incidentplatform.auth.dto.ResumeTenantRequest;
+import com.incidentplatform.auth.dto.SuspendTenantRequest;
 import com.incidentplatform.auth.dto.TenantDto;
 import com.incidentplatform.auth.ratelimit.PlatformRateLimiter;
 import com.incidentplatform.auth.ratelimit.RateLimitDecision;
+import com.incidentplatform.auth.service.TenantLifecycleService;
 import com.incidentplatform.auth.service.TenantProvisioningService;
 import com.incidentplatform.shared.dto.PagedResponse;
 import com.incidentplatform.shared.security.UserPrincipal;
@@ -59,13 +62,16 @@ import java.net.URI;
 public class PlatformTenantController {
 
     private final TenantProvisioningService provisioningService;
+    private final TenantLifecycleService lifecycleService;
     private final PlatformRateLimiter rateLimiter;
     private final Counter provisioned;
 
     public PlatformTenantController(TenantProvisioningService provisioningService,
+                                    TenantLifecycleService lifecycleService,
                                     PlatformRateLimiter rateLimiter,
                                     MeterRegistry meterRegistry) {
         this.provisioningService = provisioningService;
+        this.lifecycleService = lifecycleService;
         this.rateLimiter = rateLimiter;
         this.provisioned = Counter.builder("platform.tenants.provisioned")
                 .description("Tenants created through the platform API (backlog #0-80, #0-83)")
@@ -145,6 +151,63 @@ public class PlatformTenantController {
         }
         provisioningService.reissueFirstAdminInvite(tenantId, operator);
         return ResponseEntity.accepted().build();
+    }
+
+    @PostMapping(value = "/{tenantId}/suspend", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @PreAuthorize("@platformAccess.isPlatformAdmin(authentication)")
+    @Operation(summary = "Suspend a tenant, or change how it is suspended (backlog #0-82)",
+            description = """
+                    FULL: nothing works for the tenant's users and API keys; every session
+                    ends now. READ_ONLY: reads go on, writes are refused except account
+                    security (logout, password change, MFA); alerts stop. Nothing is
+                    deleted or revoked: resumed, the tenant works as before. Audited in
+                    both tenants and alerted.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Suspended; the tenant as it is now"),
+            @ApiResponse(responseCode = "400", description = "Invalid input, or a reserved tenant"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Not an admin of the platform-operator tenant, an API key, or a session without a recent MFA login"),
+            @ApiResponse(responseCode = "404", description = "No such tenant"),
+            @ApiResponse(responseCode = "409", description = "The tenant cannot be suspended in its state"),
+            @ApiResponse(responseCode = "429", description = "Per-operator limit reached; see Retry-After"),
+            @ApiResponse(responseCode = "503", description = "The limit cannot be checked now; see Retry-After")
+    })
+    public ResponseEntity<TenantDto> suspend(@PathVariable String tenantId,
+                                             @Valid @RequestBody SuspendTenantRequest request,
+                                             @AuthenticationPrincipal UserPrincipal operator) {
+        final RateLimitDecision limit = rateLimiter.tryConsume(operator.userId());
+        if (!limit.allowed()) {
+            return refused(limit);
+        }
+        lifecycleService.suspend(tenantId, request.mode(), request.reason(), request.note(), operator);
+        return ResponseEntity.ok(provisioningService.get(tenantId));
+    }
+
+    @PostMapping(value = "/{tenantId}/resume", consumes = MediaType.APPLICATION_JSON_VALUE,
+            produces = MediaType.APPLICATION_JSON_VALUE)
+    @PreAuthorize("@platformAccess.isPlatformAdmin(authentication)")
+    @Operation(summary = "Resume a suspended tenant (backlog #0-82)")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Resumed; the tenant as it is now"),
+            @ApiResponse(responseCode = "400", description = "Invalid input, or a reserved tenant"),
+            @ApiResponse(responseCode = "401", description = "Unauthorized"),
+            @ApiResponse(responseCode = "403", description = "Not an admin of the platform-operator tenant, an API key, or a session without a recent MFA login"),
+            @ApiResponse(responseCode = "404", description = "No such tenant"),
+            @ApiResponse(responseCode = "409", description = "The tenant is not suspended"),
+            @ApiResponse(responseCode = "429", description = "Per-operator limit reached; see Retry-After"),
+            @ApiResponse(responseCode = "503", description = "The limit cannot be checked now; see Retry-After")
+    })
+    public ResponseEntity<TenantDto> resume(@PathVariable String tenantId,
+                                            @Valid @RequestBody ResumeTenantRequest request,
+                                            @AuthenticationPrincipal UserPrincipal operator) {
+        final RateLimitDecision limit = rateLimiter.tryConsume(operator.userId());
+        if (!limit.allowed()) {
+            return refused(limit);
+        }
+        lifecycleService.resume(tenantId, request.note(), operator);
+        return ResponseEntity.ok(provisioningService.get(tenantId));
     }
 
     @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)

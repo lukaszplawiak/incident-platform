@@ -36,6 +36,7 @@ class ApiKeyIntrospectionServiceTest {
     @Mock private ApiKeyRepository apiKeyRepository;
     @Mock private IntegrationRepository integrationRepository;
     @Mock private ApiKeyUsageRecorder usageRecorder;
+    @Mock private TenantAccessService tenantAccessService;
     @InjectMocks private ApiKeyIntrospectionService service;
 
     private static ApiKey key(Instant expiresAt, UUID integrationId) {
@@ -139,5 +140,81 @@ class ApiKeyIntrospectionServiceTest {
     private static com.incidentplatform.auth.domain.User owner() {
         return com.incidentplatform.auth.domain.User.forTesting(UUID.randomUUID(), TENANT, "owner@acme.example",
                 "hash", true, List.of("ROLE_RESPONDER"));
+    }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("tenant suspension and deactivated owners (backlog #0-82)")
+    class Suspension {
+
+        private void access(com.incidentplatform.shared.security.TenantAccess access) {
+            given(tenantAccessService.accessOf(TENANT)).willReturn(access);
+        }
+
+        @Test
+        @DisplayName("suspended in full: no key resolves, for auth-service or for ingestion, and none is marked used")
+        void fullSuspension() {
+            final ApiKey apiKey = key(null, null);
+            given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(apiKey));
+            access(com.incidentplatform.shared.security.TenantAccess.NONE);
+
+            assertThat(service.resolve(HASH)).isEmpty();
+            assertThat(service.introspect(HASH)).isEqualTo(ApiKeyIntrospectionResponse.inactive());
+            then(usageRecorder).should(never()).recordUsage(any());
+        }
+
+        @Test
+        @DisplayName("read-only: a key still reads in auth-service, but ingestion (a write) gets it paused, not inactive")
+        void readOnly() {
+            final ApiKey apiKey = key(null, null);
+            given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(apiKey));
+            access(com.incidentplatform.shared.security.TenantAccess.READ_ONLY);
+
+            assertThat(service.resolve(HASH)).isPresent();
+            final ApiKeyIntrospectionResponse response = service.introspect(HASH);
+            assertThat(response).isEqualTo(ApiKeyIntrospectionResponse.pausedForWrites());
+            assertThat(response.active()).isFalse();
+            assertThat(response.tenantId()).isNull();
+            // Once, by resolve(): a paused introspection is no use of the key.
+            then(usageRecorder).should(org.mockito.Mockito.times(1)).recordUsage(apiKey.getId());
+        }
+
+        @Test
+        @DisplayName("read-only: a PERSONAL key is plain inactive for ingestion, never paused (paused would say it is valid)")
+        void readOnlyPersonalKeyNotPaused() {
+            final ApiKey personal = ApiKey.createPersonal(TENANT, "my-script", HASH, "abcdefgh",
+                    List.of("alerts:ingest"), null, owner());
+            ReflectionTestUtils.setField(personal, "id", UUID.randomUUID());
+            given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(personal));
+            access(com.incidentplatform.shared.security.TenantAccess.READ_ONLY);
+
+            assertThat(service.introspect(HASH)).isEqualTo(ApiKeyIntrospectionResponse.inactive());
+        }
+
+        @Test
+        @DisplayName("on the wire: paused is {active:false, paused:true}; inactive stays {active:false} (the contract ingestion parses)")
+        void pausedWireFormat() throws Exception {
+            final com.fasterxml.jackson.databind.ObjectMapper mapper =
+                    new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+
+            assertThat(mapper.writeValueAsString(ApiKeyIntrospectionResponse.pausedForWrites()))
+                    .isEqualTo("{\"active\":false,\"paused\":true}");
+            assertThat(mapper.writeValueAsString(ApiKeyIntrospectionResponse.inactive()))
+                    .isEqualTo("{\"active\":false}");
+        }
+
+        @Test
+        @DisplayName("a personal key of a deactivated owner does not resolve; an active owner's does")
+        void deactivatedOwner() {
+            final com.incidentplatform.auth.domain.User inactive = owner();
+            inactive.setActive(false);
+            final ApiKey personal = ApiKey.createPersonal(TENANT, "my-script", HASH, "abcdefgh",
+                    List.of("incidents:read"), null, inactive);
+            ReflectionTestUtils.setField(personal, "id", UUID.randomUUID());
+            given(apiKeyRepository.findActiveByHash(HASH)).willReturn(Optional.of(personal));
+            access(com.incidentplatform.shared.security.TenantAccess.FULL);
+
+            assertThat(service.resolve(HASH)).isEmpty();
+            then(usageRecorder).should(never()).recordUsage(any());
+        }
     }
 }

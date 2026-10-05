@@ -498,6 +498,49 @@ tests:
               summary: "Admin MFA resets refused: rate limit unavailable"
               description: "auth-service could not reach Redis to check the MFA reset limit in the last 15 minutes and refused admin MFA resets. Check Redis and the MfaResetRateLimiter ERROR lines in the auth-service log.\n"
 
+  # Backlog #0-82: a suspension or a resumption fires, and stops an hour later.
+  - interval: 1m
+    input_series:
+      - series: 'platform_tenant_lifecycle_total{job="auth-service",instance="auth-1",action="suspended"}'
+        values: '0x10 1x80'
+      - series: 'platform_tenant_lifecycle_total{job="auth-service",instance="auth-1",action="resumed"}'
+        values: '0x100'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PlatformTenantSuspensionChanged
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PlatformTenantSuspensionChanged
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+            exp_annotations:
+              summary: "A tenant was suspended or resumed"
+              description: "An operator suspended a tenant, changed its suspension or resumed it in the last hour. Check the TENANT_SUSPENDED and TENANT_RESUMED audit events in the platform-operator tenant (who, which tenant, mode, reason and note) and confirm it was expected.\n"
+      - eval_time: 85m
+        alertname: PlatformTenantSuspensionChanged
+        exp_alerts: []
+
+  # Backlog #0-82: a lookup of a tenant without a tenants row fires; none does not.
+  - interval: 1m
+    input_series:
+      - series: 'platform_tenant_status_missing_total{job="auth-service",instance="auth-1"}'
+        values: '0x10 3x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PlatformTenantStatusRowMissing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: PlatformTenantStatusRowMissing
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+            exp_annotations:
+              summary: "A tenant has no row in the tenants table"
+              description: "auth-service checked the status of a tenant without a tenants row in the last 15 minutes; it has full access and cannot be suspended. Find it in the auth-service WARN log (\"Tenant has no row in tenants\") and insert its row.\n"
+
   # Backlog #0-90: one MFA recovery request fires, and stops an hour later;
   # the other outcomes of the same counter do not.
   - interval: 1m

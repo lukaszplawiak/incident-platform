@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.authorization.AuthenticatedAuthorizationManager;
@@ -172,6 +173,19 @@ public class SharedSecurityAutoConfiguration {
     }
 
     /**
+     * Default {@link TenantStatusProvider} (backlog #0-82): every tenant has
+     * full access. auth-service, which owns the tenants' status, declares its
+     * own; the other services keep this until they read the status from
+     * auth-service (the second step of #0-82). The same arrangement as
+     * {@link #noOpTokenRevocationChecker()}.
+     */
+    @Bean
+    @ConditionalOnMissingBean(TenantStatusProvider.class)
+    public TenantStatusProvider fullAccessTenantStatusProvider() {
+        return tenantId -> TenantAccess.FULL;
+    }
+
+    /**
      * Default JwtAuthFilter bean, built with whichever
      * {@link TokenRevocationChecker} bean is present: the no-op default
      * above, or a service's own implementation.
@@ -336,7 +350,31 @@ public class SharedSecurityAutoConfiguration {
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 )
                 .addFilterBefore(jwtAuthFilter,
-                        UsernamePasswordAuthenticationFilter.class);
+                        UsernamePasswordAuthenticationFilter.class)
+                // Backlog #0-82: after authentication (JWT here, an API key
+                // just before JwtAuthFilter), so every chain built here, the
+                // services' own included, refuses a suspended tenant's requests.
+                .addFilterAfter(tenantStatusFilter(http), JwtAuthFilter.class);
+    }
+
+    /**
+     * The {@link TenantStatusFilter} of a chain (backlog #0-82), built from the
+     * context's {@link TenantStatusProvider} and the service's
+     * {@code tenant-status.read-only.allowed-writes} (comma-separated Ant
+     * patterns, empty by default). Built here rather than declared as a bean,
+     * which would also register it as a servlet filter outside the chain. A
+     * context without a provider (a test slice that does not load this
+     * auto-configuration) gets full access, as the default provider would give.
+     */
+    static TenantStatusFilter tenantStatusFilter(HttpSecurity http) {
+        final ApplicationContext context = http.getSharedObject(ApplicationContext.class);
+        final TenantStatusProvider provider = context.getBeanProvider(TenantStatusProvider.class)
+                .getIfAvailable(() -> tenantId -> TenantAccess.FULL);
+        final ObjectMapper objectMapper = context.getBeanProvider(ObjectMapper.class)
+                .getIfAvailable(() -> new ObjectMapper().findAndRegisterModules());
+        final String[] allowedWrites = context.getEnvironment()
+                .getProperty("tenant-status.read-only.allowed-writes", String[].class, new String[0]);
+        return new TenantStatusFilter(provider, objectMapper, List.of(allowedWrites));
     }
 
     /**

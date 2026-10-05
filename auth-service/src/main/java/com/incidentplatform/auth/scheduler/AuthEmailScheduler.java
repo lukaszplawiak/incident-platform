@@ -319,6 +319,10 @@ public class AuthEmailScheduler {
                         GiveUpReason.DEADLINE_PASSED, closed.reason(), entry.getId(),
                         entry.getEmailType(), entry.getEmail(), entry.getUserId());
             }
+            case Attempt.Deferred deferred ->
+                    log.info("Auth email paused while its tenant is suspended: entryId={}, type={}, tenant={}, "
+                            + "next look at {}", entry.getId(), entry.getEmailType(), entry.getTenantId(),
+                            deferred.nextAttemptAt());
             case Attempt.Send send -> send(entry, send, now);
         }
     }

@@ -14,6 +14,10 @@ import java.util.UUID;
  *
  * @param expiresAt {@code null} for a key that never expires; the caller must
  *                  not cache an active answer beyond it
+ * @param paused    {@code true} only beside {@code active:false}, for a valid
+ *                  TENANT key of a read-only tenant (backlog #0-82): not now,
+ *                  ask again later; absent otherwise. Not a field of RFC 7662 —
+ *                  an extension, which §2.2 allows
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ApiKeyIntrospectionResponse(
@@ -22,16 +26,22 @@ public record ApiKeyIntrospectionResponse(
         String tenantId,
         UUID teamId,
         List<String> scopes,
-        Instant expiresAt
+        Instant expiresAt,
+        Boolean paused
 ) {
 
     public static ApiKeyIntrospectionResponse active(UUID keyId, String tenantId, UUID teamId,
                                                      List<String> scopes, Instant expiresAt) {
         return new ApiKeyIntrospectionResponse(true, keyId, tenantId, teamId,
-                List.copyOf(scopes), expiresAt);
+                List.copyOf(scopes), expiresAt, null);
     }
 
     public static ApiKeyIntrospectionResponse inactive() {
-        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null);
+        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null, null);
+    }
+
+    /** A read-only tenant's key asked to file an alert (backlog #0-82): retry later. */
+    public static ApiKeyIntrospectionResponse pausedForWrites() {
+        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null, true);
     }
 }

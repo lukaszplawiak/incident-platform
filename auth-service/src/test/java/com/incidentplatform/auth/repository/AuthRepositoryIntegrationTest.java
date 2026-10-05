@@ -213,6 +213,10 @@ class AuthRepositoryIntegrationTest {
     @Autowired private AuthEmailPersistenceService authEmailPersistenceService;
     @Autowired private MfaService mfaService;
     @Autowired private MfaRecoveryService mfaRecoveryService;
+    @Autowired private com.incidentplatform.auth.service.TenantLifecycleService tenantLifecycleService;
+    @Autowired private com.incidentplatform.auth.service.AuthService authService;
+    @Autowired private com.incidentplatform.auth.service.ApiKeyIntrospectionService apiKeyIntrospectionService;
+    @Autowired private com.incidentplatform.auth.service.UserManagementService userManagementService;
     @Autowired private MfaRecoveryRequestRepository mfaRecoveryRequestRepository;
     @Autowired private ApiKeyService apiKeyService;
     @Autowired private ApplicationContext applicationContext;
@@ -1302,6 +1306,551 @@ class AuthRepositoryIntegrationTest {
                 }
             }
             return out.toByteArray();
+        }
+    }
+
+    /**
+     * Backlog #0-82: a tenant suspended in full or read-only, through the real
+     * services, V30 and the full context: sessions end, sign-in and keys are
+     * refused, emails wait, and resuming brings everything back but the ended
+     * sessions.
+     */
+    @Nested
+    @DisplayName("Tenant suspension (backlog #0-82)")
+    class TenantSuspension {
+
+        private final UUID operatorId = UUID.randomUUID();
+        private final UserPrincipal operator = new UserPrincipal(operatorId, ReservedTenants.PLATFORM_OPERATOR,
+                "ops@platform.test", List.of("ROLE_ADMIN"), List.of());
+        private String tenant;
+        private User member;
+        private String keyHash;
+
+        private void flushAndClear() {
+            entityManager.flush();
+            entityManager.clear();
+        }
+
+        /** A tenant with a member who has a password, and a tenant API key. */
+        @org.junit.jupiter.api.BeforeEach
+        void tenantWithMemberAndKey() {
+            tenant = "suspend-" + UUID.randomUUID().toString().substring(0, 8);
+            tenantRepository.insertIfAbsent(tenant, "Suspension test", "admin@" + tenant + ".test", operatorId);
+            member = userRepository.saveAndFlush(User.forTesting(null, tenant, "member@" + tenant + ".test",
+                    passwordEncoder.encode("member-password"), true, List.of("ROLE_ADMIN")));
+            keyHash = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "");
+            apiKeyRepository.saveAndFlush(ApiKey.createTenant(tenant, "alertmanager", keyHash,
+                    keyHash.substring(0, 8), List.of("alerts:ingest"), null));
+        }
+
+        private com.incidentplatform.auth.dto.LoginResponse login() {
+            return authService.login(new com.incidentplatform.auth.dto.LoginRequest(member.getEmail(),
+                    "member-password"), tenant);
+        }
+
+        private String statusOf() {
+            return jdbcTemplate.queryForObject("SELECT status FROM tenants WHERE tenant_id = ?", String.class, tenant);
+        }
+
+        @Test
+        @DisplayName("in full: sessions end, sign-in and keys are refused; resumed: sign-in and keys work, old sessions stay ended")
+        void fullSuspensionAndResume() {
+            final String refresh = login().refreshToken();
+            flushAndClear();
+
+            tenantLifecycleService.suspend(tenant, com.incidentplatform.auth.domain.SuspensionMode.FULL,
+                    com.incidentplatform.auth.domain.SuspensionReason.SECURITY, "Admin account taken over", operator);
+            flushAndClear();
+
+            assertThat(statusOf()).isEqualTo("SUSPENDED");
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh))
+                    .as("the session ended at the suspension").isInstanceOf(BusinessException.class);
+            assertThatThrownBy(this::login).isInstanceOfSatisfying(BusinessException.class,
+                    e -> assertThat(e.getErrorCode()).isEqualTo(com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED));
+            assertThat(apiKeyIntrospectionService.resolve(keyHash)).isEmpty();
+            assertThat(apiKeyIntrospectionService.introspect(keyHash).active()).isFalse();
+
+            tenantLifecycleService.resume(tenant, "Account secured", operator);
+            flushAndClear();
+
+            assertThat(statusOf()).isEqualTo("ACTIVE");
+            assertThat(jdbcTemplate.queryForMap("SELECT suspension_mode, suspended_at FROM tenants WHERE tenant_id = ?",
+                    tenant)).containsEntry("suspension_mode", null).containsEntry("suspended_at", null);
+            assertThat(login().accessToken()).isNotBlank();
+            assertThat(apiKeyIntrospectionService.introspect(keyHash).active()).as("keys were not revoked").isTrue();
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh))
+                    .as("a session ended by the suspension does not come back").isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("read-only: sign-in and sessions go on, ingestion's introspection is paused (503 there), keys still read")
+        void readOnly() {
+            final String refresh = login().refreshToken();
+            flushAndClear();
+
+            tenantLifecycleService.suspend(tenant, com.incidentplatform.auth.domain.SuspensionMode.READ_ONLY,
+                    com.incidentplatform.auth.domain.SuspensionReason.BILLING, "Invoice unpaid", operator);
+            flushAndClear();
+
+            assertThat(authTokenService.rotateRefreshToken(refresh).accessToken()).isNotBlank();
+            assertThat(login().accessToken()).isNotBlank();
+            assertThat(apiKeyIntrospectionService.resolve(keyHash)).isPresent();
+            assertThat(apiKeyIntrospectionService.introspect(keyHash))
+                    .isEqualTo(com.incidentplatform.auth.dto.ApiKeyIntrospectionResponse.pausedForWrites());
+        }
+
+        @Test
+        @DisplayName("a personal key of a deactivated owner is refused; reactivated, it works again (not revoked)")
+        void deactivatedOwnersPersonalKey() {
+            final String personalHash = "p".repeat(64);
+            apiKeyRepository.saveAndFlush(ApiKey.createPersonal(tenant, "member script", personalHash,
+                    "pppppppp", List.of("teams:read"), null, member));
+            assertThat(apiKeyIntrospectionService.resolve(personalHash)).isPresent();
+
+            jdbcTemplate.update("UPDATE users SET active = false WHERE id = ?", member.getId());
+            flushAndClear();
+            assertThat(apiKeyIntrospectionService.resolve(personalHash)).isEmpty();
+
+            jdbcTemplate.update("UPDATE users SET active = true WHERE id = ?", member.getId());
+            flushAndClear();
+            assertThat(apiKeyIntrospectionService.resolve(personalHash)).isPresent();
+        }
+
+        /** Rows the committed test below leaves behind, by tenant. */
+        private void deleteCommittedTenant() {
+            jdbcTemplate.update("DELETE FROM mfa_backup_codes WHERE user_id IN (SELECT id FROM users WHERE tenant_id = ?)",
+                    tenant);
+            for (final String table : List.of("auth_email_outbox", "auth_tokens", "api_keys")) {
+                jdbcTemplate.update("DELETE FROM " + table + " WHERE tenant_id = ?", tenant);
+            }
+            jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", tenant);
+            jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", tenant);
+        }
+
+        private String storedHashOf(UUID userId) {
+            return jdbcTemplate.queryForObject("SELECT password_hash FROM users WHERE id = ?", String.class, userId);
+        }
+
+        /** Still usable: peekToken refuses a used or expired token. */
+        private boolean usable(String rawToken, AuthToken.Type type) {
+            try {
+                authTokenService.peekToken(rawToken, type);
+                return true;
+            } catch (BusinessException e) {
+                return false;
+            }
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a refused invite, reset or backup-code login consumes nothing (rolled back) and works once resumed")
+        void refusalsRollBackAndWorkAfterResume() {
+            try {
+                final User invitee = userRepository.saveAndFlush(User.forTesting(null, tenant,
+                        "invitee@" + tenant + ".test", null, true, List.of("ROLE_RESPONDER")));
+                final User withMfa = User.forTesting(null, tenant, "mfa@" + tenant + ".test",
+                        passwordEncoder.encode("old-password"), true, List.of("ROLE_RESPONDER"));
+                withMfa.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+                withMfa.enableMfa();
+                final User mfaUser = userRepository.saveAndFlush(withMfa);
+                mfaBackupCodeRepository.saveAndFlush(MfaBackupCode.create(mfaUser, passwordEncoder.encode("backup-1")));
+
+                tenantLifecycleService.suspend(tenant, com.incidentplatform.auth.domain.SuspensionMode.FULL,
+                        com.incidentplatform.auth.domain.SuspensionReason.SECURITY, "Takeover drill", operator);
+                // Issued after the suspension, as a request racing it would be:
+                // the suspension's session cleanup did not see them.
+                final String invite = authTokenService.generateInviteToken(invitee, tenant);
+                final String reset = authTokenService.generatePasswordResetToken(member, tenant);
+                final String mfaLogin = authTokenService.generateMfaSessionToken(mfaUser, tenant);
+
+                assertThatThrownBy(() -> inviteService.acceptInvite(new AcceptInviteRequest(invite, "a-long-enough-password")))
+                        .isInstanceOfSatisfying(BusinessException.class,
+                                e -> assertThat(e.getErrorCode()).isEqualTo(com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED));
+                assertThatThrownBy(() -> passwordService.resetPassword(new ResetPasswordRequest(reset, "a-new-password"), tenant))
+                        .isInstanceOfSatisfying(BusinessException.class,
+                                e -> assertThat(e.getErrorCode()).isEqualTo(com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED));
+                assertThatThrownBy(() -> mfaService.verifyWithBackupCode(mfaLogin, "backup-1"))
+                        .isInstanceOfSatisfying(BusinessException.class,
+                                e -> assertThat(e.getErrorCode()).isEqualTo(com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED));
+
+                assertThat(usable(invite, AuthToken.Type.INVITE)).as("invite token").isTrue();
+                assertThat(usable(reset, AuthToken.Type.PASSWORD_RESET)).as("reset token").isTrue();
+                assertThat(usable(mfaLogin, AuthToken.Type.MFA_SESSION)).as("MFA login token").isTrue();
+                assertThat(storedHashOf(invitee.getId())).as("invitee has no password").isNull();
+                assertThat(passwordEncoder.matches("member-password", storedHashOf(member.getId()))).isTrue();
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM mfa_backup_codes WHERE user_id = ? "
+                        + "AND used_at IS NULL", Integer.class, mfaUser.getId())).as("backup code unused").isEqualTo(1);
+
+                tenantLifecycleService.resume(tenant, "Secured", operator);
+
+                inviteService.acceptInvite(new AcceptInviteRequest(invite, "a-long-enough-password"));
+                passwordService.resetPassword(new ResetPasswordRequest(reset, "a-new-password"), tenant);
+                assertThat(mfaService.verifyWithBackupCode(mfaLogin, "backup-1").accessToken()).isNotBlank();
+                assertThat(passwordEncoder.matches("a-long-enough-password", storedHashOf(invitee.getId()))).isTrue();
+                assertThat(passwordEncoder.matches("a-new-password", storedHashOf(member.getId()))).isTrue();
+            } finally {
+                deleteCommittedTenant();
+            }
+        }
+
+        @Test
+        @DisplayName("read-only to full ends the sessions then and keeps the first suspension's time")
+        void readOnlyThenFull() {
+            tenantLifecycleService.suspend(tenant, com.incidentplatform.auth.domain.SuspensionMode.READ_ONLY,
+                    com.incidentplatform.auth.domain.SuspensionReason.BILLING, "Invoice unpaid", operator);
+            flushAndClear();
+            final java.sql.Timestamp first = jdbcTemplate.queryForObject(
+                    "SELECT suspended_at FROM tenants WHERE tenant_id = ?", java.sql.Timestamp.class, tenant);
+            final String refresh = login().refreshToken();
+            flushAndClear();
+
+            tenantLifecycleService.suspend(tenant, com.incidentplatform.auth.domain.SuspensionMode.FULL,
+                    com.incidentplatform.auth.domain.SuspensionReason.BILLING, "Still unpaid after 30 days", operator);
+            flushAndClear();
+
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh)).isInstanceOf(BusinessException.class);
+            assertThat(jdbcTemplate.queryForObject("SELECT suspended_at FROM tenants WHERE tenant_id = ?",
+                    java.sql.Timestamp.class, tenant)).isEqualTo(first);
+            assertThat(jdbcTemplate.queryForObject("SELECT suspension_mode FROM tenants WHERE tenant_id = ?",
+                    String.class, tenant)).isEqualTo("FULL");
+        }
+
+        @Test
+        @DisplayName("another tenant's sessions and keys are untouched by a suspension")
+        void otherTenantUntouched() {
+            final User stranger = userRepository.saveAndFlush(User.forTesting(null, TENANT_ID,
+                    "stranger-" + UUID.randomUUID() + "@x.test", passwordEncoder.encode("p"), true, List.of("ROLE_ADMIN")));
+            final String strangerRefresh = authTokenService.generateRefreshToken(stranger, TENANT_ID, UUID.randomUUID(), null);
+            flushAndClear();
+
+            tenantLifecycleService.suspend(tenant, com.incidentplatform.auth.domain.SuspensionMode.FULL,
+                    com.incidentplatform.auth.domain.SuspensionReason.TERMS, "Terms breach", operator);
+            flushAndClear();
+
+            assertThat(authTokenService.rotateRefreshToken(strangerRefresh).accessToken()).isNotBlank();
+        }
+
+        @Test
+        @DisplayName("a tenant being offboarded cannot be suspended (the UPDATE is guarded by the status), and resume needs a suspended one")
+        void guardedTransitions() {
+            jdbcTemplate.update("UPDATE tenants SET status = 'OFFBOARDING' WHERE tenant_id = ?", tenant);
+            flushAndClear();
+            assertThatThrownBy(() -> tenantLifecycleService.suspend(tenant,
+                    com.incidentplatform.auth.domain.SuspensionMode.FULL,
+                    com.incidentplatform.auth.domain.SuspensionReason.OTHER, "x", operator))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
+            assertThatThrownBy(() -> tenantLifecycleService.resume(tenant, "x", operator))
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
+        }
+
+        @Test
+        @DisplayName("an invite of a suspended tenant waits (deferred, no token), and goes out once resumed")
+        void inviteWaits() {
+            final User invitee = userRepository.saveAndFlush(User.forTesting(null, tenant,
+                    "invitee@" + tenant + ".test", null, true, List.of("ROLE_RESPONDER")));
+            final AuthEmailOutbox invite = authEmailOutboxRepository.saveAndFlush(
+                    AuthEmailOutbox.request(invitee, AuthEmailType.INVITE, java.time.Duration.ofDays(7)));
+            tenantLifecycleService.suspend(tenant, com.incidentplatform.auth.domain.SuspensionMode.READ_ONLY,
+                    com.incidentplatform.auth.domain.SuspensionReason.BILLING, "Invoice unpaid", operator);
+            flushAndClear();
+
+            assertThat(authEmailPersistenceService.prepareAttempt(invite, Instant.now(), java.time.Duration.ZERO))
+                    .isInstanceOf(AuthEmailPersistenceService.Attempt.Deferred.class);
+            flushAndClear();
+            assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM auth_tokens WHERE user_id = ? AND type = 'INVITE'",
+                    Integer.class, invitee.getId())).isZero();
+            assertThat(jdbcTemplate.queryForObject("SELECT attempts FROM auth_email_outbox WHERE id = ?",
+                    Integer.class, invite.getId())).as("no attempt counted").isZero();
+
+            tenantLifecycleService.resume(tenant, "Paid", operator);
+            flushAndClear();
+            assertThat(authEmailPersistenceService.prepareAttempt(invite, Instant.now(), java.time.Duration.ZERO))
+                    .isInstanceOf(AuthEmailPersistenceService.Attempt.Send.class);
+        }
+
+        @Test
+        @DisplayName("deactivating a user ends their sessions at once (backlog #0-82)")
+        void deactivationEndsSessions() {
+            final User other = userRepository.saveAndFlush(User.forTesting(null, tenant, "other@" + tenant + ".test",
+                    passwordEncoder.encode("p"), true, List.of("ROLE_RESPONDER")));
+            final String refresh = authTokenService.generateRefreshToken(other, tenant, UUID.randomUUID(), null);
+            flushAndClear();
+            TenantContext.set(tenant);
+            try {
+                userManagementService.updateStatus(other.getId(),
+                        new com.incidentplatform.auth.dto.UpdateUserStatusRequest(false));
+                flushAndClear();
+            } finally {
+                TenantContext.clear();
+            }
+            assertThatThrownBy(() -> authTokenService.rotateRefreshToken(refresh)).isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("the full context: the chain carries the tenant-status filter, fed by auth-service's own status")
+        void wiring() {
+            assertThat(applicationContext.getBean(com.incidentplatform.shared.security.TenantStatusProvider.class))
+                    .isInstanceOf(com.incidentplatform.auth.service.TenantAccessService.class);
+            assertThat(applicationContext.getBean(org.springframework.security.web.SecurityFilterChain.class).getFilters())
+                    .anyMatch(com.incidentplatform.shared.security.TenantStatusFilter.class::isInstance);
+        }
+
+        /** An otherwise complete suspension with one unknown value: only that value's CHECK fails. */
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+        @org.junit.jupiter.params.provider.CsvSource({
+                "chk_tenants_suspension_mode, PAUSED, BILLING",
+                "chk_tenants_suspension_reason, FULL, UNPAID",
+                "chk_tenants_security_suspension_full, READ_ONLY, SECURITY"})
+        @DisplayName("V30 refuses an unknown suspension mode or reason, and a read-only SECURITY suspension")
+        void unknownModeOrReason(String constraint, String mode, String reason) {
+            assertThatThrownBy(() -> jdbcTemplate.update("UPDATE tenants SET status = 'SUSPENDED', "
+                            + "suspension_mode = ?, suspension_reason = ?, suspension_note = 'x', "
+                            + "suspended_at = now(), suspended_by = ? WHERE tenant_id = ?",
+                    mode, reason, operatorId, tenant))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining(constraint);
+        }
+
+        /**
+         * Holds the tenant row as a suspension does (FOR NO KEY UPDATE) in its own
+         * transaction until {@code release}, then runs {@code thenInLock} and commits.
+         */
+        private java.util.concurrent.Future<?> holdTenantLock(ExecutorService pool, CountDownLatch locked,
+                                                             CountDownLatch release, Runnable thenInLock) {
+            return pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                assertThat(tenantRepository.findByIdForUpdate(tenant)).isPresent();
+                locked.countDown();
+                try {
+                    release.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                thenInLock.run();
+            }));
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("two operators on one tenant are serialised: the second waits, then audits the first one's mode "
+                + "as its previous one (row lock, review of #0-82)")
+        void concurrentSuspensionsSerialised() throws Exception {
+            final CountDownLatch locked = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                final var first = holdTenantLock(pool, locked, release, () -> tenantRepository.suspend(tenant,
+                        "READ_ONLY", "BILLING", "first operator", operatorId));
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+                final var second = pool.submit(() -> tenantLifecycleService.suspend(tenant,
+                        com.incidentplatform.auth.domain.SuspensionMode.FULL,
+                        com.incidentplatform.auth.domain.SuspensionReason.SECURITY, "second operator", operator));
+
+                awaitBackendWaitingOnLock();
+                assertThat(second.isDone()).as("waits on the first operator's lock").isFalse();
+                release.countDown();
+                first.get(10, TimeUnit.SECONDS);
+                second.get(10, TimeUnit.SECONDS);
+
+                Mockito.verify(auditEventPublisher).publishAuth(
+                        ArgumentMatchers.any(UUID.class),
+                        ArgumentMatchers.eq(tenant), ArgumentMatchers.eq(AuditEventTypes.TENANT_SUSPENDED),
+                        ArgumentMatchers.anyString(), ArgumentMatchers.anyString(), ArgumentMatchers.anyString(),
+                        ArgumentMatchers.argThat(m -> "READ_ONLY".equals(m.get("previousMode"))));
+                assertThat(jdbcTemplate.queryForObject("SELECT suspension_mode FROM tenants WHERE tenant_id = ?",
+                        String.class, tenant)).isEqualTo("FULL");
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+                deleteCommittedTenant();
+            }
+        }
+
+        /**
+         * Until a backend of this database waits on a lock (pg_stat_activity, the
+         * container's superuser sees every backend): proof the racing call is
+         * blocked on the lock, not merely not started yet.
+         */
+        private void awaitBackendWaitingOnLock() throws InterruptedException {
+            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            while (System.nanoTime() < deadline) {
+                final Integer waiting = jdbcTemplate.queryForObject("SELECT count(*) FROM pg_stat_activity "
+                        + "WHERE datname = current_database() AND wait_event_type = 'Lock'", Integer.class);
+                if (waiting != null && waiting > 0) {
+                    return;
+                }
+                Thread.sleep(25);
+            }
+            throw new AssertionError("no backend started waiting on a lock within 10 s");
+        }
+
+        /**
+         * Runs {@code signIn} while a full suspension holds the tenant row, as
+         * TenantLifecycleService does (lock, status, then the tenant's sessions),
+         * and returns what the sign-in threw once the suspension committed.
+         */
+        private Throwable signInRacingFullSuspension(java.util.concurrent.Callable<?> signIn) throws Exception {
+            final CountDownLatch locked = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                final var suspension = holdTenantLock(pool, locked, release, () -> {
+                    tenantRepository.suspend(tenant, "FULL", "SECURITY", "takeover", operatorId);
+                    authTokenRepository.invalidateSessionsOfTenant(tenant, Instant.now());
+                });
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+                final var attempt = pool.submit(signIn);
+
+                awaitBackendWaitingOnLock();
+                assertThat(attempt.isDone()).as("waits on the suspension's lock").isFalse();
+                release.countDown();
+                suspension.get(10, TimeUnit.SECONDS);
+
+                final java.util.concurrent.ExecutionException failed = org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.ExecutionException.class, () -> attempt.get(10, TimeUnit.SECONDS));
+                return failed.getCause();
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+            }
+        }
+
+        private void assertSuspendedRefusal(Throwable refusal) {
+            // Not a deadlock (40P01) or a lock timeout: the sign-in waited, then read the suspension.
+            assertThat(refusal).isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode())
+                    .isEqualTo(com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED));
+            assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM auth_tokens WHERE tenant_id = ? "
+                    + "AND type IN ('REFRESH', 'MFA_SESSION') AND used_at IS NULL", Integer.class, tenant))
+                    .as("no live session or login continuation left").isZero();
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a login racing a full suspension waits for it and is refused, so no session slips past the "
+                + "suspension's cleanup (FOR SHARE, review of #0-82)")
+        void loginRacingSuspensionRefused() throws Exception {
+            try {
+                assertSuspendedRefusal(signInRacingFullSuspension(this::login));
+            } finally {
+                deleteCommittedTenant();
+            }
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a refresh racing a full suspension is refused, not deadlocked: the tenant is locked before the "
+                + "token (review of #0-82)")
+        void refreshRacingSuspensionRefused() throws Exception {
+            try {
+                final String refresh = authTokenService.generateRefreshToken(member, tenant, UUID.randomUUID(), null);
+                assertSuspendedRefusal(signInRacingFullSuspension(() -> authTokenService.rotateRefreshToken(refresh)));
+            } finally {
+                deleteCommittedTenant();
+            }
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a backup-code MFA login racing a full suspension is refused, not deadlocked, and the code is "
+                + "not spent (review of #0-82)")
+        void backupCodeRacingSuspensionRefused() throws Exception {
+            try {
+                final User withMfa = User.forTesting(null, tenant, "race-mfa@" + tenant + ".test",
+                        passwordEncoder.encode("p"), true, List.of("ROLE_RESPONDER"));
+                withMfa.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
+                withMfa.enableMfa();
+                final User mfaUser = userRepository.saveAndFlush(withMfa);
+                mfaBackupCodeRepository.saveAndFlush(MfaBackupCode.create(mfaUser, passwordEncoder.encode("backup-9")));
+                final String mfaLogin = authTokenService.generateMfaSessionToken(mfaUser, tenant);
+
+                assertSuspendedRefusal(signInRacingFullSuspension(
+                        () -> mfaService.verifyWithBackupCode(mfaLogin, "backup-9")));
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM mfa_backup_codes WHERE user_id = ? "
+                        + "AND used_at IS NULL", Integer.class, mfaUser.getId())).isEqualTo(1);
+            } finally {
+                deleteCommittedTenant();
+            }
+        }
+
+        @Test
+        @DisplayName("a suspension's session cleanup leaves invite and reset tokens alone: invite and reset lock "
+                + "their token before the tenant, which is deadlock-free only while this holds (review of #0-82)")
+        void sessionCleanupSkipsInviteAndResetTokens() {
+            final User invitee = userRepository.saveAndFlush(User.forTesting(null, tenant,
+                    "cleanup-invitee@" + tenant + ".test", null, true, List.of("ROLE_RESPONDER")));
+            final String invite = authTokenService.generateInviteToken(invitee, tenant);
+            final String reset = authTokenService.generatePasswordResetToken(member, tenant);
+            final String refresh = authTokenService.generateRefreshToken(member, tenant, UUID.randomUUID(), null);
+            flushAndClear();
+
+            assertThat(authTokenRepository.invalidateSessionsOfTenant(tenant, Instant.now())).isEqualTo(1);
+            flushAndClear();
+
+            assertThat(jdbcTemplate.queryForList("SELECT type FROM auth_tokens WHERE tenant_id = ? AND used_at IS NULL",
+                    String.class, tenant)).containsExactlyInAnyOrder("INVITE", "PASSWORD_RESET");
+            assertThat(authTokenService.peekToken(invite, AuthToken.Type.INVITE)).isNotNull();
+            assertThat(authTokenService.peekToken(reset, AuthToken.Type.PASSWORD_RESET)).isNotNull();
+            assertThatThrownBy(() -> authTokenService.peekToken(refresh, AuthToken.Type.REFRESH))
+                    .isInstanceOf(BusinessException.class);
+        }
+
+        @Test
+        @DisplayName("after the sign-in check the transaction's lock_timeout is back to its default (review of #0-82)")
+        void lockTimeoutResetAfterCheck() {
+            final String before = jdbcTemplate.queryForObject("SHOW lock_timeout", String.class);
+            applicationContext.getBean(com.incidentplatform.auth.service.TenantAccessService.class)
+                    .requireCanSignIn(tenant);
+            assertThat(jdbcTemplate.queryForObject("SHOW lock_timeout", String.class)).isEqualTo(before);
+        }
+
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a sign-in held longer than the lock timeout behind a suspension is answered 503, giving its "
+                + "connection back (review of #0-82)")
+        void signInGivesUpAfterLockTimeout() throws Exception {
+            final CountDownLatch locked = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            final ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                final var holder = holdTenantLock(pool, locked, release, () -> { });
+                assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+
+                final long started = System.nanoTime();
+                final var attempt = pool.submit(this::login);
+                final java.util.concurrent.ExecutionException failed = org.junit.jupiter.api.Assertions.assertThrows(
+                        java.util.concurrent.ExecutionException.class, () -> attempt.get(15, TimeUnit.SECONDS));
+                final long waitedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+
+                assertThat(failed.getCause()).isInstanceOfSatisfying(
+                        com.incidentplatform.auth.service.TenantStatusBusyException.class, e -> {
+                            assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                            assertThat(e.retryAfter()).isPositive();
+                        });
+                // Only the lower bound: it shows the wait was the lock timeout; an upper one would flake on a slow runner.
+                assertThat(waitedMs).as("waited for the lock timeout").isGreaterThanOrEqualTo(2_500L);
+                release.countDown();
+                holder.get(10, TimeUnit.SECONDS);
+                assertThat(login().accessToken()).as("works once the lock is gone").isNotBlank();
+            } finally {
+                release.countDown();
+                pool.shutdownNow();
+                deleteCommittedTenant();
+            }
+        }
+
+        /** One violation per test: Postgres aborts the transaction at the first. */
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0}")
+        @org.junit.jupiter.params.provider.CsvSource({
+                "chk_tenants_suspension_complete, SUSPENDED, ",
+                "chk_tenants_suspension_cleared, ACTIVE, FULL",
+                "chk_tenants_status, PAUSED, "})
+        @DisplayName("V30 refuses a suspended tenant without its details, details on an active one, an unknown status")
+        void constraints(String constraint, String status, String mode) {
+            assertThatThrownBy(() -> jdbcTemplate.update(
+                    "UPDATE tenants SET status = ?, suspension_mode = ? WHERE tenant_id = ?", status, mode, tenant))
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining(constraint);
         }
     }
 

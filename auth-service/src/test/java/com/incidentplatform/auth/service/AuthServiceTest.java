@@ -59,6 +59,7 @@ class AuthServiceTest {
     private TeamMemberRepository teamMemberRepository;
 
     @Mock private TenantSettingsService tenantSettingsService;
+    @Mock private TenantAccessService tenantAccessService;
 
     private AuthService authService;
 
@@ -74,7 +75,7 @@ class AuthServiceTest {
                 userRepository, jwtUtils, bruteForceProtectionService,
                 authTokenService, ENCODER,
                 auditEventPublisher, teamMemberRepository,
-                tenantSettingsService);
+                tenantSettingsService, tenantAccessService);
         // Default: not locked
         given(bruteForceProtectionService.isLocked(any(), any(), any())).willReturn(false);
         // lenient — not all tests reach this (some fail before MFA check)
@@ -304,4 +305,39 @@ class AuthServiceTest {
     }
 
 
+
+    @Nested
+    @DisplayName("tenant suspension (backlog #0-82)")
+    class TenantSuspension {
+
+        @Test
+        @DisplayName("a tenant suspended in full: the right password gets 403, and no token, no MFA token")
+        void suspendedInFull() {
+            final User user = User.forTesting(UUID.randomUUID(), TENANT_ID, EMAIL,
+                    ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
+            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID)).willReturn(Optional.of(user));
+            org.mockito.BDDMockito.willThrow(new BusinessException(
+                            com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
+                            org.springframework.http.HttpStatus.FORBIDDEN))
+                    .given(tenantAccessService).requireCanSignIn(TENANT_ID);
+
+            assertThatThrownBy(() -> authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode())
+                            .isEqualTo(com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED));
+            Mockito.verifyNoInteractions(jwtUtils);
+            then(authTokenService).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("the tenant is checked only after the password: a wrong password says nothing of it")
+        void checkedAfterPassword() {
+            final User user = User.forTesting(UUID.randomUUID(), TENANT_ID, EMAIL,
+                    ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
+            given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID)).willReturn(Optional.of(user));
+
+            assertThatThrownBy(() -> authService.login(new LoginRequest(EMAIL, "WrongPass"), TENANT_ID))
+                    .isInstanceOf(BusinessException.class);
+            then(tenantAccessService).shouldHaveNoInteractions();
+        }
+    }
 }

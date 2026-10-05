@@ -42,6 +42,8 @@ class UserManagementServiceTest {
     @Mock private TeamMemberRepository teamMemberRepository;
     @Mock private AuditEventPublisher auditEventPublisher;
     @Mock private ApiKeyService apiKeyService;
+    @Mock private AuthTokenService authTokenService;
+    @Mock private TenantAccessService tenantAccessService;
 
     private UserManagementService service;
 
@@ -52,7 +54,8 @@ class UserManagementServiceTest {
     @BeforeEach
     void setUp() {
         service = new UserManagementService(
-                userRepository, teamMemberRepository, auditEventPublisher, apiKeyService);
+                userRepository, teamMemberRepository, auditEventPublisher, apiKeyService, authTokenService,
+                tenantAccessService);
         TenantContext.set(TENANT_ID);
     }
 
@@ -169,6 +172,21 @@ class UserManagementServiceTest {
                     USER_ID, new UpdateUserStatusRequest(false));
 
             assertThat(result.active()).isFalse();
+            // Backlog #0-82: deactivation ends the user's sessions and unfinished logins at once.
+            then(authTokenService).should().invalidateLoginContinuationTokens(USER_ID);
+            then(authTokenService).should().invalidateAllRefreshTokens(USER_ID);
+        }
+
+        @Test
+        @DisplayName("reactivating ends no session (backlog #0-82)")
+        void reactivationEndsNothing() {
+            final User user = buildUser("ROLE_RESPONDER");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(user));
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+
+            service.updateStatus(USER_ID, new UpdateUserStatusRequest(true));
+
+            then(authTokenService).shouldHaveNoInteractions();
         }
 
         @Test
@@ -216,6 +234,29 @@ class UserManagementServiceTest {
                     USER_ID, new UpdateUserStatusRequest(false));
 
             assertThat(result.active()).isFalse();
+        }
+
+        @Test
+        @DisplayName("read-only tenant: deactivating goes on, reactivating is refused before anything changes "
+                + "(backlog #0-82 review)")
+        void readOnlyRefusesReactivationOnly() {
+            final User user = buildUser("ROLE_RESPONDER");
+            user.setActive(false);
+            org.mockito.BDDMockito.willThrow(new BusinessException(
+                            com.incidentplatform.shared.exception.ErrorCodes.TENANT_READ_ONLY, "read-only",
+                            HttpStatus.FORBIDDEN))
+                    .given(tenantAccessService).requireCanWrite(TENANT_ID);
+
+            assertThatThrownBy(() -> service.updateStatus(USER_ID, new UpdateUserStatusRequest(true)))
+                    .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode())
+                            .isEqualTo(com.incidentplatform.shared.exception.ErrorCodes.TENANT_READ_ONLY));
+            then(userRepository).should(never()).save(any());
+            assertThat(user.isActive()).isFalse();
+
+            final User active = buildUser("ROLE_RESPONDER");
+            given(userRepository.findByIdAndTenantId(USER_ID, TENANT_ID)).willReturn(Optional.of(active));
+            given(userRepository.save(any())).willAnswer(i -> i.getArgument(0));
+            assertThat(service.updateStatus(USER_ID, new UpdateUserStatusRequest(false)).active()).isFalse();
         }
 
         @Test

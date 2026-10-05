@@ -107,6 +107,15 @@ public interface AuthEmailOutboxRepository
     int close(@Param("id") UUID id, @Param("status") AuthEmailStatus status,
               @Param("reason") String reason);
 
+    /**
+     * Backlog #0-82: puts off an open entry of a suspended tenant to
+     * {@code nextAttemptAt}, without counting an attempt.
+     */
+    @Modifying
+    @Query("UPDATE AuthEmailOutbox e SET e.nextAttemptAt = :nextAttemptAt " +
+            "WHERE e.id = :id AND e.status IN ('PENDING', 'FAILED')")
+    int defer(@Param("id") UUID id, @Param("nextAttemptAt") Instant nextAttemptAt);
+
     /** Retention: deletes terminal entries created before {@code cutoff}. */
     @Modifying
     @Query("DELETE FROM AuthEmailOutbox e " +

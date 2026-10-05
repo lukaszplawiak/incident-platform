@@ -36,6 +36,7 @@ class AuthTokenServiceTest {
     @Mock private AuthTokenRepository tokenRepository;
     @Mock private JwtUtils jwtUtils;
     @Mock private TeamMemberRepository teamMemberRepository;
+    @Mock private TenantAccessService tenantAccessService;
 
     private AuthTokenService service;
 
@@ -47,7 +48,7 @@ class AuthTokenServiceTest {
     @BeforeEach
     void setUp() {
         service = new AuthTokenService(
-                tokenRepository, jwtUtils, teamMemberRepository);
+                tokenRepository, jwtUtils, teamMemberRepository, tenantAccessService);
     }
 
     // ── generateInviteToken ───────────────────────────────────────────────
@@ -261,6 +262,43 @@ class AuthTokenServiceTest {
             assertThat(result.rawRefreshToken()).isNotBlank();
             assertThat(result.accessExpiresAt()).isAfter(Instant.now());
             assertThat(result.refreshExpiresAt()).isAfter(Instant.now());
+        }
+
+        @Test
+        @DisplayName("refused for a deactivated user, before any new token (backlog #0-82)")
+        void refusedForDeactivatedUser() {
+            final User inactive = User.forTesting(UUID.randomUUID(), TENANT_ID, "gone@acme.test", "hash", false,
+                    List.of("ROLE_RESPONDER"));
+            final AuthToken stored = AuthToken.forTesting(inactive, TENANT_ID, "hash", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(86400), null);
+            given(tokenRepository.findValidByHashAndType(any(), eq(AuthToken.Type.REFRESH), any()))
+                    .willReturn(Optional.of(stored));
+            given(tokenRepository.markUsedIfUnused(any(), any())).willReturn(1);
+
+            assertThatThrownBy(() -> service.rotateRefreshToken("raw-refresh-token"))
+                    .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class);
+            org.mockito.Mockito.verifyNoInteractions(jwtUtils);
+            then(tokenRepository).should(org.mockito.Mockito.never()).save(any());
+        }
+
+        @Test
+        @DisplayName("refused for a tenant suspended in full before the token is consumed: tenant locked first, "
+                + "as a suspension does (backlog #0-82)")
+        void refusedForSuspendedTenant() {
+            final AuthToken stored = AuthToken.forTesting(user, TENANT_ID, "hash", AuthToken.Type.REFRESH,
+                    Instant.now().plusSeconds(86400), null);
+            given(tokenRepository.findValidByHashAndType(any(), eq(AuthToken.Type.REFRESH), any()))
+                    .willReturn(Optional.of(stored));
+            org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.exception.BusinessException(
+                            com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
+                            org.springframework.http.HttpStatus.FORBIDDEN))
+                    .given(tenantAccessService).requireCanSignIn(TENANT_ID);
+
+            assertThatThrownBy(() -> service.rotateRefreshToken("raw-refresh-token"))
+                    .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class);
+            org.mockito.Mockito.verifyNoInteractions(jwtUtils);
+            org.mockito.BDDMockito.then(tokenRepository).should(org.mockito.Mockito.never())
+                    .markUsedIfUnused(any(), any());
         }
 
         @Test

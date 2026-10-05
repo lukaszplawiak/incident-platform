@@ -42,15 +42,18 @@ public class InviteService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final AuditEventPublisher auditEventPublisher;
+    private final TenantAccessService tenantAccessService;
 
     public InviteService(AuthTokenService authTokenService,
                          UserRepository userRepository,
                          PasswordEncoder passwordEncoder,
-                         AuditEventPublisher auditEventPublisher) {
+                         AuditEventPublisher auditEventPublisher,
+                         TenantAccessService tenantAccessService) {
         this.authTokenService = authTokenService;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.auditEventPublisher = auditEventPublisher;
+        this.tenantAccessService = tenantAccessService;
     }
 
     @Transactional
@@ -60,8 +63,16 @@ public class InviteService {
                 .consumeToken(request.token(), AuthToken.Type.INVITE);
 
         final User user = token.getUser();
-
         final String hash = passwordEncoder.encode(request.password());
+        // Backlog #0-82: joining a suspended tenant is a write it is not allowed;
+        // the refusal rolls back the token's consumption, so the invite still
+        // works once the tenant is resumed (if it has not expired). After the
+        // hash (found in review): the check share-locks the tenant row until
+        // commit, and a suspension should not wait out a password hash. The
+        // invite token is consumed before this lock, the opposite of a sign-in's
+        // order: safe only because a suspension never locks INVITE tokens
+        // (AuthTokenRepository.invalidateSessionsOfTenant).
+        tenantAccessService.requireCanWrite(token.getTenantId());
         user.setPasswordHash(hash);
         userRepository.save(user);
 

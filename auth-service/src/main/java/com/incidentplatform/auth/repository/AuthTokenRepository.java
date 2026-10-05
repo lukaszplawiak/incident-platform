@@ -203,6 +203,37 @@ public interface AuthTokenRepository extends JpaRepository<AuthToken, UUID> {
             @Param("now") Instant now);
 
     /**
+     * Ends every session and unfinished login of a tenant (backlog #0-82): its
+     * refresh tokens and its MFA-session and MFA-setup-required tokens, used at
+     * {@code now}. Run when the tenant is suspended in full, so nobody in it
+     * keeps a session past the suspension; access tokens already issued expire
+     * within their 15 minutes, and auth-service refuses them at once. Invites,
+     * reset links and MFA-recovery cancel links are kept: refused while the
+     * tenant is suspended, they work again once it is resumed (if not expired).
+     * Keep INVITE and PASSWORD_RESET out of this list: InviteService and
+     * PasswordService consume such a token before share-locking the tenant
+     * row, and a suspension locking them after the tenant row would deadlock
+     * with them (backlog #0-82 review).
+     *
+     * <p>No index on {@code tenant_id}: this scans {@code auth_tokens}. Accepted
+     * on purpose — it runs once per full suspension, a rare operator action,
+     * and {@code AuthTokenCleanupScheduler} keeps the table to unexpired rows;
+     * an index would cost every login and refresh a write for it. Revisit if
+     * the table grows past what one scan per suspension can afford.
+     *
+     * @return the number of tokens invalidated
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+            UPDATE AuthToken t
+            SET t.usedAt = :now
+            WHERE t.tenantId = :tenantId
+              AND t.type IN ('REFRESH', 'MFA_SESSION', 'MFA_SETUP_REQUIRED')
+              AND t.usedAt IS NULL
+            """)
+    int invalidateSessionsOfTenant(@Param("tenantId") String tenantId, @Param("now") Instant now);
+
+    /**
      * Invalidates every session's REFRESH token EXCEPT the given one —
      * used by {@code PasswordService.changePassword()}: a defensive
      * response to a possible compromise should terminate every other

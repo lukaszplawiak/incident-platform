@@ -65,6 +65,7 @@ class MfaServiceTest {
     @Mock private MfaSessionStatusService mfaSessionStatusService;
     @Mock private MfaResetRateLimiter mfaResetRateLimiter;
     @Mock private ApiKeyService apiKeyService;
+    @Mock private TenantAccessService tenantAccessService;
 
     private final PasswordEncoder passwordEncoder =
             Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8();
@@ -89,7 +90,7 @@ class MfaServiceTest {
                 teamMemberRepository, totpService, aesEncryptionService,
                 passwordEncoder, jwtUtils, auditEventPublisher,
                 bruteForceProtectionService, authEmailRequestService, mfaSessionStatusService,
-                mfaResetRateLimiter, apiKeyService, transactionManager);
+                mfaResetRateLimiter, apiKeyService, transactionManager, tenantAccessService);
         org.mockito.Mockito.lenient().when(transactionManager.getTransaction(any())).thenAnswer(i -> {
             final var status = new org.springframework.transaction.support.SimpleTransactionStatus();
             transactions.add(status);
@@ -267,6 +268,52 @@ class MfaServiceTest {
             assertThat(response.accessToken()).isEqualTo("access-token");
             then(bruteForceProtectionService).should().recordSuccess(
                     BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID);
+        }
+
+        @Test
+        @DisplayName("a tenant suspended in full: a right code issues no session (backlog #0-82)")
+        void noSessionForSuspendedTenant() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION, Instant.now().plusSeconds(300), null);
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION)).willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID)).willReturn(false);
+            org.mockito.BDDMockito.willThrow(new BusinessException(
+                            com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
+                            org.springframework.http.HttpStatus.FORBIDDEN))
+                    .given(tenantAccessService).requireCanSignIn(TENANT_ID);
+
+            assertThatThrownBy(() -> service.verifyMfaToken("raw-mfa-token", "123456"))
+                    .isInstanceOf(BusinessException.class);
+            // Refused before the token is consumed: the tenant row is locked first,
+            // as a suspension locks it (review of #0-82, the opposite order deadlocks).
+            then(authTokenService).should(never()).consumeToken(anyString(), any());
+            org.mockito.Mockito.verifyNoInteractions(jwtUtils);
+            then(authTokenService).should(never()).generateRefreshToken(any(), anyString(), any(), any());
+        }
+
+        @Test
+        @DisplayName("checks the tenant before consuming the MFA session token: the order a suspension locks in "
+                + "(review of #0-82)")
+        void tenantCheckedBeforeConsume() {
+            final User user = buildUser(true);
+            final AuthToken mfaSessionToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SESSION, Instant.now().plusSeconds(300), null);
+            given(authTokenService.peekToken("raw-mfa-token", AuthToken.Type.MFA_SESSION)).willReturn(mfaSessionToken);
+            given(bruteForceProtectionService.isLocked(
+                    BruteForceProtectionService.Scope.MFA, USER_ID.toString(), TENANT_ID)).willReturn(false);
+            given(authTokenService.consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION))
+                    .willReturn(mfaSessionToken);
+            given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
+            given(totpService.verify("PLAIN_SECRET", "000000")).willReturn(Optional.empty());
+
+            assertThatThrownBy(() -> service.verifyMfaToken("raw-mfa-token", "000000"))
+                    .isInstanceOf(BusinessException.class);
+
+            final org.mockito.InOrder order = org.mockito.Mockito.inOrder(tenantAccessService, authTokenService);
+            order.verify(tenantAccessService).requireCanSignIn(TENANT_ID);
+            order.verify(authTokenService).consumeToken("raw-mfa-token", AuthToken.Type.MFA_SESSION);
         }
 
         @Test
@@ -657,6 +704,26 @@ class MfaServiceTest {
     class EnableMfaWithSetupToken {
 
         @Test
+        @DisplayName("checks the tenant before consuming the setup token (review of #0-82)")
+        void tenantCheckedBeforeConsume() {
+            final User user = buildUser(false);
+            final AuthToken setupToken = AuthToken.forTesting(
+                    user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
+                    Instant.now().plusSeconds(600), null);
+            given(authTokenService.peekToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+            given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
+
+            assertThatThrownBy(() -> service.enableMfaWithSetupToken("raw-setup-token", "123456"))
+                    .isInstanceOf(BusinessException.class);
+
+            final org.mockito.InOrder order = org.mockito.Mockito.inOrder(tenantAccessService, authTokenService);
+            order.verify(tenantAccessService).requireCanSignIn(TENANT_ID);
+            order.verify(authTokenService).consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED);
+        }
+
+        @Test
         @DisplayName("enables MFA, consumes the setup token, and completes login with real tokens")
         void enablesMfaAndCompletesLogin() {
             final User user = buildUser(false);
@@ -665,6 +732,8 @@ class MfaServiceTest {
                     user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
                     Instant.now().plusSeconds(600), null);
 
+            given(authTokenService.peekToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
             given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
                     .willReturn(setupToken);
             given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
@@ -703,6 +772,8 @@ class MfaServiceTest {
                     user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
                     Instant.now().plusSeconds(600), null);
 
+            given(authTokenService.peekToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
             given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
                     .willReturn(setupToken);
             given(aesEncryptionService.decrypt("encrypted-secret")).willReturn("PLAIN_SECRET");
@@ -727,6 +798,8 @@ class MfaServiceTest {
                     user, TENANT_ID, "hash", AuthToken.Type.MFA_SETUP_REQUIRED,
                     Instant.now().plusSeconds(600), null);
 
+            given(authTokenService.peekToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
+                    .willReturn(setupToken);
             given(authTokenService.consumeToken("raw-setup-token", AuthToken.Type.MFA_SETUP_REQUIRED))
                     .willReturn(setupToken);
 

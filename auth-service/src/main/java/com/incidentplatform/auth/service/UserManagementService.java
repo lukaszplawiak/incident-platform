@@ -42,15 +42,21 @@ public class UserManagementService {
     private final TeamMemberRepository teamMemberRepository;
     private final AuditEventPublisher auditEventPublisher;
     private final ApiKeyService apiKeyService;
+    private final AuthTokenService authTokenService;
+    private final TenantAccessService tenantAccessService;
 
     public UserManagementService(UserRepository userRepository,
                                  TeamMemberRepository teamMemberRepository,
                                  AuditEventPublisher auditEventPublisher,
-                                 ApiKeyService apiKeyService) {
+                                 ApiKeyService apiKeyService,
+                                 AuthTokenService authTokenService,
+                                 TenantAccessService tenantAccessService) {
         this.userRepository       = userRepository;
         this.teamMemberRepository = teamMemberRepository;
         this.auditEventPublisher  = auditEventPublisher;
         this.apiKeyService        = apiKeyService;
+        this.authTokenService = authTokenService;
+        this.tenantAccessService = tenantAccessService;
     }
 
     // ── updateRoles ───────────────────────────────────────────────────────
@@ -85,6 +91,13 @@ public class UserManagementService {
     @Transactional
     public UserSummaryDto updateStatus(UUID userId, UpdateUserStatusRequest request) {
         final String tenantId = TenantContext.get();
+        if (request.active()) {
+            // Backlog #0-82 (found in review): this route is on a read-only
+            // tenant's allowed writes so an admin can shut a departed person
+            // out; the filter sees only the path, so bringing someone back,
+            // which also brings back their personal API keys, is refused here.
+            tenantAccessService.requireCanWrite(tenantId);
+        }
         final User user = requireActiveUser(userId, tenantId);
 
         final boolean willStillBeActiveAdmin =
@@ -93,6 +106,14 @@ public class UserManagementService {
 
         user.setActive(request.active());
         userRepository.save(user);
+        if (!request.active()) {
+            // Backlog #0-82: deactivating ends the user's sessions and unfinished
+            // logins at once; until then they kept refreshing for up to 30 days
+            // (refresh now also refuses a deactivated user, and so does their
+            // personal API key while they stay deactivated).
+            authTokenService.invalidateLoginContinuationTokens(userId);
+            authTokenService.invalidateAllRefreshTokens(userId);
+        }
 
         auditEventPublisher.publishAuth(
                 userId, tenantId,

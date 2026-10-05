@@ -48,6 +48,7 @@ class PasswordServiceTest {
     @Mock private AuthTokenService authTokenService;
     @Mock private AuditEventPublisher auditEventPublisher;
     @Mock private ApiKeyService apiKeyService;
+    @Mock private TenantAccessService tenantAccessService;
 
     private PasswordService service;
 
@@ -63,7 +64,7 @@ class PasswordServiceTest {
     void setUp() {
         service = new PasswordService(
                 userRepository, authTokenService,
-                ENCODER, auditEventPublisher, apiKeyService);
+                ENCODER, auditEventPublisher, apiKeyService, tenantAccessService);
     }
 
     @AfterEach
@@ -442,5 +443,23 @@ class PasswordServiceTest {
     private UserPrincipal buildPrincipal() {
         return new UserPrincipal(USER_ID, TENANT_ID, "u@example.com",
                 List.of("ROLE_RESPONDER"), List.of(), List.of(), SESSION_ID);
+    }
+
+    @Test
+    @DisplayName("a tenant suspended in full: the reset link changes nothing (backlog #0-82)")
+    void resetRefusedForSuspendedTenant() {
+        final User user = buildUserWithPassword(CURRENT_PASSWORD);
+        final AuthToken token = buildResetToken(user);
+        given(authTokenService.consumeToken("valid-token", AuthToken.Type.PASSWORD_RESET)).willReturn(token);
+        org.mockito.BDDMockito.willThrow(new com.incidentplatform.shared.exception.BusinessException(
+                        com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
+                        org.springframework.http.HttpStatus.FORBIDDEN))
+                .given(tenantAccessService).requireCanSignIn(token.getTenantId());
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.resetPassword(
+                        new ResetPasswordRequest("valid-token", NEW_PASSWORD), TENANT_ID))
+                .isInstanceOf(com.incidentplatform.shared.exception.BusinessException.class);
+        then(userRepository).should(org.mockito.Mockito.never()).save(any());
+        then(apiKeyService).shouldHaveNoInteractions();
     }
 }

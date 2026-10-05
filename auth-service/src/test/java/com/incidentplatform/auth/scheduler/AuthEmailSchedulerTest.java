@@ -374,6 +374,21 @@ class AuthEmailSchedulerTest {
         }
 
         @Test
+        @DisplayName("Deferred (tenant suspended, backlog #0-82): nothing sent, nothing counted, nothing recorded")
+        void deferred() {
+            final AuthEmailOutbox entry = invite();
+            duePending(entry);
+            given(persistenceService.prepareAttempt(eq(entry), any(), any()))
+                    .willReturn(new Attempt.Deferred(java.time.Instant.now().plusSeconds(300)));
+
+            scheduler.processPending();
+
+            then(emailService).shouldHaveNoInteractions();
+            then(persistenceService).should(org.mockito.Mockito.never()).recordSent(any(), any());
+            assertNoGiveUpCounted();
+        }
+
+        @Test
         @DisplayName("PERMANENTLY_FAILED (deadline passed): nothing sent, counted as DEADLINE_PASSED")
         void deadlinePassed() {
             final AuthEmailOutbox entry = invite();

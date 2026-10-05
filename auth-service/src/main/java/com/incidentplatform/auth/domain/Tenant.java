@@ -2,6 +2,8 @@ package com.incidentplatform.auth.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import org.hibernate.annotations.Immutable;
@@ -19,6 +21,10 @@ import java.util.UUID;
  * {@code TenantRepository.insertIfAbsent}, a single {@code INSERT ... ON
  * CONFLICT DO NOTHING}: atomic, and a taken id comes back as 0 rows instead of
  * an overwrite.
+ *
+ * <p>Its life-cycle status (backlog #0-82, V30) changes only through
+ * {@code TenantRepository}'s conditional UPDATEs, each guarded by the current
+ * status, so two operators acting at once cannot both win.
  */
 @Entity
 @Immutable
@@ -40,6 +46,30 @@ public class Tenant {
 
     @Column(name = "created_by", updatable = false)
     private UUID createdBy;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, updatable = false, insertable = false, length = 20)
+    private TenantStatus status;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "suspension_mode", updatable = false, insertable = false, length = 20)
+    private SuspensionMode suspensionMode;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "suspension_reason", updatable = false, insertable = false, length = 20)
+    private SuspensionReason suspensionReason;
+
+    @Column(name = "suspension_note", updatable = false, insertable = false, length = 500)
+    private String suspensionNote;
+
+    @Column(name = "suspended_at", updatable = false, insertable = false)
+    private Instant suspendedAt;
+
+    @Column(name = "suspended_by", updatable = false, insertable = false)
+    private UUID suspendedBy;
+
+    @Column(name = "status_changed_at", updatable = false, insertable = false)
+    private Instant statusChangedAt;
 
     protected Tenant() {
         // JPA
@@ -65,5 +95,35 @@ public class Tenant {
     /** The operator who provisioned it; null for backfilled tenants. */
     public UUID getCreatedBy() {
         return createdBy;
+    }
+
+    public TenantStatus getStatus() {
+        return status;
+    }
+
+    /** Set only while {@link TenantStatus#SUSPENDED}. */
+    public SuspensionMode getSuspensionMode() {
+        return suspensionMode;
+    }
+
+    public SuspensionReason getSuspensionReason() {
+        return suspensionReason;
+    }
+
+    public String getSuspensionNote() {
+        return suspensionNote;
+    }
+
+    public Instant getSuspendedAt() {
+        return suspendedAt;
+    }
+
+    public UUID getSuspendedBy() {
+        return suspendedBy;
+    }
+
+    /** When the status last changed; null if it never has. */
+    public Instant getStatusChangedAt() {
+        return statusChangedAt;
     }
 }

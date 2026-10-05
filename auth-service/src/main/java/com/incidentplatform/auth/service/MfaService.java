@@ -76,6 +76,7 @@ public class MfaService {
     private final MfaSessionStatusService mfaSessionStatusService;
     private final MfaResetRateLimiter mfaResetRateLimiter;
     private final ApiKeyService apiKeyService;
+    private final TenantAccessService tenantAccessService;
     private final TransactionTemplate transaction;
 
     public MfaService(UserRepository userRepository,
@@ -92,7 +93,8 @@ public class MfaService {
                       MfaSessionStatusService mfaSessionStatusService,
                       MfaResetRateLimiter mfaResetRateLimiter,
                       ApiKeyService apiKeyService,
-                      PlatformTransactionManager transactionManager) {
+                      PlatformTransactionManager transactionManager,
+                      TenantAccessService tenantAccessService) {
         this.userRepository       = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.authTokenService     = authTokenService;
@@ -107,6 +109,7 @@ public class MfaService {
         this.mfaSessionStatusService = mfaSessionStatusService;
         this.mfaResetRateLimiter = mfaResetRateLimiter;
         this.apiKeyService = apiKeyService;
+        this.tenantAccessService = tenantAccessService;
         this.transaction = new TransactionTemplate(transactionManager);
     }
 
@@ -555,6 +558,9 @@ public class MfaService {
     @Transactional
     public MfaEnableWithLoginResponse enableMfaWithSetupToken(
             String rawSetupToken, String totpCode) {
+        // Backlog #0-82: tenant first, then the token, as in resolveAndCheckMfaSession.
+        tenantAccessService.requireCanSignIn(authTokenService.peekToken(
+                rawSetupToken, AuthToken.Type.MFA_SETUP_REQUIRED).getTenantId());
         final AuthToken setupToken = authTokenService.consumeToken(
                 rawSetupToken, AuthToken.Type.MFA_SETUP_REQUIRED);
 
@@ -707,6 +713,12 @@ public class MfaService {
                             remaining.toMinutes() + 1),
                     HttpStatus.UNAUTHORIZED);
         }
+
+        // Backlog #0-82: before the token is consumed, so the tenant row is
+        // locked before a token row, in the order a suspension locks them
+        // (found in review: the other order deadlocks with it). issueTokens
+        // checks again, inside the lock this already holds.
+        tenantAccessService.requireCanSignIn(tenantId);
 
         final AuthToken consumed = authTokenService.consumeToken(
                 rawMfaToken, AuthToken.Type.MFA_SESSION);
@@ -910,6 +922,11 @@ private List<String> doEnableMfa(User user, String tenantId, String totpCode,
     }
 
     private LoginResponse issueTokens(User user, String tenantId) {
+        // Backlog #0-82: the one place an MFA login (code, backup code, setup
+        // required) becomes a session; a tenant suspended in full gets none.
+        // Its callers already took this lock before consuming their token; this
+        // is the guard for any future caller, and re-reads under the lock held.
+        tenantAccessService.requireCanSignIn(tenantId);
         final List<UUID> teamIds =
                 teamMemberRepository.findTeamIdsByUserIdAndTenantId(
                         user.getId(), tenantId);

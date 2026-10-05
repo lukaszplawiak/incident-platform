@@ -20,7 +20,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -76,7 +75,7 @@ public class ApiKeyIntrospectionClientImpl implements ApiKeyIntrospectionClient 
     @Retry(name = CLIENT_NAME)
     @CircuitBreaker(name = CLIENT_NAME, fallbackMethod = "introspectFallback")
     @Override
-    public Optional<IntrospectedApiKey> introspect(String keyHash) {
+    public ApiKeyIntrospection introspect(String keyHash) {
         final String body = restClient.post()
                 .uri(authServiceBaseUrl + PATH)
                 .header("Authorization", "Bearer " + serviceTokenProvider.getPurposeToken(
@@ -88,7 +87,10 @@ public class ApiKeyIntrospectionClientImpl implements ApiKeyIntrospectionClient 
 
         // {"active":false} is a successful answer — returned inside the proxied
         // method so the breaker counts it as a success: a burst of wrong keys
-        // must not open the circuit and lock out every valid key.
+        // must not open the circuit and lock out every valid key. The same for
+        // {"active":false,"paused":true} (backlog #0-82): a read-only tenant
+        // is no failure of auth-service, and must not trip the breaker for
+        // every tenant or count as a client fallback.
         return parse(body);
     }
 
@@ -97,14 +99,14 @@ public class ApiKeyIntrospectionClientImpl implements ApiKeyIntrospectionClient 
      * fallback metric, then throws: the caller must answer 503, not 401.
      */
     @SuppressWarnings("unused")
-    Optional<IntrospectedApiKey> introspectFallback(String keyHash, Exception e) {
+    ApiKeyIntrospection introspectFallback(String keyHash, Exception e) {
         log.warn("auth-service could not introspect an API key: error={}", e.getMessage());
         fallbackMetrics.record(CLIENT_NAME, ServiceNames.AUTH_SERVICE, e);
         throw new ApiKeyIntrospectionUnavailableException(
                 "auth-service could not answer the API key introspection", e);
     }
 
-    private Optional<IntrospectedApiKey> parse(String body) {
+    private ApiKeyIntrospection parse(String body) {
         final JsonNode json;
         try {
             json = objectMapper.readTree(body == null ? "" : body);
@@ -113,13 +115,16 @@ public class ApiKeyIntrospectionClientImpl implements ApiKeyIntrospectionClient 
             throw new IllegalStateException("Unparseable introspection response", e);
         }
         if (json == null || !json.path("active").asBoolean(false)) {
-            return Optional.empty();
+            // Only a literal true counts: anything else is the definite "no".
+            return json != null && json.path("paused").asBoolean(false)
+                    ? new ApiKeyIntrospection.Paused()
+                    : new ApiKeyIntrospection.Inactive();
         }
         final List<String> scopes = new ArrayList<>();
         json.path("scopes").forEach(scope -> scopes.add(scope.asText()));
         final String teamId = json.path("teamId").asText(null);
         final String expiresAt = json.path("expiresAt").asText(null);
-        return Optional.of(new IntrospectedApiKey(
+        return new ApiKeyIntrospection.Active(new IntrospectedApiKey(
                 UUID.fromString(json.path("keyId").asText()),
                 json.path("tenantId").asText(null),
                 teamId == null ? null : UUID.fromString(teamId),

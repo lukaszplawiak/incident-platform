@@ -1,7 +1,5 @@
 package com.incidentplatform.ingestion.apikey;
 
-import java.util.Optional;
-
 /**
  * Asks auth-service which tenant an API key belongs to (backlog #0-16, the
  * #0-30 pattern: a narrow HTTP pull of data auth-service owns).
@@ -17,9 +15,11 @@ public interface ApiKeyIntrospectionClient {
 
     /**
      * @param keyHash lowercase hex SHA-256 of the raw key; the raw key is never sent
-     * @return the key if it is active, empty if it is unknown, revoked or expired
+     * @return the key if it is active; {@link ApiKeyIntrospection.Inactive} if it
+     *         is unknown, revoked or expired; {@link ApiKeyIntrospection.Paused}
+     *         if its tenant is read-only (backlog #0-82)
      * @throws ApiKeyIntrospectionUnavailableException if auth-service could not
      *         answer — "unknown", which must never be read as "not active"
      */
-    Optional<IntrospectedApiKey> introspect(String keyHash);
+    ApiKeyIntrospection introspect(String keyHash);
 }

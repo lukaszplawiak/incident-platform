@@ -51,6 +51,7 @@ class AuthEmailPersistenceServiceTest {
     @Mock private AuthTokenService tokenService;
     @Mock private UserRepository userRepository;
     @Mock private MfaRecoveryRequestRepository recoveryRequestRepository;
+    @Mock private TenantAccessService tenantAccessService;
 
     private AuthEmailPersistenceService service;
 
@@ -64,7 +65,10 @@ class AuthEmailPersistenceServiceTest {
     void setUp() {
         meters = new SimpleMeterRegistry();
         service = new AuthEmailPersistenceService(
-                outboxRepository, tokenRepository, tokenService, userRepository, recoveryRequestRepository, meters);
+                outboxRepository, tokenRepository, tokenService, userRepository, recoveryRequestRepository,
+                tenantAccessService, meters);
+        org.mockito.Mockito.lenient().when(tenantAccessService.accessOf(any()))
+                .thenReturn(com.incidentplatform.shared.security.TenantAccess.FULL);
         user = User.forTesting(UUID.randomUUID(), TENANT_ID, "user@firma.pl", null, true,
                 List.of("ROLE_RESPONDER"));
     }
@@ -163,6 +167,56 @@ class AuthEmailPersistenceServiceTest {
 
             assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE)).isInstanceOf(Attempt.Send.class);
             then(tokenRepository).should().invalidateValidTokens(eq(user.getId()), eq(AuthToken.Type.PASSWORD_RESET), any());
+        }
+
+        @org.junit.jupiter.params.ParameterizedTest(name = "{0} while {1}")
+        @org.junit.jupiter.params.provider.CsvSource({
+                "INVITE, READ_ONLY", "INVITE, NONE", "PASSWORD_RESET, NONE"})
+        @DisplayName("a suspended tenant's invite (either mode) or reset (in full) waits: deferred, no token (backlog #0-82)")
+        void pausedBySuspension(AuthEmailType type, com.incidentplatform.shared.security.TenantAccess access) {
+            final AuthEmailOutbox entry = request(type, Duration.ofDays(7));
+            userExists();
+            if (type.supersededByNewer()) {
+                noNewerRequest();
+            }
+            given(tenantAccessService.accessOf(TENANT_ID)).willReturn(access);
+            given(outboxRepository.defer(eq(entry.getId()), any())).willReturn(1);
+            final Instant now = Instant.now();
+
+            assertThat(service.prepareAttempt(entry, now, TOLERANCE)).isEqualTo(
+                    new Attempt.Deferred(now.plus(AuthEmailPersistenceService.SUSPENSION_DEFERRAL)));
+            then(tokenService).shouldHaveNoInteractions();
+            then(tokenRepository).shouldHaveNoInteractions();
+        }
+
+        @Test
+        @DisplayName("a read-only tenant still gets its reset links; security notices go out in full suspension (backlog #0-82)")
+        void notPaused() {
+            final AuthEmailOutbox reset = request(AuthEmailType.PASSWORD_RESET, Duration.ofMinutes(15));
+            userExists();
+            noNewerRequest();
+            given(tenantAccessService.accessOf(TENANT_ID)).willReturn(
+                    com.incidentplatform.shared.security.TenantAccess.READ_ONLY);
+            given(tokenService.generatePasswordResetTokenWithEntity(user, TENANT_ID)).willReturn(new GeneratedToken(
+                    "raw", AuthToken.create(user, TENANT_ID, "h", AuthToken.Type.PASSWORD_RESET, Instant.now())));
+            assertThat(service.prepareAttempt(reset, Instant.now(), TOLERANCE)).isInstanceOf(Attempt.Send.class);
+
+            final AuthEmailOutbox notice = request(AuthEmailType.MFA_ENABLED, Duration.ofHours(24));
+            assertThat(service.prepareAttempt(notice, Instant.now(), TOLERANCE))
+                    .isEqualTo(new Attempt.Send(null, null));
+            then(outboxRepository).should(never()).defer(any(), any());
+        }
+
+        @Test
+        @DisplayName("a paused entry closed meanwhile is AlreadyClosed")
+        void deferOfClosedEntry() {
+            final AuthEmailOutbox entry = request(AuthEmailType.INVITE, Duration.ofDays(7));
+            userExists();
+            noNewerRequest();
+            given(tenantAccessService.accessOf(TENANT_ID)).willReturn(
+                    com.incidentplatform.shared.security.TenantAccess.NONE);
+            given(outboxRepository.defer(eq(entry.getId()), any())).willReturn(0);
+            assertThat(service.prepareAttempt(entry, Instant.now(), TOLERANCE)).isEqualTo(new Attempt.AlreadyClosed());
         }
 
         @Test

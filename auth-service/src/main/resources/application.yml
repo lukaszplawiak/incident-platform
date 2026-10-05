@@ -230,6 +230,33 @@ security:
     # Override per environment: dev=localhost, prod=https://app.incidentplatform.com
     # This property has no inline default — it must be set here or via env var.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:4200}
+
+# Backlog #0-82: what a tenant suspended to read-only may still write, read by
+# shared's TenantStatusFilter: comma-separated "METHOD /ant/pattern" entries,
+# matched on the path MVC routes (a "." or ".." segment never matches); an
+# entry without a write method fails startup. Account security, so a billing
+# hold never stops anyone from logging out, changing their password or managing
+# their MFA, nor an admin from shutting out a leaked key or a departed person
+# (revoke a key, every key a user created or an integration, deactivate a user,
+# reset their MFA; found in review). Reactivating a user is on the same route
+# and is refused by UserManagementService instead. Every other write is 403
+# TENANT_READ_ONLY. A new account-security route goes here, or a read-only
+# tenant cannot reach it. (Password reset and invites are public paths, checked
+# by TenantAccessService instead.)
+tenant-status:
+  read-only:
+    allowed-writes: >-
+      POST /api/v1/auth/logout,
+      PATCH /api/v1/users/me/password,
+      POST /api/v1/auth/mfa/setup,
+      POST /api/v1/auth/mfa/enable,
+      POST /api/v1/auth/mfa/disable,
+      DELETE /api/v1/api-keys/*,
+      POST /api/v1/api-keys/revoke-created-by,
+      DELETE /api/v1/integrations/*,
+      PATCH /api/v1/users/*/status,
+      POST /api/v1/users/*/mfa-reset
+
 # Backlog #0-88: limits on admins resetting other users' MFA
 # (POST /api/v1/users/{id}/mfa-reset): per admin, and per tenant (so several
 # taken-over admin accounts of one tenant do not multiply the per-admin number;

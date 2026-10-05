@@ -79,14 +79,17 @@ public class AuthTokenService {
     private final AuthTokenRepository tokenRepository;
     private final JwtUtils jwtUtils;
     private final TeamMemberRepository teamMemberRepository;
+    private final TenantAccessService tenantAccessService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public AuthTokenService(AuthTokenRepository tokenRepository,
                             JwtUtils jwtUtils,
-                            TeamMemberRepository teamMemberRepository) {
+                            TeamMemberRepository teamMemberRepository,
+                            TenantAccessService tenantAccessService) {
         this.tokenRepository       = tokenRepository;
         this.jwtUtils              = jwtUtils;
         this.teamMemberRepository  = teamMemberRepository;
+        this.tenantAccessService = tenantAccessService;
     }
 
     /**
@@ -361,12 +364,30 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
      */
     @Transactional
     public RotationResult rotateRefreshToken(String rawRefreshToken) {
+        // Backlog #0-82: a refresh continues a session, so it is refused where a
+        // login would be, for a tenant suspended in full (whose sessions end at
+        // the suspension). Checked BEFORE the token is consumed (found in
+        // review): the check share-locks the tenant row, and a suspension
+        // locks that row first and the tenant's tokens second; consuming
+        // first would lock in the opposite order and deadlock with it.
+        tenantAccessService.requireCanSignIn(peekToken(rawRefreshToken, AuthToken.Type.REFRESH).getTenantId());
+
         // Consume old token — throws 401 if invalid/expired/used
         final AuthToken oldToken = consumeToken(
                 rawRefreshToken, AuthToken.Type.REFRESH);
 
         final User user        = oldToken.getUser();
         final String tenantId  = oldToken.getTenantId();
+
+        // A deactivated user (backlog #0-82): their sessions are ended when they
+        // are deactivated; this covers one rotated meanwhile. The refusal rolls
+        // back the consumption, which changes nothing: the token is already
+        // invalidated.
+        if (!user.isActive()) {
+            log.warn("Refresh refused for a deactivated user: userId={}, tenant={}", user.getId(), tenantId);
+            throw new BusinessException(ErrorCodes.UNAUTHORIZED,
+                    "Token is invalid, expired, or already used", HttpStatus.UNAUTHORIZED);
+        }
 
         // Rotation continues the same logical session — carried forward
         // onto both the new access token and the new refresh token below,

@@ -161,4 +161,31 @@ class SharedSecurityAutoConfigurationTest {
                             .isSameAs(serviceChecker);
                 });
     }
+
+    @Test
+    @DisplayName("backlog #0-82: a full-access tenant-status provider by default, one a service declares wins, "
+            + "and the default chain carries the tenant-status filter")
+    void tenantStatusWiring() {
+        contextRunner.run(context -> {
+            assertThat(context.getBean(TenantStatusProvider.class).accessOf("acme")).isEqualTo(TenantAccess.FULL);
+            final org.springframework.security.web.SecurityFilterChain chain =
+                    context.getBean(org.springframework.security.web.SecurityFilterChain.class);
+            assertThat(chain.getFilters()).anyMatch(TenantStatusFilter.class::isInstance);
+            final int jwt = indexOf(chain, JwtAuthFilter.class);
+            final int status = indexOf(chain, TenantStatusFilter.class);
+            assertThat(status).as("after authentication").isGreaterThan(jwt);
+        });
+        contextRunner.withBean(TenantStatusProvider.class, () -> tenantId -> TenantAccess.NONE)
+                .run(context -> assertThat(context.getBean(TenantStatusProvider.class).accessOf("acme"))
+                        .isEqualTo(TenantAccess.NONE));
+    }
+
+    private static int indexOf(org.springframework.security.web.SecurityFilterChain chain, Class<?> type) {
+        for (int i = 0; i < chain.getFilters().size(); i++) {
+            if (type.isInstance(chain.getFilters().get(i))) {
+                return i;
+            }
+        }
+        return -1;
+    }
 }
