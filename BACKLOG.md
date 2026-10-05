@@ -1260,7 +1260,7 @@ status however old (static stability; the first version gave FULL an hour after 
 review of 2a because that abandoned a known suspension, for good when the service token is rejected), FULL only
 for a tenant never answered for (fail-open), counted and alerted; a rejected token is its own critical alert.
 
-**Step 2a: PR #TBD.** Every other service reads the status (`AuthServiceTenantStatusProvider` in `shared`,
+**Step 2a: PR #457.** Every other service reads the status (`AuthServiceTenantStatusProvider` in `shared`,
 `GET /api/v1/internal/tenant-status`, cache 10 s, one call per tenant at a time, last known status during an
 outage, FULL only for a tenant never answered for, alerts `TenantStatusLookupFailing` /
 `TenantStatusLookupRejected`, CI check that every service sets `auth-service.base-url`), so `TenantStatusFilter` closes the access-token window in all of them; STOMP
