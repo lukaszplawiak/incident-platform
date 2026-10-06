@@ -1274,7 +1274,7 @@ so its invite or reset token could be replayed without end);
 suspend/resume wait at most 5 s for a lock; a lost lock (deadlock, timeout) in
 auth-service is 503 + Retry-After, not 500. Still open from step 1: the missing `tenants` row (a foreign key).
 
-**Step 2b: PR #TBD.** Decided (2026-10-06) after a `/research`: a table per service
+**Step 2b: PR #458.** Decided (2026-10-06) after a `/research`: a table per service
 (`<service>_paused_tenants`: notification V10, escalation V9, postmortem V7) rather than a set held in memory (lost on
 restart, different per replica, and escalation-service needs when the pause began) or a status on every work row
 (new states in three state machines, and the consumers' cancel paths would have to know them). `PausedTenantsSync`
