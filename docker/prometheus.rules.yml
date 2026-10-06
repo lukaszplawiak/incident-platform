@@ -621,6 +621,51 @@ groups:
             service's ERROR log ("rejected the service token from client
             tenant-status").
 
+      - alert: TenantPauseSyncFailing
+        # Backlog #0-82, step 2b: PausedTenantsSync (shared) in notification-,
+        # escalation- or postmortem-service keeps failing, for a tenant or as a
+        # whole (kind tenant/run): a database error, a resumption whose hook
+        # failed. While it fails, a new suspension may not pause that tenant's
+        # background work (only the schedulers' per-row check holds it), and a
+        # resumed tenant's work stays held. auth-service being down is not
+        # this: the sync then keeps every tenant as it is, and
+        # TenantStatusLookupFailing fires.
+        expr: |
+          sum by (job, kind) (increase(tenant_pause_sync_failures_total[10m])) > 0
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} cannot keep suspended tenants' background work paused"
+          description: >
+            {{ $labels.job }}'s pause sync failed ({{ $labels.kind }}) for over 5
+            minutes: suspended tenants may not be paused there, and resumed ones
+            may stay held. See the service's ERROR log ("Pause sync").
+
+      - alert: TenantPauseSyncStalled
+        # Backlog #0-82, step 2b (review): no replica of the service completed a
+        # pause sync for 5 minutes (it runs every 10 s under ShedLock): a dead
+        # scheduler, a ShedLock row held by a stuck run, the database refusing
+        # every run (TenantPauseSyncFailing fires too then). Suspensions and
+        # resumptions are not recorded meanwhile: a new suspension's work is held
+        # back only by the schedulers' per-row check, and a resumed tenant's work
+        # stays held. The counter is registered at zero, so an instance that never
+        # ran counts as stalled.
+        expr: |
+          sum by (job) (increase(tenant_pause_sync_runs_total[5m])) == 0
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} has not synced suspended tenants' pauses for 10 minutes"
+          description: >
+            No instance of {{ $labels.job }} completed a pause sync in the last 10
+            minutes: suspensions and resumptions are not recorded there. Check the
+            service's scheduler, its ShedLock row (paused-tenants-sync-<table>) and
+            its ERROR log ("Pause sync").
+
       - alert: WebSocketSessionUntracked
         # Backlog #0-82, step 2 (review): an authenticated STOMP session whose
         # socket incident-service does not track, so a suspension of its tenant

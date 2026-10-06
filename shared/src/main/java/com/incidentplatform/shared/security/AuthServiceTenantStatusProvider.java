@@ -13,6 +13,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -113,7 +114,7 @@ public class AuthServiceTenantStatusProvider implements TenantStatusProvider {
     /** Asks auth-service about one tenant; a seam so tests can hold a call open. */
     @FunctionalInterface
     interface Fetcher {
-        TenantAccess fetch(String tenantId);
+        TenantStatusResponse fetch(String tenantId);
     }
 
     /**
@@ -122,10 +123,13 @@ public class AuthServiceTenantStatusProvider implements TenantStatusProvider {
      * @param access       what the provider answers
      * @param known        {@code access} is auth-service's answer, not the FULL
      *                     given to a tenant it never answered for
+     * @param since        when the tenant's suspension began, as auth-service said
+     *                     ({@code null} for full access or when it did not say)
      * @param refreshAfter when to ask auth-service again
      * @param failing      the last attempt failed (for logging the outage once)
      */
-    private record Entry(TenantAccess access, boolean known, Instant refreshAfter, boolean failing) {
+    private record Entry(TenantAccess access, boolean known, Instant since, Instant refreshAfter,
+                         boolean failing) {
 
         boolean isFreshAt(Instant now) {
             return now.isBefore(refreshAfter);
@@ -200,7 +204,7 @@ public class AuthServiceTenantStatusProvider implements TenantStatusProvider {
             if (response == null || response.access() == null) {
                 throw new IllegalStateException("auth-service answered the tenant status lookup without an access");
             }
-            return response.access();
+            return response;
         };
     }
 
@@ -252,6 +256,23 @@ public class AuthServiceTenantStatusProvider implements TenantStatusProvider {
         return cached == null ? TenantAccess.FULL : cached.access();
     }
 
+    /**
+     * The answer {@link #accessOf} gives, with its suspension time, if it is
+     * auth-service's (now, or the last one before an outage), never the FULL
+     * given to a tenant it never answered for (backlog #0-82, step 2b). Empty
+     * too for a tenant whose answer could not be cached ({@code
+     * MAX_CACHED_TENANTS}): the caller then keeps its state, which is the safe
+     * side either way.
+     */
+    @Override
+    public Optional<TenantAccessState> confirmedStateOf(String tenantId) {
+        accessOf(tenantId);
+        final Entry entry = entries.get(tenantId);
+        return entry != null && entry.known()
+                ? Optional.of(new TenantAccessState(entry.access(), entry.since()))
+                : Optional.empty();
+    }
+
     private void refreshInBackground(String tenantId) {
         // Claimed atomically (found in review: a check of inFlight let a burst of
         // CONNECTs start a thread each before the first registered its call).
@@ -299,7 +320,7 @@ public class AuthServiceTenantStatusProvider implements TenantStatusProvider {
     }
 
     private TenantAccess refresh(String tenantId, Entry cached) {
-        final TenantAccess answer;
+        final TenantStatusResponse answer;
         try {
             answer = fetcher.fetch(tenantId);
         } catch (RuntimeException e) {
@@ -308,8 +329,9 @@ public class AuthServiceTenantStatusProvider implements TenantStatusProvider {
         if (cached != null && cached.failing()) {
             log.info("Tenant status lookup works again: tenant={}", tenantId);
         }
-        put(tenantId, new Entry(answer, true, clock.instant().plus(ttl), false));
-        return answer;
+        final Instant since = answer.access() == TenantAccess.FULL ? null : answer.since();
+        put(tenantId, new Entry(answer.access(), true, since, clock.instant().plus(ttl), false));
+        return answer.access();
     }
 
     private TenantAccess fallBack(String tenantId, Entry cached, RuntimeException e) {
@@ -323,7 +345,7 @@ public class AuthServiceTenantStatusProvider implements TenantStatusProvider {
                     known ? "the last known status " + access : "FULL (no status known)",
                     tenantId, e.getClass().getSimpleName());
         }
-        put(tenantId, new Entry(access, known, clock.instant().plus(ttl), true));
+        put(tenantId, new Entry(access, known, known ? cached.since() : null, clock.instant().plus(ttl), true));
         return access;
     }
 

@@ -121,6 +121,16 @@ audit:
     table: escalation_audit_outbox
     poll-interval-ms: ${AUDIT_OUTBOX_POLL_INTERVAL_MS:2000}
 
+# Backlog #0-82, step 2b: a suspended tenant's escalations are held back, its
+# timers stopped for the length of the suspension. This table (migration V9)
+# lists the paused tenants; PausedTenantsSync (shared) keeps it in step with
+# auth-service every sync-interval-ms, EscalationScheduler's query leaves them
+# out. Without the property the service does not start (its scheduler needs
+# TenantWorkGuard, which comes with it).
+tenant-pause:
+  table: escalation_paused_tenants
+  sync-interval-ms: ${TENANT_PAUSE_SYNC_INTERVAL_MS:10000}
+
 kafka:
   topics:
     incidents-lifecycle: incidents.lifecycle
@@ -141,6 +151,10 @@ escalation:
   # incidents) had no ceiling on how long a single cycle's sequence of
   # synchronous oncall-service HTTP calls could take.
   scheduler-batch-size: ${ESCALATION_SCHEDULER_BATCH_SIZE:100}
+  # Backlog #0-82, step 2b: how long one escalation run may take before it
+  # leaves the rest for the next; at most the run's 5 min ShedLock less 30 s
+  # (checked at startup), so another replica never starts on the same tasks.
+  scheduler-processing-budget: ${ESCALATION_SCHEDULER_PROCESSING_BUDGET:PT4M}
 
 # Backlog #0-82, step 2: TenantStatusFilter asks auth-service what a tenant may
 # do (AuthServiceTenantStatusProvider in shared; tenant-status.cache.ttl 10 s,

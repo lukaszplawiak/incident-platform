@@ -2,6 +2,7 @@ package com.incidentplatform.auth.api;
 
 import com.incidentplatform.auth.service.TenantAccessService;
 import com.incidentplatform.shared.security.TenantContext;
+import com.incidentplatform.shared.security.TenantAccessState;
 import com.incidentplatform.shared.security.TenantStatusResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -20,8 +21,10 @@ import org.springframework.web.bind.annotation.RestController;
  * workspace read (backlog #0-21/#0-30), and built the same way: a service token
  * with {@code aud=auth-service} only, and the tenant is the token's signed
  * claim — a service asks about the tenant it acts for, never another. It
- * answers only the {@link com.incidentplatform.shared.security.TenantAccess};
- * the status behind it (mode, reason, the operator's note) stays here.
+ * answers the {@link com.incidentplatform.shared.security.TenantAccess} and,
+ * for a suspended tenant, when it was suspended (step 2b: a pause of
+ * background work is measured from it); the status behind it (mode, reason,
+ * the operator's note) stays here.
  */
 @RestController
 public class InternalTenantStatusController {
@@ -44,6 +47,7 @@ public class InternalTenantStatusController {
             @ApiResponse(responseCode = "403", description = "ROLE_SERVICE with aud=auth-service required")
     })
     public TenantStatusResponse getForService() {
-        return new TenantStatusResponse(tenantAccessService.accessOf(TenantContext.get()));
+        final TenantAccessState state = tenantAccessService.stateOf(TenantContext.get());
+        return new TenantStatusResponse(state.access(), state.since());
     }
 }

@@ -10,6 +10,8 @@ import com.incidentplatform.notification.service.NotificationPersistenceService;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.pause.TenantWorkGuard;
+import com.incidentplatform.shared.security.TenantAccess;
 import com.incidentplatform.shared.security.TenantContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,11 +21,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,6 +62,12 @@ class NotificationSchedulerTest {
 
     private NotificationScheduler scheduler;
 
+    /** What the status cache knows of a tenant (backlog #0-82); every other tenant has full access. */
+    private final Map<String, TenantAccess> knownAccess = new HashMap<>();
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+    private final TenantWorkGuard workGuard = new TenantWorkGuard(
+            tenantId -> knownAccess.getOrDefault(tenantId, TenantAccess.FULL), meterRegistry);
+
     private static final String TENANT_ID = "test-tenant";
 
     @BeforeEach
@@ -65,12 +76,72 @@ class NotificationSchedulerTest {
                 new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMinutes(3), 200);
         scheduler = new NotificationScheduler(
                 queueRepository, notificationService, persistenceService,
-                messageStore, properties);
+                messageStore, workGuard, properties);
     }
 
     @AfterEach
     void tearDown() {
         TenantContext.clear();
+    }
+
+    @Test
+    @DisplayName("backlog #0-82: a suspended tenant's entry is held back untouched (not sent, not marked) and "
+            + "the rest of the batch goes on")
+    void suspendedTenantHeldBack() {
+        knownAccess.put("suspended-tenant", TenantAccess.NONE);
+        final NotificationQueueEntry held = NotificationQueueEntry.pending(
+                UUID.randomUUID(), "suspended-tenant", "IncidentOpenedEvent", Severity.CRITICAL, "High CPU");
+        final NotificationQueueEntry good = buildPendingEntry();
+        given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(held, good));
+
+        scheduler.processPendingNotifications();
+
+        then(notificationService).should(never()).processEntry(held);
+        then(persistenceService).should(never()).markFailed(eq(held), any());
+        then(persistenceService).should(never()).recordLookupFailure(held);
+        then(notificationService).should().processEntry(good);
+        assertThat(meterRegistry.get("tenant.pause.guard.held").counter().count()).isEqualTo(1);
+        assertThat(TenantContext.getOrNull()).isNull();
+    }
+
+    @Test
+    @DisplayName("review: the batch's tenants are prefetched before the loop, so the guard reads the cache")
+    void prefetchesBatchTenantsFirst() {
+        final TenantWorkGuard guard = org.mockito.Mockito.mock(TenantWorkGuard.class);
+        given(guard.mayRun(anyString())).willReturn(true);
+        final NotificationScheduler prefetching = new NotificationScheduler(queueRepository, notificationService,
+                persistenceService, messageStore, guard, new NotificationSchedulerProperties(Duration.ofSeconds(30),
+                Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMinutes(3), 200));
+        final NotificationQueueEntry entry = buildPendingEntry();
+        given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
+
+        prefetching.processPendingNotifications();
+
+        final org.mockito.InOrder order = org.mockito.Mockito.inOrder(guard, notificationService);
+        order.verify(guard).prefetch(List.of(TENANT_ID));
+        order.verify(notificationService).processEntry(entry);
+    }
+
+    @Test
+    @DisplayName("review: the prefetch counts against the processing budget, not against the lock's margin")
+    void prefetchCountsAgainstBudget() {
+        final TenantWorkGuard guard = org.mockito.Mockito.mock(TenantWorkGuard.class);
+        given(guard.mayRun(anyString())).willReturn(true);
+        org.mockito.BDDMockito.willAnswer(invocation -> {
+            Thread.sleep(50);
+            return null;
+        }).given(guard).prefetch(org.mockito.ArgumentMatchers.any());
+        final NotificationScheduler tight = new NotificationScheduler(queueRepository, notificationService,
+                persistenceService, messageStore, guard, new NotificationSchedulerProperties(Duration.ofSeconds(30),
+                Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMillis(20), 200));
+        final NotificationQueueEntry first = buildPendingEntry();
+        final NotificationQueueEntry second = buildPendingEntry();
+        given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(first, second));
+
+        tight.processPendingNotifications();
+
+        then(notificationService).should().processEntry(first);
+        then(notificationService).should(never()).processEntry(second);
     }
 
     private NotificationQueueEntry buildPendingEntry() {
@@ -274,7 +345,7 @@ class NotificationSchedulerTest {
                     Duration.ofMinutes(4), Duration.ofMinutes(5))) {
                 org.assertj.core.api.Assertions.assertThatThrownBy(() -> new NotificationScheduler(
                                 queueRepository, notificationService, persistenceService,
-                                messageStore, props(bad)))
+                                messageStore, workGuard, props(bad)))
                         .as("budget %s", bad)
                         .isInstanceOf(IllegalArgumentException.class);
             }
@@ -285,7 +356,7 @@ class NotificationSchedulerTest {
         void acceptsABudgetBelowTheLock() {
             org.assertj.core.api.Assertions.assertThatCode(() -> new NotificationScheduler(
                             queueRepository, notificationService, persistenceService,
-                            messageStore, props(Duration.ofMinutes(3))))
+                            messageStore, workGuard, props(Duration.ofMinutes(3))))
                     .doesNotThrowAnyException();
         }
     }
@@ -298,7 +369,7 @@ class NotificationSchedulerTest {
         @DisplayName("stops after the budget is used up but always processes at least one entry")
         void stopsWhenTheBudgetIsUsedUp() {
             final NotificationScheduler tight = new NotificationScheduler(
-                    queueRepository, notificationService, persistenceService, messageStore,
+                    queueRepository, notificationService, persistenceService, messageStore, workGuard,
                     new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7),
                             Duration.ofMinutes(10), Duration.ofNanos(1), 200));
             final NotificationQueueEntry first = buildPendingEntry();

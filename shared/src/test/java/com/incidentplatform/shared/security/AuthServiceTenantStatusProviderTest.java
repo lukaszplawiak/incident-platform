@@ -143,6 +143,16 @@ class AuthServiceTenantStatusProviderTest {
 
         assertThat(mapper.readValue(json, Map.class)).isEqualTo(Map.of("access", "READ_ONLY"));
         assertThat(mapper.readValue(json, TenantStatusResponse.class).access()).isEqualTo(TenantAccess.READ_ONLY);
+
+        // Step 2b: the suspension's time, as Spring Boot's mapper writes it (ISO-8601).
+        final ObjectMapper boot = new ObjectMapper().findAndRegisterModules()
+                .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        final Instant since = Instant.parse("2026-10-05T09:30:00Z");
+        final String withSince = boot.writeValueAsString(new TenantStatusResponse(TenantAccess.NONE, since));
+        assertThat(boot.readValue(withSince, Map.class))
+                .isEqualTo(Map.of("access", "NONE", "since", "2026-10-05T09:30:00Z"));
+        assertThat(boot.readValue(withSince, TenantStatusResponse.class))
+                .isEqualTo(new TenantStatusResponse(TenantAccess.NONE, since));
     }
 
     @Nested
@@ -228,6 +238,51 @@ class AuthServiceTenantStatusProviderTest {
         }
 
         @Test
+        @DisplayName("confirmedStateOf: auth-service's answer with its suspension time, and the last one kept "
+                + "through an outage (backlog #0-82, step 2b)")
+        void confirmedIsTheAnswerOrTheLastKnown() {
+            final Instant suspendedAt = Instant.parse("2026-10-05T09:30:00Z");
+            server.expect(requestTo(URL)).andRespond(withSuccess(
+                    "{\"access\":\"READ_ONLY\",\"since\":\"2026-10-05T09:30:00Z\"}", MediaType.APPLICATION_JSON));
+            assertThat(provider.confirmedStateOf(TENANT))
+                    .contains(new TenantAccessState(TenantAccess.READ_ONLY, suspendedAt));
+
+            server.reset();
+            server.expect(ExpectedCount.manyTimes(), requestTo(URL))
+                    .andRespond(withException(new IOException("connection refused")));
+            clock.advance(Duration.ofDays(1));
+            assertThat(provider.confirmedStateOf(TENANT))
+                    .contains(new TenantAccessState(TenantAccess.READ_ONLY, suspendedAt));
+        }
+
+        @Test
+        @DisplayName("confirmedStateOf: an answer without a time (an older auth-service) has none; full access "
+                + "never keeps one")
+        void confirmedWithoutTime() {
+            answer(TENANT, "NONE");
+            assertThat(provider.confirmedStateOf(TENANT)).contains(new TenantAccessState(TenantAccess.NONE, null));
+
+            server.reset();
+            server.expect(requestTo(URL)).andRespond(withSuccess(
+                    "{\"access\":\"FULL\",\"since\":\"2026-10-05T09:30:00Z\"}", MediaType.APPLICATION_JSON));
+            clock.advance(TTL);
+            assertThat(provider.confirmedStateOf(TENANT)).contains(new TenantAccessState(TenantAccess.FULL, null));
+        }
+
+        @Test
+        @DisplayName("confirmedStateOf: empty, not the fail-open FULL, for a tenant auth-service never answered "
+                + "for, so a pause is never ended on a guess")
+        void confirmedIsEmptyWithoutAnAnswer() {
+            server.expect(ExpectedCount.manyTimes(), requestTo(URL))
+                    .andRespond(withStatus(HttpStatus.SERVICE_UNAVAILABLE));
+
+            assertThat(provider.accessOf(TENANT)).isEqualTo(TenantAccess.FULL);
+            assertThat(provider.confirmedStateOf(TENANT)).isEmpty();
+            clock.advance(TTL);
+            assertThat(provider.confirmedStateOf(TENANT)).isEmpty();
+        }
+
+        @Test
         @DisplayName("after the outage the next answer replaces the kept one")
         void recovers() {
             answer(TENANT, "NONE");
@@ -268,7 +323,7 @@ class AuthServiceTenantStatusProviderTest {
                 calls.incrementAndGet();
                 called.countDown();
                 await(release);
-                return TenantAccess.NONE;
+                return new TenantStatusResponse(TenantAccess.NONE);
             });
             pool = Executors.newFixedThreadPool(8);
 
@@ -298,7 +353,7 @@ class AuthServiceTenantStatusProviderTest {
                     called.countDown();
                     await(release);
                 }
-                return TenantAccess.NONE;
+                return new TenantStatusResponse(TenantAccess.NONE);
             });
             blocking.accessOf(TENANT);
             clock.advance(TTL);
@@ -323,7 +378,7 @@ class AuthServiceTenantStatusProviderTest {
                     called.countDown();
                     await(release);
                 }
-                return TenantAccess.FULL;
+                return new TenantStatusResponse(TenantAccess.FULL);
             });
             pool = Executors.newFixedThreadPool(1);
             final Future<TenantAccess> slow = pool.submit(() -> blocking.accessOf("slow"));
@@ -376,7 +431,7 @@ class AuthServiceTenantStatusProviderTest {
             final AuthServiceTenantStatusProvider stuck = new AuthServiceTenantStatusProvider(tenantId -> {
                 called.countDown();
                 await(release);
-                return TenantAccess.NONE;
+                return new TenantStatusResponse(TenantAccess.NONE);
             }, Runnable::run, new ClientFallbackMetrics(meterRegistry), new SimpleMeterRegistry(), TTL,
                     Duration.ofMillis(200), clock);
             pool = Executors.newFixedThreadPool(1);
@@ -411,7 +466,7 @@ class AuthServiceTenantStatusProviderTest {
         void build() {
             deferred = new AuthServiceTenantStatusProvider(tenantId -> {
                 calls.incrementAndGet();
-                return TenantAccess.NONE;
+                return new TenantStatusResponse(TenantAccess.NONE);
             }, scheduled::add, new ClientFallbackMetrics(meterRegistry), new SimpleMeterRegistry(), TTL,
                     AuthServiceTenantStatusProvider.FOLLOWER_WAIT, clock);
         }
@@ -461,7 +516,7 @@ class AuthServiceTenantStatusProviderTest {
         @DisplayName("an executor that refuses the task changes nothing for the caller")
         void refusedExecutor() {
             final AuthServiceTenantStatusProvider refusing = new AuthServiceTenantStatusProvider(
-                    tenantId -> TenantAccess.NONE, task -> {
+                    tenantId -> new TenantStatusResponse(TenantAccess.NONE), task -> {
                         throw new java.util.concurrent.RejectedExecutionException("full");
                     }, new ClientFallbackMetrics(meterRegistry), new SimpleMeterRegistry(), TTL,
                     AuthServiceTenantStatusProvider.FOLLOWER_WAIT, clock);
@@ -473,7 +528,7 @@ class AuthServiceTenantStatusProviderTest {
     @Test
     @DisplayName("the cache is bounded: when full of fresh entries a new tenant is answered, not cached")
     void bounded() {
-        final AuthServiceTenantStatusProvider bounded = withFetcher(tenantId -> TenantAccess.FULL);
+        final AuthServiceTenantStatusProvider bounded = withFetcher(tenantId -> new TenantStatusResponse(TenantAccess.FULL));
 
         for (int i = 0; i < AuthServiceTenantStatusProvider.MAX_CACHED_TENANTS; i++) {
             bounded.accessOf("tenant-" + i);
@@ -490,7 +545,7 @@ class AuthServiceTenantStatusProviderTest {
     @Test
     @DisplayName("a full cache is purged at most once per TTL, not scanned on every request (found in review)")
     void purgeAtMostOncePerTtl() {
-        final AuthServiceTenantStatusProvider bounded = withFetcher(tenantId -> TenantAccess.FULL);
+        final AuthServiceTenantStatusProvider bounded = withFetcher(tenantId -> new TenantStatusResponse(TenantAccess.FULL));
         for (int i = 0; i < AuthServiceTenantStatusProvider.MAX_CACHED_TENANTS; i++) {
             bounded.accessOf("tenant-" + i);
         }
@@ -515,7 +570,7 @@ class AuthServiceTenantStatusProviderTest {
             if (down.get()) {
                 throw new org.springframework.web.client.ResourceAccessException("auth-service down");
             }
-            return tenantId.equals("suspended") ? TenantAccess.NONE : TenantAccess.FULL;
+            return new TenantStatusResponse(tenantId.equals("suspended") ? TenantAccess.NONE : TenantAccess.FULL);
         });
         bounded.accessOf("suspended");
         for (int i = 1; i < AuthServiceTenantStatusProvider.MAX_CACHED_TENANTS; i++) {
@@ -533,7 +588,7 @@ class AuthServiceTenantStatusProviderTest {
     @Test
     @DisplayName("refuses a non-positive TTL")
     void validatesTtl() {
-        assertThatThrownBy(() -> new AuthServiceTenantStatusProvider(tenantId -> TenantAccess.FULL, Runnable::run,
+        assertThatThrownBy(() -> new AuthServiceTenantStatusProvider(tenantId -> new TenantStatusResponse(TenantAccess.FULL), Runnable::run,
                 new ClientFallbackMetrics(meterRegistry), meterRegistry, Duration.ZERO,
                 AuthServiceTenantStatusProvider.FOLLOWER_WAIT, clock))
                 .isInstanceOf(IllegalArgumentException.class);

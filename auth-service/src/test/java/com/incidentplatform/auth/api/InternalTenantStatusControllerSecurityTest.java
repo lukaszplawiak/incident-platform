@@ -107,13 +107,18 @@ class InternalTenantStatusControllerSecurityTest {
 
     @ParameterizedTest
     @EnumSource(TenantAccess.class)
-    @DisplayName("a service token gets its tenant's access")
+    @DisplayName("a service token gets its tenant's access, and when it was suspended (step 2b)")
     void serviceGetsAccess(TenantAccess access) throws Exception {
-        given(tenantAccessService.accessOf(TENANT_ID)).willReturn(access);
+        final java.time.Instant since = access == TenantAccess.FULL
+                ? null : java.time.Instant.parse("2026-10-05T09:30:00Z");
+        given(tenantAccessService.stateOf(TENANT_ID))
+                .willReturn(new com.incidentplatform.shared.security.TenantAccessState(access, since));
 
         mockMvc.perform(get(PATH).with(service()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.access").value(access.name()))
+                .andExpect(since == null ? jsonPath("$.since").doesNotExist()
+                        : jsonPath("$.since").value("2026-10-05T09:30:00Z"))
                 .andExpect(jsonPath("$.reason").doesNotExist())
                 .andExpect(jsonPath("$.mode").doesNotExist());
     }
@@ -122,7 +127,7 @@ class InternalTenantStatusControllerSecurityTest {
     @DisplayName("no credentials: 401")
     void anonymous() throws Exception {
         mockMvc.perform(get(PATH)).andExpect(status().isUnauthorized());
-        then(tenantAccessService).should(never()).accessOf(TENANT_ID);
+        then(tenantAccessService).should(never()).stateOf(TENANT_ID);
     }
 
     @Test

@@ -9,6 +9,7 @@ import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.service.NotificationPersistenceService;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.notification.slack.SlackMessageStore;
+import com.incidentplatform.shared.pause.TenantWorkGuard;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -62,6 +63,7 @@ public class NotificationScheduler {
     private final NotificationService notificationService;
     private final NotificationPersistenceService persistenceService;
     private final SlackMessageStore messageStore;
+    private final TenantWorkGuard workGuard;
     private final Duration pendingThreshold;
     private final Duration lookupRetryWindow;
     private final Duration processingBudget;
@@ -73,11 +75,13 @@ public class NotificationScheduler {
             NotificationService notificationService,
             NotificationPersistenceService persistenceService,
             SlackMessageStore messageStore,
+            TenantWorkGuard workGuard,
             NotificationSchedulerProperties properties) {
         this.queueRepository = queueRepository;
         this.notificationService = notificationService;
         this.persistenceService = persistenceService;
         this.messageStore = messageStore;
+        this.workGuard = workGuard;
         this.pendingThreshold = properties.pendingThreshold();
         this.lookupRetryWindow = properties.lookupRetryWindow();
         this.processingBudget = validated(properties.processingBudget());
@@ -113,6 +117,11 @@ public class NotificationScheduler {
      *
      * <p>TenantContext is set per-entry and cleared in finally — no tenant
      * context leaks between entries even in the same scheduler run.
+     *
+     * <p>Backlog #0-82, step 2b: a suspended tenant's entries are held back,
+     * not sent and not marked: left out by the query once the pause sync has
+     * the tenant in {@code notification_paused_tenants}, and by
+     * {@link TenantWorkGuard} before that. All are sent once it is resumed.
      *
      * <h2>Fixed (backlog #42): direct repository.save() in this catch
      * block</h2>
@@ -159,7 +168,15 @@ public class NotificationScheduler {
         // outlives it lets a second replica start on the same PENDING entries. So a
         // run stops after processingBudget and leaves the rest for the next cycle,
         // but always processes at least one entry so it can never stall on the budget.
+        // The clock starts before the prefetch, which counts against the budget
+        // (found in review: started after it, the prefetch's up to 10 s came out
+        // of the margin left for the entry in flight when the budget runs out).
         final Instant deadline = Instant.now().plus(processingBudget);
+
+        // Backlog #0-82 (review): the batch's tenants' statuses are looked up
+        // together first, so the per-row guard reads the cache instead of waiting
+        // tenant after tenant while auth-service is slow.
+        workGuard.prefetch(pending.stream().map(NotificationQueueEntry::getTenantId).toList());
         int processed = 0;
         int leftPending = 0;
 
@@ -176,6 +193,13 @@ public class NotificationScheduler {
             // this entry's failure, not end the batch (backlog #0-92).
             try {
                 TenantContext.set(entry.getTenantId());
+                // Backlog #0-82, step 2b: the query leaves out the tenants in
+                // notification_paused_tenants; this covers a suspension the pause
+                // sync has not seen yet (up to about 20 s). The entry stays PENDING,
+                // untouched, and is sent when the tenant resumes.
+                if (!workGuard.mayRun(entry.getTenantId())) {
+                    continue;
+                }
                 notificationService.processEntry(entry);
             } catch (OncallLookupUnavailableException e) {
                 if (handleLookupUnavailable(entry, e, "oncall-service",

@@ -1187,7 +1187,7 @@ when the services have taken every other connection, which is the reserve's purp
 
 ### 0-82. Suspend and offboard a tenant
 
-**Type:** design · **Priority:** Medium · **Status:** In progress, step 2a of 2 done, 2b open (split out of #0-80; offboarding moved to #0-101)
+**Type:** design · **Priority:** Medium · **Status:** In progress, steps 1, 2a and 2b done; left: the missing `tenants` row (a foreign key, below) (split out of #0-80; offboarding moved to #0-101)
 
 **Problem.** (As written before step 1.) Since #0-80 a platform operator creates tenants
 (`POST /api/v1/platform/tenants`), but nothing ends one. A customer who stops paying, breaches terms or leaves keeps logging in, its
@@ -1274,8 +1274,40 @@ so its invite or reset token could be replayed without end);
 suspend/resume wait at most 5 s for a lock; a lost lock (deadlock, timeout) in
 auth-service is 503 + Retry-After, not 500. Still open from step 1: the missing `tenants` row (a foreign key).
 
-**Step 2b: open.** Pause the schedulers of notification-, escalation- and postmortem-service as decided above,
-and resume them on resumption.
+**Step 2b: PR #458.** Decided (2026-10-06) after a `/research`: a table per service
+(`<service>_paused_tenants`: notification V10, escalation V9, postmortem V7) rather than a set held in memory (lost on
+restart, different per replica, and escalation-service needs when the pause began) or a status on every work row
+(new states in three state machines, and the consumers' cancel paths would have to know them). `PausedTenantsSync`
+(`shared`, ShedLock, every 10 s) asks auth-service only about the tenants with work waiting plus the paused ones,
+with the existing tenant-scoped endpoint (no tenant-less list, so no second purpose token), and changes a tenant only
+on auth-service's own answer (`TenantStatusProvider.confirmedStateOf`): an outage right after a restart resumes no
+one, and a tenant never answered for is not paused (fail-open, as in 2a). The schedulers' queries leave the paused
+tenants out (`NOT EXISTS`, native, the table a constant checked at startup against `tenant-pause.table`);
+`TenantWorkGuard` holds a row back (`accessOf`, not the cache-only `knownAccessOf`: found by E2E, that answers FULL
+for an uncached tenant, so after a restart a suspended tenant's oldest rows went out in the first cycle) until the
+sync pauses the tenant. The pause is measured from the suspension's own time: auth-service's answer now carries
+`since` (`suspended_at`, kept across a change of mode), and `paused_at` takes it (decided in the second review: first
+a fixed 20 s allowance before the sync's own time, which a late sync, a used-up budget or a failing run outran, and a
+task held by the guard meanwhile still escalated at once on resumption; the time of the event, recorded by its
+owner, as Jira's SLA clocks and Kubernetes' `lastTransitionTime` do, not the time it was noticed; one database, one
+clock). Resumption is one transaction with the service's hook: escalation-service moves every PENDING timer on by the
+pause (`now - GREATEST(suspended_at, timer start)`; a task already due at the suspension is left as it is; `version`
+bumped), notification-service restarts the routing lookups' retry windows (#0-19); the end of the pause is when the
+sync sees the resumption, which only ever lengthens a timer. Notifications are all sent on resumption, none dropped
+for age (the tenant's alerts were refused at intake meanwhile). Candidates (paused, or with waiting work) are asked
+in tenant id order, each run continuing after where the last one's budget ran out (third review: paused tenants used
+to go first, and enough of them in an auth-service outage starved new suspensions). escalation- and postmortem-service got
+processing budgets like notification-service's (review: a batch of slow status lookups during an auth-service outage
+could outlive a ShedLock), and each scheduler looks up its batch's tenants together before the loop, 8 at a time
+(`TenantWorkGuard.prefetch`; fourth review: one after another, 60 tenants at ~3 s in an outage delayed the last
+ones' escalations by a cycle or more), its budget started before the prefetch so the prefetch cannot eat the
+margin below the lock (fifth review). A prefetched answer lasts one status TTL; a longer loop asks row by row
+again, accepted (the sync has paused a suspended tenant by then). A timer is never moved earlier (`GREATEST(interval '0', ...)`). The Slack ACK path (no message carries the button since #0-21; #0-35 brings it back)
+reaches incident-service with notification-service's token, past the status filter, so `SlackActionService` now
+refuses a suspended tenant's acknowledgement itself, counted (`slack.ack.refused`), fail-open like the filter. Alerts
+`TenantPauseSyncFailing` and `TenantPauseSyncStalled` (no instance completed a run in 5 minutes). Scale limits (a lookup per tenant per sync in each service, candidate and backlog scans
+without `tenant_id` in the indexes): #0-102.
+Still open from step 1: the missing `tenants` row (a foreign key).
 
 ---
 
@@ -1534,6 +1566,34 @@ the customer), backups, and whether the destructive step needs a second operator
 approval, keep a tested runbook.
 
 **When.** Before the first customer leaves, or the first erasure request for a whole organisation.
+
+### 0-102. The pause of suspended tenants' background work at scale
+
+**Type:** performance · **Priority:** Low · **Status:** Open (found in the review of #0-82 step 2b)
+
+**Problem.** `PausedTenantsSync` (notification-, escalation-, postmortem-service) asks auth-service about every
+tenant with waiting work, one call each, serially, every 10 s, and the sync interval equals the status cache's TTL,
+so nearly every call misses the cache: about 3 services x N tenants / 10 s on `/internal/tenant-status`. Its
+candidate queries (`SELECT DISTINCT tenant_id ... WHERE status ...`) and the schedulers' `NOT EXISTS` read every
+pending row of a paused tenant on each run, as the partial indexes they use do not hold `tenant_id`; a tenant held
+with nothing waiting is still asked about every run (it must be, to see its resumption); a tenant held
+for weeks with alerts still flowing (notifications are written meanwhile) makes every poll walk its backlog.
+`notification_queue` has no `tenant_id` index for the resumption's UPDATE. Fine at today's scale; not at
+thousands of tenants with work waiting. A run that runs out of its budget leaves the rest to the next (which goes on
+after it), so at that size a suspension takes several runs to reach every service (the timers no longer depend on it:
+the pause is measured from `suspended_at`).
+
+**Approach.** Measure first (the provider's cache hit/miss counters, `EXPLAIN ANALYZE` on a seeded database).
+Then, as needed: a sync interval at least twice the status cache's TTL (most lookups then hit the cache) or
+lookups fanned out a few at a time on virtual threads instead of one after another; a partial index
+`(tenant_id) WHERE status = 'PENDING'` per work table (the candidate query becomes an index-only scan); a batch
+status endpoint in auth-service (a service token per tenant today: a tenant-less list
+would need a second purpose token, CLAUDE.md's deny-by-default rule), or a sync interval above the TTL; `tenant_id`
+in the partial pending indexes (`CREATE INDEX CONCURRENTLY`, alone in its migration, with
+`spring.flyway.postgresql.transactional-lock: false`).
+
+**When.** Before tenants with work waiting number in the hundreds, or when auth-service's status endpoint shows in
+its own latency.
 
 ---
 

@@ -11,6 +11,8 @@ import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.pause.TenantWorkGuard;
+import com.incidentplatform.shared.security.TenantAccess;
 import com.incidentplatform.shared.security.TenantContext;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
@@ -25,9 +27,12 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.OptimisticLockingFailureException;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -77,6 +82,9 @@ class EscalationSchedulerTest {
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 
+    /** What the status cache knows of a tenant (backlog #0-82); every other tenant has full access. */
+    private final Map<String, TenantAccess> knownAccess = new HashMap<>();
+
     private EscalationScheduler scheduler;
 
     private static final String TENANT_ID = "test-tenant";
@@ -92,7 +100,10 @@ class EscalationSchedulerTest {
                 auditEventPublisher,
                 oncallServiceClient,
                 meterRegistry,
-                BATCH_SIZE);
+                new TenantWorkGuard(tenantId -> knownAccess.getOrDefault(tenantId, TenantAccess.FULL),
+                        meterRegistry),
+                BATCH_SIZE,
+                Duration.ofMinutes(4));
     }
 
     @AfterEach
@@ -699,6 +710,110 @@ class EscalationSchedulerTest {
         then(persistenceService).should(never()).markEscalated(badTenant);
         then(persistenceService).should().markEscalated(good);
         assertThat(TenantContext.getOrNull()).isNull();
+    }
+
+    @Test
+    @DisplayName("backlog #0-82: a suspended tenant's task is held back untouched (no escalation, no attempt "
+            + "counted) and the rest of the batch goes on")
+    void suspendedTenantHeldBack() {
+        knownAccess.put("suspended-tenant", TenantAccess.READ_ONLY);
+        final EscalationTask held = buildOverdueTaskForTenant("suspended-tenant");
+        final EscalationTask good = buildOverdueTaskForTenant("active-tenant");
+        given(taskRepository.findDueForEscalation(any(), any())).willReturn(List.of(held, good));
+
+        scheduler.checkAndEscalate();
+
+        then(persistenceService).should(never()).markEscalated(held);
+        then(persistenceService).should(never()).recordFailedAttempt(eq(held), any());
+        then(oncallServiceClient).should(never()).getCurrentOncall(eq("suspended-tenant"), any(), any());
+        then(kafkaSender).should(times(1)).send(any(IncidentEscalatedEvent.class), any());
+        then(persistenceService).should().markEscalated(good);
+        assertThat(meterRegistry.get("tenant.pause.guard.held").counter().count()).isEqualTo(1);
+        assertThat(TenantContext.getOrNull()).isNull();
+    }
+
+    @Test
+    @DisplayName("backlog #0-82 (review): past the processing budget the rest of the batch waits for the next "
+            + "cycle, so a run cannot outlive its ShedLock; one task is always processed")
+    void processingBudgetStopsTheRun() {
+        final EscalationScheduler tight = new EscalationScheduler(taskRepository, persistenceService, kafkaSender,
+                escalationService, auditEventPublisher, oncallServiceClient, meterRegistry,
+                new TenantWorkGuard(tenantId -> {
+                    // A slow status lookup, as while auth-service is down.
+                    try {
+                        Thread.sleep(30);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return TenantAccess.FULL;
+                }, meterRegistry),
+                BATCH_SIZE, Duration.ofMillis(10));
+        final EscalationTask first = buildOverdueTaskForTenant("tenant-one");
+        final EscalationTask second = buildOverdueTaskForTenant("tenant-two");
+        given(taskRepository.findDueForEscalation(any(), any())).willReturn(List.of(first, second));
+
+        tight.checkAndEscalate();
+
+        then(persistenceService).should().markEscalated(first);
+        then(persistenceService).should(never()).markEscalated(second);
+    }
+
+    @Test
+    @DisplayName("a processing budget that would outlive the lock is refused at startup")
+    void processingBudgetWithinLock() {
+        for (final Duration bad : List.of(Duration.ZERO, Duration.ofMinutes(-1), Duration.ofMinutes(5),
+                Duration.ofSeconds(271))) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> new EscalationScheduler(taskRepository,
+                            persistenceService, kafkaSender, escalationService, auditEventPublisher,
+                            oncallServiceClient, meterRegistry, new TenantWorkGuard(t -> TenantAccess.FULL,
+                            meterRegistry), BATCH_SIZE, bad))
+                    .as("budget %s", bad).isInstanceOf(IllegalArgumentException.class);
+        }
+        org.assertj.core.api.Assertions.assertThatCode(() -> new EscalationScheduler(taskRepository,
+                persistenceService, kafkaSender, escalationService, auditEventPublisher, oncallServiceClient,
+                meterRegistry, new TenantWorkGuard(t -> TenantAccess.FULL, meterRegistry), BATCH_SIZE,
+                Duration.ofSeconds(270))).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("review: the batch's tenants are prefetched before the loop, so the guard reads the cache")
+    void prefetchesBatchTenantsFirst() {
+        final TenantWorkGuard guard = org.mockito.Mockito.mock(TenantWorkGuard.class);
+        given(guard.mayRun(org.mockito.ArgumentMatchers.anyString())).willReturn(true);
+        final EscalationScheduler prefetching = new EscalationScheduler(taskRepository, persistenceService,
+                kafkaSender, escalationService, auditEventPublisher, oncallServiceClient, meterRegistry, guard,
+                BATCH_SIZE, Duration.ofMinutes(4));
+        final EscalationTask first = buildOverdueTaskForTenant("tenant-one");
+        final EscalationTask second = buildOverdueTaskForTenant("tenant-two");
+        given(taskRepository.findDueForEscalation(any(), any())).willReturn(List.of(first, second));
+
+        prefetching.checkAndEscalate();
+
+        final InOrder order = inOrder(guard, persistenceService);
+        order.verify(guard).prefetch(List.of("tenant-one", "tenant-two"));
+        order.verify(persistenceService).markEscalated(first);
+    }
+
+    @Test
+    @DisplayName("review: the prefetch counts against the processing budget, not against the lock's margin")
+    void prefetchCountsAgainstBudget() {
+        final TenantWorkGuard guard = org.mockito.Mockito.mock(TenantWorkGuard.class);
+        given(guard.mayRun(org.mockito.ArgumentMatchers.anyString())).willReturn(true);
+        org.mockito.BDDMockito.willAnswer(invocation -> {
+            Thread.sleep(50);
+            return null;
+        }).given(guard).prefetch(org.mockito.ArgumentMatchers.any());
+        final EscalationScheduler tight = new EscalationScheduler(taskRepository, persistenceService, kafkaSender,
+                escalationService, auditEventPublisher, oncallServiceClient, meterRegistry, guard, BATCH_SIZE,
+                Duration.ofMillis(20));
+        final EscalationTask first = buildOverdueTaskForTenant("tenant-one");
+        final EscalationTask second = buildOverdueTaskForTenant("tenant-two");
+        given(taskRepository.findDueForEscalation(any(), any())).willReturn(List.of(first, second));
+
+        tight.checkAndEscalate();
+
+        then(persistenceService).should().markEscalated(first);
+        then(persistenceService).should(never()).markEscalated(second);
     }
 
     private EscalationTask buildOverdueTask(int level) {

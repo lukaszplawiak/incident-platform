@@ -560,9 +560,16 @@ What a suspension does and does not do:
   password, an old invite or reset link) gets 429 after a few attempts, for the brute-force
   window, and those attempts are not audited one by one; it has no effect once the tenant is
   resumed.
-- **Not yet**: work already in the platform (alerts accepted before the suspension, notifications,
-  escalations, postmortems of its incidents) goes on; pausing it is the second part of step 2 of
-  #0-82.
+- Its work in the background is paused, in either mode, and resumed with the tenant: no
+  notification is sent, nothing is escalated and no postmortem is generated while it is suspended
+  (within about 20 s of the suspension). Nothing is dropped: what was waiting goes out on
+  resumption, every notification however old (the tenant's alerts were refused meanwhile, so they
+  are still true), and an incident's escalation timer goes on from where it stood when the
+  suspension began, since nobody could acknowledge it in between. Its users cannot acknowledge an
+  incident from Slack once the button is back (backlog #0-35; the refusal is counted as
+  `slack.ack.refused`). If auth-service is down, nothing is paused or resumed until
+  it answers again (`TenantStatusLookupFailing`); `TenantPauseSyncFailing` means a service cannot
+  record the pause itself, `TenantPauseSyncStalled` that it has stopped trying.
 
 Every suspension, change and resumption is audited in both tenants (`TENANT_SUSPENDED`,
 `TENANT_RESUMED`; the note only in the operator tenant's) and alerts the operator
