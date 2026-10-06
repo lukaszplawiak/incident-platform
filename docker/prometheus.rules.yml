@@ -576,6 +576,91 @@ groups:
             Find it in the auth-service WARN log ("Tenant has no row in
             tenants") and insert its row.
 
+      - alert: TenantStatusLookupFailing
+        # Backlog #0-82, step 2: a service could not ask auth-service what a
+        # tenant may do (AuthServiceTenantStatusProvider in shared): unreachable,
+        # 5xx, an unreadable answer. It keeps each tenant's last known status
+        # (static stability), and gives full access only to a tenant it never
+        # had an answer for (fail-open, decided): a tenant new to that instance
+        # (after a restart: every tenant) is not checked there meanwhile, and a
+        # resumption is not seen there either. A rejected service token is
+        # TenantStatusLookupRejected below.
+        expr: |
+          sum by (job, reason) (increase(service_client_fallback_total{client="tenant-status",reason!="auth"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} cannot read tenant status from auth-service"
+          description: >
+            {{ $labels.job }} failed to read tenant status from auth-service
+            (reason {{ $labels.reason }}) for over 5 minutes. It keeps each
+            tenant's last known status; a tenant it never saw gets full access
+            there until auth-service answers. Check auth-service's health and the
+            service's WARN log ("Tenant status lookup failed").
+
+      - alert: TenantStatusLookupRejected
+        # Backlog #0-82, step 2 (review): auth-service refused the service token
+        # of a status lookup (401/403). A misconfiguration, not an outage (a JWT
+        # secret differing between services, a wrong audience), so it does not
+        # heal and is critical at once, without a for: the service keeps the
+        # last known statuses but learns of no new suspension, and gives a
+        # tenant it never saw full access.
+        expr: |
+          sum by (job) (increase(service_client_fallback_total{client="tenant-status",reason="auth"}[10m])) > 0
+        labels:
+          severity: critical
+          scope: platform
+        annotations:
+          summary: "auth-service rejects {{ $labels.job }}'s tenant status lookups"
+          description: >
+            auth-service answered 401/403 to {{ $labels.job }}'s tenant status
+            lookups: its service token is not accepted (JWT secret or audience).
+            New suspensions are not enforced there until it is fixed. See the
+            service's ERROR log ("rejected the service token from client
+            tenant-status").
+
+      - alert: WebSocketSessionUntracked
+        # Backlog #0-82, step 2 (review): an authenticated STOMP session whose
+        # socket incident-service does not track, so a suspension of its tenant
+        # cannot close it. Relies on STOMP's session id being the WebSocket
+        # session's, true for the plain /ws endpoint; a transport change (SockJS,
+        # a proxy) would break it for every session, silently but for this. A
+        # client closing during CONNECT counts too, rarely: hence a threshold.
+        expr: |
+          sum by (job) (increase(websocket_sessions_unbound_total[15m])) > 3
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} cannot close suspended tenants' WebSocket sessions"
+          description: >
+            {{ $labels.job }} authenticated WebSocket sessions it does not track
+            in the last 15 minutes: a suspension does not close them. Check the
+            WARN log ("Authenticated WebSocket session not tracked") and whether
+            the WebSocket transport or a proxy changed the session id.
+
+      - alert: TenantStatusCacheFull
+        # Backlog #0-82, step 2 (review): a service's tenant-status cache
+        # (10 000 tenants) is full, so some tenants are not cached: each of their
+        # requests calls auth-service, and in an outage they get full access.
+        # Known suspensions are never evicted, so many of them can fill it.
+        expr: |
+          sum by (job) (increase(cache_puts_skipped_total{cache="tenant-status"}[15m])) > 0
+        for: 15m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }}'s tenant status cache is full"
+          description: >
+            {{ $labels.job }} could not cache some tenants' status for 15
+            minutes: more than 10000 tenants active on one instance, or many
+            known suspensions. Their requests each call auth-service. Raise
+            AuthServiceTenantStatusProvider.MAX_CACHED_TENANTS or move to the
+            generic cache (backlog #0-33).
+
       - alert: PlatformMfaRecoveryRequested
         # Backlog #0-90: an operator asked to reset the MFA of a customer
         # tenant's only admin, which runs after the waiting period (72 h)

@@ -133,6 +133,14 @@ gemini:
 incident-service:
   base-url: ${INCIDENT_SERVICE_URL:http://localhost:8082}
 
+# Backlog #0-82, step 2: TenantStatusFilter asks auth-service what a tenant may
+# do (AuthServiceTenantStatusProvider in shared; tenant-status.cache.ttl 10 s,
+# the last known status while auth-service is down, FULL for a tenant never
+# answered for). Without this URL every tenant would have full access here
+# (checked in CI: .github/scripts/check-tenant-status-config.sh).
+auth-service:
+  base-url: ${AUTH_SERVICE_URL:http://localhost:8087}
+
 server:
   port: ${SERVER_PORT:8085}
   server-header: ""

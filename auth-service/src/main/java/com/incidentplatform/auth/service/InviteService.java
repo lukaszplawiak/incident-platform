@@ -72,7 +72,7 @@ public class InviteService {
         // invite token is consumed before this lock, the opposite of a sign-in's
         // order: safe only because a suspension never locks INVITE tokens
         // (AuthTokenRepository.invalidateSessionsOfTenant).
-        tenantAccessService.requireCanWrite(token.getTenantId());
+        tenantAccessService.requireCanJoin(token.getTenantId(), user.getId(), SignInFlow.ACCEPT_INVITE);
         user.setPasswordHash(hash);
         userRepository.save(user);
 

@@ -370,7 +370,8 @@ public AuthToken consumeToken(String rawToken, AuthToken.Type expectedType) {
         // review): the check share-locks the tenant row, and a suspension
         // locks that row first and the tenant's tokens second; consuming
         // first would lock in the opposite order and deadlock with it.
-        tenantAccessService.requireCanSignIn(peekToken(rawRefreshToken, AuthToken.Type.REFRESH).getTenantId());
+        final AuthToken peeked = peekToken(rawRefreshToken, AuthToken.Type.REFRESH);
+        tenantAccessService.requireCanSignIn(peeked.getTenantId(), peeked.getUser().getId(), SignInFlow.REFRESH);
 
         // Consume old token — throws 401 if invalid/expired/used
         final AuthToken oldToken = consumeToken(

@@ -150,6 +150,24 @@ class ApiKeyIntrospectionClientImplTest {
         }
 
         @Test
+        @DisplayName("{\"active\":false,\"suspended\":true} is Suspended, a normal answer (backlog #0-82 step 2); "
+                + "never over active, and a non-boolean suspended is plain inactive")
+        void suspendedKey() {
+            stubAnswer(200, "{\"active\": false, \"suspended\": true}");
+            assertThat(client.introspect(KEY_HASH)).isEqualTo(new ApiKeyIntrospection.Suspended());
+
+            wireMock.resetAll();
+            stubAnswer(200, """
+                    {"active": true, "suspended": true, "keyId": "%s", "tenantId": "acme", "scopes": []}
+                    """.formatted(UUID.randomUUID()));
+            assertThat(client.introspect(KEY_HASH)).isInstanceOf(ApiKeyIntrospection.Active.class);
+
+            wireMock.resetAll();
+            stubAnswer(200, "{\"active\": false, \"suspended\": \"yes\"}");
+            assertThat(client.introspect(KEY_HASH)).isEqualTo(new ApiKeyIntrospection.Inactive());
+        }
+
+        @Test
         @DisplayName("paused never overrides active, and a non-boolean paused is not paused")
         void pausedOnlyBesideInactive() {
             final UUID keyId = UUID.randomUUID();

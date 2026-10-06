@@ -71,7 +71,7 @@ class TenantLifecycleServiceTest {
 
     private void current(TenantStatus status, SuspensionMode mode) {
         final Tenant tenant = mock(Tenant.class);
-        given(tenant.getStatus()).willReturn(status);
+        org.mockito.Mockito.lenient().when(tenant.getStatus()).thenReturn(status);
         org.mockito.Mockito.lenient().when(tenant.getSuspensionMode()).thenReturn(mode);
         org.mockito.Mockito.lenient().when(tenant.getSuspensionReason())
                 .thenReturn(mode == null ? null : SuspensionReason.BILLING);
@@ -220,5 +220,42 @@ class TenantLifecycleServiceTest {
     void tenantResource() {
         assertThat(TenantLifecycleService.tenantResource("acme")).isEqualTo(TenantLifecycleService.tenantResource("acme"))
                 .isNotEqualTo(TenantLifecycleService.tenantResource("globex"));
+    }
+
+    @Test
+    @DisplayName("suspend and resume bound their lock wait before taking the tenant row (backlog #0-82 step 2)")
+    void lockWaitBounded() {
+        current(TenantStatus.ACTIVE, null);
+        given(tenantRepository.suspend(TENANT, "READ_ONLY", "BILLING", NOTE, OPERATOR_ID)).willReturn(1);
+        service.suspend(TENANT, SuspensionMode.READ_ONLY, SuspensionReason.BILLING, NOTE, operator);
+
+        current(TenantStatus.SUSPENDED, SuspensionMode.READ_ONLY);
+        given(tenantRepository.resume(TENANT)).willReturn(1);
+        service.resume(TENANT, NOTE, operator);
+
+        final org.mockito.InOrder order = org.mockito.Mockito.inOrder(tenantRepository);
+        order.verify(tenantRepository).setLocalLockTimeout(TenantLifecycleService.LOCK_TIMEOUT);
+        order.verify(tenantRepository).findByIdForUpdate(TENANT);
+        order.verify(tenantRepository).setLocalLockTimeout(TenantLifecycleService.LOCK_TIMEOUT);
+        order.verify(tenantRepository).findByIdForUpdate(TENANT);
+    }
+
+    @Test
+    @DisplayName("a tenant row still locked after the wait is 503 + Retry-After, nothing changed or audited")
+    void lockTimeoutIsBusy() {
+        given(tenantRepository.findByIdForUpdate(TENANT))
+                .willThrow(new org.springframework.dao.CannotAcquireLockException("lock timeout"));
+
+        assertThatThrownBy(() -> service.suspend(TENANT, SuspensionMode.FULL, SuspensionReason.TERMS, NOTE,
+                operator))
+                .isInstanceOfSatisfying(TenantStatusBusyException.class, e -> {
+                    assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(e.retryAfter()).isEqualTo(TenantLifecycleService.BUSY_RETRY_AFTER);
+                });
+        assertThatThrownBy(() -> service.resume(TENANT, NOTE, operator))
+                .isInstanceOf(TenantStatusBusyException.class);
+        then(tenantRepository).should(never()).suspend(any(), any(), any(), any(), any());
+        then(tenantRepository).should(never()).resume(any());
+        then(auditEventPublisher).shouldHaveNoInteractions();
     }
 }

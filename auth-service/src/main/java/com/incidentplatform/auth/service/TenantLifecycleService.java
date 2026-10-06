@@ -18,11 +18,13 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
@@ -76,6 +78,14 @@ public class TenantLifecycleService {
     static final String COUNTER = "platform.tenant.lifecycle";
     /** The actor the customer tenant's trail shows for an operator's step (as #0-90). */
     static final String CUSTOMER_SIDE_OPERATOR = "platform-operator";
+    /**
+     * How long a suspension or resumption waits for a lock (backlog #0-82, step 2;
+     * found in the review of step 1: it waited without bound). Longer than a
+     * sign-in's 3 s ({@code TenantAccessService}), as an operator's change is rare
+     * and worth waiting for, short enough not to hold a pooled connection.
+     */
+    static final String LOCK_TIMEOUT = "5s";
+    static final Duration BUSY_RETRY_AFTER = Duration.ofSeconds(5);
 
     private final TenantRepository tenantRepository;
     private final AuthTokenRepository authTokenRepository;
@@ -111,7 +121,8 @@ public class TenantLifecycleService {
      * <p>Locks the tenant row, then the tenant's session tokens. A rare deadlock
      * with another bulk invalidation of one user's tokens (an MFA reset, a
      * deactivation), which locks them without the tenant row, aborts one of the
-     * two (Postgres picks); the operator retries, nothing half-done remains.
+     * two (Postgres picks); the loser gets 503 + Retry-After (step 2 of #0-82),
+     * nothing half-done remains.
      *
      * @throws BusinessException 400 for a malformed or reserved tenant id, a missing mode or
      *         reason, or an unusable note; 409 if the tenant is being offboarded
@@ -135,8 +146,7 @@ public class TenantLifecycleService {
                             + "accounts over", HttpStatus.BAD_REQUEST);
         }
         final String checkedNote = checkedNote(note);
-        final Tenant before = tenantRepository.findByIdForUpdate(tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException("Tenant", tenantId));
+        final Tenant before = lockTenant(tenantId);
         final SuspensionMode previousMode = before.getStatus() == TenantStatus.SUSPENDED
                 ? before.getSuspensionMode() : null;
 
@@ -172,6 +182,27 @@ public class TenantLifecycleService {
     }
 
     /**
+     * The tenant row, locked for the rest of the transaction ({@code FOR NO KEY
+     * UPDATE}, waiting: two operators are serialised), each lock wait of the
+     * transaction bounded by {@value #LOCK_TIMEOUT}. Not reset after the
+     * lookup, unlike a sign-in's: the session cleanup that follows locks the
+     * tenant's token rows, and a wait there is bounded too; whichever lock
+     * times out, the operator gets 503 + Retry-After
+     * ({@code TenantStatusBusyHandler}), the transaction rolls back and nothing
+     * half-done remains.
+     */
+    private Tenant lockTenant(String tenantId) {
+        tenantRepository.setLocalLockTimeout(LOCK_TIMEOUT);
+        try {
+            return tenantRepository.findByIdForUpdate(tenantId)
+                    .orElseThrow(() -> new ResourceNotFoundException("Tenant", tenantId));
+        } catch (PessimisticLockingFailureException e) {
+            log.warn("Tenant row locked by another change of its status, answered 503: tenant={}", tenantId);
+            throw new TenantStatusBusyException(BUSY_RETRY_AFTER);
+        }
+    }
+
+    /**
      * Resumes a suspended tenant.
      *
      * @throws BusinessException 400 for a malformed or reserved tenant id or an unusable
@@ -182,8 +213,7 @@ public class TenantLifecycleService {
     public void resume(String tenantId, String note, UserPrincipal operator) {
         requireManagedTenant(tenantId);
         final String checkedNote = checkedNote(note);
-        final Tenant before = tenantRepository.findByIdForUpdate(tenantId)
-                .orElseThrow(() -> new ResourceNotFoundException("Tenant", tenantId));
+        final Tenant before = lockTenant(tenantId);
         if (tenantRepository.resume(tenantId) != 1) {
             throw new BusinessException(ErrorCodes.BUSINESS_RULE_VIOLATION,
                     "Tenant '" + tenantId + "' is " + before.getStatus() + ", not suspended", HttpStatus.CONFLICT);

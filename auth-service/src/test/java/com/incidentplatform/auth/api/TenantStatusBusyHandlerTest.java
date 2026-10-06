@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Duration;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -33,6 +34,28 @@ class TenantStatusBusyHandlerTest {
         void refresh() {
             throw new TenantStatusBusyException(Duration.ofSeconds(5));
         }
+
+        @PostMapping("/api/v1/auth/mfa/verify")
+        void deadlocked() {
+            // What Spring makes of PostgreSQL's 40P01 and 55P03.
+            throw new org.springframework.dao.CannotAcquireLockException("deadlock detected; SQL [select ...]");
+        }
+    }
+
+    @Test
+    @DisplayName("a lost lock (deadlock, lock timeout) is 503 + Retry-After + RESOURCE_BUSY, not the shared 500 "
+            + "(backlog #0-82 step 2), and the SQL stays out of the body")
+    void lockLostIs503() throws Exception {
+        final MockMvc mockMvc = MockMvcBuilders.standaloneSetup(new BusyController())
+                .setControllerAdvice(new GlobalExceptionHandler(), new TenantStatusBusyHandler())
+                .build();
+
+        mockMvc.perform(post("/api/v1/auth/mfa/verify"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(header().string("Retry-After", "5"))
+                .andExpect(jsonPath("$.errorCode").value(ErrorCodes.RESOURCE_BUSY))
+                .andExpect(content().string(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("select"))));
     }
 
     @Test

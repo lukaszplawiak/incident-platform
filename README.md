@@ -250,8 +250,8 @@ Each escalation level creates an independent `EscalationTask` in PostgreSQL. ACK
 ### Security
 
 - **JWT secret**: No default value — application refuses to start without `JWT_SECRET` set explicitly
-- **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts only `aud=auth-service`, on its one internal endpoint for a tenant's Slack workspace — backlog #0-30) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
-- **Alert source authentication** (backlog #0-16): external alert sources — a tenant's Alertmanager, Wazuh, and the platform's own Alertmanager (as the reserved `platform-operator` tenant) — send an Integration API key (`Authorization: ApiKey ipl_…` or `Bearer ipl_…`). ingestion-service sends only its SHA-256 to auth-service's introspection endpoint, with a tenant-less *purpose token* that auth-service accepts on that one route and nowhere else, and caches active keys for at most 60 s (the revocation window). A definite "no" is `401`; "can't check right now" is `503` + `Retry-After`, because Alertmanager retries 5xx but drops every 4xx. A valid key of a tenant suspended read-only also gets `503`, with `Retry-After: 300` and `TENANT_READ_ONLY` (its alerts are paused, not refused); a tenant suspended in full gets `401` (backlog #0-82). ingestion-service accepts no service tokens. Tenant ids `platform-operator` and `system` are reserved
+- **Service-to-service auth**: `ServiceTokenProvider.getToken(tenantId, audience)` generates and caches one JWT per tenant and target service with `ROLE_SERVICE`; `JwtAuthFilter` authenticates it as a `ServicePrincipal` only in the service named in its `aud` claim (auth-service accepts only `aud=auth-service`, on its two internal endpoints: a tenant's Slack workspace — backlog #0-30 — and a tenant's status, read by every other service — backlog #0-82) and takes the tenant only from the signed `tenantId` claim, never from `X-Tenant-Id` — not exposed to end users. Client fallbacks that fail open are counted in `service_client_fallback_total{client,target,reason}`; `reason="auth"` means a 401/403, i.e. a misconfiguration and not an outage
+- **Alert source authentication** (backlog #0-16): external alert sources — a tenant's Alertmanager, Wazuh, and the platform's own Alertmanager (as the reserved `platform-operator` tenant) — send an Integration API key (`Authorization: ApiKey ipl_…` or `Bearer ipl_…`). ingestion-service sends only its SHA-256 to auth-service's introspection endpoint, with a tenant-less *purpose token* that auth-service accepts on that one route and nowhere else, and caches active keys for at most 60 s (the revocation window). A definite "no" is `401`; "can't check right now" is `503` + `Retry-After`, because Alertmanager retries 5xx but drops every 4xx. A valid key of a tenant suspended read-only also gets `503`, with `Retry-After: 300` and `TENANT_READ_ONLY` (its alerts are paused, not refused); a tenant suspended in full gets `403` + `TENANT_SUSPENDED`, which is not counted as a failed authentication (backlog #0-82). A key cached as active before a suspension is caught by the status filter within 10 s. ingestion-service accepts no service tokens. Tenant ids `platform-operator` and `system` are reserved
 - **Dev endpoints**: `DevTokenController` (`GET /dev/token`, an unauthenticated token for any tenant and role) is gated with `@Profile({"local", "dev"})`, plus a startup guard that refuses to run outside those profiles. The guard cannot help if a deployment sets the dev profile itself, which the k8s base ConfigMap did for every overlay, prod included (backlog #0-63). Now only `k8s/overlays/dev` sets `SPRING_PROFILES_ACTIVE`, docker-compose sets none, and CI fails if the rendered staging or prod overlay sets any Spring profile
 - **Management port isolation**: Prometheus metrics and health endpoints on separate ports (8091–8097) — never co-located with the business API
 - **API key security**: Gemini API key passed via `x-goog-api-key` HTTP header — never embedded in URLs where it could appear in access logs
@@ -452,20 +452,38 @@ Summary; details in [Resilience & Security](#security).
   demoted, deactivated or archived.
 - **Tenant suspension** (backlog #0-82): an operator suspends a tenant (`POST /api/v1/platform/tenants/{id}/suspend`,
   `/resume`; a `SECURITY` reason requires `FULL`, also enforced by a CHECK; `platform-operator` itself cannot be
-  suspended), in full (nothing works: in auth-service every session ends at once, sign-ins, invites, password
-  resets and API keys are refused; the other services until step 2, see the gaps) or read-only (reads go on,
+  suspended), in full (nothing works: every session ends at once, sign-ins, invites, password resets and API keys
+  are refused, an access token already issued is refused in every service, and its live WebSocket sessions are
+  closed) or read-only (reads go on,
   writes are 403 except account security: logout, password, MFA, and an admin revoking a key (one, or every key
   a user created) or an integration, deactivating a user or resetting their MFA, each listed with its HTTP method,
   reactivating a user refused; alerts are paused, not lost: ingestion-service answers them 503 +
-  `Retry-After: 300` + `TENANT_READ_ONLY`, so Alertmanager retries them until the tenant is resumed). The status
-  lives in auth-service's `tenants` table (V30). Transitions take a row lock on the tenant (`FOR NO KEY UPDATE`,
+  `Retry-After: 300` + `TENANT_READ_ONLY`, so Alertmanager retries them until the tenant is resumed; a full
+  suspension's alerts get `403 TENANT_SUSPENDED`, not counted as a failed authentication of the sender's IP). The
+  status lives in auth-service's `tenants` table (V30). Transitions take a row lock on the tenant (`FOR NO KEY UPDATE`,
   waits) before a status-guarded UPDATE, so two operators are serialised; sign-ins, invites and resets take a
   share lock on the same row, taken before any token is consumed (the suspension's order: tenant, then tokens), so a
   sign-in racing a full suspension either commits before the suspension's session cleanup or reads the suspension;
-  it waits at most 3 s, then gets 503 + `Retry-After`. A
+  it waits at most 3 s, then gets 503 + `Retry-After`; a suspension or resumption waits at most 5 s, and any
+  request of auth-service that loses a lock (timeout, deadlock) gets 503 + `Retry-After`, not 500. A
   `TenantStatusFilter` from `shared`, added by `buildCommonSecurity` to every service's chain, refuses a suspended
-  tenant's users and keys (in auth-service only until step 2: the other services' provider says FULL), and auth-service's public paths (login, refresh, MFA, invite, reset) check it
-  themselves. Nothing is deleted or revoked, so a resumed tenant works as before. Invites (and, in full,
+  tenant's users and keys; auth-service answers it from its database, every other service asks auth-service
+  (`GET /api/v1/internal/tenant-status`, a service token for that tenant, `aud=auth-service`) and keeps the answer
+  10 s, one call per tenant at a time, so a suspension reaches every service within 10 s (step 2 of #0-82). If
+  auth-service cannot answer, a service keeps each tenant's last known status however long the outage lasts
+  (static stability), and gives full access only to a tenant it never had an answer for (fail-open, decided: an
+  auth-service outage must not stop every tenant); counted and alerted (`TenantStatusLookupFailing`, and
+  `TenantStatusLookupRejected`, critical, when auth-service refuses the service's token). CI fails a service that
+  does not set `auth-service.base-url` (`check-tenant-status-config.sh`): without it the service would give every
+  tenant full access. In incident-service a
+  suspended tenant's STOMP `CONNECT` is refused and a sweep every 10 s closes the sessions it opened before; both
+  read the status without waiting on auth-service, so its outage cannot tie up the WebSocket threads (alerts
+  `WebSocketSessionUntracked` if a session cannot be tracked, `TenantStatusCacheFull` if the status cache is
+  full).
+  auth-service's public paths (login, refresh, MFA, invite, reset) check the status themselves, and a sign-in
+  refused for it is audited (`USER_SIGN_IN_REFUSED_TENANT_SUSPENDED`, after the rollback) and counted
+  (`auth_signin_refused_total`); past a few refusals per user in the brute-force window the answer is 429 with no
+  event (a refusal rolls back, so its invite or reset token, or a right password, could be replayed without end). Nothing is deleted or revoked, so a resumed tenant works as before. Invites (and, in full,
   password-reset emails) wait while it lasts. Audited in both tenants, alerted on every change
   (`PlatformTenantSuspensionChanged`, critical). Deactivating a single user now also ends their sessions, and a
   refresh or a personal API key of a deactivated user is refused (until then deactivation only stopped new logins).
@@ -587,16 +605,21 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Application**
   - Swagger UI and the OpenAPI documents are public in every profile: backlog #0-73.
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
-  - Tenant suspension is enforced in auth-service only so far: until the other services read the tenant's status
-    (the second step of backlog #0-82), an access token issued before a suspension still works in them for up to
-    15 minutes, and work already in the platform (accepted alerts, notifications, escalations, postmortems) goes on.
-  - A key of a tenant suspended in full may still file alerts for up to 60 s, if ingestion-service checked it in
-    the minute before (its positive cache, the revocation window): backlog #0-82 step 2. Such a key's retries also
-    count against the sender IP's failed-authentication limit, like a revoked key's.
-  - A sign-in refused because its tenant is suspended is neither audited nor counted, and a suspension or
-    resumption waits for the tenant's row lock without a timeout (sign-ins are bounded at 3 s): backlog #0-82 step 2.
+  - A suspended tenant's work already in the platform goes on: notifications, escalations and postmortems of its
+    incidents are still sent, by the services' schedulers, which act with service tokens: backlog #0-82 step 2b
+    (pause them, resume them on resumption).
+  - Outside auth-service a suspension takes up to 10 s (the status cache), and during an auth-service outage a
+    service gives full access to a tenant it never had a status for, e.g. every tenant after its own restart
+    (fail-open by decision, alerted `TenantStatusLookupFailing`); a tenant resumed during the outage stays refused
+    there until auth-service answers: backlog #0-82.
   - A tenant with users but no `tenants` row (none should exist) has full access and cannot be suspended; counted,
     alerted (`PlatformTenantStatusRowMissing`) and logged once: backlog #0-82 (a foreign key would close it).
+  - The bound on sign-ins refused for suspension (a few per user, then 429 without an audit event) lives in Redis
+    and fails open like the other Redis limits: while Redis is down every refusal is audited, so a user replaying a
+    refused invite or reset link can grow the tenant's audit trail; parallel refusals can also overshoot the bound a
+    little (not atomic). Accepted: backlog #0-82.
+  - A suspended tenant's live WebSocket session on an instance that has not cached its status yet stays open until
+    the next sweeps (up to about 20 s); STOMP never waits on auth-service: backlog #0-82.
   - A tenant cannot be offboarded: its data stays in all seven services until someone edits the databases:
     backlog #0-101.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
@@ -903,7 +926,7 @@ logging:
     com.incidentplatform: DEBUG
 ```
 
-**notification-service** reads each tenant's Slack workspace from auth-service. `auth-service.base-url` defaults to `http://localhost:8087`, so nothing is needed locally unless auth-service runs elsewhere:
+Every service but auth-service reads from auth-service: each tenant's status (all six, backlog #0-82) and, in **notification-service**, each tenant's Slack workspace. `auth-service.base-url` defaults to `http://localhost:8087`, so nothing is needed locally unless auth-service runs elsewhere; then set it (or `AUTH_SERVICE_URL`) in every one of them:
 
 ```yaml
 auth-service:
@@ -1072,7 +1095,8 @@ docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafan
 > 60 s, so a revoked key stops working within a minute. If auth-service is down, ingest answers
 > `503` + `Retry-After` and Alertmanager retries; a wrong or revoked key gets `401`, which it does
 > not retry. A key of a tenant suspended read-only gets `503` + `Retry-After: 300` +
-> `TENANT_READ_ONLY` (paused), one of a tenant suspended in full `401` (backlog #0-82).
+> `TENANT_READ_ONLY` (paused), one of a tenant suspended in full `403` + `TENANT_SUSPENDED`
+> (backlog #0-82).
 
 ### Step 6 — Verify all services are up
 
@@ -1573,7 +1597,8 @@ incident-platform/
 │       │                          # RecordRedeliveries, UnreadableRecordException
 │       └── security/              # JwtUtils, JwtAuthFilter, TenantContext, TenantIds, InvalidTenantIdException,
 │                                  # TenantAwareTaskDecorator, ServiceTokenProvider,
-│                                  # TenantStatusFilter + TenantStatusProvider (tenant suspension, #0-82)
+│                                  # TenantStatusFilter + TenantStatusProvider (tenant suspension, #0-82),
+│                                  # AuthServiceTenantStatusProvider + TenantStatusResponse (status from auth-service)
 │
 ├── auth-service/                  # port 8087 — identity and access management
 │   └── src/main/java/

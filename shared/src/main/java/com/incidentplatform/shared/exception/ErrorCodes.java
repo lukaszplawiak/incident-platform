@@ -24,6 +24,8 @@ public final class ErrorCodes {
     public static final String TOO_MANY_FAILED_AUTHENTICATIONS = "TOO_MANY_FAILED_AUTHENTICATIONS";
     public static final String FORBIDDEN                = "FORBIDDEN";
     public static final String OPTIMISTIC_LOCK_CONFLICT = "OPTIMISTIC_LOCK_CONFLICT";
+    /** Another transaction held the rows this one needed (lock timeout, deadlock): retry shortly, 503. */
+    public static final String RESOURCE_BUSY            = "RESOURCE_BUSY";
     public static final String INTERNAL_SERVER_ERROR    = "INTERNAL_SERVER_ERROR";
 
     // ── Incident domain ─────────────────────────────────────────────────────

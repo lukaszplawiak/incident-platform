@@ -97,7 +97,16 @@ public class BruteForceProtectionService {
      */
     public enum Scope {
         LOGIN("login"),
-        MFA("mfa");
+        MFA("mfa"),
+        /**
+         * Sign-ins refused because the tenant is suspended (backlog #0-82,
+         * step 2), keyed by user id: each refusal is audited, and this bounds
+         * how many one user can make (a reused invite or reset token, a script
+         * on a known password), then {@code SignInRefusalHandler} answers 429
+         * without an event. It never touches the login lockout, so a resumed
+         * tenant's users are not locked out.
+         */
+        SUSPENDED_SIGN_IN("suspended-sign-in");
 
         private final String key;
 

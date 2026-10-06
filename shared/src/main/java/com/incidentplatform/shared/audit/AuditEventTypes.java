@@ -65,6 +65,14 @@ public final class AuditEventTypes {
     public static final String USER_ARCHIVED           = "USER_ARCHIVED";
     public static final String USER_RESTORED           = "USER_RESTORED";
     public static final String USER_ANONYMIZED         = "USER_ANONYMIZED";
+    /**
+     * A sign-in refused because the user's tenant is suspended (backlog #0-82,
+     * step 2): logging in, refreshing, finishing an MFA login, accepting an
+     * invite or resetting a password. Recorded in the tenant's own trail, after
+     * the refused request's transaction rolled back; the flow is in the
+     * metadata.
+     */
+    public static final String USER_SIGN_IN_REFUSED_TENANT_SUSPENDED = "USER_SIGN_IN_REFUSED_TENANT_SUSPENDED";
 
     // ── Platform (backlog #0-80) ─────────────────────────────────────────────
     // Recorded in the platform-operator tenant: an operator's action on another

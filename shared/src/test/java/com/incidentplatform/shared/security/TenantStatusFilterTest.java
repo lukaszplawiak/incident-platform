@@ -207,4 +207,51 @@ class TenantStatusFilterTest {
                         tenantId -> TenantAccess.FULL, new ObjectMapper(), List.of(entry)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    @org.junit.jupiter.api.Nested
+    @DisplayName("with tenant-status.read-only.retry-after set (ingestion-service, backlog #0-82 step 2)")
+    class RetryAfter {
+
+        private MockFilterChain runRetrying(TenantAccess access, String method, MockHttpServletResponse response)
+                throws Exception {
+            final TenantStatusFilter filter = new TenantStatusFilter(tenantId -> access,
+                    new ObjectMapper().findAndRegisterModules(), List.of(), java.time.Duration.ofMinutes(5));
+            final MockFilterChain chain = new MockFilterChain();
+            filter.doFilter(new MockHttpServletRequest(method, "/api/v1/alerts"), response, chain);
+            return chain;
+        }
+
+        @Test
+        @DisplayName("a read-only write is 503 + Retry-After, so an alert sender keeps and retries it")
+        void readOnlyWriteIs503() throws Exception {
+            authenticate(user(true));
+            final MockHttpServletResponse response = new MockHttpServletResponse();
+
+            assertThat(runRetrying(TenantAccess.READ_ONLY, "POST", response).getRequest()).isNull();
+            assertThat(response.getStatus()).isEqualTo(503);
+            assertThat(response.getHeader("Retry-After")).isEqualTo("300");
+            assertThat(response.getContentAsString()).contains("\"errorCode\":\"TENANT_READ_ONLY\"");
+        }
+
+        @Test
+        @DisplayName("reads still pass, and a tenant suspended in full is still 403")
+        void readsPassFullStill403() throws Exception {
+            authenticate(user(true));
+            assertThat(runRetrying(TenantAccess.READ_ONLY, "GET", new MockHttpServletResponse()).getRequest())
+                    .isNotNull();
+
+            final MockHttpServletResponse response = new MockHttpServletResponse();
+            assertThat(runRetrying(TenantAccess.NONE, "POST", response).getRequest()).isNull();
+            assertThat(response.getStatus()).isEqualTo(403);
+            assertThat(response.getHeader("Retry-After")).isNull();
+        }
+
+        @Test
+        @DisplayName("a retry-after under one second fails construction (it would be sent as 0)")
+        void subSecondRefused() {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> new TenantStatusFilter(tenantId -> TenantAccess.FULL,
+                            new ObjectMapper(), List.of(), java.time.Duration.ofMillis(500)))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
+    }
 }

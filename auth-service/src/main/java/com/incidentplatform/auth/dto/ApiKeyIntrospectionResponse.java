@@ -18,6 +18,11 @@ import java.util.UUID;
  *                  TENANT key of a read-only tenant (backlog #0-82): not now,
  *                  ask again later; absent otherwise. Not a field of RFC 7662 —
  *                  an extension, which §2.2 allows
+ * @param suspended {@code true} only beside {@code active:false}, for a valid
+ *                  TENANT key of a tenant suspended in full (backlog #0-82,
+ *                  step 2): refused, but the key itself is not wrong, so the
+ *                  caller does not count it as a failed authentication; absent
+ *                  otherwise. Same kind of extension as {@code paused}
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ApiKeyIntrospectionResponse(
@@ -27,21 +32,27 @@ public record ApiKeyIntrospectionResponse(
         UUID teamId,
         List<String> scopes,
         Instant expiresAt,
-        Boolean paused
+        Boolean paused,
+        Boolean suspended
 ) {
 
     public static ApiKeyIntrospectionResponse active(UUID keyId, String tenantId, UUID teamId,
                                                      List<String> scopes, Instant expiresAt) {
         return new ApiKeyIntrospectionResponse(true, keyId, tenantId, teamId,
-                List.copyOf(scopes), expiresAt, null);
+                List.copyOf(scopes), expiresAt, null, null);
     }
 
     public static ApiKeyIntrospectionResponse inactive() {
-        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null, null);
+        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null, null, null);
     }
 
     /** A read-only tenant's key asked to file an alert (backlog #0-82): retry later. */
     public static ApiKeyIntrospectionResponse pausedForWrites() {
-        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null, true);
+        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null, true, null);
+    }
+
+    /** A key of a tenant suspended in full (backlog #0-82, step 2): refused, not a wrong key. */
+    public static ApiKeyIntrospectionResponse suspendedTenant() {
+        return new ApiKeyIntrospectionResponse(false, null, null, null, null, null, null, true);
     }
 }

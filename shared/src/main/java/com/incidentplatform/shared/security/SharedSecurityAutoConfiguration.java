@@ -1,13 +1,20 @@
 package com.incidentplatform.shared.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.incidentplatform.shared.observability.ClientFallbackMetrics;
+import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.security.authorization.AuthenticatedAuthorizationManager;
 import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.authorization.AuthorizationManager;
@@ -22,8 +29,11 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.client.RestClient;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -173,10 +183,56 @@ public class SharedSecurityAutoConfiguration {
     }
 
     /**
+     * The {@link TenantStatusProvider} of a service that sets
+     * {@code auth-service.base-url} (backlog #0-82, step 2): every service but
+     * auth-service, which declares its own from its database and sets no such
+     * URL. Declared before {@link #fullAccessTenantStatusProvider()} so that one
+     * backs off. See {@link AuthServiceTenantStatusProvider} for the cache and
+     * what happens when auth-service does not answer.
+     *
+     * <p>Its own HTTP client, with short timeouts (the lookup runs on a request
+     * thread), built from the context's {@link RestClient.Builder} so it keeps
+     * Boot's message converters and observation.
+     */
+    @Bean
+    @ConditionalOnProperty("auth-service.base-url")
+    @ConditionalOnMissingBean(TenantStatusProvider.class)
+    public TenantStatusProvider authServiceTenantStatusProvider(
+            ObjectProvider<RestClient.Builder> restClientBuilder,
+            ServiceTokenProvider serviceTokenProvider,
+            ClientFallbackMetrics fallbackMetrics,
+            MeterRegistry meterRegistry,
+            @Value("${auth-service.base-url}") String authServiceBaseUrl,
+            Environment environment) {
+        // Bound rather than @Value-injected: Boot's binder takes "PT10S" and "10s"
+        // alike in any context, @Value converts a Duration only where Boot has
+        // registered its conversion service.
+        final Binder binder = Binder.get(environment);
+        final Duration connectTimeout = duration(binder, "tenant-status.client.connect-timeout", "PT1S");
+        final Duration readTimeout = duration(binder, "tenant-status.client.read-timeout", "PT2S");
+        final Duration ttl = duration(binder, "tenant-status.cache.ttl", "PT10S");
+        final JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(
+                HttpClient.newBuilder().connectTimeout(connectTimeout).build());
+        requestFactory.setReadTimeout(readTimeout);
+        final RestClient restClient = restClientBuilder.getIfAvailable(RestClient::builder)
+                .clone()
+                .baseUrl(authServiceBaseUrl)
+                .requestFactory(requestFactory)
+                .build();
+        return new AuthServiceTenantStatusProvider(restClient, serviceTokenProvider, fallbackMetrics,
+                meterRegistry, ttl);
+    }
+
+    private static Duration duration(Binder binder, String name, String defaultValue) {
+        return binder.bind(name, Duration.class).orElseGet(() -> Duration.parse(defaultValue));
+    }
+
+    /**
      * Default {@link TenantStatusProvider} (backlog #0-82): every tenant has
-     * full access. auth-service, which owns the tenants' status, declares its
-     * own; the other services keep this until they read the status from
-     * auth-service (the second step of #0-82). The same arrangement as
+     * full access. Left for a context that neither owns the status
+     * (auth-service) nor knows where to ask for it (no
+     * {@code auth-service.base-url}): test slices, and no deployed service since
+     * step 2 of #0-82. The same arrangement as
      * {@link #noOpTokenRevocationChecker()}.
      */
     @Bean
@@ -360,8 +416,10 @@ public class SharedSecurityAutoConfiguration {
     /**
      * The {@link TenantStatusFilter} of a chain (backlog #0-82), built from the
      * context's {@link TenantStatusProvider} and the service's
-     * {@code tenant-status.read-only.allowed-writes} (comma-separated Ant
-     * patterns, empty by default). Built here rather than declared as a bean,
+     * {@code tenant-status.read-only.allowed-writes} (comma-separated
+     * {@code "METHOD /ant/pattern"} entries, empty by default) and
+     * {@code tenant-status.read-only.retry-after} (unset: a read-only refusal
+     * is 403; set: 503 with that Retry-After, ingestion-service). Built here rather than declared as a bean,
      * which would also register it as a servlet filter outside the chain. A
      * context without a provider (a test slice that does not load this
      * auto-configuration) gets full access, as the default provider would give.
@@ -374,7 +432,11 @@ public class SharedSecurityAutoConfiguration {
                 .getIfAvailable(() -> new ObjectMapper().findAndRegisterModules());
         final String[] allowedWrites = context.getEnvironment()
                 .getProperty("tenant-status.read-only.allowed-writes", String[].class, new String[0]);
-        return new TenantStatusFilter(provider, objectMapper, List.of(allowedWrites));
+        // Bound, not read with getProperty: Boot's binder takes "PT5M" and "5m"
+        // alike, a plain Environment converts neither.
+        final Duration readOnlyRetryAfter = Binder.get(context.getEnvironment())
+                .bind("tenant-status.read-only.retry-after", Duration.class).orElse(null);
+        return new TenantStatusFilter(provider, objectMapper, List.of(allowedWrites), readOnlyRetryAfter);
     }
 
     /**

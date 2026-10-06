@@ -541,6 +541,93 @@ tests:
               summary: "A tenant has no row in the tenants table"
               description: "auth-service checked the status of a tenant without a tenants row in the last 15 minutes; it has full access and cannot be suspended. Find it in the auth-service WARN log (\"Tenant has no row in tenants\") and insert its row.\n"
 
+  # Backlog #0-82 step 2: a service that keeps failing to read tenant status
+  # fires after 5 minutes, per service and reason; another client's fallbacks
+  # do not, and neither does a rejected token, which is its own critical alert,
+  # firing at once.
+  - interval: 1m
+    input_series:
+      - series: 'service_client_fallback_total{job="incident-service",instance="incident-1",client="tenant-status",target="auth-service",reason="unreachable"}'
+        values: '0x5 1+1x40'
+      - series: 'service_client_fallback_total{job="notification-service",instance="notification-1",client="oncall",target="oncall-service",reason="unreachable"}'
+        values: '0x5 1+1x40'
+      - series: 'service_client_fallback_total{job="oncall-service",instance="oncall-1",client="tenant-status",target="auth-service",reason="auth"}'
+        values: '0x5 1+1x40'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: TenantStatusLookupFailing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantStatusLookupFailing
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: incident-service
+              reason: unreachable
+            exp_annotations:
+              summary: "incident-service cannot read tenant status from auth-service"
+              description: "incident-service failed to read tenant status from auth-service (reason unreachable) for over 5 minutes. It keeps each tenant's last known status; a tenant it never saw gets full access there until auth-service answers. Check auth-service's health and the service's WARN log (\"Tenant status lookup failed\").\n"
+      - eval_time: 4m
+        alertname: TenantStatusLookupRejected
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: TenantStatusLookupRejected
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              scope: platform
+              job: oncall-service
+            exp_annotations:
+              summary: "auth-service rejects oncall-service's tenant status lookups"
+              description: "auth-service answered 401/403 to oncall-service's tenant status lookups: its service token is not accepted (JWT secret or audience). New suspensions are not enforced there until it is fixed. See the service's ERROR log (\"rejected the service token from client tenant-status\").\n"
+
+  # Backlog #0-82 step 2: a few untracked sessions (clients closing during
+  # CONNECT) do not fire; a steady stream does.
+  - interval: 1m
+    input_series:
+      - series: 'websocket_sessions_unbound_total{job="incident-service",instance="incident-1"}'
+        values: '0x5 1+1x30'
+      - series: 'websocket_sessions_unbound_total{job="incident-service",instance="incident-2"}'
+        values: '0x40 1'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: WebSocketSessionUntracked
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: WebSocketSessionUntracked
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: incident-service
+            exp_annotations:
+              summary: "incident-service cannot close suspended tenants' WebSocket sessions"
+              description: "incident-service authenticated WebSocket sessions it does not track in the last 15 minutes: a suspension does not close them. Check the WARN log (\"Authenticated WebSocket session not tracked\") and whether the WebSocket transport or a proxy changed the session id.\n"
+
+  # Backlog #0-82 step 2: skipped puts in the tenant-status cache for 15 minutes
+  # fire; another cache's do not.
+  - interval: 1m
+    input_series:
+      - series: 'cache_puts_skipped_total{job="oncall-service",instance="oncall-1",cache="tenant-status"}'
+        values: '0x5 1+1x40'
+      - series: 'cache_puts_skipped_total{job="notification-service",instance="notification-1",cache="slack-workspace"}'
+        values: '0x5 1+1x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantStatusCacheFull
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TenantStatusCacheFull
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: oncall-service
+            exp_annotations:
+              summary: "oncall-service's tenant status cache is full"
+              description: "oncall-service could not cache some tenants' status for 15 minutes: more than 10000 tenants active on one instance, or many known suspensions. Their requests each call auth-service. Raise AuthServiceTenantStatusProvider.MAX_CACHED_TENANTS or move to the generic cache (backlog #0-33).\n"
+
   # Backlog #0-90: one MFA recovery request fires, and stops an hour later;
   # the other outcomes of the same counter do not.
   - interval: 1m

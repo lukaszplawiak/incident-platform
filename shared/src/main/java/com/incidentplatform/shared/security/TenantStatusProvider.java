@@ -20,4 +20,19 @@ public interface TenantStatusProvider {
      * @param tenantId a valid tenant id (the principal's, already checked)
      */
     TenantAccess accessOf(String tenantId);
+
+    /**
+     * What the tenant may do as far as known now, without waiting on anything
+     * remote (backlog #0-82, step 2): for a caller that must not block, such as
+     * a STOMP {@code CONNECT} on the message channel's threads or a sweep over
+     * many tenants. A provider that asks another service answers from its cache
+     * and refreshes it in the background; one that reads its own database (the
+     * default) answers as {@link #accessOf}. Never stricter than
+     * {@link #accessOf}, so the caller must enforce again where it matters.
+     *
+     * @param tenantId a valid tenant id (the principal's, already checked)
+     */
+    default TenantAccess knownAccessOf(String tenantId) {
+        return accessOf(tenantId);
+    }
 }

@@ -1187,7 +1187,7 @@ when the services have taken every other connection, which is the reserve's purp
 
 ### 0-82. Suspend and offboard a tenant
 
-**Type:** design · **Priority:** Medium · **Status:** In progress, step 1 of 2 (split out of #0-80; offboarding moved to #0-101)
+**Type:** design · **Priority:** Medium · **Status:** In progress, step 2a of 2 done, 2b open (split out of #0-80; offboarding moved to #0-101)
 
 **Problem.** (As written before step 1.) Since #0-80 a platform operator creates tenants
 (`POST /api/v1/platform/tenants`), but nothing ends one. A customer who stops paying, breaches terms or leaves keeps logging in, its
@@ -1235,10 +1235,11 @@ item: #0-101.
 account-security writes it allows (others' MFA, deactivation). In step 1 already: a read-only
 tenant's alerts are paused, not refused: introspection answers `paused:true` and ingestion-service
 503 + `Retry-After` (Alertmanager retries 5xx, drops 4xx), as a successful answer so its circuit
-breaker is not tripped for every tenant; a full suspension's alerts get 401. Left for step 2 (or a
+breaker is not tripped for every tenant; a full suspension's alerts got 401 (403 `TENANT_SUSPENDED` since
+2a). Left for step 2 (or a
 foreign key): a tenant with users but no `tenants` row has full access and cannot be suspended — none
 should exist; it is counted, alerted (`PlatformTenantStatusRowMissing`) and logged once. Also left for
-step 2 (found in the review of step 1): a key ingestion-service cached in the minute before a full
+step 2 (found in the review of step 1; all done in 2a, below): a key ingestion-service cached in the minute before a full
 suspension still files alerts for the rest of that minute; a fully suspended tenant's key is answered
 like a revoked one, so its sender's retries count against the IP's failed-authentication limit (a
 shared NAT could throttle others); a sign-in refused for suspension is neither audited nor counted;
@@ -1246,7 +1247,35 @@ shared NAT could throttle others); a sign-in refused for suspension is neither a
 of the status (5-10 s), not a lookup per request; a short cache (5-10 s) of ingestion's paused
 introspection answers, so a sender that ignores Retry-After cannot turn every alert into an
 auth-service call; a sign-in that loses a deadlock to a suspension's session cleanup gets a 500,
-not 503 + Retry-After. Step 2: open.
+not 503 + Retry-After.
+
+**Step 2, decided (2026-10-05).** Split in two PRs. A decision of step 1 changed: Kafka consumers do **not**
+park and replay a suspended tenant's records. notification-, escalation- and postmortem-service's consumers
+only write a row (a queue entry, an escalation task, a GENERATING postmortem); their schedulers do the
+outbound work. So 2b pauses the schedulers instead: a per-service `paused_tenants` table, excluded in the
+schedulers' SQL (not in Java, where a suspended tenant's rows would fill every batch and starve the others),
+in both modes, with delivery and escalation deadlines not running while paused; intake goes on, so the state
+is consistent on resume. `AuditEventConsumer` is never paused. When auth-service cannot answer: the last known
+status however old (static stability; the first version gave FULL an hour after the last answer, changed in the
+review of 2a because that abandoned a known suspension, for good when the service token is rejected), FULL only
+for a tenant never answered for (fail-open), counted and alerted; a rejected token is its own critical alert.
+
+**Step 2a: PR #457.** Every other service reads the status (`AuthServiceTenantStatusProvider` in `shared`,
+`GET /api/v1/internal/tenant-status`, cache 10 s, one call per tenant at a time, last known status during an
+outage, FULL only for a tenant never answered for, alerts `TenantStatusLookupFailing` /
+`TenantStatusLookupRejected`, CI check that every service sets `auth-service.base-url`), so `TenantStatusFilter` closes the access-token window in all of them; STOMP
+`CONNECT` refused and open sessions closed (incident-service, `TenantWebSocketSessions`). The step-1 review
+items: a full suspension's keys answer `suspended:true` → 403 in ingestion-service, not counted by the IP
+limiter, and the 60 s positive cache window is closed by the status filter (ingestion's read-only refusal is
+503 + Retry-After there, `tenant-status.read-only.retry-after`); paused and suspended introspection answers
+are cached 5 s; a sign-in refused for suspension is audited (`USER_SIGN_IN_REFUSED_TENANT_SUSPENDED`, after the
+rollback) and counted, at most a few times per user per window (then 429, no event: a refusal rolls back,
+so its invite or reset token could be replayed without end);
+suspend/resume wait at most 5 s for a lock; a lost lock (deadlock, timeout) in
+auth-service is 503 + Retry-After, not 500. Still open from step 1: the missing `tenants` row (a foreign key).
+
+**Step 2b: open.** Pause the schedulers of notification-, escalation- and postmortem-service as decided above,
+and resume them on resumption.
 
 ---
 

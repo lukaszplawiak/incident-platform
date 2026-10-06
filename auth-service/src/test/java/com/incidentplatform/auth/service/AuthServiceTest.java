@@ -316,10 +316,10 @@ class AuthServiceTest {
             final User user = User.forTesting(UUID.randomUUID(), TENANT_ID, EMAIL,
                     ENCODER.encode(RAW_PASSWORD), true, List.of("ROLE_ADMIN"));
             given(userRepository.findByEmailAndTenantId(EMAIL, TENANT_ID)).willReturn(Optional.of(user));
-            org.mockito.BDDMockito.willThrow(new BusinessException(
-                            com.incidentplatform.shared.exception.ErrorCodes.TENANT_SUSPENDED, "suspended",
-                            org.springframework.http.HttpStatus.FORBIDDEN))
-                    .given(tenantAccessService).requireCanSignIn(TENANT_ID);
+            org.mockito.BDDMockito.willThrow(new TenantSuspendedSignInException(TENANT_ID, user.getId(),
+                            SignInFlow.LOGIN, com.incidentplatform.shared.security.TenantAccess.NONE))
+                    .given(tenantAccessService).requireCanSignIn(org.mockito.ArgumentMatchers.eq(TENANT_ID),
+                            org.mockito.ArgumentMatchers.eq(user.getId()), org.mockito.ArgumentMatchers.eq(SignInFlow.LOGIN));
 
             assertThatThrownBy(() -> authService.login(new LoginRequest(EMAIL, RAW_PASSWORD), TENANT_ID))
                     .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode())

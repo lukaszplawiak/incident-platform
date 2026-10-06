@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -112,16 +113,33 @@ public class TenantAccessService implements TenantStatusProvider {
      * types ({@code AuthTokenRepository.invalidateSessionsOfTenant}).
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public void requireCanSignIn(String tenantId) {
-        if (lockedAccessOf(tenantId) == TenantAccess.NONE) {
-            throw suspended();
+    public void requireCanSignIn(String tenantId, UUID userId, SignInFlow flow) {
+        final TenantAccess access = lockedAccessOf(tenantId);
+        if (access == TenantAccess.NONE) {
+            // Its own type (step 2): audited and counted once the transaction
+            // has rolled back (SignInRefusalHandler).
+            throw new TenantSuspendedSignInException(tenantId, userId, flow, access);
         }
     }
 
     /**
-     * Refuses a write that comes in without a principal (accepting an invite)
-     * for a suspended tenant, in full or read-only. Share-locks the tenant row,
-     * as {@link #requireCanSignIn}.
+     * Refuses a sign-in that is also a write (accepting an invite) for a
+     * suspended tenant, in full or read-only, audited and counted like
+     * {@link #requireCanSignIn}. Share-locks the tenant row, as that does.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void requireCanJoin(String tenantId, UUID userId, SignInFlow flow) {
+        final TenantAccess access = lockedAccessOf(tenantId);
+        if (access != TenantAccess.FULL) {
+            throw new TenantSuspendedSignInException(tenantId, userId, flow, access);
+        }
+    }
+
+    /**
+     * Refuses a write for a suspended tenant, in full or read-only, where the
+     * filter does not already (an admin's request that also takes a
+     * non-security write, such as reactivating a user). Not a sign-in, so not
+     * audited as one. Share-locks the tenant row, as {@link #requireCanSignIn}.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void requireCanWrite(String tenantId) {

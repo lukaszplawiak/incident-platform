@@ -105,7 +105,7 @@ public class PasswordService {
         // the hash, as InviteService: the check share-locks the tenant row. The
         // reset token was consumed before it, safe only because a suspension
         // never locks PASSWORD_RESET tokens (see InviteService).
-        tenantAccessService.requireCanSignIn(token.getTenantId());
+        tenantAccessService.requireCanSignIn(token.getTenantId(), user.getId(), SignInFlow.PASSWORD_RESET);
 
         user.setPasswordHash(newHash);
         // Backlog #0-83: an MFA setup begun but not enabled goes with the old

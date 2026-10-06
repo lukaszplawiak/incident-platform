@@ -33,9 +33,10 @@ import java.util.Optional;
  *       failure: the client did nothing wrong. A read-only tenant's key
  *       (backlog #0-82) → {@code Paused} (503 with a longer
  *       {@code Retry-After}), not counted either: its alerts are paused, not
- *       refused. A key of a tenant suspended in full is {@code Inactive}, like
- *       a revoked one, and counted: auth-service does not tell the two apart
- *       (backlog #0-82 step 2 may).</li>
+ *       refused. A key of a tenant suspended in full → {@code Suspended} (403),
+ *       not counted (step 2 of #0-82; it used to be {@code Inactive} and
+ *       counted, so a suspended tenant's retrying sender could throttle every
+ *       client behind the same IP).</li>
  * </ol>
  *
  * <h2>Principal</h2>
@@ -93,6 +94,7 @@ public class RemoteApiKeyLookupService implements ApiKeyAuthFilter.ApiKeyLookupS
         return switch (answer) {
             case ApiKeyIntrospection.Active(IntrospectedApiKey key) -> authenticated(key);
             case ApiKeyIntrospection.Paused paused -> new ApiKeyLookupResult.Paused(PAUSED_RETRY_AFTER);
+            case ApiKeyIntrospection.Suspended suspended -> new ApiKeyLookupResult.Suspended();
             case ApiKeyIntrospection.Inactive inactive -> {
                 authFailureRateLimiter.recordFailure(clientIp);
                 yield new ApiKeyLookupResult.Invalid();

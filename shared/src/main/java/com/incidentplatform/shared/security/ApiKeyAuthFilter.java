@@ -63,6 +63,12 @@ import java.util.UUID;
  *       refused, so the sender keeps them. Its own case, not
  *       {@code Unavailable}: nothing failed, and an operator reading the log
  *       or the sender reading the body must not chase an outage.</li>
+ *   <li>{@link ApiKeyLookupResult.Suspended} (backlog #0-82, step 2) — a valid
+ *       key of a tenant suspended in full: <b>403</b> {@code TENANT_SUSPENDED}.
+ *       A definite "no" like {@code Invalid}, but its own case so the service
+ *       does not count it as a failed authentication: the sender presented a
+ *       real key, and counting its retries would throttle every client behind
+ *       the same IP (a shared NAT).</li>
  * </ul>
  * Before, an invalid key fell through to the entry point's generic 401, and an
  * unreachable validator could not be told apart from a wrong key at all.
@@ -109,6 +115,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         record Throttled(Duration retryAfter) implements ApiKeyLookupResult { }
 
         record Paused(Duration retryAfter) implements ApiKeyLookupResult { }
+
+        record Suspended() implements ApiKeyLookupResult { }
     }
 
     private final ApiKeyLookupService lookupService;
@@ -164,6 +172,11 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 response.setHeader(HttpHeaders.RETRY_AFTER, seconds(paused.retryAfter()));
                 writeError(response, HttpStatus.SERVICE_UNAVAILABLE, ErrorCodes.TENANT_READ_ONLY,
                         "The tenant is read-only: writes are paused until it is resumed. Retry later.");
+            }
+            case ApiKeyLookupResult.Suspended suspended -> {
+                log.info("API key of a tenant suspended in full, refused: request={}", request.getRequestURI());
+                writeError(response, HttpStatus.FORBIDDEN, ErrorCodes.TENANT_SUSPENDED,
+                        "This organisation's account is suspended. Contact the platform operator.");
             }
             case ApiKeyLookupResult.Throttled throttled -> {
                 response.setHeader(HttpHeaders.RETRY_AFTER, seconds(throttled.retryAfter()));

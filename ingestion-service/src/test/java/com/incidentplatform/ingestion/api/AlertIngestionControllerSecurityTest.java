@@ -123,6 +123,11 @@ class AlertIngestionControllerSecurityTest {
     @MockitoBean
     private ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService;
 
+    // Replaces AuthServiceTenantStatusProvider (backlog #0-82 step 2, tested in
+    // shared): the chain's TenantStatusFilter asks this one.
+    @MockitoBean
+    private com.incidentplatform.shared.security.TenantStatusProvider tenantStatusProvider;
+
     private static final String RAW_KEY = "ipl_test-integration-key";
 
     private static final String TENANT_ID = "test-tenant";
@@ -143,6 +148,8 @@ class AlertIngestionControllerSecurityTest {
         given(clientIpResolver.resolve(any())).willReturn("203.0.113.1");
         given(apiKeyLookupService.lookup(anyString(), any()))
                 .willReturn(new ApiKeyAuthFilter.ApiKeyLookupResult.Invalid());
+        given(tenantStatusProvider.accessOf(anyString()))
+                .willReturn(com.incidentplatform.shared.security.TenantAccess.FULL);
     }
 
     @AfterEach
@@ -348,6 +355,46 @@ class AlertIngestionControllerSecurityTest {
         }
 
         @Test
+        @DisplayName("a key authenticated (cached) before a read-only suspension: 503 + Retry-After 300, "
+                + "TENANT_READ_ONLY, from the status filter — paused, never a 4xx Alertmanager drops "
+                + "(backlog #0-82 step 2)")
+        void readOnlyTenantPausedByStatusFilter() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(authenticatedKey(ApiScopes.ALERTS_INGEST));
+            given(tenantStatusProvider.accessOf("operator-tenant"))
+                    .willReturn(com.incidentplatform.shared.security.TenantAccess.READ_ONLY);
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(header().string(HttpHeaders.RETRY_AFTER, "300"))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.errorCode").value("TENANT_READ_ONLY"));
+            then(alertIngestionService).should(never()).ingest(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("a key authenticated (cached) before a full suspension: 403 TENANT_SUSPENDED from the "
+                + "status filter (closes the 60 s introspection cache window, backlog #0-82 step 2)")
+        void fullySuspendedTenantRefusedByStatusFilter() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(authenticatedKey(ApiScopes.ALERTS_INGEST));
+            given(tenantStatusProvider.accessOf("operator-tenant"))
+                    .willReturn(com.incidentplatform.shared.security.TenantAccess.NONE);
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isForbidden())
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.errorCode").value("TENANT_SUSPENDED"));
+            then(alertIngestionService).should(never()).ingest(any(), any(), any(), any());
+        }
+
+        @Test
         @DisplayName("200 for 'Authorization: ApiKey ipl_...' with alerts:ingest, tenant taken from the key")
         void apiKeySchemeIsAccepted() throws Exception {
             given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
@@ -434,6 +481,24 @@ class AlertIngestionControllerSecurityTest {
                     .andExpect(header().string(HttpHeaders.RETRY_AFTER, "300"))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                             .jsonPath("$.errorCode").value("TENANT_READ_ONLY"));
+            then(alertIngestionService).should(never()).ingest(any(), any(), any(), any());
+        }
+
+        @Test
+        @DisplayName("403 TENANT_SUSPENDED for a key of a tenant suspended in full, without WWW-Authenticate "
+                + "(backlog #0-82 step 2)")
+        void suspendedIs403() throws Exception {
+            given(apiKeyLookupService.lookup(eq(RAW_KEY), any()))
+                    .willReturn(new ApiKeyAuthFilter.ApiKeyLookupResult.Suspended());
+
+            mockMvc.perform(post("/api/v1/alerts/prometheus")
+                            .header(HttpHeaders.AUTHORIZATION, "ApiKey " + RAW_KEY)
+                            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                            .content(PROMETHEUS_PAYLOAD))
+                    .andExpect(status().isForbidden())
+                    .andExpect(header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE))
+                    .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                            .jsonPath("$.errorCode").value("TENANT_SUSPENDED"));
             then(alertIngestionService).should(never()).ingest(any(), any(), any(), any());
         }
 

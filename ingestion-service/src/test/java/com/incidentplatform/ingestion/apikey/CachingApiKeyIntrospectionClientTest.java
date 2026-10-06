@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -174,23 +176,30 @@ class CachingApiKeyIntrospectionClientTest {
     }
 
     @Nested
-    @DisplayName("paused keys (backlog #0-82)")
-    class PausedKeys {
+    @DisplayName("keys of a suspended tenant (backlog #0-82)")
+    class SuspendedTenantKeys {
 
-        @Test
-        @DisplayName("are never cached, in either map: the first retry after resume goes through")
-        void notCached() {
-            given(delegate.introspect(HASH))
-                    .willReturn(new ApiKeyIntrospection.Paused(), new ApiKeyIntrospection.Active(key(null)));
+        @ParameterizedTest
+        @MethodSource("com.incidentplatform.ingestion.apikey.CachingApiKeyIntrospectionClientTest#suspensionAnswers")
+        @DisplayName("paused and suspended answers are cached for the negative TTL, as what they are, never as "
+                + "active (changed in step 2: paused was never cached)")
+        void cachedForNegativeTtl(ApiKeyIntrospection answer) {
+            given(delegate.introspect(HASH)).willReturn(answer, new ApiKeyIntrospection.Active(key(null)));
 
-            assertThat(cache.introspect(HASH)).isEqualTo(new ApiKeyIntrospection.Paused());
+            assertThat(cache.introspect(HASH)).isEqualTo(answer);
+            assertThat(cache.introspect(HASH)).as("from the cache").isEqualTo(answer);
             assertThat(cache.activeSize()).isZero();
-            assertThat(cache.inactiveSize()).isZero();
             assertThat(cache.findCached(HASH)).isEmpty();
+            then(delegate).should(times(1)).introspect(HASH);
 
-            assertThat(cache.introspect(HASH)).isInstanceOf(ApiKeyIntrospection.Active.class);
-            then(delegate).should(times(2)).introspect(HASH);
+            clock.advance(java.time.Duration.ofSeconds(CachingApiKeyIntrospectionClient.NEGATIVE_TTL_SECONDS));
+            assertThat(cache.introspect(HASH)).as("the first call after the TTL asks again")
+                    .isInstanceOf(ApiKeyIntrospection.Active.class);
         }
+    }
+
+    static java.util.stream.Stream<ApiKeyIntrospection> suspensionAnswers() {
+        return java.util.stream.Stream.of(new ApiKeyIntrospection.Paused(), new ApiKeyIntrospection.Suspended());
     }
 
     @Nested

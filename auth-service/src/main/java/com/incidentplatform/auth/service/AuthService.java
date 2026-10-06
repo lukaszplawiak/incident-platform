@@ -116,8 +116,10 @@ public class AuthService {
         // After the password, so only someone who has it learns that the
         // organisation is suspended; a read-only tenant still signs in. After
         // recordSuccess too, on purpose: the password was right, so the
-        // failure counter resets even though no session follows.
-        tenantAccessService.requireCanSignIn(tenantId);
+        // failure counter resets even though no session follows. How many
+        // such refusals one user can make is bounded by SignInRefusals, for
+        // every sign-in flow alike (step 2), not by the login lockout.
+        tenantAccessService.requireCanSignIn(tenantId, user.getId(), SignInFlow.LOGIN);
 
         // ── 5. MFA check ───────────────────────────────────────────────────
         // Two conditions trigger MFA second factor:
