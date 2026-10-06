@@ -36,6 +36,8 @@ class TenantAccessServiceTest {
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 
+    private static final java.time.Instant SUSPENDED_AT = java.time.Instant.parse("2026-10-05T09:30:00Z");
+
     private TenantAccessService service() {
         return new TenantAccessService(tenantRepository, meterRegistry);
     }
@@ -43,7 +45,8 @@ class TenantAccessServiceTest {
     /** Stubs both lookups: the per-request one and the share-locked one of sign-ins and writes. */
     private void status(TenantStatus status, SuspensionMode mode) {
         org.mockito.Mockito.lenient().when(tenantRepository.findStatus(TENANT))
-                .thenReturn(Optional.of(new TenantStatusView(status, mode)));
+                .thenReturn(Optional.of(new TenantStatusView(status, mode,
+                        status == TenantStatus.ACTIVE ? null : SUSPENDED_AT)));
         org.mockito.Mockito.lenient().when(tenantRepository.findStatusForSignIn(TENANT))
                 .thenReturn(Optional.of(new TenantRepository.LockedTenantStatus() {
                     @Override
@@ -73,6 +76,22 @@ class TenantAccessServiceTest {
         assertThat(service().accessOf(TENANT)).isEqualTo(TenantAccess.NONE);
         given(tenantRepository.findStatus(TENANT)).willReturn(Optional.empty());
         assertThat(service().accessOf(TENANT)).as("a gap in the table locks nobody out").isEqualTo(TenantAccess.FULL);
+    }
+
+    @Test
+    @DisplayName("step 2b: the other services' answer carries when the tenant was suspended; full access, and "
+            + "a tenant without a row, carry no time")
+    void stateCarriesSuspensionTime() {
+        status(TenantStatus.SUSPENDED, SuspensionMode.READ_ONLY);
+        assertThat(service().stateOf(TENANT))
+                .isEqualTo(new com.incidentplatform.shared.security.TenantAccessState(TenantAccess.READ_ONLY,
+                        SUSPENDED_AT));
+        assertThat(service().confirmedStateOf(TENANT)).contains(service().stateOf(TENANT));
+        status(TenantStatus.ACTIVE, null);
+        assertThat(service().stateOf(TENANT).since()).isNull();
+        given(tenantRepository.findStatus(TENANT)).willReturn(Optional.empty());
+        assertThat(service().stateOf(TENANT))
+                .isEqualTo(new com.incidentplatform.shared.security.TenantAccessState(TenantAccess.FULL, null));
     }
 
     @Test

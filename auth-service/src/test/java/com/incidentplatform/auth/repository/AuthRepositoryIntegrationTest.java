@@ -1397,6 +1397,13 @@ class AuthRepositoryIntegrationTest {
             assertThat(apiKeyIntrospectionService.resolve(keyHash)).isPresent();
             assertThat(apiKeyIntrospectionService.introspect(keyHash))
                     .isEqualTo(com.incidentplatform.auth.dto.ApiKeyIntrospectionResponse.pausedForWrites());
+            // Step 2b: the status read carries suspended_at, which the other services
+            // measure a pause of background work from.
+            final java.time.Instant suspendedAt = jdbcTemplate.queryForObject(
+                    "SELECT suspended_at FROM tenants WHERE tenant_id = ?", java.sql.Timestamp.class, tenant)
+                    .toInstant();
+            assertThat(tenantRepository.findStatus(tenant)).get()
+                    .extracting(TenantStatusView::suspendedAt).isEqualTo(suspendedAt);
         }
 
         @Test

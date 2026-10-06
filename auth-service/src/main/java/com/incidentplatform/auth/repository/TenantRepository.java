@@ -165,7 +165,8 @@ public interface TenantRepository extends JpaRepository<Tenant, String> {
      * ({@code TenantStatusProvider}): a primary-key lookup of two columns.
      * Empty for a tenant without a row.
      */
-    @Query("SELECT new com.incidentplatform.auth.repository.TenantStatusView(t.status, t.suspensionMode) "
+    @Query("SELECT new com.incidentplatform.auth.repository.TenantStatusView(t.status, t.suspensionMode, "
+            + "t.suspendedAt) "
             + "FROM Tenant t WHERE t.tenantId = :tenantId")
     Optional<TenantStatusView> findStatus(@Param("tenantId") String tenantId);
 }

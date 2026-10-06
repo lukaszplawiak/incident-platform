@@ -5,6 +5,7 @@ import com.incidentplatform.auth.repository.TenantStatusView;
 import com.incidentplatform.shared.exception.BusinessException;
 import com.incidentplatform.shared.exception.ErrorCodes;
 import com.incidentplatform.shared.security.TenantAccess;
+import com.incidentplatform.shared.security.TenantAccessState;
 import com.incidentplatform.shared.security.TenantStatusProvider;
 import com.incidentplatform.auth.domain.SuspensionMode;
 import com.incidentplatform.auth.domain.TenantStatus;
@@ -75,7 +76,26 @@ public class TenantAccessService implements TenantStatusProvider {
 
     @Override
     public TenantAccess accessOf(String tenantId) {
-        return access(tenantId, tenantRepository.findStatus(tenantId));
+        return stateOf(tenantId).access();
+    }
+
+    /**
+     * What the tenant may do, with when it was suspended (backlog #0-82, step
+     * 2b): the other services' answer ({@code /api/v1/internal/tenant-status}),
+     * so that a service pausing the tenant's background work measures the pause
+     * from the suspension itself, not from when it noticed it. No time for full
+     * access, or for a tenant without a {@code tenants} row.
+     */
+    public TenantAccessState stateOf(String tenantId) {
+        final Optional<TenantStatusView> view = tenantRepository.findStatus(tenantId);
+        final TenantAccess access = access(tenantId, view);
+        return new TenantAccessState(access,
+                access == TenantAccess.FULL ? null : view.map(TenantStatusView::suspendedAt).orElse(null));
+    }
+
+    @Override
+    public Optional<TenantAccessState> confirmedStateOf(String tenantId) {
+        return Optional.of(stateOf(tenantId));
     }
 
     private TenantAccess access(String tenantId, Optional<TenantStatusView> view) {
@@ -174,7 +194,7 @@ public class TenantAccessService implements TenantStatusProvider {
         }
         tenantRepository.resetLocalLockTimeout();
         return access(tenantId, row.map(r -> new TenantStatusView(TenantStatus.valueOf(r.getStatus()),
-                r.getMode() == null ? null : SuspensionMode.valueOf(r.getMode()))));
+                r.getMode() == null ? null : SuspensionMode.valueOf(r.getMode()), null)));
     }
 
     private static BusinessException suspended() {
