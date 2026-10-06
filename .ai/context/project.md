@@ -366,13 +366,13 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (assigned UUID, no `@Version`: otherwise `save` merges).
   - "Active admin" is one query pair now, `countActiveAcceptedUsersWithRole[Excluding]` (active + password), used
     by the last-admin guard too; tenant settings expose `activeAdmins` / `singleAdmin` as the prevention side.
-- **Tenant suspension (#0-82, steps 1 and 2a; 2b = pausing schedulers is open)**: `TenantLifecycleService` (suspend/resume), `TenantAccessService` (status
+- **Tenant suspension (#0-82, steps 1, 2a and 2b; left: a foreign key for the missing `tenants` row)**: `TenantLifecycleService` (suspend/resume), `TenantAccessService` (status
   -> `TenantAccess`, guards for public paths), V30 columns on `tenants`, `TenantStatusFilter` in `shared`. Non-obvious:
   - The filter is built inside `buildCommonSecurity` from the context's `TenantStatusProvider`, not declared as a
     bean: a filter bean is also registered as a plain servlet filter outside the chain. A context without a provider
     (a test slice) gets FULL. Services' own chains get it automatically because they all call `buildCommonSecurity`.
-  - Only a `UserPrincipal` (person or API key) is checked; service tokens pass (their background work is not paused
-    yet: step 2b pauses it in the schedulers). Read-only allows GET/HEAD/OPTIONS plus the service's
+  - Only a `UserPrincipal` (person or API key) is checked; service tokens pass (their background work is paused in
+    the schedulers, step 2b, below; a person's action relayed with one, the Slack ACK, checks itself). Read-only allows GET/HEAD/OPTIONS plus the service's
     `tenant-status.read-only.allowed-writes`: `"METHOD /ant/pattern"` entries (auth-service: logout, password change,
     MFA setup/enable/disable, and an admin's key/integration revoke, revoke-created-by, user status and MFA reset),
     matched on `UrlPathHelper`'s path within the application (decoded, `;params` removed, `//` collapsed) and the
@@ -385,7 +385,7 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     are checked by `TenantAccessService` instead.
   - Other services (step 2a): `AuthServiceTenantStatusProvider` (`shared`), registered when `auth-service.base-url`
     is set (all six; a new service must set it or it silently gets "always FULL"), asks
-    `GET /api/v1/internal/tenant-status` (auth's second ROLE_SERVICE endpoint, answers only `TenantAccess`) with a
+    `GET /api/v1/internal/tenant-status` (auth's second ROLE_SERVICE endpoint, answers `TenantAccess` and, since step 2b, `since` = `suspended_at`) with a
     service token for the tenant. Cache 10 s, one call per tenant at a time (the others get the expired entry
     meanwhile, or wait for the call, at most `FOLLOWER_WAIT` 5 s, then FULL). On failure the last known answer
     HOWEVER OLD (static stability; a time limit on it was rejected: it abandons a known suspension, and with a
@@ -462,6 +462,41 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     the operator-side event has the operator's id and the note.
   - `rotateRefreshToken` now refuses a deactivated user, `updateStatus(false)` ends the user's sessions, and a
     personal key of a deactivated owner does not resolve: user deactivation used to be login-only.
+  - Background work (step 2b, `shared` `pause/`): notification-, escalation- and postmortem-service set
+    `tenant-pause.table` (`<service>_paused_tenants`), written only by `PausedTenantsSync` (ShedLock
+    `paused-tenants-sync-<table>`, 10 s). Non-obvious decisions:
+    - A table, not a set in memory (lost on restart, different per replica) nor a status on every work row (new
+      states the consumers' cancel paths would have to know). Excluded in each picking query (`NOT EXISTS`, native:
+      the table has no entity), never skipped in Java after the `LIMIT`, where the paused tenant's oldest rows
+      would starve everyone else. The queries name the table through a constant (`EscalationTaskRepository
+      .PAUSED_TABLE` etc.; plain string concatenation, as a text block strips the space before `+`), and
+      `PausedTenantsConfiguration` fails startup unless `PausableWork.pausedTable()` equals the property.
+    - Only auth-service's own answer changes the table (`TenantStatusProvider.confirmedStateOf`: the answer or
+      the last one kept through an outage, empty for a tenant never answered for), so a restart during an
+      auth-service outage resumes no one and pauses no one (fail-open, as the filter).
+    - The pause is measured from the suspension, `paused_at` = auth-service's `suspended_at` (sent as `since`,
+      kept across a mode change; `now()` if an older auth-service sends none), never from when the sync saw it: a
+      fixed allowance for the sync's delay was outrun by a late sync. One database, one clock (revisit with
+      per-service databases, #0-67). The end is when the sync sees the resumption, which only lengthens a timer.
+    - The per-row `TenantWorkGuard` uses `accessOf`, not `knownAccessOf`: the cache-only call answers FULL for an
+      uncached tenant, so after a restart a suspended tenant's oldest rows went out before the first sync. As it
+      may wait ~3 s per uncached tenant in an outage, every pausing scheduler has a processing budget validated
+      against its ShedLock at startup, and calls `TenantWorkGuard.prefetch` with its batch's tenants first (8 at a
+      time on virtual threads, waits at most 10 s, never fails the run), so the per-row check reads the cache. The
+      budget's clock starts before the prefetch (its 10 s must not eat the 30 s margin below the lock). A prefetch
+      is good for one status TTL (10 s): a longer loop asks row by row again, accepted, as by then the sync has
+      paused a suspended tenant and the next query leaves it out.
+    - Candidates (paused plus with waiting work) are asked in tenant id order, each run continuing after the last
+      tenant a used-up budget reached (per-JVM cursor): paused-first ordering let enough paused tenants starve
+      new suspensions.
+    - Resume hooks run in the transaction that deletes the paused row: escalation moves PENDING timers by
+      `now() - GREATEST(suspended_at, incident_opened_at)`, never negative (the timer's start; tasks already
+      due at the suspension untouched; `version` bumped); notification clears `first_lookup_failure_at` (a second writer
+      of queue rows, safe because the scheduler reads no paused row); postmortem none.
+    - Consumers and the incident/audit outbox relays are never paused. The Slack ACK path (no button since #0-21,
+      back with #0-35) refuses a suspended tenant itself, as service tokens pass the filter.
+    - Alerts `TenantPauseSyncFailing` and `TenantPauseSyncStalled` (no completed run in 5 min,
+      `tenant.pause.sync.runs` registered at zero). Scale limits: #0-102.
 - **Bulk UPDATEs flush before they clear** (found in #0-83): `@Modifying(clearAutomatically = true)` must
   come with `flushAutomatically = true`. Hibernate flushes before a JPQL bulk statement only pending changes
   of the tables it touches, so an earlier change to another table in the same transaction (an outbox INSERT)
