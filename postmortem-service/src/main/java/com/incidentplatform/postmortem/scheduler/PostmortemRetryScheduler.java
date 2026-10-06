@@ -8,8 +8,10 @@ import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
 import com.incidentplatform.shared.audit.AuditText;
+import com.incidentplatform.shared.pause.TenantWorkGuard;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,28 +74,67 @@ public class PostmortemRetryScheduler {
     private static final Logger log =
             LoggerFactory.getLogger(PostmortemRetryScheduler.class);
 
+    /** ShedLock {@code lockAtMostFor} of {@link #processGenerating}; keep the two in step. */
+    static final String GENERATING_LOCK_AT_MOST_FOR = "4m";
+    /** ShedLock {@code lockAtMostFor} of {@link #retryFailedPostmortems}; keep the two in step. */
+    static final String RETRY_LOCK_AT_MOST_FOR = "9m";
+    /** Room left for the postmortem in flight (a Gemini call takes up to about 15 s) when a budget runs out. */
+    private static final Duration LOCK_MARGIN = Duration.ofSeconds(30);
+
     private final PostmortemRepository postmortemRepository;
     private final GeminiClient geminiClient;
     private final PostmortemPromptBuilder promptBuilder;
     private final PostmortemPersistenceService persistenceService;
+    private final TenantWorkGuard workGuard;
     private final int maxRetryAttempts;
     private final Duration stuckThreshold;
     private final int generatingBatchSize;
     private final int retryBatchSize;
+    private final Duration generatingBudget;
+    private final Duration retryBudget;
 
     public PostmortemRetryScheduler(PostmortemRepository postmortemRepository,
                                     GeminiClient geminiClient,
                                     PostmortemPromptBuilder promptBuilder,
                                     PostmortemPersistenceService persistenceService,
-                                    PostmortemProperties properties) {
+                                    TenantWorkGuard workGuard,
+                                    PostmortemProperties properties,
+                                    // Backlog #0-82, step 2b (found in review): see validated().
+                                    @Value("${postmortem.generating-processing-budget:PT3M}")
+                                    Duration generatingBudget,
+                                    @Value("${postmortem.retry-processing-budget:PT8M}")
+                                    Duration retryBudget) {
         this.postmortemRepository = postmortemRepository;
         this.geminiClient         = geminiClient;
         this.promptBuilder        = promptBuilder;
         this.persistenceService   = persistenceService;
+        this.workGuard            = workGuard;
         this.maxRetryAttempts     = properties.maxRetryAttempts();
         this.stuckThreshold       = properties.stuckThreshold();
         this.generatingBatchSize  = properties.generatingBatchSize();
         this.retryBatchSize       = properties.retryBatchSize();
+        this.generatingBudget     = validated(generatingBudget, Duration.ofMinutes(4),
+                "postmortem.generating-processing-budget");
+        this.retryBudget          = validated(retryBudget, Duration.ofMinutes(9),
+                "postmortem.retry-processing-budget");
+    }
+
+    /**
+     * Fails at startup if a run's budget would let it outlive its ShedLock
+     * (backlog #0-82, step 2b, found in review). Each postmortem costs a Gemini
+     * call and, since step 2b, {@link TenantWorkGuard}'s status lookup, up to
+     * about 3 s for a tenant not yet cached while auth-service is down; a run
+     * past its lock would let another replica generate the same postmortems.
+     * The same arrangement as {@code NotificationScheduler}'s and
+     * {@code EscalationScheduler}'s budgets.
+     */
+    private static Duration validated(Duration budget, Duration lock, String property) {
+        final Duration limit = lock.minus(LOCK_MARGIN);
+        if (budget == null || budget.isZero() || budget.isNegative() || budget.compareTo(limit) > 0) {
+            throw new IllegalArgumentException(property + " must be positive and at most " + limit
+                    + " (the run's lock " + lock + " minus a " + LOCK_MARGIN + " margin), was " + budget);
+        }
+        return budget;
     }
 
     /**
@@ -121,7 +162,7 @@ public class PostmortemRetryScheduler {
     )
     @SchedulerLock(
             name = "postmortem-service:processGenerating",
-            lockAtMostFor = "4m",
+            lockAtMostFor = PostmortemRetryScheduler.GENERATING_LOCK_AT_MOST_FOR,
             lockAtLeastFor = "10s"
     )
     public void processGenerating() {
@@ -137,11 +178,29 @@ public class PostmortemRetryScheduler {
         log.info("Outbox check: found {} GENERATING postmortems to process",
                 candidates.size());
 
+        // The clock starts before the prefetch, which counts against the budget
+        // (review: the margin below the lock is for the postmortem in flight).
+        final Instant deadline = Instant.now().plus(generatingBudget);
+        // Backlog #0-82 (review): statuses looked up together before the loop.
+        workGuard.prefetch(candidates.stream().map(Postmortem::getTenantId).toList());
+        int processed = 0;
         for (final Postmortem postmortem : candidates) {
+            if (processed > 0 && Instant.now().isAfter(deadline)) {
+                log.warn("Outbox check: processing budget of {} used up, {} of {} postmortems left for the "
+                        + "next run", generatingBudget, candidates.size() - processed, candidates.size());
+                break;
+            }
+            processed++;
             // Inside the try: set refuses an invalid tenant id, and that must stay
             // this entry's failure, not end the batch (backlog #0-92).
             try {
                 TenantContext.set(postmortem.getTenantId());
+                // Backlog #0-82, step 2b: the query leaves out the tenants in
+                // postmortem_paused_tenants; this covers a suspension the pause
+                // sync has not seen yet. Left GENERATING, untouched.
+                if (!workGuard.mayRun(postmortem.getTenantId())) {
+                    continue;
+                }
                 processOne(postmortem);
             } catch (OptimisticLockingFailureException e) {
                 // Fixed (backlog #49): see Postmortem.version's own
@@ -182,7 +241,7 @@ public class PostmortemRetryScheduler {
     )
     @SchedulerLock(
             name = "postmortem-service:retryFailedPostmortems",
-            lockAtMostFor = "9m",
+            lockAtMostFor = PostmortemRetryScheduler.RETRY_LOCK_AT_MOST_FOR,
             lockAtLeastFor = "30s"
     )
     public void retryFailedPostmortems() {
@@ -197,11 +256,27 @@ public class PostmortemRetryScheduler {
         log.info("Postmortem retry check: found {} candidates (maxRetryAttempts={})",
                 candidates.size(), maxRetryAttempts);
 
+        // The clock starts before the prefetch, which counts against the budget
+        // (review: the margin below the lock is for the postmortem in flight).
+        final Instant deadline = Instant.now().plus(retryBudget);
+        // Backlog #0-82 (review): statuses looked up together before the loop.
+        workGuard.prefetch(candidates.stream().map(Postmortem::getTenantId).toList());
+        int processed = 0;
         for (final Postmortem postmortem : candidates) {
+            if (processed > 0 && Instant.now().isAfter(deadline)) {
+                log.warn("Postmortem retry check: processing budget of {} used up, {} of {} postmortems left "
+                        + "for the next run", retryBudget, candidates.size() - processed, candidates.size());
+                break;
+            }
+            processed++;
             // Inside the try: set refuses an invalid tenant id, and that must stay
             // this entry's failure, not end the batch (backlog #0-92).
             try {
                 TenantContext.set(postmortem.getTenantId());
+                // Backlog #0-82, step 2b: as in processGenerating; no retry spent.
+                if (!workGuard.mayRun(postmortem.getTenantId())) {
+                    continue;
+                }
                 retryOne(postmortem);
             } catch (OptimisticLockingFailureException e) {
                 // Fixed (backlog #49): same reasoning as processGenerating's

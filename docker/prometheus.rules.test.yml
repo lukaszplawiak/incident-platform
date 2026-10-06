@@ -582,6 +582,57 @@ tests:
               summary: "auth-service rejects oncall-service's tenant status lookups"
               description: "auth-service answered 401/403 to oncall-service's tenant status lookups: its service token is not accepted (JWT secret or audience). New suspensions are not enforced there until it is fixed. See the service's ERROR log (\"rejected the service token from client tenant-status\").\n"
 
+  # Backlog #0-82 step 2b: a pause sync that keeps failing fires after 5
+  # minutes, per service and kind; failures long past (a counter that no
+  # longer moves) do not.
+  - interval: 1m
+    input_series:
+      - series: 'tenant_pause_sync_failures_total{job="escalation-service",instance="escalation-1",kind="run"}'
+        values: '0x5 1+1x40'
+      - series: 'tenant_pause_sync_failures_total{job="notification-service",instance="notification-1",kind="tenant"}'
+        values: '2x45'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: TenantPauseSyncFailing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantPauseSyncFailing
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: escalation-service
+              kind: run
+            exp_annotations:
+              summary: "escalation-service cannot keep suspended tenants' background work paused"
+              description: "escalation-service's pause sync failed (run) for over 5 minutes: suspended tenants may not be paused there, and resumed ones may stay held. See the service's ERROR log (\"Pause sync\").\n"
+
+  # Backlog #0-82 step 2b (review): a service whose pause sync stopped (every
+  # instance flat) fires after its for; one where any instance still runs it
+  # does not, nor does a replica that never holds the lock.
+  - interval: 1m
+    input_series:
+      - series: 'tenant_pause_sync_runs_total{job="notification-service",instance="notification-1"}'
+        values: '0x30'
+      - series: 'tenant_pause_sync_runs_total{job="escalation-service",instance="escalation-1"}'
+        values: '0+6x30'
+      - series: 'tenant_pause_sync_runs_total{job="escalation-service",instance="escalation-2"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: TenantPauseSyncStalled
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantPauseSyncStalled
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: notification-service
+            exp_annotations:
+              summary: "notification-service has not synced suspended tenants' pauses for 10 minutes"
+              description: "No instance of notification-service completed a pause sync in the last 10 minutes: suspensions and resumptions are not recorded there. Check the service's scheduler, its ShedLock row (paused-tenants-sync-<table>) and its ERROR log (\"Pause sync\").\n"
+
   # Backlog #0-82 step 2: a few untracked sessions (clients closing during
   # CONNECT) do not fire; a steady stream does.
   - interval: 1m

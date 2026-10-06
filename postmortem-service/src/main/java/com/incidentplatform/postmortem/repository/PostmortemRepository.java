@@ -16,6 +16,13 @@ import java.util.UUID;
 @Repository
 public interface PostmortemRepository extends JpaRepository<Postmortem, UUID> {
 
+    /**
+     * The paused-tenants table the scheduler queries name (backlog #0-82, step
+     * 2b); {@code PostmortemPausableWork} reports it, and startup fails unless
+     * it is {@code tenant-pause.table}, the table the sync writes.
+     */
+    String PAUSED_TABLE = "postmortem_paused_tenants";
+
     Optional<Postmortem> findByIncidentIdAndTenantId(UUID incidentId, String tenantId);
 
     Page<Postmortem> findByTenantIdOrderByCreatedAtDesc(String tenantId,
@@ -49,10 +56,18 @@ public interface PostmortemRepository extends JpaRepository<Postmortem, UUID> {
      * scheduler tick), risking the same arbitrary subset being picked every
      * time while older stuck records are starved.
      */
-    @Query("SELECT p FROM Postmortem p " +
-            "WHERE p.status = 'GENERATING' " +
-            "AND p.createdAt < :stuckThreshold " +
-            "ORDER BY p.createdAt ASC")
+    // Backlog #0-82, step 2b: a suspended tenant's postmortems are left out
+    // in the query, not skipped in the scheduler, where the oldest would fill
+    // every batch; see findFailedWithRemainingRetries. Native, because the
+    // paused table (PAUSED_TABLE, which must be tenant-pause.table) is shared's,
+    // written over JDBC, and has no entity.
+    @Query(value = "SELECT p.* FROM postmortems p "
+            + "WHERE p.status = 'GENERATING' "
+            + "AND p.created_at < :stuckThreshold "
+            + "AND NOT EXISTS (SELECT 1 FROM " + PAUSED_TABLE
+            + " t WHERE t.tenant_id = p.tenant_id) "
+            + "ORDER BY p.created_at ASC",
+            nativeQuery = true)
     List<Postmortem> findStuckGenerating(
             @Param("stuckThreshold") Instant stuckThreshold,
             Pageable pageable);
@@ -65,12 +80,35 @@ public interface PostmortemRepository extends JpaRepository<Postmortem, UUID> {
      * Caps how many rows {@code PostmortemRetryScheduler.retryFailedPostmortems()}
      * processes per run, protecting its {@code lockAtMostFor}. Explicit
      * {@code ORDER BY p.createdAt ASC} for the same stable-paging reason.
+     *
+     * <h2>Backlog #0-82, step 2b: a suspended tenant's postmortems are left out</h2>
+     * No Gemini call, which costs money, for a tenant a platform operator
+     * suspended, in either mode, and no retry spent: they wait, and are
+     * generated once the tenant is resumed. In the query, not skipped in the
+     * scheduler, where the oldest would fill every batch and hold up every other
+     * tenant's.
      */
-    @Query("SELECT p FROM Postmortem p " +
-            "WHERE p.status = 'FAILED' " +
-            "AND p.retryCount < :maxRetryAttempts " +
-            "ORDER BY p.createdAt ASC")
+    @Query(value = "SELECT p.* FROM postmortems p "
+            + "WHERE p.status = 'FAILED' "
+            + "AND p.retry_count < :maxRetryAttempts "
+            + "AND NOT EXISTS (SELECT 1 FROM " + PAUSED_TABLE
+            + " t WHERE t.tenant_id = p.tenant_id) "
+            + "ORDER BY p.created_at ASC",
+            nativeQuery = true)
     List<Postmortem> findFailedWithRemainingRetries(
             @Param("maxRetryAttempts") int maxRetryAttempts,
             Pageable pageable);
+
+    /**
+     * The tenants with a postmortem the schedulers would generate (GENERATING,
+     * or FAILED with retries left), paused or not: the candidates the pause sync
+     * asks auth-service about (backlog #0-82, step 2b).
+     */
+    @Query(value = """
+            SELECT DISTINCT p.tenant_id FROM postmortems p
+            WHERE p.status = 'GENERATING'
+               OR (p.status = 'FAILED' AND p.retry_count < :maxRetryAttempts)
+            ORDER BY p.tenant_id
+            """, nativeQuery = true)
+    List<String> findTenantsWithPendingGeneration(@Param("maxRetryAttempts") int maxRetryAttempts);
 }

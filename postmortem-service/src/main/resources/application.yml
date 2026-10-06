@@ -111,6 +111,17 @@ audit:
     table: postmortem_audit_outbox
     poll-interval-ms: ${AUDIT_OUTBOX_POLL_INTERVAL_MS:2000}
 
+# Backlog #0-82, step 2b: no postmortem is generated (no Gemini call) for a
+# suspended tenant; its postmortems wait and are generated on resumption. This
+# table (migration V7) lists the paused tenants; PausedTenantsSync (shared)
+# keeps it in step with auth-service every sync-interval-ms,
+# PostmortemRetryScheduler's queries leave them out. Without the property
+# the service does not start (its scheduler needs TenantWorkGuard, which
+# comes with it).
+tenant-pause:
+  table: postmortem_paused_tenants
+  sync-interval-ms: ${TENANT_PAUSE_SYNC_INTERVAL_MS:10000}
+
 kafka:
   topics:
     incidents-lifecycle: incidents.lifecycle
@@ -216,6 +227,12 @@ postmortem:
   # Kept as plain properties for @Scheduled(fixedDelayString):
   generating-scheduler-interval-ms: ${POSTMORTEM_GENERATING_INTERVAL_MS:30000}
   retry-scheduler-interval-ms: ${POSTMORTEM_RETRY_INTERVAL_MS:300000}
+  # Backlog #0-82, step 2b: how long one run may take before it leaves the
+  # rest for the next; at most the run's ShedLock less 30 s (generating 4 min,
+  # retry 9 min; checked at startup), so another replica never starts on the
+  # same postmortems.
+  generating-processing-budget: ${POSTMORTEM_GENERATING_PROCESSING_BUDGET:PT3M}
+  retry-processing-budget: ${POSTMORTEM_RETRY_PROCESSING_BUDGET:PT8M}
 
 security:
   cors:

@@ -8,7 +8,10 @@ import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.postmortem.repository.PostmortemRepository;
 import com.incidentplatform.postmortem.service.PostmortemPersistenceService;
 import com.incidentplatform.postmortem.service.PostmortemPromptBuilder;
+import com.incidentplatform.shared.pause.TenantWorkGuard;
+import com.incidentplatform.shared.security.TenantAccess;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,7 +26,9 @@ import org.springframework.dao.OptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,6 +58,12 @@ class PostmortemRetrySchedulerTest {
 
     private PostmortemRetryScheduler scheduler;
 
+    /** What the status cache knows of a tenant (backlog #0-82); every other tenant has full access. */
+    private final Map<String, TenantAccess> knownAccess = new HashMap<>();
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+    private final TenantWorkGuard workGuard = new TenantWorkGuard(
+            tenantId -> knownAccess.getOrDefault(tenantId, TenantAccess.FULL), meterRegistry);
+
     private static final int MAX_RETRY_ATTEMPTS = 3;
     private static final int STUCK_THRESHOLD_MINUTES = 2;
     // Fixed (backlog #48): PostmortemProperties gained two new constructor
@@ -77,8 +88,8 @@ class PostmortemRetrySchedulerTest {
                 postmortemRepository,
                 geminiClient,
                 promptBuilder,
-                persistenceService,
-                properties);
+                persistenceService, workGuard,
+                properties, java.time.Duration.ofMinutes(3), java.time.Duration.ofMinutes(8));
     }
 
     @AfterEach
@@ -584,8 +595,8 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
             final PostmortemRetryScheduler smallBatchScheduler =
                     new PostmortemRetryScheduler(
                             postmortemRepository, geminiClient,
-                            new PostmortemPromptBuilder(), persistenceService,
-                            properties);
+                            new PostmortemPromptBuilder(), persistenceService, workGuard,
+                            properties, java.time.Duration.ofMinutes(3), java.time.Duration.ofMinutes(8));
 
             given(postmortemRepository.findStuckGenerating(any(), any()))
                     .willReturn(List.of());
@@ -613,8 +624,8 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
             final PostmortemRetryScheduler smallBatchScheduler =
                     new PostmortemRetryScheduler(
                             postmortemRepository, geminiClient,
-                            new PostmortemPromptBuilder(), persistenceService,
-                            properties);
+                            new PostmortemPromptBuilder(), persistenceService, workGuard,
+                            properties, java.time.Duration.ofMinutes(3), java.time.Duration.ofMinutes(8));
 
             given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
                     .willReturn(List.of());
@@ -629,6 +640,121 @@ void shouldMarkFailedOnNonGeminiExceptionFirstAttempt() {
             assertThat(pageableCaptor.getValue().getPageSize()).isEqualTo(smallBatchSize);
             assertThat(pageableCaptor.getValue().getPageNumber()).isZero();
         }
+    }
+
+    @Test
+    @DisplayName("backlog #0-82: a suspended tenant's postmortems are held back on both paths: no Gemini call, "
+            + "no retry spent, nothing marked; the other tenants' go on")
+    void suspendedTenantHeldBack() {
+        knownAccess.put("suspended-tenant", TenantAccess.READ_ONLY);
+        final Postmortem generating = Postmortem.createGenerating(UUID.randomUUID(), "suspended-tenant", "Disk",
+                Severity.HIGH, Instant.now().minusSeconds(600), Instant.now(), 10);
+        final Postmortem failed = buildFailedPostmortemForTenant("suspended-tenant");
+        given(postmortemRepository.findStuckGenerating(any(), any())).willReturn(List.of(generating));
+        given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any())).willReturn(List.of(failed));
+
+        scheduler.processGenerating();
+        scheduler.retryFailedPostmortems();
+
+        then(geminiClient).shouldHaveNoInteractions();
+        then(persistenceService).shouldHaveNoInteractions();
+        assertThat(meterRegistry.get("tenant.pause.guard.held").counter().count()).isEqualTo(2);
+        assertThat(TenantContext.getOrNull()).isNull();
+    }
+
+    @Test
+    @DisplayName("backlog #0-82 (review): past its processing budget a run leaves the rest for the next, so it "
+            + "cannot outlive its ShedLock; a budget too long for the lock is refused at startup")
+    void processingBudget() {
+        final PostmortemProperties properties = new PostmortemProperties(MAX_RETRY_ATTEMPTS,
+                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES), GENERATING_BATCH_SIZE, RETRY_BATCH_SIZE);
+        final TenantWorkGuard slowGuard = new TenantWorkGuard(tenantId -> {
+            // A slow status lookup, as while auth-service is down.
+            try {
+                Thread.sleep(30);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return TenantAccess.FULL;
+        }, meterRegistry);
+        final PostmortemRetryScheduler tight = new PostmortemRetryScheduler(postmortemRepository, geminiClient,
+                new PostmortemPromptBuilder(), persistenceService, slowGuard, properties,
+                java.time.Duration.ofMillis(10), java.time.Duration.ofMillis(10));
+        final Postmortem first = buildFailedPostmortemForTenant("tenant-one");
+        final Postmortem second = buildFailedPostmortemForTenant("tenant-two");
+        given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any())).willReturn(List.of(first, second));
+        given(persistenceService.incrementRetryCount(any())).willReturn(1);
+
+        tight.retryFailedPostmortems();
+
+        then(persistenceService).should().incrementRetryCount(first.getId());
+        then(persistenceService).should(never()).incrementRetryCount(second.getId());
+
+        // The GENERATING path's budget alike: one Gemini call, the second postmortem left for the next run.
+        org.mockito.Mockito.clearInvocations(geminiClient);
+        given(postmortemRepository.findStuckGenerating(any(), any()))
+                .willReturn(List.of(buildGeneratingPostmortem(), buildGeneratingPostmortem()));
+        tight.processGenerating();
+        then(geminiClient).should(times(1)).generate(anyString(), anyString());
+
+        for (final java.time.Duration bad : List.of(java.time.Duration.ZERO, java.time.Duration.ofSeconds(211))) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> new PostmortemRetryScheduler(
+                            postmortemRepository, geminiClient, new PostmortemPromptBuilder(), persistenceService,
+                            workGuard, properties, bad, java.time.Duration.ofMinutes(8)))
+                    .as("generating budget %s", bad).isInstanceOf(IllegalArgumentException.class);
+        }
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new PostmortemRetryScheduler(postmortemRepository,
+                        geminiClient, new PostmortemPromptBuilder(), persistenceService, workGuard, properties,
+                        java.time.Duration.ofMinutes(3), java.time.Duration.ofSeconds(511)))
+                .as("retry budget").isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("review: both loops prefetch their batch's tenants before working through it")
+    void prefetchesBatchTenantsFirst() {
+        final TenantWorkGuard guard = org.mockito.Mockito.mock(TenantWorkGuard.class);
+        final PostmortemRetryScheduler prefetching = new PostmortemRetryScheduler(postmortemRepository, geminiClient,
+                new PostmortemPromptBuilder(), persistenceService, guard, new PostmortemProperties(MAX_RETRY_ATTEMPTS,
+                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES), GENERATING_BATCH_SIZE, RETRY_BATCH_SIZE),
+                java.time.Duration.ofMinutes(3), java.time.Duration.ofMinutes(8));
+        given(postmortemRepository.findStuckGenerating(any(), any()))
+                .willReturn(List.of(buildGeneratingPostmortem()));
+        given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any()))
+                .willReturn(List.of(buildFailedPostmortemForTenant("other-tenant")));
+
+        prefetching.processGenerating();
+        prefetching.retryFailedPostmortems();
+
+        then(guard).should().prefetch(List.of("test-tenant"));
+        then(guard).should().prefetch(List.of("other-tenant"));
+    }
+
+    @Test
+    @DisplayName("review: in both loops the prefetch counts against the processing budget")
+    void prefetchCountsAgainstBudget() {
+        final TenantWorkGuard guard = org.mockito.Mockito.mock(TenantWorkGuard.class);
+        given(guard.mayRun(anyString())).willReturn(true);
+        org.mockito.BDDMockito.willAnswer(invocation -> {
+            Thread.sleep(50);
+            return null;
+        }).given(guard).prefetch(org.mockito.ArgumentMatchers.any());
+        final PostmortemRetryScheduler tight = new PostmortemRetryScheduler(postmortemRepository, geminiClient,
+                new PostmortemPromptBuilder(), persistenceService, guard, new PostmortemProperties(MAX_RETRY_ATTEMPTS,
+                java.time.Duration.ofMinutes(STUCK_THRESHOLD_MINUTES), GENERATING_BATCH_SIZE, RETRY_BATCH_SIZE),
+                java.time.Duration.ofMillis(20), java.time.Duration.ofMillis(20));
+        given(postmortemRepository.findStuckGenerating(any(), any()))
+                .willReturn(List.of(buildGeneratingPostmortem(), buildGeneratingPostmortem()));
+        final Postmortem first = buildFailedPostmortemForTenant("tenant-one");
+        final Postmortem second = buildFailedPostmortemForTenant("tenant-two");
+        given(postmortemRepository.findFailedWithRemainingRetries(anyInt(), any())).willReturn(List.of(first, second));
+        given(persistenceService.incrementRetryCount(any())).willReturn(1);
+
+        tight.processGenerating();
+        then(geminiClient).should(times(1)).generate(anyString(), anyString());
+
+        tight.retryFailedPostmortems();
+        then(persistenceService).should().incrementRetryCount(first.getId());
+        then(persistenceService).should(never()).incrementRetryCount(second.getId());
     }
 
     // ── helpers ───────────────────────────────────────────────────────────

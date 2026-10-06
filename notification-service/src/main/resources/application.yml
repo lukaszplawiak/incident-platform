@@ -133,6 +133,16 @@ audit:
     table: notification_audit_outbox
     poll-interval-ms: ${AUDIT_OUTBOX_POLL_INTERVAL_MS:2000}
 
+# Backlog #0-82, step 2b: a suspended tenant's notifications are held back and
+# all sent on resumption. This table (migration V10) lists the paused tenants;
+# PausedTenantsSync (shared) keeps it in step with auth-service every
+# sync-interval-ms, NotificationScheduler's query leaves them out. Without the
+# property the service does not start (its scheduler needs TenantWorkGuard,
+# which comes with it).
+tenant-pause:
+  table: notification_paused_tenants
+  sync-interval-ms: ${TENANT_PAUSE_SYNC_INTERVAL_MS:10000}
+
 kafka:
   topics:
     incidents-lifecycle: incidents.lifecycle

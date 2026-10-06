@@ -10,6 +10,7 @@ import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableE
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
+import com.incidentplatform.shared.security.TenantAccess;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +21,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -57,6 +59,9 @@ class SlackActionServiceTest {
 
     private SlackActionService service;
 
+    /** What auth-service says of a tenant (backlog #0-82); every other tenant has full access. */
+    private final Map<String, TenantAccess> knownAccess = new HashMap<>();
+
     private static final UUID INCIDENT_ID = UUID.randomUUID();
     private static final String TENANT_ID = "test-tenant";
     private static final String CHANNEL = "#incidents";
@@ -67,7 +72,8 @@ class SlackActionServiceTest {
     void setUp() {
         service = new SlackActionService(
                 incidentAckClient, slackChannel, messageStore,
-                oncallClient, slackWorkspaceClient, new ObjectMapper(), auditEventPublisher, meterRegistry);
+                oncallClient, slackWorkspaceClient, new ObjectMapper(), auditEventPublisher,
+                tenantId -> knownAccess.getOrDefault(tenantId, TenantAccess.FULL), meterRegistry);
     }
 
     private void givenTenantWorkspace() {
@@ -309,6 +315,59 @@ class SlackActionServiceTest {
                     eq(AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED),
                     anyString(), anyString(), metadataCaptor.capture());
             return (List<String>) metadataCaptor.getValue().get("failedChannels");
+        }
+    }
+
+    /**
+     * Backlog #0-82, step 2b: the ACK button reaches incident-service with this
+     * service's token, which the status filter lets through, so the tenant's
+     * status is checked here.
+     */
+    @Nested
+    @DisplayName("acknowledge button and tenant suspension (backlog #0-82)")
+    class AcknowledgeAndSuspension {
+
+        private String ackPayload(String tenantId) {
+            return """
+                    {"type":"block_actions","user":{"id":"U123","name":"jan"},
+                     "actions":[{"action_id":"acknowledge_incident","value":"%s|%s"}],
+                     "container":{"channel_id":"C1","message_ts":"%s"}}
+                    """.formatted(INCIDENT_ID, tenantId, MESSAGE_TS);
+        }
+
+        @Test
+        @DisplayName("a suspended tenant's acknowledgement is refused in either mode: no lookup, no ACK")
+        void suspendedRefused() {
+            knownAccess.put(TENANT_ID, TenantAccess.READ_ONLY);
+            service.processAction(ackPayload(TENANT_ID));
+            knownAccess.put(TENANT_ID, TenantAccess.NONE);
+            service.processAction(ackPayload(TENANT_ID));
+
+            then(oncallClient).shouldHaveNoInteractions();
+            then(incidentAckClient).shouldHaveNoInteractions();
+            assertThat(meterRegistry.get("slack.ack.refused").tag("reason", "tenant_suspended").counter().count())
+                    .isEqualTo(2);
+        }
+
+        @Test
+        @DisplayName("an active tenant's acknowledgement goes to incident-service")
+        void activeAcknowledged() {
+            given(oncallClient.findBySlackUserId(TENANT_ID, "U123")).willReturn(Optional.empty());
+            given(incidentAckClient.acknowledgeIncident(eq(INCIDENT_ID), eq(TENANT_ID), any())).willReturn(false);
+
+            service.processAction(ackPayload(TENANT_ID));
+
+            then(incidentAckClient).should().acknowledgeIncident(eq(INCIDENT_ID), eq(TENANT_ID), any());
+            assertThat(meterRegistry.get("slack.ack.refused").counter().count()).as("registered at zero").isZero();
+        }
+
+        @Test
+        @DisplayName("a tenant id that is not one is ignored before anything is asked")
+        void invalidTenantIgnored() {
+            service.processAction(ackPayload("Not A Tenant"));
+
+            then(oncallClient).shouldHaveNoInteractions();
+            then(incidentAckClient).shouldHaveNoInteractions();
         }
     }
 }

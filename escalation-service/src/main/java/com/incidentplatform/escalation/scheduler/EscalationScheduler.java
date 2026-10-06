@@ -13,6 +13,7 @@ import com.incidentplatform.shared.audit.UnrecordedAuditEvents;
 import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEventKafkaSender;
 import com.incidentplatform.shared.events.IncidentEventTypes;
+import com.incidentplatform.shared.pause.TenantWorkGuard;
 import com.incidentplatform.shared.security.TenantContext;
 import io.micrometer.core.instrument.MeterRegistry;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -24,6 +25,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -77,6 +79,13 @@ public class EscalationScheduler {
 
     private static final String SERVICE_NAME = "escalation-service";
 
+    /** ShedLock {@code lockAtMostFor} of {@link #checkAndEscalate}; keep the two in step. */
+    static final String LOCK_AT_MOST_FOR = "5m";
+    static final Duration LOCK_AT_MOST_FOR_DURATION = Duration.ofMinutes(5);
+
+    /** Room left for the task in flight when the budget runs out. */
+    private static final Duration LOCK_MARGIN = Duration.ofSeconds(30);
+
     private static final String ESCALATION_ROLE_LEVEL_1 = "SECONDARY";
     private static final String ESCALATION_ROLE_LEVEL_2 = "MANAGER";
 
@@ -87,7 +96,9 @@ public class EscalationScheduler {
     private final AuditEventPublisher auditEventPublisher;
     private final OncallServiceClient oncallServiceClient;
     private final UnrecordedAuditEvents unrecorded;
+    private final TenantWorkGuard workGuard;
     private final int batchSize;
+    private final Duration processingBudget;
 
     public EscalationScheduler(
             EscalationTaskRepository taskRepository,
@@ -97,6 +108,7 @@ public class EscalationScheduler {
             AuditEventPublisher auditEventPublisher,
             OncallServiceClient oncallServiceClient,
             MeterRegistry meterRegistry,
+            TenantWorkGuard workGuard,
             // Fixed (backlog #39): caps how many due tasks one poll cycle
             // processes — matches IncidentEventOutboxRepository's bounded-
             // batch pattern (incident-service). Without this, a large
@@ -106,7 +118,9 @@ public class EscalationScheduler {
             // sequence — could take. A backlog too large for one batch
             // simply drains oldest-first (see findDueForEscalation's
             // ORDER BY) across subsequent cycles instead.
-            @Value("${escalation.scheduler-batch-size:100}") int batchSize) {
+            @Value("${escalation.scheduler-batch-size:100}") int batchSize,
+            // Backlog #0-82, step 2b (found in review): see validated().
+            @Value("${escalation.scheduler-processing-budget:PT4M}") Duration processingBudget) {
         this.taskRepository = taskRepository;
         this.persistenceService = persistenceService;
         this.kafkaSender = kafkaSender;
@@ -115,7 +129,30 @@ public class EscalationScheduler {
         this.oncallServiceClient = oncallServiceClient;
         this.unrecorded = new UnrecordedAuditEvents(meterRegistry,
                 AuditEventTypes.ESCALATION_FIRED, AuditEventTypes.ESCALATION_NOTIFICATION_FAILED);
+        this.workGuard = workGuard;
         this.batchSize = batchSize;
+        this.processingBudget = validated(processingBudget);
+    }
+
+    /**
+     * Fails at startup if the processing budget would let a run outlive the
+     * ShedLock (backlog #0-82, step 2b, found in review). A run makes blocking
+     * calls per task: oncall-service, and since step 2b
+     * {@link TenantWorkGuard}'s status lookup, up to about 3 s for each tenant
+     * not yet cached while auth-service is down. A batch of 100 such tenants
+     * could take longer than {@code lockAtMostFor}, and another replica would
+     * then start on the same tasks. The same arrangement as
+     * {@code NotificationScheduler}'s budget.
+     */
+    private static Duration validated(Duration budget) {
+        final Duration limit = LOCK_AT_MOST_FOR_DURATION.minus(LOCK_MARGIN);
+        if (budget == null || budget.isZero() || budget.isNegative() || budget.compareTo(limit) > 0) {
+            throw new IllegalArgumentException(
+                    "escalation.scheduler-processing-budget must be positive and at most " + limit
+                            + " (the lock duration " + LOCK_AT_MOST_FOR_DURATION + " minus a " + LOCK_MARGIN
+                            + " margin for the task in flight), was " + budget);
+        }
+        return budget;
     }
 
     /**
@@ -131,6 +168,12 @@ public class EscalationScheduler {
      * <p>What matters is that {@link TenantContext} is set for the duration
      * of processing each individual task — see {@link #escalate}.
      *
+     * <p>Backlog #0-82, step 2b: a suspended tenant's tasks are held back,
+     * neither escalated nor counted as a failed attempt: left out by the query
+     * once the pause sync has the tenant in {@code escalation_paused_tenants},
+     * and by {@link TenantWorkGuard} before that. On resumption their timers
+     * are moved on by the pause ({@link EscalationPausableWork}).
+     *
      * <p>Deliberately NOT {@code @Transactional} at this level — see this
      * class's own Javadoc for the full account. Each task's database
      * write is its own short transaction via
@@ -144,7 +187,7 @@ public class EscalationScheduler {
     )
     @SchedulerLock(
             name = "escalation-service:checkAndEscalate",
-            lockAtMostFor = "5m",
+            lockAtMostFor = EscalationScheduler.LOCK_AT_MOST_FOR,
             lockAtLeastFor = "10s"
     )
     public void checkAndEscalate() {
@@ -159,7 +202,25 @@ public class EscalationScheduler {
         log.info("Escalation check: found {} tasks due for escalation",
                 dueTasks.size());
 
+        // One run must finish inside the ShedLock: past processingBudget the rest
+        // waits for the next cycle, but at least one task is always processed.
+        // The clock starts before the prefetch, which counts against the budget
+        // (found in review: started after it, the prefetch's up to 10 s came out
+        // of the margin left for the task in flight when the budget runs out).
+        final Instant deadline = Instant.now().plus(processingBudget);
+
+        // Backlog #0-82 (review): the batch's tenants' statuses are looked up
+        // together first, so the per-row guard reads the cache instead of waiting
+        // tenant after tenant while auth-service is slow.
+        workGuard.prefetch(dueTasks.stream().map(EscalationTask::getTenantId).toList());
+        int processed = 0;
         for (final EscalationTask task : dueTasks) {
+            if (processed > 0 && Instant.now().isAfter(deadline)) {
+                log.warn("Escalation check: processing budget of {} used up, {} of {} tasks left for the "
+                        + "next cycle", processingBudget, dueTasks.size() - processed, dueTasks.size());
+                break;
+            }
+            processed++;
             // TenantContext is set for the duration of processing this single
             // task — every log line emitted by escalate() (and anything it
             // calls, including kafkaSender.send() and
@@ -172,6 +233,13 @@ public class EscalationScheduler {
             // this entry's failure, not end the batch (backlog #0-92).
             try {
                 TenantContext.set(task.getTenantId());
+                // Backlog #0-82, step 2b: the query leaves out the tenants in
+                // escalation_paused_tenants; this covers a suspension the pause
+                // sync has not seen yet (up to about 20 s). The task is left
+                // untouched, and its timer is moved on when the tenant resumes.
+                if (!workGuard.mayRun(task.getTenantId())) {
+                    continue;
+                }
                 escalate(task);
             } catch (Exception e) {
                 // Fixed (backlog #41): logs and records which attempt this

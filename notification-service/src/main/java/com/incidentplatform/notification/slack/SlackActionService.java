@@ -14,6 +14,10 @@ import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.audit.AuditEventTypes;
 import com.incidentplatform.shared.audit.UnrecordedAuditEvents;
 import com.incidentplatform.shared.domain.Severity;
+import com.incidentplatform.shared.security.TenantAccess;
+import com.incidentplatform.shared.security.TenantIds;
+import com.incidentplatform.shared.security.TenantStatusProvider;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,6 +45,8 @@ public class SlackActionService {
     private final SlackWorkspaceClient slackWorkspaceClient;
     private final ObjectMapper objectMapper;
     private final AuditEventPublisher auditEventPublisher;
+    private final TenantStatusProvider tenantStatusProvider;
+    private final Counter refusedSuspended;
     private final UnrecordedAuditEvents unrecorded;
 
     public SlackActionService(IncidentAckClient incidentAckClient,
@@ -50,6 +56,7 @@ public class SlackActionService {
                               SlackWorkspaceClient slackWorkspaceClient,
                               ObjectMapper objectMapper,
                               AuditEventPublisher auditEventPublisher,
+                              TenantStatusProvider tenantStatusProvider,
                               MeterRegistry meterRegistry) {
         this.incidentAckClient = incidentAckClient;
         this.slackChannel = slackChannel;
@@ -58,6 +65,12 @@ public class SlackActionService {
         this.slackWorkspaceClient = slackWorkspaceClient;
         this.objectMapper = objectMapper;
         this.auditEventPublisher = auditEventPublisher;
+        this.tenantStatusProvider = tenantStatusProvider;
+        // Registered at zero, so a dashboard or alert sees the first refusal.
+        this.refusedSuspended = Counter.builder("slack.ack.refused")
+                .tag("reason", "tenant_suspended")
+                .description("Slack acknowledgements refused because the tenant is suspended (backlog #0-82)")
+                .register(meterRegistry);
         this.unrecorded = new UnrecordedAuditEvents(meterRegistry,
                 AuditEventTypes.SLACK_ACK_MESSAGE_UPDATE_FAILED);
     }
@@ -108,10 +121,39 @@ public class SlackActionService {
         }
 
         final String tenantId = parts[1];
+        if (!TenantIds.isValid(tenantId)) {
+            log.warn("Invalid tenant id in action value, acknowledgement ignored: incidentId={}", incidentId);
+            return;
+        }
 
         final JsonNode user = payload.path("user");
         final String slackUserId = user.path("id").asText("unknown");
         final String slackUserName = user.path("name").asText("unknown");
+
+        // Backlog #0-82, step 2b: the acknowledgement is a person's write, but it
+        // reaches incident-service with this service's token, which
+        // TenantStatusFilter lets through (it checks only a person's JWT or an
+        // API key). Today no message carries the button (removed in #0-21: a
+        // tenant's clicks are signed with its own App's secret, which fails
+        // SlackSignatureVerifier), but the path is kept for #0-35's OAuth
+        // install, which brings it back; then a suspended tenant's user could
+        // acknowledge from a message sent before the suspension. Refused here
+        // already, in both modes: read-only allows no write, full none at all.
+        // accessOf may wait on auth-service (at most its client's timeouts):
+        // this runs on the Slack executor, after Slack has had its answer.
+        // Fail-open like the status filter, by decision (step 2a): a tenant this
+        // service never had an answer for gets FULL while auth-service is down,
+        // so an outage does not stop every tenant's acknowledgements. The
+        // refusal is counted (slack.ack.refused) and logged; the Slack user is
+        // not told, as this service sends nothing back on a button press (the
+        // message stays as it was, and the incident unacknowledged).
+        final TenantAccess access = tenantStatusProvider.accessOf(tenantId);
+        if (access != TenantAccess.FULL) {
+            refusedSuspended.increment();
+            log.info("Slack acknowledgement refused, tenant suspended: incidentId={}, tenant={}, access={}, " +
+                    "slackUser={}", incidentId, tenantId, access, slackUserId);
+            return;
+        }
 
         log.info("Processing ACK: incidentId={}, tenant={}, slackUser={}",
                 incidentId, tenantId, slackUserName);
