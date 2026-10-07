@@ -2,6 +2,7 @@ package com.incidentplatform.notification.slack;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.channel.NotificationException;
+import com.incidentplatform.notification.channel.NotificationFailureReason;
 import com.incidentplatform.notification.channel.SlackNotificationChannel;
 import com.incidentplatform.notification.client.IncidentAckClient;
 import com.incidentplatform.notification.client.OncallClient;
@@ -146,7 +147,8 @@ class SlackActionServiceTest {
                     .willReturn(Optional.of("9999.111111"));
 
             // The primary channel (button-click channel) fails; the second succeeds.
-            willThrow(new NotificationException("SLACK", CHANNEL, "Slack API down"))
+            willThrow(new NotificationException("SLACK", CHANNEL,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, null))
                     .given(slackChannel).updateMessageAfterAck(
                             eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
 
@@ -169,7 +171,8 @@ class SlackActionServiceTest {
             given(messageStore.find(INCIDENT_ID, secondChannel))
                     .willReturn(Optional.of("9999.111111"));
 
-            willThrow(new NotificationException("SLACK", CHANNEL, "Slack API down"))
+            willThrow(new NotificationException("SLACK", CHANNEL,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, null))
                     .given(slackChannel).updateMessageAfterAck(
                             eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
 
@@ -181,13 +184,41 @@ class SlackActionServiceTest {
                     eq(secondChannel), eq("9999.111111"), anyString(), any(), anyString());
         }
 
+        /**
+         * Backlog #0-93 (review): the channel's fallback rethrows an exception
+         * that is not the HTTP client's; it must still fail only its channel.
+         */
+        @Test
+        @DisplayName("an unexpected exception from one channel's update fails that channel only; the others are "
+                + "still updated and its row kept")
+        void unexpectedExceptionFailsOneChannelOnly() {
+            givenTenantWorkspace();
+            final String secondChannel = "#oncall-team-a";
+            given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
+                    .willReturn(List.of(CHANNEL, secondChannel));
+            given(messageStore.find(INCIDENT_ID, secondChannel))
+                    .willReturn(Optional.of("9999.111111"));
+            willThrow(new IllegalStateException("a bug"))
+                    .given(slackChannel).updateMessageAfterAck(
+                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
+
+            service.updateSlackMessages(
+                    INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
+
+            then(slackChannel).should().updateMessageAfterAck(
+                    eq(secondChannel), eq("9999.111111"), anyString(), any(), anyString());
+            then(messageStore).should(never()).remove(INCIDENT_ID, CHANNEL);
+            then(messageStore).should().remove(INCIDENT_ID, secondChannel);
+        }
+
         @Test
         @DisplayName("publishes SLACK_ACK_MESSAGE_UPDATE_FAILED naming the failed channel")
         void publishesAuditEventNamingFailedChannel() {
             givenTenantWorkspace();
             given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
                     .willReturn(List.of(CHANNEL));
-            willThrow(new NotificationException("SLACK", CHANNEL, "Slack API down"))
+            willThrow(new NotificationException("SLACK", CHANNEL,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, null))
                     .given(slackChannel).updateMessageAfterAck(
                             eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
 

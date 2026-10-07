@@ -12,6 +12,7 @@ import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.audit.UnrecordedAuditEvents;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.security.TenantContext;
+import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,6 +73,9 @@ public class NotificationService {
      */
     private static final Set<String> ACTIONABLE_EVENTS =
             Set.of(INCIDENT_OPENED, INCIDENT_ESCALATED);
+
+    /** The reason recorded for an exception no channel anticipated (backlog #0-93). */
+    static final String UNEXPECTED_REASON = "UNEXPECTED";
 
     private final NotificationRouter router;
     private final NotificationLogRepository logRepository;
@@ -313,12 +317,19 @@ public class NotificationService {
             try {
                 channel.send(request);
             } catch (NotificationException e) {
-                recordFailed(entry, channel.channelName(), request, e.getMessage());
-
-                log.error("Notification failed: channel={}, recipient={}, " +
-                                "incidentId={}, error={}",
-                        channel.channelName(), request.recipient(),
-                        incidentId, e.getMessage());
+                // Backlog #0-93: recorded by its reason, the platform's words;
+                // the provider's own error is the cause, logged here only. WARN
+                // when the tenant has something to change (a rejected address,
+                // a channel the bot is not in), ERROR when it is the platform's.
+                recordFailed(entry, channel.channelName(), request, e.reason().name(), e.recordedText());
+                final String line = "Notification failed: channel={}, recipient={}, incidentId={}, reason={}";
+                if (e.reason().permanent()) {
+                    log.warn(line, channel.channelName(), request.recipient(), incidentId, e.recordedText(),
+                            e.getCause());
+                } else {
+                    log.error(line, channel.channelName(), request.recipient(), incidentId, e.recordedText(),
+                            e.getCause());
+                }
                 continue;
             } catch (Exception e) {
                 // Recorded by its type only: the message of an exception the
@@ -326,7 +337,7 @@ public class NotificationService {
                 // host name or a response body, and notification_log and the
                 // audit trail are the tenant's to read (backlog #0-84, found
                 // in review). The full exception is in the log line below.
-                recordFailed(entry, channel.channelName(), request, AuditText.unexpected(e));
+                recordFailed(entry, channel.channelName(), request, UNEXPECTED_REASON, AuditText.unexpected(e));
 
                 log.error("Unexpected error sending notification: " +
                                 "channel={}, incidentId={}",
@@ -352,6 +363,16 @@ public class NotificationService {
     }
 
     /**
+     * {@code notification.channel.failed{channel,reason}} (backlog #0-93): a
+     * failed send by its reason, a {@code NotificationFailureReason} or
+     * {@link #UNEXPECTED_REASON}, so a closed set of tags (no tenant, no
+     * provider code). Counted whether or not its record is then written.
+     */
+    private Counter failedSends(String channelName, String reason) {
+        return meterRegistry.counter("notification.channel.failed", "channel", channelName, "reason", reason);
+    }
+
+    /**
      * Records a failed send: its {@code notification_log} row and
      * {@code NOTIFICATION_FAILED} audit event, in one transaction (backlog
      * #0-84). A failure of that write is logged and counted
@@ -362,11 +383,13 @@ public class NotificationService {
     private void recordFailed(NotificationQueueEntry entry,
                               String channelName,
                               NotificationRequest request,
+                              String reason,
                               String error) {
+        failedSends(channelName, reason).increment();
         try {
             persistenceService.recordChannelFailed(
                     entry.getIncidentId(), entry.getTenantId(), entry.getEventType(),
-                    entry.getEscalationLevel(), channelName, request.recipient(), error);
+                    entry.getEscalationLevel(), channelName, request.recipient(), reason, error);
         } catch (RuntimeException e) {
             unrecorded.increment(AuditEventTypes.NOTIFICATION_FAILED);
             // "Audit event not recorded" is what the AuditEventUnrecorded alert

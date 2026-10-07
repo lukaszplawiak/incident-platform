@@ -117,11 +117,11 @@ class NotificationPersistenceServiceTest {
     }
 
     @Test
-    @DisplayName("recordChannelFailed persists a FAILED NotificationLog with the error message")
+    @DisplayName("recordChannelFailed persists a FAILED NotificationLog with the error, and the reason in the audit event")
     void recordsChannelFailed() {
         persistenceService.recordChannelFailed(
                 INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL",
-                "oncall@example.com", "SMTP connection refused");
+                "oncall@example.com", "EMAIL_FAILED", "SMTP connection refused");
 
         final ArgumentCaptor<NotificationLog> captor =
                 ArgumentCaptor.forClass(NotificationLog.class);
@@ -133,7 +133,8 @@ class NotificationPersistenceServiceTest {
         then(auditEventPublisher).should().publishIncident(INCIDENT_ID, TENANT_ID,
                 AuditEventTypes.NOTIFICATION_FAILED, "notification-service",
                 "Notification failed via EMAIL to oncall@example.com: SMTP connection refused",
-                Map.of("channel", "EMAIL", "recipient", "oncall@example.com", "error", "SMTP connection refused"));
+                Map.of("channel", "EMAIL", "recipient", "oncall@example.com", "reason", "EMAIL_FAILED",
+                        "error", "SMTP connection refused"));
     }
 
     /**
@@ -145,14 +146,15 @@ class NotificationPersistenceServiceTest {
     @DisplayName("recordChannelFailed with no error message records 'unknown' rather than throwing")
     void recordsChannelFailedWithoutMessage() {
         persistenceService.recordChannelFailed(
-                INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL", "oncall@example.com", null);
+                INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL", "oncall@example.com", null, null);
 
         final ArgumentCaptor<NotificationLog> captor = ArgumentCaptor.forClass(NotificationLog.class);
         then(logRepository).should().save(captor.capture());
         assertThat(captor.getValue().getErrorMessage()).isEqualTo("unknown");
         then(auditEventPublisher).should().publishIncident(eq(INCIDENT_ID), eq(TENANT_ID),
                 eq(AuditEventTypes.NOTIFICATION_FAILED), eq("notification-service"), any(),
-                eq(Map.of("channel", "EMAIL", "recipient", "oncall@example.com", "error", "unknown")));
+                eq(Map.of("channel", "EMAIL", "recipient", "oncall@example.com", "reason", "unknown",
+                        "error", "unknown")));
     }
 
     /**
@@ -165,7 +167,7 @@ class NotificationPersistenceServiceTest {
         final String error = "line one\n" + "x".repeat(10_000);
 
         persistenceService.recordChannelFailed(
-                INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL", "oncall@example.com", error);
+                INCIDENT_ID, TENANT_ID, EVENT_TYPE, 0, "EMAIL", "oncall@example.com", "EMAIL_FAILED", error);
 
         final ArgumentCaptor<NotificationLog> logRow = ArgumentCaptor.forClass(NotificationLog.class);
         then(logRepository).should().save(logRow.capture());

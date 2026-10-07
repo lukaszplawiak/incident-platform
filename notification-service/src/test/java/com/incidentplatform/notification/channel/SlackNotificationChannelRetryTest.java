@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
@@ -54,7 +56,8 @@ class SlackNotificationChannelRetryTest {
                 new ObjectMapper(),
                 properties,
                 messageStore,
-                slackWorkspaceClient);
+                slackWorkspaceClient,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry());
     }
 
     @Nested
@@ -62,33 +65,32 @@ class SlackNotificationChannelRetryTest {
     class FallbackMethod {
 
         @Test
-        @DisplayName("should throw NotificationException with cause after retries exhausted")
+        @DisplayName("a network error after the retries is SLACK_UNAVAILABLE, the client's text kept on the cause only "
+                + "(backlog #0-93)")
         void shouldThrowNotificationExceptionOnFallback() {
-            // given
             final NotificationRequest request = buildRequest();
-            final Exception cause = new ResourceAccessException("Connection timed out");
+            final Exception cause = new ResourceAccessException("I/O error on POST https://slack.com/api/x: refused");
 
-            // when / then
             assertThatThrownBy(() ->
                     channel.postIncidentMessageFallback("#incidents", request, BOT_TOKEN, cause))
-                    .isInstanceOf(NotificationException.class)
-                    .hasMessageContaining("after retries")
-                    .hasMessageContaining("#incidents")
+                    .isInstanceOfSatisfying(NotificationException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_UNAVAILABLE);
+                        assertThat(e.getRecipient()).isEqualTo("#incidents");
+                    })
+                    .hasMessageNotContaining("slack.com")
                     .hasCause(cause);
         }
 
         @Test
-        @DisplayName("should include channel name in NotificationException")
+        @DisplayName("names the channel it was posting to as the recipient")
         void shouldIncludeChannelInException() {
-            // given
             final NotificationRequest request = buildRequest();
             final Exception cause = new ResourceAccessException("Timeout");
 
-            // when / then
             assertThatThrownBy(() ->
                     channel.postIncidentMessageFallback("U0123456789", request, BOT_TOKEN, cause))
-                    .isInstanceOf(NotificationException.class)
-                    .hasMessageContaining("U0123456789");
+                    .isInstanceOfSatisfying(NotificationException.class,
+                            e -> assertThat(e.getRecipient()).isEqualTo("U0123456789"));
         }
 
         @Test
@@ -107,6 +109,59 @@ class SlackNotificationChannelRetryTest {
                 // then
                 assertThat(e.getCause()).isSameAs(originalCause);
             }
+        }
+    }
+
+    /** Backlog #0-93: how a failed call is classified, by the exception alone. */
+    @Nested
+    @DisplayName("failure classification")
+    class FailureClassification {
+
+        @Test
+        @DisplayName("429 is SLACK_RATE_LIMITED, another 4xx SLACK_REJECTED, 5xx SLACK_UNAVAILABLE, by status only")
+        void httpStatuses() {
+            final byte[] body = "{\"error\":\"secret detail\"}".getBytes();
+            assertThat(SlackNotificationChannel.failure("#c", HttpClientErrorException.create(
+                    HttpStatus.TOO_MANY_REQUESTS, "Too Many", null, body, null)))
+                    .satisfies(e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_RATE_LIMITED);
+                        assertThat(e.detail()).isEqualTo("http_429");
+                    });
+            assertThat(SlackNotificationChannel.failure("#c", HttpClientErrorException.create(
+                    HttpStatus.FORBIDDEN, "Forbidden", null, body, null)))
+                    .satisfies(e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_REJECTED);
+                        assertThat(e.detail()).isEqualTo("http_403");
+                        assertThat(e.getMessage()).doesNotContain("secret");
+                    });
+            assertThat(SlackNotificationChannel.failure("#c", HttpServerErrorException.create(
+                    HttpStatus.BAD_GATEWAY, "Bad Gateway", null, body, null)))
+                    .satisfies(e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_UNAVAILABLE);
+                        assertThat(e.detail()).isEqualTo("http_502");
+                    });
+        }
+
+        @Test
+        @DisplayName("401 is SLACK_AUTH_FAILED (second review)")
+        void unauthorized() {
+            assertThat(SlackNotificationChannel.failure("#c", HttpClientErrorException.create(
+                    HttpStatus.UNAUTHORIZED, "Unauthorized", null, new byte[0], null)))
+                    .satisfies(e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_AUTH_FAILED);
+                        assertThat(e.detail()).isEqualTo("http_401");
+                    });
+        }
+
+        @Test
+        @DisplayName("an already classified failure passes through; another exception is rethrown as it is")
+        void passThroughAndRethrow() {
+            final NotificationException classified = new NotificationException("SLACK", "#c",
+                    NotificationFailureReason.SLACK_REJECTED, "not_in_channel", null);
+            assertThat(SlackNotificationChannel.failure("#c", classified)).isSameAs(classified);
+
+            final IllegalArgumentException bug = new IllegalArgumentException("a bug");
+            assertThatThrownBy(() -> SlackNotificationChannel.failure("#c", bug)).isSameAs(bug);
         }
     }
 

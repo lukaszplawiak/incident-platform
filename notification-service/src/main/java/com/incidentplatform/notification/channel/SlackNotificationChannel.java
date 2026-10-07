@@ -1,5 +1,7 @@
 package com.incidentplatform.notification.channel;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.client.SlackWorkspaceClient;
 import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
@@ -8,13 +10,18 @@ import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.domain.Severity;
 import io.github.resilience4j.retry.annotation.Retry;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestClient;
+import org.springframework.web.client.RestClientException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Component
 public class SlackNotificationChannel implements NotificationChannel {
@@ -29,23 +36,37 @@ public class SlackNotificationChannel implements NotificationChannel {
     private final String slackApiPostUrl;
     private final String slackApiUpdateUrl;
 
+    /** The counter's channel tag for a refused broadcast, apart from the delivery itself (backlog #0-93). */
+    static final String BROADCAST_CHANNEL_TAG = "SLACK_BROADCAST";
+
+    /** Slack's {@code error} codes it documents as worth trying again later. */
+    private static final Set<String> TRANSIENT_ERRORS =
+            Set.of("internal_error", "fatal_error", "service_unavailable", "request_timeout");
+
+    /** Slack's {@code error} codes for a bot token it no longer accepts (second review of #0-93). */
+    private static final Set<String> AUTH_ERRORS = Set.of(
+            "invalid_auth", "not_authed", "token_revoked", "token_expired", "account_inactive");
+
     private final boolean enabled;
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final SlackMessageStore messageStore;
     private final SlackWorkspaceClient slackWorkspaceClient;
+    private final MeterRegistry meterRegistry;
 
     public SlackNotificationChannel(
             RestClient.Builder restClientBuilder,
             ObjectMapper objectMapper,
             NotificationChannelProperties properties,
             SlackMessageStore messageStore,
-            SlackWorkspaceClient slackWorkspaceClient) {
+            SlackWorkspaceClient slackWorkspaceClient,
+            MeterRegistry meterRegistry) {
         this.restClient = restClientBuilder.build();
         this.objectMapper = objectMapper;
         this.enabled = properties.channels().slack().enabled();
         this.messageStore = messageStore;
         this.slackWorkspaceClient = slackWorkspaceClient;
+        this.meterRegistry = meterRegistry;
 
         final String apiBaseUrl = properties.channels().slack().apiBaseUrl();
         this.slackApiPostUrl = apiBaseUrl + "/chat.postMessage";
@@ -100,7 +121,7 @@ public class SlackNotificationChannel implements NotificationChannel {
         try {
             workspace = slackWorkspaceClient.getWorkspace(request.tenantId())
                     .orElseThrow(() -> new NotificationException("SLACK", request.recipient(),
-                            "No active Slack workspace for this tenant — nothing posted", null));
+                            NotificationFailureReason.SLACK_WORKSPACE_MISSING, null));
         } catch (SlackWorkspaceLookupUnavailableException e) {
             // The router saw a workspace (possibly from cache) but auth-service
             // failed now. Converted to NotificationException so processEntry
@@ -108,8 +129,7 @@ public class SlackNotificationChannel implements NotificationChannel {
             // outcome as a Slack API outage — instead of the generic "unexpected
             // error" path. Kept distinct from "no workspace" in the message.
             throw new NotificationException("SLACK", request.recipient(),
-                    "auth-service unavailable — could not read the tenant's Slack " +
-                            "workspace, nothing posted", e);
+                    NotificationFailureReason.SLACK_WORKSPACE_UNAVAILABLE, e);
         }
 
         // Fixed (backlog #0-18): the message used to be posted to the one shared
@@ -121,14 +141,44 @@ public class SlackNotificationChannel implements NotificationChannel {
                 && workspace.defaultChannel() != null && !workspace.defaultChannel().isBlank();
 
         if (broadcastEnabled) {
-            final String defaultChannelTs = postIncidentMessage(
-                    workspace.defaultChannel(), request, workspace.botToken());
-            messageStore.save(request.incidentId(), workspace.defaultChannel(),
-                    request.tenantId(), defaultChannelTs);
+            try {
+                final String defaultChannelTs = post(
+                        workspace.defaultChannel(), request, workspace.botToken());
+                messageStore.save(request.incidentId(), workspace.defaultChannel(),
+                        request.tenantId(), defaultChannelTs);
+            } catch (NotificationException broadcastFailed) {
+                // Backlog #0-93 (second review): the broadcast must not cost the
+                // on-call their DM. Before #0-93 a refused broadcast (a channel
+                // archived, or one the bot was removed from) passed as a success,
+                // so the DM always went; now that it fails, it would have stopped
+                // the DM too. So the DM is still sent, and the notification counts
+                // as delivered when it is: it reached the person it is for. The
+                // broadcast's failure is logged with its reason and counted in
+                // notification.channel.failed under its own channel tag
+                // (SLACK_BROADCAST, third review: the log line alone was the only
+                // trace); not a notification_log row, as the log keeps one row
+                // per channel and the Slack row is the delivery's. With no DM to
+                // send, the broadcast was the whole delivery, and its failure is
+                // the channel's.
+                if (!isSlackUserId(request.recipient())) {
+                    throw broadcastFailed;
+                }
+                meterRegistry.counter("notification.channel.failed", "channel", BROADCAST_CHANNEL_TAG,
+                        "reason", broadcastFailed.reason().name()).increment();
+                final String line = "Slack broadcast failed, the on-call DM is still sent: channel={}, "
+                        + "incidentId={}, reason={}";
+                if (broadcastFailed.reason().permanent()) {
+                    log.warn(line, workspace.defaultChannel(), request.incidentId(),
+                            broadcastFailed.recordedText(), broadcastFailed.getCause());
+                } else {
+                    log.error(line, workspace.defaultChannel(), request.incidentId(),
+                            broadcastFailed.recordedText(), broadcastFailed.getCause());
+                }
+            }
         }
 
         if (isSlackUserId(request.recipient())) {
-            final String dmTs = postIncidentMessage(
+            final String dmTs = post(
                     request.recipient(), request, workspace.botToken());
             messageStore.save(request.incidentId(), request.recipient(),
                     request.tenantId(), dmTs);
@@ -145,9 +195,23 @@ public class SlackNotificationChannel implements NotificationChannel {
             // this only guards a caller that bypasses it; fail loudly rather
             // than report a delivery.
             throw new NotificationException("SLACK", request.recipient(),
-                    "Nothing posted: not a Slack user id and the shared-channel " +
-                            "broadcast is disabled or has no default channel " +
-                            "configured", null);
+                    NotificationFailureReason.SLACK_NOTHING_POSTED, null);
+        }
+    }
+
+    /**
+     * {@link #postIncidentMessage} as {@link #send} calls it: on this object,
+     * not through Spring's proxy, so neither its {@code @Retry} nor its
+     * fallback applies (found in the second review of #0-93; see backlog
+     * #0-103). An HTTP error is therefore classified here, as the fallback
+     * would, instead of reaching the caller raw and being recorded as an
+     * unexpected error.
+     */
+    private String post(String channel, NotificationRequest request, String botToken) {
+        try {
+            return postIncidentMessage(channel, request, botToken);
+        } catch (RestClientException e) {
+            throw failure(channel, e);
         }
     }
 
@@ -174,7 +238,7 @@ public class SlackNotificationChannel implements NotificationChannel {
                 .retrieve()
                 .body(String.class);
 
-        final String ts = extractTs(responseBody);
+        final String ts = requireOk(channel, responseBody).path("ts").asText(null);
 
         log.info("Slack incident message sent: " +
                         "channel={}, incidentId={}, ts={}",
@@ -213,13 +277,14 @@ public class SlackNotificationChannel implements NotificationChannel {
                         acknowledgedByName)
         );
 
-        restClient.post()
+        final String responseBody = restClient.post()
                 .uri(slackApiUpdateUrl)
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer " + botToken)
                 .body(payload)
                 .retrieve()
-                .toBodilessEntity();
+                .body(String.class);
+        requireOk(channel, responseBody);
 
         log.info("Slack message updated after ACK: channel={}, ts={}, " +
                 "acknowledgedBy={}", channel, messageTs, acknowledgedByName);
@@ -301,14 +366,10 @@ public class SlackNotificationChannel implements NotificationChannel {
                                    NotificationRequest request,
                                    String botToken,
                                    Exception cause) {
-        log.error("Slack notification failed after all retries: " +
-                        "channel={}, incidentId={}, error={}",
-                channel, request.incidentId(), cause.getMessage());
-        throw new NotificationException(
-                "SLACK", channel,
-                String.format("Slack API failed after retries for " +
-                        "channel=%s: %s", channel, cause.getMessage()),
-                cause);
+        final NotificationException failure = failure(channel, cause);
+        log.error("Slack notification failed: channel={}, incidentId={}, reason={}",
+                channel, request.incidentId(), failure.recordedText(), cause);
+        throw failure;
     }
 
     /**
@@ -331,13 +392,109 @@ public class SlackNotificationChannel implements NotificationChannel {
                                NotificationRequest originalRequest,
                                String botToken,
                                Exception cause) {
-        log.warn("Failed to update Slack message after ACK: " +
-                        "channel={}, ts={}, error={}",
-                channel, messageTs, cause.getMessage());
-        throw new NotificationException(
-                "SLACK", channel,
-                "Failed to update Slack message after ACK: " + cause.getMessage(),
-                cause);
+        final NotificationException failure = failure(channel, cause);
+        log.warn("Failed to update Slack message after ACK: channel={}, ts={}, reason={}",
+                channel, messageTs, failure.recordedText(), cause);
+        throw failure;
+    }
+
+    /**
+     * The answer of a Slack Web API call, which must say {@code "ok": true}
+     * (backlog #0-93). Slack reports most failures (a channel the bot is not
+     * in, a revoked token, an archived channel) as HTTP 200 with
+     * {@code {"ok":false,"error":"<code>"}}; this used to be read as a
+     * delivery, so a message that never left was recorded as SENT. Now it is
+     * a {@link NotificationException} carrying Slack's code, which is a fixed
+     * vocabulary and safe to record once checked; Slack's free-text fields
+     * are not read. Not retried: the retry covers network errors and 5xx, and
+     * the answers Slack documents as transient are few.
+     */
+    private JsonNode requireOk(String channel, String responseBody) {
+        final JsonNode answer;
+        try {
+            answer = responseBody == null ? null : objectMapper.readTree(responseBody);
+        } catch (JsonProcessingException e) {
+            throw new NotificationException("SLACK", channel,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, "unreadable_response", e);
+        }
+        if (answer == null || !answer.path("ok").isBoolean()) {
+            throw new NotificationException("SLACK", channel,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, "unreadable_response", null);
+        }
+        if (!answer.path("ok").asBoolean()) {
+            final String code = answer.path("error").asText(null);
+            final NotificationException failure =
+                    new NotificationException("SLACK", channel, reasonFor(code), code, null);
+            if (code != null && failure.detail() == null && log.isDebugEnabled()) {
+                // Not a plain code, so not recorded (review: leave a trace for the
+                // operator). Shown with anything but printable ASCII replaced and
+                // cut, as it came from outside and #0-94 has not escaped log lines.
+                log.debug("Slack answered ok:false with an error that is not a plain code: channel={}, error={}",
+                        channel, printable(code));
+            }
+            throw failure;
+        }
+        return answer;
+    }
+
+    private static String printable(String value) {
+        final String cut = value.length() > 64 ? value.substring(0, 64) + "..." : value;
+        return cut.replaceAll("[^\\x20-\\x7E]", "?");
+    }
+
+    private static NotificationFailureReason reasonFor(String slackError) {
+        if (slackError == null) {
+            // ok:false without saying why (second review: Set.of(...).contains(null)
+            // throws, which recorded it as an unexpected error).
+            return NotificationFailureReason.SLACK_REJECTED;
+        }
+        if ("ratelimited".equals(slackError)) {
+            return NotificationFailureReason.SLACK_RATE_LIMITED;
+        }
+        if (AUTH_ERRORS.contains(slackError)) {
+            return NotificationFailureReason.SLACK_AUTH_FAILED;
+        }
+        return TRANSIENT_ERRORS.contains(slackError)
+                ? NotificationFailureReason.SLACK_UNAVAILABLE
+                : NotificationFailureReason.SLACK_REJECTED;
+    }
+
+    /**
+     * What a failed Slack call (after its retries) becomes (backlog #0-93).
+     * Resilience4j calls the fallback for every exception, not only the
+     * retried ones, so a {@link NotificationException} already classified by
+     * {@link #requireOk} passes through as it is. An HTTP error is classified
+     * by its status alone, never its body; an exception that is not the HTTP
+     * client's is rethrown unchanged, so the caller records it by its type.
+     */
+    static NotificationException failure(String channel, Exception cause) {
+        if (cause instanceof NotificationException classified) {
+            return classified;
+        }
+        if (cause instanceof HttpClientErrorException.Unauthorized) {
+            return new NotificationException("SLACK", channel,
+                    NotificationFailureReason.SLACK_AUTH_FAILED, "http_401", cause);
+        }
+        if (cause instanceof HttpClientErrorException.TooManyRequests) {
+            return new NotificationException("SLACK", channel,
+                    NotificationFailureReason.SLACK_RATE_LIMITED, "http_429", cause);
+        }
+        if (cause instanceof HttpClientErrorException client) {
+            return new NotificationException("SLACK", channel, NotificationFailureReason.SLACK_REJECTED,
+                    "http_" + client.getStatusCode().value(), cause);
+        }
+        if (cause instanceof HttpServerErrorException server) {
+            return new NotificationException("SLACK", channel, NotificationFailureReason.SLACK_UNAVAILABLE,
+                    "http_" + server.getStatusCode().value(), cause);
+        }
+        if (cause instanceof RestClientException) {
+            return new NotificationException("SLACK", channel,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, cause);
+        }
+        if (cause instanceof RuntimeException unexpected) {
+            throw unexpected;
+        }
+        throw new IllegalStateException("Slack call failed", cause);
     }
 
     /**
@@ -360,17 +517,5 @@ public class SlackNotificationChannel implements NotificationChannel {
             case MEDIUM   -> "🟡";
             case LOW      -> "🟢";
         };
-    }
-
-    private String extractTs(String responseBody) {
-        try {
-            return objectMapper.readTree(responseBody)
-                    .path("ts")
-                    .asText(null);
-        } catch (Exception e) {
-            log.warn("Failed to extract ts from Slack response: {}",
-                    e.getMessage());
-            return null;
-        }
     }
 }

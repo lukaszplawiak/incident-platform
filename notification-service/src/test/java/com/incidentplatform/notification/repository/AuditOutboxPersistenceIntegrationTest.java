@@ -240,7 +240,8 @@ class AuditOutboxPersistenceIntegrationTest {
         assertThatThrownBy(() -> persistenceService.recordChannelSent(sent, "acme", "INCIDENT_OPENED", 0,
                 "EMAIL", "oncall@acme.example", "Subject", "Message")).hasMessage("unstorable");
         assertThatThrownBy(() -> persistenceService.recordChannelFailed(failed, "acme", "INCIDENT_OPENED", 0,
-                "EMAIL", "oncall@acme.example", "SMTP down")).hasMessage("unstorable");
+                "EMAIL", "oncall@acme.example", "EMAIL_TRANSPORT_UNAVAILABLE",
+                "EMAIL_TRANSPORT_UNAVAILABLE: The mail server could not be reached")).hasMessage("unstorable");
 
         assertThat(logRows(sent)).isZero();
         assertThat(logRows(failed)).isZero();

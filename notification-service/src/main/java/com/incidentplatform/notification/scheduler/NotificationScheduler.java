@@ -9,6 +9,7 @@ import com.incidentplatform.notification.repository.NotificationQueueRepository;
 import com.incidentplatform.notification.service.NotificationPersistenceService;
 import com.incidentplatform.notification.service.NotificationService;
 import com.incidentplatform.notification.slack.SlackMessageStore;
+import com.incidentplatform.shared.audit.AuditText;
 import com.incidentplatform.shared.pause.TenantWorkGuard;
 import com.incidentplatform.shared.security.TenantContext;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -215,13 +216,18 @@ public class NotificationScheduler {
                     leftPending++;
                 }
             } catch (Exception e) {
+                // The exception with its stack trace, not its message spliced into
+                // the line (backlog #0-93, review): the message may quote a
+                // provider's text, and #0-94 has not made log lines safe yet.
                 log.error("Unexpected error processing notification queue entry: " +
-                                "incidentId={}, eventType={}, error={}",
-                        entry.getIncidentId(), entry.getEventType(),
-                        e.getMessage(), e);
+                                "incidentId={}, eventType={}",
+                        entry.getIncidentId(), entry.getEventType(), e);
 
                 try {
-                    persistenceService.markFailed(entry, e.getMessage());
+                    // Backlog #0-93: the exception's type only, as everywhere the
+                    // platform records a failure it did not anticipate; its
+                    // message may quote SQL, a URL or a response body.
+                    persistenceService.markFailed(entry, AuditText.unexpected(e));
                 } catch (Exception markFailedEx) {
                     log.error("Failed to mark queue entry as FAILED: " +
                                     "incidentId={}, error={}",

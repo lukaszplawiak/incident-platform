@@ -378,6 +378,16 @@ public class SlackActionService {
             // channels once the whole batch is done, so nothing further
             // is logged here to avoid duplicate noise for the same failure.
             return false;
+        } catch (RuntimeException e) {
+            // Backlog #0-93 (found in review): the fallback now rethrows an
+            // exception that is not the HTTP client's (a bug, not a Slack
+            // answer) instead of wrapping it, so the caller records it by its
+            // type. Here that would leave the loop, the other channels'
+            // messages un-updated and the failure unaudited, so it fails this
+            // channel like any other failure; it is logged here, with its stack
+            // trace, because the fallback did not.
+            log.error("Unexpected error updating a Slack message after ACK: channel={}", channel, e);
+            return false;
         }
     }
 }

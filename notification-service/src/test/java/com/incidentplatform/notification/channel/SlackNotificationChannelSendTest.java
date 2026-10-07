@@ -9,6 +9,7 @@ import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.domain.Severity;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -32,11 +33,13 @@ import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.post;
 import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 
 /**
  * Regression test for the bug documented in {@link SlackNotificationChannel#send}:
@@ -58,6 +61,7 @@ import static org.mockito.Mockito.never;
 class SlackNotificationChannelSendTest {
 
     private WireMockServer wireMock;
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private SlackNotificationChannel channel;
 
     @Mock
@@ -125,7 +129,8 @@ class SlackNotificationChannelSendTest {
                 new ObjectMapper(),
                 properties,
                 messageStore,
-                slackWorkspaceClient);
+                slackWorkspaceClient,
+                meterRegistry);
     }
 
     @AfterEach
@@ -259,11 +264,219 @@ class SlackNotificationChannelSendTest {
         given(slackWorkspaceClient.getWorkspace(TENANT_ID)).willThrow(outage);
 
         assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
-                .isInstanceOf(NotificationException.class)
-                .hasMessageContaining("auth-service unavailable")
+                .isInstanceOfSatisfying(NotificationException.class, e -> assertThat(e.reason())
+                        .isEqualTo(NotificationFailureReason.SLACK_WORKSPACE_UNAVAILABLE))
                 .hasCause(outage);
 
         wireMock.verify(0, postRequestedFor(urlPathEqualTo("/chat.postMessage")));
+    }
+
+    /**
+     * Backlog #0-93: Slack answers most failures with HTTP 200 and
+     * {@code "ok":false}; that used to be read as a delivery (recorded SENT).
+     */
+    private void slackAnswers(String path, String body) {
+        wireMock.stubFor(post(urlPathEqualTo(path))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(body)));
+    }
+
+    @Test
+    @DisplayName("ok:false is a failure with Slack's code, not a delivery; nothing stored, Slack's text not kept "
+            + "(backlog #0-93)")
+    void okFalseIsRejected() {
+        slackAnswers("/chat.postMessage",
+                "{\"ok\":false,\"error\":\"not_in_channel\",\"warning\":\"see https://internal.example\"}");
+
+        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                .isInstanceOfSatisfying(NotificationException.class, e -> {
+                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_REJECTED);
+                    assertThat(e.detail()).isEqualTo("not_in_channel");
+                })
+                .hasMessage("SLACK_REJECTED (not_in_channel): Slack refused the message");
+        then(messageStore).should(never()).save(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("ok:false ratelimited is SLACK_RATE_LIMITED, a transient code SLACK_UNAVAILABLE")
+    void okFalseTransientCodes() {
+        slackAnswers("/chat.postMessage", "{\"ok\":false,\"error\":\"ratelimited\"}");
+        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                .isInstanceOfSatisfying(NotificationException.class,
+                        e -> assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_RATE_LIMITED));
+
+        slackAnswers("/chat.postMessage", "{\"ok\":false,\"error\":\"internal_error\"}");
+        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                .isInstanceOfSatisfying(NotificationException.class, e -> {
+                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_UNAVAILABLE);
+                    assertThat(e.reason().permanent()).isFalse();
+                });
+    }
+
+    @Test
+    @DisplayName("an answer that is not Slack's JSON, or has no ok field, is SLACK_UNAVAILABLE (unreadable_response)")
+    void unreadableAnswer() {
+        for (final String body : new String[] {"<html>gateway</html>", "{\"ts\":\"1.2\"}"}) {
+            slackAnswers("/chat.postMessage", body);
+            assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                    .as(body)
+                    .isInstanceOfSatisfying(NotificationException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_UNAVAILABLE);
+                        assertThat(e.detail()).isEqualTo("unreadable_response");
+                    })
+                    .hasMessageNotContaining("gateway");
+        }
+    }
+
+    @Test
+    @DisplayName("a Slack code that is not a plain code is dropped, the reason kept")
+    void oddCodeDropped() {
+        slackAnswers("/chat.postMessage", "{\"ok\":false,\"error\":\"Bad Thing\\nforged line\"}");
+
+        final ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SlackNotificationChannel.class);
+        final ch.qos.logback.classic.Level level = logger.getLevel();
+        final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(ch.qos.logback.classic.Level.DEBUG);
+        try {
+            assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                    .isInstanceOfSatisfying(NotificationException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_REJECTED);
+                        assertThat(e.detail()).isNull();
+                    })
+                    .hasMessage("SLACK_REJECTED: Slack refused the message");
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(level);
+        }
+        // Review: the dropped code leaves a trace at DEBUG, on one line.
+        assertThat(appender.list).anySatisfy(e -> assertThat(e.getFormattedMessage())
+                .contains("error=Bad Thing?forged line").doesNotContain("\n"));
+    }
+
+    @Test
+    @DisplayName("the update after an ACK checks ok too: ok:false is a failure, so its ts is kept for a retry")
+    void updateOkFalseIsFailure() {
+        slackAnswers("/chat.update", "{\"ok\":false,\"error\":\"message_not_found\"}");
+        final NotificationRequest original = buildRequest("U0123456789");
+
+        assertThatThrownBy(() -> channel.updateMessageAfterAck(DEFAULT_CHANNEL, SLACK_TS, "Jane", original, BOT_TOKEN))
+                .isInstanceOfSatisfying(NotificationException.class, e -> {
+                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_REJECTED);
+                    assertThat(e.detail()).isEqualTo("message_not_found");
+                });
+
+        slackAnswers("/chat.update", "{\"ok\":true}");
+        channel.updateMessageAfterAck(DEFAULT_CHANNEL, SLACK_TS, "Jane", original, BOT_TOKEN);
+    }
+
+    @Test
+    @DisplayName("ok:false without an error code is SLACK_REJECTED, not an unexpected error (second review)")
+    void okFalseWithoutCode() {
+        slackAnswers("/chat.postMessage", "{\"ok\":false}");
+
+        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                .isInstanceOfSatisfying(NotificationException.class, e -> {
+                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_REJECTED);
+                    assertThat(e.detail()).isNull();
+                });
+    }
+
+    @Test
+    @DisplayName("a token Slack no longer accepts is SLACK_AUTH_FAILED, logged at ERROR (second review)")
+    void revokedToken() {
+        for (final String code : new String[] {"invalid_auth", "token_revoked", "account_inactive"}) {
+            slackAnswers("/chat.postMessage", "{\"ok\":false,\"error\":\"" + code + "\"}");
+            assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                    .as(code)
+                    .isInstanceOfSatisfying(NotificationException.class, e -> {
+                        assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_AUTH_FAILED);
+                        assertThat(e.reason().permanent()).isFalse();
+                        assertThat(e.detail()).isEqualTo(code);
+                    });
+        }
+    }
+
+    /**
+     * Second review: send() calls postIncidentMessage on itself, past the retry
+     * proxy and its fallback, so an HTTP error must be classified there too, not
+     * reach the caller raw (recorded as an unexpected error).
+     */
+    @Test
+    @DisplayName("an HTTP error on the send path is classified by its status, Slack's body not kept")
+    void httpErrorOnSendPath() {
+        wireMock.stubFor(post(urlPathEqualTo("/chat.postMessage"))
+                .willReturn(aResponse().withStatus(401).withBody("{\"error\":\"secret body\"}")));
+
+        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
+                .isInstanceOfSatisfying(NotificationException.class, e -> {
+                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_AUTH_FAILED);
+                    assertThat(e.detail()).isEqualTo("http_401");
+                })
+                .hasMessageNotContaining("secret");
+    }
+
+    /**
+     * Second review: before #0-93 a refused broadcast passed as a success, so
+     * the DM always went; now that it fails, it must not stop the DM.
+     */
+    @Test
+    @DisplayName("a refused broadcast still lets the on-call DM go, and the send counts as delivered; the "
+            + "broadcast's failure is counted under SLACK_BROADCAST and logged by its permanence")
+    void refusedBroadcastStillDms() {
+        final ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SlackNotificationChannel.class);
+        final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            refuseBroadcast("is_archived");
+            channel.send(buildRequest("U0123456789"));
+            refuseBroadcast("internal_error");
+            channel.send(buildRequest("U0123456789"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        final var broadcastLines = appender.list.stream()
+                .filter(e -> e.getFormattedMessage().startsWith("Slack broadcast failed")).toList();
+        assertThat(broadcastLines).extracting(ch.qos.logback.classic.spi.ILoggingEvent::getLevel)
+                .containsExactly(ch.qos.logback.classic.Level.WARN, ch.qos.logback.classic.Level.ERROR);
+        assertThat(meterRegistry.counter("notification.channel.failed", "channel", "SLACK_BROADCAST",
+                "reason", "SLACK_REJECTED").count()).isEqualTo(1.0);
+        assertThat(meterRegistry.counter("notification.channel.failed", "channel", "SLACK_BROADCAST",
+                "reason", "SLACK_UNAVAILABLE").count()).isEqualTo(1.0);
+
+        wireMock.verify(postRequestedFor(urlPathEqualTo("/chat.postMessage"))
+                .withRequestBody(containing("\"channel\":\"U0123456789\"")));
+        then(messageStore).should(times(2))
+                .save(INCIDENT_ID, "U0123456789", TENANT_ID, SLACK_TS);
+        then(messageStore).should(never()).save(eq(INCIDENT_ID), eq(DEFAULT_CHANNEL), any(), any());
+    }
+
+    private void refuseBroadcast(String slackError) {
+        wireMock.stubFor(post(urlPathEqualTo("/chat.postMessage"))
+                .withRequestBody(containing("\"channel\":\"" + DEFAULT_CHANNEL + "\""))
+                .willReturn(aResponse().withStatus(200).withHeader("Content-Type", "application/json")
+                        .withBody("{\"ok\":false,\"error\":\"" + slackError + "\"}")));
+    }
+
+    @Test
+    @DisplayName("with no DM to send, a refused broadcast is the channel's failure")
+    void refusedBroadcastWithoutDmFails() {
+        slackAnswers("/chat.postMessage", "{\"ok\":false,\"error\":\"is_archived\"}");
+
+        assertThatThrownBy(() -> channel.send(buildRequest("#not-a-user")))
+                .isInstanceOfSatisfying(NotificationException.class, e -> {
+                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_REJECTED);
+                    assertThat(e.detail()).isEqualTo("is_archived");
+                });
     }
 
     private NotificationRequest buildRequest(String recipient) {
