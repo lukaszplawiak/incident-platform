@@ -139,8 +139,10 @@ public class OperatorTenantBootstrap {
     }
 
     Outcome reconcile() {
-        if (reconciler.enabled()) {
-            recordTenant();
+        if (reconciler.enabled() && !recordTenant()) {
+            // Keep the gauge's last value, as refreshPendingGauge does: the
+            // cause is the database, which has alerts of its own.
+            return Outcome.FAILED;
         }
         final Outcome outcome = reconciler.reconcile();
         if (outcome != Outcome.DISABLED) {
@@ -152,18 +154,27 @@ public class OperatorTenantBootstrap {
     /**
      * Records the operator tenant in {@code tenants} (backlog #0-80), like every
      * provisioned tenant: on a new database V21 ran before any user existed, so
-     * its backfill could not. Idempotent; a failure is logged and does not stop
-     * the admin reconciliation, which matters more, and the next run retries.
+     * its backfill could not. Idempotent; the next run retries a failure.
+     *
+     * <p>Backlog #0-82: a failure now stops the run. It used to be logged and
+     * the admin reconciliation went on, which mattered more; since V31 every
+     * user needs its tenant's row, so inviting the admin without it could only
+     * fail on the foreign key.
+     *
+     * @return whether the row exists now
      */
-    private void recordTenant() {
+    private boolean recordTenant() {
         try {
             if (tenantRepository.insertIfAbsent(ReservedTenants.PLATFORM_OPERATOR, DISPLAY_NAME,
                     adminEmail, null) == 1) {
                 log.info("Operator tenant recorded in tenants, tenant={}",
                         ReservedTenants.PLATFORM_OPERATOR);
             }
+            return true;
         } catch (RuntimeException e) {
-            log.error("Could not record the operator tenant in tenants; retried next run", e);
+            log.error("Could not record the operator tenant in tenants; the admin reconciliation "
+                    + "waits for the next run", e);
+            return false;
         }
     }
 }

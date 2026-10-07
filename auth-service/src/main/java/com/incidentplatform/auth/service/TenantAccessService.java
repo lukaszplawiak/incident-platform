@@ -39,16 +39,22 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p>One primary-key lookup per call, not cached: a suspension takes effect on
  * the next request, which is the point of it, and auth-service's own requests
- * are not hot enough for the lookup to matter. A tenant without a row (none
- * should exist: V21 backfilled every tenant that had users, provisioning and the
- * operator's bootstrap insert one) has full access rather than none, so a gap in
- * the table cannot lock a tenant out. Such a tenant also cannot be suspended
- * (suspend finds no row, 404), so the gap is counted on every lookup
- * ({@value #MISSING_ROW_COUNTER}, alert {@code PlatformTenantStatusRowMissing})
- * and logged at WARN once per tenant: visible in operation, rather than a
- * fail-open nobody notices. A foreign key
- * from {@code users.tenant_id} to {@code tenants} would close it for good; no
- * code path creates a user outside an existing tenant today.
+ * are not hot enough for the lookup to matter.
+ *
+ * <p>A tenant without a row has full access rather than none, and cannot be
+ * suspended (suspend finds no row, 404). Since V31 (backlog #0-82) such a
+ * tenant has no data in auth-service either: every table holding a tenant's
+ * data has a foreign key to {@code tenants}, so no user, key or session can
+ * exist before the row. What is left is a token naming a tenant id that
+ * auth-service never recorded: auth-service signs tokens only for its own
+ * users, so in a deployment only a token minted elsewhere with the shared
+ * secret can (incident-service's dev-profile {@code /dev/token} does, for any
+ * id, backlog #0-63). Full access stays the answer, not none, so a
+ * gap cannot lock a tenant out, and it stays a tripwire: counted on every
+ * lookup ({@value #MISSING_ROW_COUNTER}, alert
+ * {@code PlatformTenantStatusRowMissing}) and logged at WARN once per tenant,
+ * because outside the dev profile it means a signing key or token issuer that
+ * should not exist.
  */
 @Service
 public class TenantAccessService implements TenantStatusProvider {

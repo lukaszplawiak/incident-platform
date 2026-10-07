@@ -60,16 +60,6 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     boolean existsByTenantId(String tenantId);
 
     /**
-     * Whether a tenant has, or ever had, any user, archived and anonymized ones
-     * included. Native, to bypass {@code @SQLRestriction} on purpose: tenant
-     * provisioning (backlog #0-80) must not hand a new admin a tenant id whose
-     * users and data already exist, even if nobody in it is active any more.
-     */
-    @Query(value = "SELECT EXISTS (SELECT 1 FROM users WHERE tenant_id = :tenantId)",
-            nativeQuery = true)
-    boolean existsAnyByTenantId(@Param("tenantId") String tenantId);
-
-    /**
      * Lists all non-deleted users in a tenant — paginated.
      * Roles are NOT eagerly loaded — list endpoints don't need them.
      */

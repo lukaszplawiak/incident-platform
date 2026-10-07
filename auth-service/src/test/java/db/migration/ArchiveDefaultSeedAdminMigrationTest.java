@@ -201,6 +201,13 @@ class ArchiveDefaultSeedAdminMigrationTest {
     }
 
     private UUID insertUser(String email, String tenantId, String passwordHash) throws SQLException {
+        // Backlog #0-82: a user needs its tenant's row (V31's foreign key).
+        try (PreparedStatement stmt = connection.prepareStatement(
+                "INSERT INTO tenants (tenant_id, display_name) VALUES (?, ?) ON CONFLICT DO NOTHING")) {
+            stmt.setString(1, tenantId);
+            stmt.setString(2, tenantId);
+            stmt.executeUpdate();
+        }
         final UUID id = UUID.randomUUID();
         try (PreparedStatement stmt = connection.prepareStatement(
                 "INSERT INTO users (id, tenant_id, email, password_hash, active) VALUES (?, ?, ?, ?, TRUE)")) {

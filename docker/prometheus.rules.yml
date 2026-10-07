@@ -556,13 +556,17 @@ groups:
             reason and note) and confirm it was expected.
 
       - alert: PlatformTenantStatusRowMissing
-        # Backlog #0-82: auth-service looked up the status of a tenant that has
-        # users or keys but no row in tenants. Such a tenant gets full access
-        # and cannot be suspended (fail-open on purpose, so a gap locks nobody
-        # out). None should exist: V21 backfilled the table, provisioning and
-        # the operator bootstrap insert one. High, not critical: nothing is
-        # exposed by it, but a suspension of that tenant would silently not be
-        # possible. Content-free: the WARN log names the tenant once.
+        # Backlog #0-82: auth-service looked up the status of a tenant with no
+        # row in tenants. Such a tenant gets full access and cannot be
+        # suspended (fail-open on purpose, so a gap locks nobody out). Since
+        # V31 every auth-service table with a tenant's data has a foreign key
+        # to tenants, so the tenant has no users, keys or sessions there: the
+        # request's token was minted outside auth-service's sign-in
+        # (/dev/token in dev; elsewhere, something holding the JWT secret).
+        # A tripwire now, kept high, not critical: a forged token for a
+        # tenant that does exist would not trip it, so it is no detector of a
+        # leaked secret, only a sign worth a look. Content-free: the WARN log
+        # names the tenant once.
         expr: |
           sum(increase(platform_tenant_status_missing_total[15m])) > 0
         labels:
@@ -573,8 +577,11 @@ groups:
           description: >
             auth-service checked the status of a tenant without a tenants row in
             the last 15 minutes; it has full access and cannot be suspended.
-            Find it in the auth-service WARN log ("Tenant has no row in
-            tenants") and insert its row.
+            Since V31 no data in auth-service can exist without its tenant's
+            row, so the request carried a token minted outside auth-service's
+            sign-in (outside dev, a leaked JWT secret or a stray token issuer).
+            Find the tenant in the auth-service WARN log ("Tenant has no row in
+            tenants") and investigate where its token came from.
 
       - alert: TenantStatusLookupFailing
         # Backlog #0-82, step 2: a service could not ask auth-service what a
