@@ -240,7 +240,8 @@ curl -s -X POST http://localhost:8087/api/v1/platform/tenants \
   `platform-operator` and `system` are reserved (`400`).
 - `409` if a tenant with that id exists (also one that existed before V21: those were backfilled
   from their users).
-- **Check the id is unused first.** auth-service knows only tenants that have, or had, a user. An id
+- **Check the id is unused first.** auth-service knows only tenants that have, or had, data in it
+  (every auth-service table with a tenant's data needs the tenant's row, backlog #0-82). An id
   that only other services hold rows for (incidents or on-call data written under it without a
   user, e.g. through the dev profile's `/dev/token`, whose default tenant is `test-tenant` and which
   the README's end-to-end test uses) is accepted, and the new admin then sees that data. An id whose

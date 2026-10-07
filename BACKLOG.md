@@ -78,7 +78,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
 | [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
-| [0-82](#0-82-suspend-and-offboard-a-tenant) | Suspend and offboard a tenant (offboarding: #0-101) | design | Medium | In progress |
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
 | [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
@@ -90,6 +89,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-99](#0-99-public-token-endpoints-have-no-request-limit) | Public token endpoints have no request limit | security | Low | Open |
 | [0-100](#0-100-a-locally-built-jar-contains-the-developers-application-localyml) | A locally built jar contains the developer's `application-local.yml` | tech-debt | Low | Open |
 | [0-101](#0-101-offboard-a-tenant) | Offboard a tenant | design | Medium | Open |
+| [0-102](#0-102-the-pause-of-suspended-tenants-background-work-at-scale) | The pause of suspended tenants' background work at scale | performance | Low | Open |
 
 ---
 
@@ -1187,7 +1187,8 @@ when the services have taken every other connection, which is the reserve's purp
 
 ### 0-82. Suspend and offboard a tenant
 
-**Type:** design · **Priority:** Medium · **Status:** In progress, steps 1, 2a and 2b done; left: the missing `tenants` row (a foreign key, below) (split out of #0-80; offboarding moved to #0-101)
+**Type:** design · **Priority:** Medium · **Status:** Done, PRs #456, #457, #458, #459 (split out of #0-80; offboarding moved to #0-101). Kept in full as
+the record of the decisions, which the code and the other docs refer to.
 
 **Problem.** (As written before step 1.) Since #0-80 a platform operator creates tenants
 (`POST /api/v1/platform/tenants`), but nothing ends one. A customer who stops paying, breaches terms or leaves keeps logging in, its
@@ -1238,7 +1239,8 @@ tenant's alerts are paused, not refused: introspection answers `paused:true` and
 breaker is not tripped for every tenant; a full suspension's alerts got 401 (403 `TENANT_SUSPENDED` since
 2a). Left for step 2 (or a
 foreign key): a tenant with users but no `tenants` row has full access and cannot be suspended — none
-should exist; it is counted, alerted (`PlatformTenantStatusRowMissing`) and logged once. Also left for
+should exist; it is counted, alerted (`PlatformTenantStatusRowMissing`) and logged once (closed by the foreign keys
+in the last part, below). Also left for
 step 2 (found in the review of step 1; all done in 2a, below): a key ingestion-service cached in the minute before a full
 suspension still files alerts for the rest of that minute; a fully suspended tenant's key is answered
 like a revoked one, so its sender's retries count against the IP's failed-authentication limit (a
@@ -1272,7 +1274,7 @@ are cached 5 s; a sign-in refused for suspension is audited (`USER_SIGN_IN_REFUS
 rollback) and counted, at most a few times per user per window (then 429, no event: a refusal rolls back,
 so its invite or reset token could be replayed without end);
 suspend/resume wait at most 5 s for a lock; a lost lock (deadlock, timeout) in
-auth-service is 503 + Retry-After, not 500. Still open from step 1: the missing `tenants` row (a foreign key).
+auth-service is 503 + Retry-After, not 500. Still open from step 1 then: the missing `tenants` row (closed below).
 
 **Step 2b: PR #458.** Decided (2026-10-06) after a `/research`: a table per service
 (`<service>_paused_tenants`: notification V10, escalation V9, postmortem V7) rather than a set held in memory (lost on
@@ -1307,7 +1309,32 @@ reaches incident-service with notification-service's token, past the status filt
 refuses a suspended tenant's acknowledgement itself, counted (`slack.ack.refused`), fail-open like the filter. Alerts
 `TenantPauseSyncFailing` and `TenantPauseSyncStalled` (no instance completed a run in 5 minutes). Scale limits (a lookup per tenant per sync in each service, candidate and backlog scans
 without `tenant_id` in the indexes): #0-102.
-Still open from step 1: the missing `tenants` row (a foreign key).
+
+**Last part: the missing `tenants` row, PR #459.** A tenant id with data but no `tenants` row had full access and
+could not be suspended (counted, alert `PlatformTenantStatusRowMissing`). Decided (2026-10-06): a foreign key to
+`tenants`, `ON DELETE RESTRICT`, on every auth-service table holding a tenant's data (users, user_roles, teams,
+tenant_settings, auth_tokens, api_keys, integrations, slack_workspaces, mfa_recovery_requests). V31 first records
+any id without a row as ACTIVE, named after itself (as V21 did for users: refusing would stop a deployment over a
+gap the row closes), and adds the keys `NOT VALID`; V32 validates them, under a lock that lets reads and writes go
+on. Not on `auth_email_outbox` / `auth_audit_outbox`: queues of work about covered rows, whose events must never be
+refused for their tenant. Not in the other six services: a foreign key across services would tie their schemas to
+auth-service's (#0-85). A tenants row is never deleted (offboarding ends in the `OFFBOARDED` tombstone, #0-101).
+The missing-row answer stays FULL with its counter and alert, now a tripwire: auth-service has no data for such a
+tenant, so only a token minted outside its sign-in (`/dev/token`; elsewhere, something holding the JWT secret)
+can name one. Provisioning's check of users without a row (`UserRepository.existsAnyByTenantId`, found in the
+review of #0-80) went, unreachable; the operator tenant's bootstrap now stops its run (FAILED, gauge unchanged)
+when it cannot record the row, since inviting the admin without it could only fail on the foreign key. A
+structural test (`AuthRepositoryIntegrationTest.everyTenantIdColumnReferencesTenants`) fails on a table with a
+`tenant_id` and no validated foreign key; `TenantForeignKeysMigrationTest` runs V31/V32 on orphaned data.
+Added in review: a write refused by one of these keys is 403, not the shared catch-all's 500
+(`UnrecordedTenantHandler`, only the nine constraint names, which a test compares with the schema); V31 names each
+id it adopts in a WARNING (a reserved one flagged: adopted rather than refused, as refusing would stop the
+deployment and being reserved grants nothing), and waits at most 5 s for a lock (`lock_timeout`; its nine ALTERs
+hold their locks until it commits); V32's header says what to do if validation ever fails; the migration test seeds
+an orphan in each of the nine tables and checks the window between V31 and V32. Second review: V31 locks the ten
+tables before its backfill, so no orphan can be written between the backfill and the constraints; the 403 body is
+the shared handler's own wording, not a hint that the tenant is unknown; a write failing only at commit is shown to
+reach the handler as well.
 
 ---
 
@@ -1317,7 +1344,7 @@ Still open from step 1: the missing `tenants` row (a foreign key).
 
 **Problem.** `POST /api/v1/platform/tenants` (#0-80) refuses an id only if auth-service's `tenants` table
 has it, and V21 filled that table from auth-service's `users`. The other six services keep `tenant_id` as a
-plain string on their own rows. If any of them holds rows under an id that never had a user in auth-service,
+plain string on their own rows. If any of them holds rows under an id that never had data in auth-service,
 an operator can provision that id, and its new admin sees those rows. Possible sources, to be verified:
 - incident-service's `/dev/token` (dev profile only) mints a token for any tenant id, so a dev or test
   database may have incidents, on-call schedules or postmortems under such ids. Its default is
@@ -1326,8 +1353,10 @@ an operator can provision that id, and its new admin sees those rows. Possible s
 - alerts ingested under an Integration API key always belong to a tenant with a user, so probably not.
 
 Only an operator can do this, so it is an accident or a rogue-operator risk, not an outside attack. Today
-`docs/tenant-provisioning.md` tells the operator to check the id first. An id with users in auth-service,
-archived ones included, is already refused (`UserRepository.existsAnyByTenantId`).
+`docs/tenant-provisioning.md` tells the operator to check the id first. An id with any data in auth-service,
+archived users included, is already refused: since #0-82 every auth-service table holding a tenant's data has a
+foreign key to `tenants` (V31), so such an id has its row, and provisioning's insert refuses it (that replaced a
+check of the users, `UserRepository.existsAnyByTenantId`).
 
 **Approach.** First verify: list the tenant ids each service's tables hold and which of them auth-service
 has no record of, on every deployed database. Then either:
@@ -1637,6 +1666,7 @@ its own latency.
 | 0-96 | A consumer acknowledged a poison pill before its dead-letter copy was written (`DeadLetterPublisher.publish`, fire-and-forget, 15 call sites): a failed send lost it, a refused forged record's evidence included, with only an ERROR line. The fire-and-forget path is gone: a consumer hands such a record to `DeadLetterPublisher.deadLetterThenAcknowledge`, which acknowledges it once Kafka has the copy and `nack`s it otherwise (the way `AuditEventConsumer` already did, #0-84); the copy names its `sourcePartition` and `sourceOffset`, so one stored twice (at least once) can be told apart. Three more of the same kind were found and fixed: a transient failure was "not acknowledged, Kafka redelivers", which in `MANUAL_IMMEDIATE` mode it does not, the next record's acknowledgement commits the offset past it (shown on a real broker by `DeadLetterPublisherKafkaIntegrationTest`, Testcontainers Kafka) — every consumer now `nack`s it (`redeliverLater`, 5 s, `kafka.records.redelivery.requested{reason}`); a record without `X-Event-Type` was acknowledged and dropped (notification, escalation, postmortem, `IncidentEscalationEventConsumer`) and is now dead-lettered; and the rule for "transient" (#47: `TransientDataAccessException` only) took a database outage for a poison pill, since Spring gives it as `DataAccessResourceFailureException` (non-transient) or `CannotCreateTransactionException` (no `DataAccessException`), so escalation and postmortem dead-lettered every event while the database was down. One rule in `shared` now, `KafkaFailures`, for all six consumers; anything else is dead-lettered, as #47 decided (notification-service and `IncidentKafkaConsumer` used to call every exception transient). `IncidentEscalationEventConsumer`'s listener was `@Transactional` and acknowledged inside the transaction, before the commit where the `@Version` conflict of #40 is thrown: the write moved to `IncidentCommandService.recordEscalationLevel`, committed before the acknowledgement. ingestion-service waits for an alert's dead-letter copy and answers 503 with `Retry-After` (`INGESTION_UNAVAILABLE`) when Kafka does not take it. Bounds added in review, so that no record holds a partition, every tenant on it, for ever: a copy waits at most 5 s in all (`DeadLetterPublisher.deadLetterTemplate`, a producer of its own with a 2 s metadata block — escalation-service's producer keeps Kafka's 60 s on purpose, #0-84); each consumer refuses to start unless `max.poll.records` such waits fit in half of `max.poll.interval.ms` (raised from 30 s to 120 s in incident, escalation and postmortem; a `nack`'s delay pauses the partition, `pausedForNack` in spring-kafka 3.3, and does not count); a record failing past `kafka.consumer.redelivery-deadline` (30 min, `RecordRedeliveries`) is dead-lettered, counted (`kafka.records.redelivery.gave_up`) and alerted (`KafkaRecordRedeliveryGaveUp`, critical; `KafkaRecordRedeliveryStuck`, high, after 15 min of nacks); a copy's payload is cut to 128 KiB (UTF-8, marked `originalPayloadTruncated`) so it always fits in a record; a dead-letter reason and its log line keep a message only when the platform wrote it content-free (`KafkaFailures.reason`: a refused tenant, an unknown severity, `UnreadableRecordException`), any other exception by type and the platform's frame (a parser's message quotes the record; `GenericNormalizer` no longer quotes an invalid severity). ingestion-service's producer blocks at most 5 s (was Kafka's 60 s, on the request thread), a request's copies are awaited together under one deadline, a payload is copied once however many of its alerts fail to serialize, and the dedup keys of alerts a lost copy was to keep are released, or the sender's retry was answered as a duplicate and the alert lost; the copies' deadline counts from the wait and no copy starts after one failed (second review). Accepted: a database outage longer than the deadline dead-letters one record per partition per deadline (an audit event then missing from the trail until replayed, #0-97, raising both `AuditEventsRejected` and `KafkaRecordRedeliveryGaveUp`). A record without `X-Event-Type` keeps its tenant in the copy when it has a trustworthy one (`TenantKafkaRecordResolver.trustedTenantOrNull`, not counted). Real-broker test `DeadLetterPublisherKafkaIntegrationTest`, Postgres test `IncidentEscalationLevelIntegrationTest`. `DefaultErrorHandler` and a dead-letter replay: #0-97 | PR #453 |
 | 0-39 | Closed by #0-91/#0-92: every producer writes the header (through `TenantRecords`), the resolver dead-letters a record whose header and payload tenant differ, and `AuditEventConsumer` resolves through it like every consumer | PR #452 |
 | 0-81 | `application-test.yml` sat in `src/main/resources` of auth-, incident- and ingestion-service, so it shipped in every jar and image, the auth and incident copies with a hard-coded `jwt.secret` and auth's with a valid `mfa.encryption-key`, applied wherever the `test` profile was switched on. No test activated that profile any more (its only user, `BaseIntegrationTest`, went with backlog #45; tests set their keys with `@TestPropertySource`), so the three files are deleted rather than moved to `src/test/resources`. A CI step in "Build, Test & Coverage" (`.github/scripts/check-packaged-profiles.sh`, its cases in `test-packaged-profiles.sh` run first) fails on any committed `application-<profile>.{yml,yaml,properties}` under `*/src/main/resources` or its `config/`, on a profile document (a `spring.config.activate.on-profile` key, nested or dotted, not the words in a comment) in a base `application.*`, on a base `application.*` that switches a profile on (`spring.profiles.active` / `include` / `default` / `group`: in the jar it would apply in every environment, past #0-63's check of the manifests), and (review) on a key ending in `secret`, `encryption-key`, `private-key` or `api-key` (any case, kebab or camelCase) in a base `application.*` that is not a `${VAR}` placeholder without default, quoted or not, since a key written straight into the base file ships just the same (postmortem-service's `gemini.api-key` lost its `your-api-key-here` default for it; compose and every overlay set `GEMINI_API_KEY`); it has no allow-list (review: an empty, untested one), so a profile in a jar needs a backlog decision and a change to the script. This closes what #0-63's manifest check could not (a run outside the manifests). The developer's gitignored `application-local.yml` in locally built jars: #0-100 | PR #455 |
+| 0-82 | Nothing ended a tenant (split out of #0-80). An operator now suspends and resumes a tenant, `FULL` or `READ_ONLY`, enforced in auth-service (step 1), in every service and on STOMP (2a), and in the background work of notification-, escalation- and postmortem-service (2b); every auth-service table holding a tenant's data has a foreign key to `tenants` (last part). Full record of the decisions: [the item](#0-82-suspend-and-offboard-a-tenant). Offboarding: #0-101; the pause at scale: #0-102 | PRs #456, #457, #458, #459 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

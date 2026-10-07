@@ -366,7 +366,7 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (assigned UUID, no `@Version`: otherwise `save` merges).
   - "Active admin" is one query pair now, `countActiveAcceptedUsersWithRole[Excluding]` (active + password), used
     by the last-admin guard too; tenant settings expose `activeAdmins` / `singleAdmin` as the prevention side.
-- **Tenant suspension (#0-82, steps 1, 2a and 2b; left: a foreign key for the missing `tenants` row)**: `TenantLifecycleService` (suspend/resume), `TenantAccessService` (status
+- **Tenant suspension (#0-82, done; offboarding is #0-101)**: `TenantLifecycleService` (suspend/resume), `TenantAccessService` (status
   -> `TenantAccess`, guards for public paths), V30 columns on `tenants`, `TenantStatusFilter` in `shared`. Non-obvious:
   - The filter is built inside `buildCommonSecurity` from the context's `TenantStatusProvider`, not declared as a
     bean: a filter bean is also registered as a plain servlet filter outside the chain. A context without a provider
@@ -450,8 +450,18 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     (reactivation), not audited as a sign-in. Invite/reset hash the password before taking the lock. Two-thread Testcontainers tests
     (login, refresh, backup code, lock timeout, two operators) pin all of it; they wait on `pg_stat_activity`
     `wait_event_type = 'Lock'`, not a sleep. The per-request filter lookup is unlocked.
-  - A tenant without a `tenants` row: FULL access, counted (`platform.tenant.status.missing`, alert
-    `PlatformTenantStatusRowMissing`), WARN once per tenant.
+  - Every auth-service table with a tenant's data has a foreign key to `tenants` (V31 adds them `NOT VALID` after
+    recording any id without a row, V32 validates; `ON DELETE RESTRICT`, a tenants row is never deleted). Not on
+    `auth_email_outbox` / `auth_audit_outbox`: queues whose events must never be refused for their tenant. Not in
+    the other services either: a cross-service FK would tie their schemas to auth-service's (#0-85). Test fixtures
+    must record their tenant first (`AuthRepositoryIntegrationTest.recordTenant`). A tenant without a row can now
+    only come from a token minted outside auth-service (`/dev/token`): still FULL access, counted
+    (`platform.tenant.status.missing`, alert `PlatformTenantStatusRowMissing`), WARN once per tenant, as a tripwire;
+    its writes fail on the foreign key, answered 403 by `UnrecordedTenantHandler` (only V31's nine constraint names,
+    checked against the schema in `AuthRepositoryIntegrationTest`; any other integrity error keeps the shared 500).
+    A new tenant-data table needs its constraint name added there too. V31 logs each adopted id as a WARNING
+    (Flyway's "DB:" line) and has a 5 s `lock_timeout`; V32's header is the runbook if validation ever fails.
+    The operator tenant's bootstrap stops its run (FAILED, gauge unchanged) when it cannot record the row.
   - FULL ends sessions (`AuthTokenRepository.invalidateSessionsOfTenant`: REFRESH + MFA continuations), keeps invite
     and reset links (refused while suspended, valid again after resume). The MFA-recovery cancel link is not checked:
     it works throughout, like the rest of #0-90. Nothing revoked, so resume is complete.

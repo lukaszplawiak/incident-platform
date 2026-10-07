@@ -243,6 +243,26 @@ class AuthRepositoryIntegrationTest {
                 .willReturn(com.incidentplatform.auth.ratelimit.RateLimitDecision.ALLOWED);
     }
 
+    /**
+     * Backlog #0-82: every table holding a tenant's data has a foreign key to
+     * {@code tenants} (V31), so the tenants most fixtures write for (their own,
+     * the operator's, and "other-tenant" for a stranger's rows) must have their
+     * row first. A test with a tenant of its own records it with
+     * {@link #recordTenant}. In a {@code NOT_SUPPORTED} test the row is
+     * committed and stays; it is never deleted, as ON DELETE RESTRICT would
+     * refuse it while another test's committed data refers to it.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void fixtureTenantsRecorded() {
+        recordTenant(TENANT_ID);
+        recordTenant(ReservedTenants.PLATFORM_OPERATOR);
+        recordTenant("other-tenant");
+    }
+
+    private void recordTenant(String tenantId) {
+        tenantRepository.insertIfAbsent(tenantId, tenantId, "admin@" + tenantId + ".test", null);
+    }
+
     private static final String TENANT_ID = "test-tenant";
 
     /**
@@ -261,6 +281,28 @@ class AuthRepositoryIntegrationTest {
                 WHERE k.conrelid = (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass
                   AND k.contype = 'c'
                   AND position(? IN pg_get_constraintdef(k.oid)) > 0)
+            ORDER BY c.table_name
+            """;
+
+    /**
+     * Tables of this schema with a tenant_id column but no validated foreign key
+     * from that column to {@code tenants}; backlog #0-82. Not counted: tenants
+     * itself and the two outboxes, left without one on purpose (V31).
+     */
+    private static final String TENANT_ID_COLUMNS_WITHOUT_TENANT_FK = """
+            SELECT c.table_name FROM information_schema.columns c
+            JOIN information_schema.tables t
+              ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+             AND t.table_type = 'BASE TABLE'
+            WHERE c.table_schema = current_schema() AND c.column_name = 'tenant_id'
+              AND c.table_name NOT IN ('tenants', 'auth_email_outbox', 'auth_audit_outbox')
+              AND NOT EXISTS (
+                SELECT 1 FROM pg_constraint k
+                JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = ANY (k.conkey)
+                WHERE k.conrelid = (quote_ident(c.table_schema) || '.' || quote_ident(c.table_name))::regclass
+                  AND k.contype = 'f' AND k.convalidated
+                  AND k.confrelid = (quote_ident(c.table_schema) || '.tenants')::regclass
+                  AND cardinality(k.conkey) = 1 AND a.attname = 'tenant_id')
             ORDER BY c.table_name
             """;
 
@@ -300,6 +342,7 @@ class AuthRepositoryIntegrationTest {
     class SlackWorkspaceRepositoryTests {
 
         private SlackWorkspace install(String tenantId) {
+            recordTenant(tenantId);
             return SlackWorkspace.install(tenantId, null, "T0123456",
                     "iv:ciphertext", "#incidents", false);
         }
@@ -395,8 +438,10 @@ class AuthRepositoryIntegrationTest {
         @Test
         @DisplayName("save() persists a new SlackWorkspace in place and starts its version at 0")
         void newSlackWorkspaceIsPersistedNotMerged() {
+            final String tenantId = "slack-new-" + UUID.randomUUID();
+            recordTenant(tenantId);
             final SlackWorkspace workspace = SlackWorkspace.install(
-                    "slack-new-" + UUID.randomUUID(), null, "T0123456",
+                    tenantId, null, "T0123456",
                     "iv:ciphertext", "#incidents", false);
 
             slackWorkspaceRepository.save(workspace);
@@ -745,6 +790,7 @@ class AuthRepositoryIntegrationTest {
 
         /** A committed admin of its own tenant, for the tests that commit (deleted by {@link #deleteKeyCreator}). */
         private User committedKeyCreator(String tenant, String email) {
+            recordTenant(tenant);
             return userRepository.saveAndFlush(User.forTesting(null, tenant, email, "hashed-password", true,
                     List.of("ROLE_ADMIN")));
         }
@@ -834,6 +880,7 @@ class AuthRepositoryIntegrationTest {
                 + "429 after one second) instead of waiting on a pooled connection (backlog #0-89, review)")
         void keyCreationRefusedWhileCreatorLocked() throws Exception {
             final String tenant = "lock-tenant";
+            recordTenant(tenant);
             final User admin = userRepository.saveAndFlush(User.forTesting(null, tenant,
                     "lock-admin@example.com", "hashed-password", true, List.of("ROLE_ADMIN")));
             final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
@@ -895,6 +942,7 @@ class AuthRepositoryIntegrationTest {
             // A smoke test of the whole path under load; the lock itself is pinned
             // deterministically by keyCreationRefusedWhileCreatorLocked (review).
             final String tenant = "race-tenant";
+            recordTenant(tenant);
             final User admin = userRepository.saveAndFlush(User.forTesting(null, tenant,
                     "race-admin@example.com", "hashed-password", true, List.of("ROLE_ADMIN")));
             final UserPrincipal asAdmin = new UserPrincipal(admin.getId(), tenant, admin.getEmail(),
@@ -1227,6 +1275,7 @@ class AuthRepositoryIntegrationTest {
         @Test
         @DisplayName("break-glass finds only platform-operator users: the same email in another tenant is not found (review of #0-88)")
         void breakGlassOperatorTenantOnly() {
+            recordTenant("acme-bg");
             final User customerAdmin = User.forTesting(null, "acme-bg", "same-email@example.com",
                     "hashed-password", true, List.of("ROLE_ADMIN"));
             customerAdmin.storePendingMfaSecret(mfaEncryptionService.encrypt(totpService.generateSecret()));
@@ -2259,6 +2308,7 @@ class AuthRepositoryIntegrationTest {
             final String cancelToken = sendNotice(admin);
             // A row that disagrees with its user's tenant: the check holds even then.
             final String otherTenant = "recovery-other-" + UUID.randomUUID().toString().substring(0, 6);
+            recordTenant(otherTenant);
             jdbcTemplate.update("UPDATE mfa_recovery_requests SET tenant_id = ? WHERE id = ?",
                     otherTenant, request.getId());
             flushAndClear();
@@ -2925,10 +2975,17 @@ class AuthRepositoryIntegrationTest {
                     "SELECT count(*) FROM users WHERE tenant_id = ?", Integer.class, tenantId)).isEqualTo(1);
         }
 
+        /**
+         * Backlog #0-82: an id whose users are all archived has its tenants row
+         * (V31's foreign key admits no user without one), so the row alone
+         * refuses it; provision() no longer checks the users itself. The
+         * refused insert comes last: it aborts the test's transaction.
+         */
         @Test
-        @DisplayName("provision: an id whose only users are archived is refused, and its row rolled back")
+        @DisplayName("provision: an id whose only users are archived is refused by its tenants row, 409")
         void provisionRefusedForIdWithArchivedUsers() {
             final String tenantId = newTenantId();
+            recordTenant(tenantId);
             jdbcTemplate.update("""
                     INSERT INTO users (id, tenant_id, email, active, archived_at)
                     VALUES (gen_random_uuid(), ?, 'old@acme.example', FALSE, now())
@@ -2936,8 +2993,17 @@ class AuthRepositoryIntegrationTest {
 
             assertThatThrownBy(() -> tenantProvisioningService.provision(
                     new ProvisionTenantRequest(tenantId, "Acme", "new@acme.example"), operator))
-                    .isInstanceOf(BusinessException.class);
+                    .isInstanceOfSatisfying(BusinessException.class,
+                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
             assertThat(userRepository.findByEmailAndTenantId("new@acme.example", tenantId)).isEmpty();
+
+            assertThatThrownBy(() -> jdbcTemplate.update("""
+                    INSERT INTO users (id, tenant_id, email, active, archived_at)
+                    VALUES (gen_random_uuid(), ?, 'old@acme.example', FALSE, now())
+                    """, newTenantId()))
+                    .as("no user without its tenant's row")
+                    .isInstanceOf(DataIntegrityViolationException.class)
+                    .hasMessageContaining("fk_users_tenant");
         }
 
         @Test
@@ -3026,10 +3092,100 @@ class AuthRepositoryIntegrationTest {
                             + "AND column_name = 'tenant_id'", Integer.class)).isGreaterThanOrEqualTo(11);
         }
 
+        /**
+         * Backlog #0-82: a tenant's data cannot exist without its tenants row,
+         * which is what makes the tenant suspendable. A new table with a
+         * tenant_id and no foreign key, or one left NOT VALID, fails here.
+         */
+        @Test
+        @DisplayName("every table with a tenant's data has a validated foreign key to tenants (V31, V32)")
+        void everyTenantIdColumnReferencesTenants() {
+            assertThat(jdbcTemplate.queryForList(TENANT_ID_COLUMNS_WITHOUT_TENANT_FK, String.class)).isEmpty();
+            assertThat(jdbcTemplate.queryForList("""
+                    SELECT conrelid::regclass::text FROM pg_constraint
+                    WHERE contype = 'f' AND convalidated
+                      AND confrelid = (quote_ident(current_schema()) || '.tenants')::regclass
+                    ORDER BY 1
+                    """, String.class))
+                    .as("the nine tables V31 covers, so the query above is not vacuous")
+                    .containsExactly("api_keys", "auth_tokens", "integrations", "mfa_recovery_requests",
+                            "slack_workspaces", "teams", "tenant_settings", "user_roles", "users");
+            assertThat(jdbcTemplate.queryForList("""
+                    SELECT conname FROM pg_constraint
+                    WHERE contype = 'f' AND confrelid = (quote_ident(current_schema()) || '.tenants')::regclass
+                    """, String.class))
+                    .as("the constraints UnrecordedTenantHandler answers with 403")
+                    .containsExactlyInAnyOrderElementsOf(
+                            com.incidentplatform.auth.api.UnrecordedTenantHandler.TENANT_FOREIGN_KEYS);
+        }
+
+        /**
+         * Backlog #0-82 (review): a JPA write for a tenant without a row fails
+         * with an exception that names the constraint, which is what
+         * UnrecordedTenantHandler needs to answer 403 rather than 500. Last
+         * statement of the test: the refusal aborts its transaction.
+         */
+        @Test
+        @DisplayName("a JPA write for an unrecorded tenant names its foreign key, so it is answered 403")
+        void unrecordedTenantWriteNamesItsForeignKey() {
+            final Team team = Team.forTesting(null, newTenantId(), "ops");
+
+            assertThatThrownBy(() -> teamRepository.saveAndFlush(team))
+                    .isInstanceOfSatisfying(DataIntegrityViolationException.class, e -> assertThat(
+                            com.incidentplatform.auth.api.UnrecordedTenantHandler.tenantForeignKey(e))
+                            .contains("fk_teams_tenant"));
+        }
+
+        /**
+         * Deletes a tenant's rows and then its tenants row, children before
+         * parents: recovery requests first (their user_id does not cascade),
+         * users last among the data (roles, tokens, codes and memberships
+         * cascade with them). Only inside a test's own transaction.
+         */
+        private void removeTenantWithinTestTransaction(String tenant) {
+            for (final String table : List.of("mfa_recovery_requests", "integrations", "api_keys",
+                    "slack_workspaces", "tenant_settings", "auth_tokens", "auth_email_outbox", "user_roles",
+                    "teams", "users")) {
+                jdbcTemplate.update("DELETE FROM " + table + " WHERE tenant_id = ?", tenant);
+            }
+            jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", tenant);
+        }
+
+        /**
+         * Backlog #0-82 (second review): most writes are not flushed by the
+         * service but when its transaction commits, where Spring translates
+         * the failure itself. It must still be a DataIntegrityViolationException
+         * naming the constraint, or UnrecordedTenantHandler would let it reach
+         * the shared 500. A UUID id is generated in memory, so save() only
+         * schedules the INSERT and the commit runs it.
+         */
+        @Test
+        @Transactional(propagation = Propagation.NOT_SUPPORTED)
+        @DisplayName("a write for an unrecorded tenant that fails at commit names its foreign key too")
+        void unrecordedTenantWriteFailingAtCommitNamesItsForeignKey() {
+            final String tenantId = newTenantId();
+
+            assertThatThrownBy(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                teamRepository.save(Team.forTesting(null, tenantId, "ops"));
+                assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM teams WHERE tenant_id = ?",
+                        Integer.class, tenantId)).as("not flushed before the commit").isZero();
+            }))
+                    .isInstanceOfSatisfying(DataIntegrityViolationException.class, e -> assertThat(
+                            com.incidentplatform.auth.api.UnrecordedTenantHandler.tenantForeignKey(e))
+                            .contains("fk_teams_tenant"));
+        }
+
+        /**
+         * Backlog #0-82 (review): the tenants row can only go with the tenant's
+         * data (ON DELETE RESTRICT), and a committing test may have left some
+         * behind for the operator tenant, so the row is not simply deleted:
+         * the data goes first, all in this test's transaction, rolled back
+         * afterwards. Independent of the order the tests run in.
+         */
         @Test
         @DisplayName("the operator tenant's bootstrap records its tenant row once")
         void operatorBootstrapRecordsTenant() {
-            jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", ReservedTenants.PLATFORM_OPERATOR);
+            removeTenantWithinTestTransaction(ReservedTenants.PLATFORM_OPERATOR);
             final OperatorTenantBootstrap bootstrap = new OperatorTenantBootstrap("ops-row@example.com",
                     userRepository, authTokenRepository, authEmailOutboxRepository, userService,
                     resendInviteService, tenantRepository, new SimpleMeterRegistry());
@@ -3046,34 +3202,40 @@ class AuthRepositoryIntegrationTest {
          * Outside the test transaction, so provisioning commits or rolls back on
          * its own. The tenants row is inserted first; a failure after it must take
          * the row with it, or the id would be taken by a tenant nobody can log in
-         * to. The failure used here is the guard that follows the insert (an id
-         * whose only user is archived, committed beforehand), so the row is
-         * certainly written before the exception. Fails if provision() loses its
-         * transaction: insertIfAbsent would then commit on its own (found in
-         * review: an earlier version failed on the tenants insert itself and
-         * proved nothing).
+         * to. The failure used here is the audit outbox write, which comes after
+         * both the row and the first admin, so the row is certainly written before
+         * the exception. Fails if provision() loses its transaction: insertIfAbsent
+         * would then commit on its own (found in review: an earlier version failed
+         * on the tenants insert itself and proved nothing). Backlog #0-82: it used
+         * to fail on a pre-existing archived user without a tenants row, which the
+         * foreign keys of V31 no longer allow to exist.
          */
         @Test
         @Transactional(propagation = Propagation.NOT_SUPPORTED)
         @DisplayName("a failure after the tenant insert rolls the tenant row back")
         void failureRollsBackTenant() {
             final String tenantId = newTenantId();
-            jdbcTemplate.update("""
-                    INSERT INTO users (id, tenant_id, email, active, archived_at)
-                    VALUES (gen_random_uuid(), ?, 'old@acme.example', FALSE, now())
-                    """, tenantId);
+            org.mockito.BDDMockito.willThrow(new IllegalStateException("outbox write failed"))
+                    .given(auditEventPublisher).publishAuth(
+                            ArgumentMatchers.any(), ArgumentMatchers.any(),
+                            ArgumentMatchers.any(), ArgumentMatchers.any(),
+                            ArgumentMatchers.any(), ArgumentMatchers.any(),
+                            ArgumentMatchers.any());
             try {
                 assertThatThrownBy(() -> tenantProvisioningService.provision(
                         new ProvisionTenantRequest(tenantId, "Acme", "new@acme.example"), operator))
-                        .isInstanceOf(BusinessException.class);
+                        .isInstanceOf(IllegalStateException.class);
 
                 assertThat(tenantRepository.existsById(tenantId)).isFalse();
                 assertThat(jdbcTemplate.queryForObject(
                         "SELECT count(*) FROM users WHERE tenant_id = ?", Integer.class, tenantId))
-                        .as("only the pre-existing archived user").isEqualTo(1);
+                        .as("the first admin goes with it").isZero();
             } finally {
+                // Only if the rollback did not happen; data before its tenants row.
+                for (final String table : List.of("auth_email_outbox", "auth_tokens", "user_roles", "users")) {
+                    jdbcTemplate.update("DELETE FROM " + table + " WHERE tenant_id = ?", tenantId);
+                }
                 jdbcTemplate.update("DELETE FROM tenants WHERE tenant_id = ?", tenantId);
-                jdbcTemplate.update("DELETE FROM users WHERE tenant_id = ?", tenantId);
             }
         }
     }

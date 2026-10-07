@@ -30,6 +30,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
 
 import java.util.List;
@@ -43,6 +44,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willAnswer;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -128,14 +131,27 @@ class OperatorTenantBootstrapTest {
     }
 
     @Test
-    @DisplayName("a failure recording the tenant does not stop the admin reconciliation")
-    void tenantRecordFailureDoesNotStopReconciliation() {
+    @DisplayName("a failure recording the tenant stops the run: FAILED, nobody invited, the gauge keeps its value "
+            + "(backlog #0-82: no user without its tenant's row)")
+    void tenantRecordFailureStopsReconciliation() {
+        final OperatorTenantBootstrap reconciler = reconciler(EMAIL);
+        noActiveAdmin();
+        given(userRepository.findByEmailAndTenantId(EMAIL, TENANT)).willReturn(Optional.empty());
+        given(userRepository.existsByTenantId(TENANT)).willReturn(false);
+        assertThat(reconciler.reconcile()).isEqualTo(Outcome.INVITED);
+        assertThat(pendingGauge()).isEqualTo(1);
+        clearInvocations(userRepository, userService);
         given(tenantRepository.insertIfAbsent(any(), any(), any(), any()))
-                .willThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
-        given(userRepository.existsActiveAcceptedUserWithRole(TENANT, Role.ROLE_ADMIN))
-                .willReturn(true);
+                .willThrow(new DataAccessResourceFailureException("db down"));
+        // Unused when the run stops as it should; if it went on, it would
+        // answer ADMIN_ACTIVE and set the gauge to 0, both asserted against.
+        lenient().when(userRepository.existsActiveAcceptedUserWithRole(TENANT, Role.ROLE_ADMIN))
+                .thenReturn(true);
 
-        assertThat(reconciler(EMAIL).reconcile()).isEqualTo(Outcome.ADMIN_ACTIVE);
+        assertThat(reconciler.reconcile()).isEqualTo(Outcome.FAILED);
+        assertThat(pendingGauge()).as("last value kept").isEqualTo(1);
+        then(userRepository).shouldHaveNoInteractions();
+        then(userService).shouldHaveNoInteractions();
     }
 
     @Test

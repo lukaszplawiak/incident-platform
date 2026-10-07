@@ -141,18 +141,6 @@ class TenantProvisioningServiceTest {
             verifyNoInteractions(tenantRepository, userService, auditEventPublisher);
         }
 
-        @Test
-        @DisplayName("refuses an id that already has users (archived ones too) with 409, creating no admin")
-        void idWithUsersRefused() {
-            given(tenantRepository.insertIfAbsent(any(), any(), any(), any())).willReturn(1);
-            given(userRepository.existsAnyByTenantId(TENANT)).willReturn(true);
-
-            assertThatThrownBy(() -> service.provision(request(TENANT), OPERATOR))
-                    .isInstanceOfSatisfying(BusinessException.class,
-                            e -> assertThat(e.getHttpStatus()).isEqualTo(HttpStatus.CONFLICT));
-            verifyNoInteractions(userService, auditEventPublisher);
-        }
-
         @ParameterizedTest
         @ValueSource(strings = {"Acme", "ac", "-acme", "acme-", "ac_me", "acme.corp"})
         @DisplayName("refuses a malformed tenant id with 400, before writing anything")

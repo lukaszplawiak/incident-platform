@@ -539,7 +539,7 @@ tests:
               scope: platform
             exp_annotations:
               summary: "A tenant has no row in the tenants table"
-              description: "auth-service checked the status of a tenant without a tenants row in the last 15 minutes; it has full access and cannot be suspended. Find it in the auth-service WARN log (\"Tenant has no row in tenants\") and insert its row.\n"
+              description: "auth-service checked the status of a tenant without a tenants row in the last 15 minutes; it has full access and cannot be suspended. Since V31 no data in auth-service can exist without its tenant's row, so the request carried a token minted outside auth-service's sign-in (outside dev, a leaked JWT secret or a stray token issuer). Find the tenant in the auth-service WARN log (\"Tenant has no row in tenants\") and investigate where its token came from.\n"
 
   # Backlog #0-82 step 2: a service that keeps failing to read tenant status
   # fires after 5 minutes, per service and reason; another client's fallbacks

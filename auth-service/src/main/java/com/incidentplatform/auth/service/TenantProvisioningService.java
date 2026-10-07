@@ -126,18 +126,16 @@ public class TenantProvisioningService {
             throw new BusinessException(ErrorCodes.VALIDATION_FAILED,
                     "Tenant id '" + tenantId + "' is reserved by the platform", HttpStatus.BAD_REQUEST);
         }
+        // The tenants row is the whole guard: a tenant id with any data, users
+        // archived or anonymized included, has its row, since every table
+        // holding a tenant's data has a foreign key to tenants (V31, backlog
+        // #0-82). That replaced a second check here for users without a row
+        // (existsAnyByTenantId, found in review of #0-80), which the foreign
+        // key made unreachable.
         if (tenantRepository.insertIfAbsent(tenantId, displayName, email,
                 operator.userId()) == 0) {
             throw new BusinessException(ErrorCodes.ALREADY_EXISTS,
                     "Tenant '" + tenantId + "' already exists", HttpStatus.CONFLICT);
-        }
-        // Defence in depth (found in review): the tenants row is the guard, and
-        // V21 backfilled it from every user, but a tenant id that somehow has
-        // users without a row must not get a second admin from here. The
-        // exception rolls the row back.
-        if (userRepository.existsAnyByTenantId(tenantId)) {
-            throw new BusinessException(ErrorCodes.ALREADY_EXISTS,
-                    "Tenant id '" + tenantId + "' already has users", HttpStatus.CONFLICT);
         }
 
         final CreateUserResponse admin = inTenant(tenantId, () -> userService.createUser(

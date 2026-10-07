@@ -500,7 +500,12 @@ Summary; details in [Resilience & Security](#security).
   a suspended tenant itself, as it reaches incident-service with a service token, which the status filter lets
   through. Alerts `TenantPauseSyncFailing` (runs failing) and `TenantPauseSyncStalled` (no instance completed a
   run in 5 minutes). Audited in both tenants, alerted on every change
-  (`PlatformTenantSuspensionChanged`, critical). Deactivating a single user now also ends their sessions, and a
+  (`PlatformTenantSuspensionChanged`, critical). Every auth-service table holding a tenant's data has a foreign key
+  to `tenants` (V31/V32, `ON DELETE RESTRICT`; not the auth email and audit outboxes), so no tenant can have data
+  without the row that makes it suspendable; a token naming a tenant with no row (only one minted outside
+  auth-service, e.g. `/dev/token`) still gets full access, counted and alerted (`PlatformTenantStatusRowMissing`),
+  and its first write in auth-service is answered 403, not 500 (`UnrecordedTenantHandler`). V31 names every tenant
+  id it had to record in a warning in auth-service's log. Deactivating a single user now also ends their sessions, and a
   refresh or a personal API key of a deactivated user is refused (until then deactivation only stopped new logins).
 - **Audit trail through an outbox** (backlog #0-84, every service with audit events: auth-, incident-,
   notification-, escalation-, postmortem-service): an audit event is a row in the service's own outbox table,
@@ -637,8 +642,6 @@ Open items from the audit and earlier, most important first within each area. Ea
     service gives full access to a tenant it never had a status for, e.g. every tenant after its own restart
     (fail-open by decision, alerted `TenantStatusLookupFailing`); a tenant resumed during the outage stays refused
     there until auth-service answers: backlog #0-82.
-  - A tenant with users but no `tenants` row (none should exist) has full access and cannot be suspended; counted,
-    alerted (`PlatformTenantStatusRowMissing`) and logged once: backlog #0-82 (a foreign key would close it).
   - The bound on sign-ins refused for suspension (a few per user, then 429 without an audit event) lives in Redis
     and fails open like the other Redis limits: while Redis is down every refusal is audited, so a user replaying a
     refused invite or reset link can grow the tenant's audit trail; parallel refusals can also overshoot the bound a
@@ -662,7 +665,7 @@ Open items from the audit and earlier, most important first within each area. Ea
   - The public token endpoints (`reset-password`, `accept-invite`, `mfa-recovery/cancel`) have no request limit:
     a token is 32 random bytes, single-use, so guessing is out of reach, but an unauthenticated flood still costs a
     lookup and a log line each: backlog #0-99.
-  - A tenant id with data in other services but no user in auth-service can be provisioned, and its admin would
+  - A tenant id with data in other services but no data in auth-service can be provisioned, and its admin would
     see that data; the operator guide says to check first: backlog #0-85.
 - **Project**
   - No `SECURITY.md`, no private vulnerability reporting, no Dependabot alerts: backlog #0-74.
@@ -1582,6 +1585,7 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `TenantKafkaProducerInterceptorTest` (shared) | The interceptor writes no header any more: it counts records without a valid one, except a dead-letter record marked as tenant-less (`TenantRecords.withoutTenant`); the topic name alone exempts nothing (backlog #0-91) |
 | `TenantKafkaConsumerInterceptorTest`, `TenantKafkaRecordInterceptorTest` (shared) | Validation only on the poll thread (nothing dropped or rewritten); the MDC takes only a valid header (`_missing` / `_invalid` otherwise) and no metric is tagged with a record's value (backlog #0-92) |
 | Tenant-id CHECK guard (every service's Postgres integration test) | Every table with a `tenant_id` carries the slug `CHECK`; a new table without one fails (backlog #0-92) |
+| Tenant foreign-key guard (`AuthRepositoryIntegrationTest`), `TenantForeignKeysMigrationTest`, `UnrecordedTenantHandlerTest` (auth-service) | Every auth-service table with a tenant's data has a validated foreign key to `tenants`, named in `UnrecordedTenantHandler`; V31 records each orphaned id (one per table seeded) and names it in a warning, its keys already refuse a new orphan before V32 validates them, and a tenants row with data cannot be deleted; a write refused by one of them is 403, any other integrity error the shared 500 (backlog #0-82) |
 | `PausedTenantsTest` (shared, Postgres) | The paused-tenants SQL: a new pause starting at the suspension's time from auth-service, an unchanged one and a change of mode that keeps its start; full access and a bad tenant id refused; a resumption commits the service's hook with the row's deletion or rolls both back (backlog #0-82) |
 | `PausedTenantsSyncTest`, `TenantWorkGuardTest`, `PausedTenantsConfigurationTest` (shared) | Pause sync: paused tenants and tenants with work asked together in id order, each once, a cut-short run continued by the next (paused tenants rotate too); `tenant.pause.sync.runs` counts completed runs only; only auth-service's own answer pauses or resumes (`confirmedStateOf`), so an outage changes nothing; one tenant's failure isolated; budget and lock; the per-row check uses `accessOf` (re-asked when expired or never cached), not `knownAccessOf`, and a batch's tenants are prefetched in parallel, at most 8 at a time, waiting at most its limit and never failing the run; the pause takes auth-service's suspension time; a `tenant-pause.table` other than the service's query table stops startup; `tenant-pause.table` without a `PausableWork` fails startup (backlog #0-82) |
 | `TenantStatusProviderTest`, `AuthServiceTenantStatusProviderTest` (shared) | `confirmedStateOf`: auth-service's answer with its suspension time (`since`, ISO-8601 on the wire, left out for full access), the last one kept through an outage, and empty (not the fail-open FULL) for a tenant never answered for (backlog #0-82) |
