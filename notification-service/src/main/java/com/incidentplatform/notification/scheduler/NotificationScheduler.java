@@ -1,5 +1,6 @@
 package com.incidentplatform.notification.scheduler;
 
+import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.client.OncallLookupUnavailableException;
 import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.config.NotificationSchedulerProperties;
@@ -54,8 +55,13 @@ public class NotificationScheduler {
     static final String LOCK_AT_MOST_FOR = "4m";
     static final Duration LOCK_AT_MOST_FOR_DURATION = Duration.ofMinutes(4);
 
-    /** Room left for the entry in flight when the budget runs out. */
-    private static final Duration LOCK_MARGIN = Duration.ofSeconds(30);
+    /**
+     * Room left for the entry in flight when the budget runs out: its database
+     * work and the channels that do not say how long they take; a channel that
+     * does ({@link NotificationChannel#worstCaseSendTime}, Slack's retries) adds
+     * its own on top (review of backlog #0-103).
+     */
+    static final Duration LOCK_MARGIN = Duration.ofSeconds(30);
 
     private static final Logger log =
             LoggerFactory.getLogger(NotificationScheduler.class);
@@ -77,7 +83,8 @@ public class NotificationScheduler {
             NotificationPersistenceService persistenceService,
             SlackMessageStore messageStore,
             TenantWorkGuard workGuard,
-            NotificationSchedulerProperties properties) {
+            NotificationSchedulerProperties properties,
+            List<NotificationChannel> channels) {
         this.queueRepository = queueRepository;
         this.notificationService = notificationService;
         this.persistenceService = persistenceService;
@@ -85,7 +92,7 @@ public class NotificationScheduler {
         this.workGuard = workGuard;
         this.pendingThreshold = properties.pendingThreshold();
         this.lookupRetryWindow = properties.lookupRetryWindow();
-        this.processingBudget = validated(properties.processingBudget());
+        this.processingBudget = validated(properties.processingBudget(), worstCaseSends(channels));
         this.batchSize = properties.batchSize();
         this.slackMessageTsRetention = properties.slackMessageTsRetention();
     }
@@ -96,17 +103,34 @@ public class NotificationScheduler {
      * otherwise silently bring back the double processing across replicas that the
      * budget exists to prevent: another replica takes the lock while this run is
      * still walking the same PENDING entries.
+     *
+     * <p>The budget is checked between entries, so the lock must also outlast the
+     * entry started just before the budget ran out: {@link #LOCK_MARGIN}, plus the
+     * time the channels say a send can take at most. Review of backlog #0-103: once
+     * Slack's retry ran on the send path, a Slack that hangs costs three attempts of
+     * connect and read timeout per call, twice per entry (broadcast and DM), which
+     * the fixed 30 s margin alone did not cover.
+     *
+     * @param worstCaseSends the longest the channels' sends of one entry can take
+     *                       beyond {@link #LOCK_MARGIN}
      */
-    private static Duration validated(Duration budget) {
-        final Duration limit = LOCK_AT_MOST_FOR_DURATION.minus(LOCK_MARGIN);
+    static Duration validated(Duration budget, Duration worstCaseSends) {
+        final Duration limit = LOCK_AT_MOST_FOR_DURATION.minus(LOCK_MARGIN).minus(worstCaseSends);
         if (budget.isZero() || budget.isNegative() || budget.compareTo(limit) > 0) {
             throw new IllegalArgumentException(
                     "notification.scheduler.processing-budget must be positive and at most " +
                             limit + " (the lock duration " + LOCK_AT_MOST_FOR_DURATION +
-                            " minus a " + LOCK_MARGIN + " margin for the entry in flight), was " +
-                            budget);
+                            " minus a " + LOCK_MARGIN + " margin and the " + worstCaseSends +
+                            " the channels' sends of the entry in flight can take, e.g. Slack's retries " +
+                            "and timeouts), was " + budget);
         }
         return budget;
+    }
+
+    private static Duration worstCaseSends(List<NotificationChannel> channels) {
+        return channels.stream()
+                .map(NotificationChannel::worstCaseSendTime)
+                .reduce(Duration.ZERO, Duration::plus);
     }
 
     /**

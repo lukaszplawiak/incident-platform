@@ -27,7 +27,7 @@ import java.time.Duration;
  *     interval-ms: ${NOTIFICATION_SCHEDULER_INTERVAL_MS:30000}
  *     slack-message-ts-retention: ${NOTIFICATION_SLACK_TS_RETENTION:P7D}
  *     lookup-retry-window: ${NOTIFICATION_LOOKUP_RETRY_WINDOW:PT10M}
- *     processing-budget: ${NOTIFICATION_SCHEDULER_PROCESSING_BUDGET:PT3M}
+ *     processing-budget: ${NOTIFICATION_SCHEDULER_PROCESSING_BUDGET:PT2M30S}
  *     batch-size: ${NOTIFICATION_SCHEDULER_BATCH_SIZE:200}
  * }</pre>
  */
@@ -71,7 +71,8 @@ public record NotificationSchedulerProperties(
          * leaves the rest for the next cycle. Must stay below the ShedLock
          * {@code lockAtMostFor} (4 minutes): a run that outlives the lock lets a second
          * replica start on the same PENDING entries. At least one entry is always
-         * processed per run. Default: PT3M.
+         * processed per run. Default: PT2M30S (PT3M until the review of backlog #0-103: the lock
+         * must also cover Slack's retries for the entry in flight, see {@code NotificationScheduler}).
          */
         @NotNull(message = "notification.scheduler.processing-budget must not be null")
         Duration processingBudget,

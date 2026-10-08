@@ -202,7 +202,7 @@ public class SlackActionService {
      * still-clickable button) permanently, the one piece of tracking
      * data ({@code SlackMessageTs}) a future retry mechanism would need
      * was deleted anyway, and nothing durable recorded that this
-     * happened — see {@link SlackNotificationChannel#updateMessageFallback}'s
+     * happened — see {@code SlackApiClient#updateMessageFallback}'s
      * own Javadoc for the other half of this fix.
      *
      * <h2>Fixed (backlog #0-21): the ACK update now uses the acknowledging
@@ -360,7 +360,7 @@ public class SlackActionService {
 
     /**
      * @return true if the update succeeded, false if it failed after
-     *         {@link SlackNotificationChannel}'s own retries were
+     *         {@code SlackApiClient}'s retries (backlog #0-103) were
      *         exhausted (its fallback rethrows {@link NotificationException}
      *         rather than swallowing it — see that method's own Javadoc).
      */
@@ -373,10 +373,16 @@ public class SlackActionService {
                     channel, messageTs, acknowledgedByName, request, botToken);
             return true;
         } catch (NotificationException e) {
-            // Already logged with full detail inside updateMessageFallback —
-            // this class's own log.error above summarizes across all
-            // channels once the whole batch is done, so nothing further
-            // is logged here to avoid duplicate noise for the same failure.
+            // Logged here, once per channel (backlog #0-103: SlackApiClient's
+            // fallback no longer logs, as the send path's caller already did),
+            // the way NotificationService logs a failed send: WARN when the
+            // reason is the tenant's to fix, ERROR when it is the platform's.
+            final String line = "Failed to update Slack message after ACK: channel={}, ts={}, reason={}";
+            if (e.reason().permanent()) {
+                log.warn(line, channel, messageTs, e.recordedText(), e.getCause());
+            } else {
+                log.error(line, channel, messageTs, e.recordedText(), e.getCause());
+            }
             return false;
         } catch (RuntimeException e) {
             // Backlog #0-93 (found in review): the fallback now rethrows an

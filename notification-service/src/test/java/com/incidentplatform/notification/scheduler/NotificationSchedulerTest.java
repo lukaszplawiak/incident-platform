@@ -1,5 +1,6 @@
 package com.incidentplatform.notification.scheduler;
 
+import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.client.OncallLookupUnavailableException;
 import com.incidentplatform.notification.client.SlackWorkspaceLookupUnavailableException;
 import com.incidentplatform.notification.config.NotificationSchedulerProperties;
@@ -32,12 +33,15 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.BDDMockito.willThrow;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 
 /**
@@ -76,7 +80,7 @@ class NotificationSchedulerTest {
                 new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMinutes(3), 200);
         scheduler = new NotificationScheduler(
                 queueRepository, notificationService, persistenceService,
-                messageStore, workGuard, properties);
+                messageStore, workGuard, properties, List.of());
     }
 
     @AfterEach
@@ -111,7 +115,7 @@ class NotificationSchedulerTest {
         given(guard.mayRun(anyString())).willReturn(true);
         final NotificationScheduler prefetching = new NotificationScheduler(queueRepository, notificationService,
                 persistenceService, messageStore, guard, new NotificationSchedulerProperties(Duration.ofSeconds(30),
-                Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMinutes(3), 200));
+                Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMinutes(3), 200), List.of());
         final NotificationQueueEntry entry = buildPendingEntry();
         given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(entry));
 
@@ -133,7 +137,7 @@ class NotificationSchedulerTest {
         }).given(guard).prefetch(org.mockito.ArgumentMatchers.any());
         final NotificationScheduler tight = new NotificationScheduler(queueRepository, notificationService,
                 persistenceService, messageStore, guard, new NotificationSchedulerProperties(Duration.ofSeconds(30),
-                Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMillis(20), 200));
+                Duration.ofDays(7), Duration.ofMinutes(10), Duration.ofMillis(20), 200), List.of());
         final NotificationQueueEntry first = buildPendingEntry();
         final NotificationQueueEntry second = buildPendingEntry();
         given(queueRepository.findPendingOlderThan(any(), any())).willReturn(List.of(first, second));
@@ -345,7 +349,7 @@ class NotificationSchedulerTest {
                     Duration.ofMinutes(4), Duration.ofMinutes(5))) {
                 org.assertj.core.api.Assertions.assertThatThrownBy(() -> new NotificationScheduler(
                                 queueRepository, notificationService, persistenceService,
-                                messageStore, workGuard, props(bad)))
+                                messageStore, workGuard, props(bad), List.of()))
                         .as("budget %s", bad)
                         .isInstanceOf(IllegalArgumentException.class);
             }
@@ -356,7 +360,59 @@ class NotificationSchedulerTest {
         void acceptsABudgetBelowTheLock() {
             org.assertj.core.api.Assertions.assertThatCode(() -> new NotificationScheduler(
                             queueRepository, notificationService, persistenceService,
-                            messageStore, workGuard, props(Duration.ofMinutes(3))))
+                            messageStore, workGuard, props(Duration.ofMinutes(3)), List.of()))
+                    .doesNotThrowAnyException();
+        }
+
+        /**
+         * Review of backlog #0-103: the budget is checked between entries, so the
+         * lock must also outlast the entry in flight, whose Slack send now retries.
+         */
+        @Test
+        @DisplayName("the channels' worst-case send counts against the lock too: a budget that fits the 30 s "
+                + "margin alone is rejected once Slack's retries are added, and named in the message")
+        void channelsWorstCaseSendCountsAgainstTheLock() {
+            final NotificationChannel slowChannel = mock(NotificationChannel.class);
+            given(slowChannel.worstCaseSendTime()).willReturn(Duration.ofSeconds(51));
+            final NotificationChannel quickChannel = mock(NotificationChannel.class);
+            given(quickChannel.worstCaseSendTime()).willReturn(Duration.ZERO);
+
+            assertThatThrownBy(() -> new NotificationScheduler(
+                            queueRepository, notificationService, persistenceService,
+                            messageStore, workGuard, props(Duration.ofMinutes(3)), List.of(slowChannel, quickChannel)))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("PT2M39S")
+                    .hasMessageContaining("PT51S");
+            assertThatCode(() -> new NotificationScheduler(
+                            queueRepository, notificationService, persistenceService,
+                            messageStore, workGuard, props(Duration.ofSeconds(159)), List.of(slowChannel, quickChannel)))
+                    .doesNotThrowAnyException();
+        }
+
+        @Test
+        @DisplayName("the channels' worst cases are added up")
+        void worstCasesAreSummed() {
+            assertThatThrownBy(() -> NotificationScheduler.validated(
+                            Duration.ofSeconds(150), Duration.ofSeconds(61)))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(NotificationScheduler.validated(
+                            Duration.ofSeconds(150), Duration.ofSeconds(60)))
+                    .isEqualTo(Duration.ofSeconds(150));
+        }
+
+        @Test
+        @DisplayName("a channel that says nothing of its send time adds nothing beyond the margin")
+        void channelDefaultAddsNothing() {
+            final NotificationChannel plain = new NotificationChannel() {
+                @Override public String channelName() { return "PLAIN"; }
+                @Override public void send(com.incidentplatform.notification.dto.NotificationRequest request) { }
+                @Override public boolean isEnabled() { return true; }
+            };
+
+            assertThat(plain.worstCaseSendTime()).isZero();
+            assertThatCode(() -> new NotificationScheduler(
+                            queueRepository, notificationService, persistenceService,
+                            messageStore, workGuard, props(Duration.ofSeconds(210)), List.of(plain)))
                     .doesNotThrowAnyException();
         }
     }
@@ -371,7 +427,7 @@ class NotificationSchedulerTest {
             final NotificationScheduler tight = new NotificationScheduler(
                     queueRepository, notificationService, persistenceService, messageStore, workGuard,
                     new NotificationSchedulerProperties(Duration.ofSeconds(30), Duration.ofDays(7),
-                            Duration.ofMinutes(10), Duration.ofNanos(1), 200));
+                            Duration.ofMinutes(10), Duration.ofNanos(1), 200), List.of());
             final NotificationQueueEntry first = buildPendingEntry();
             final NotificationQueueEntry second = buildPendingEntry();
             final NotificationQueueEntry third = buildPendingEntry();

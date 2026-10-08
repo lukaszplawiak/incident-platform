@@ -52,7 +52,7 @@ class EmailNotificationChannelTest {
         final NotificationChannelProperties properties = new NotificationChannelProperties(
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, FROM_ADDRESS),
-                        new NotificationChannelProperties.Slack(true, "secret", "http://localhost"),
+                        new NotificationChannelProperties.Slack(true, "secret", "http://localhost", null, null),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 new NotificationChannelProperties.OperatorAlert("operator@test.com", null));
         channel = new EmailNotificationChannel(mailSender, properties);
@@ -82,7 +82,7 @@ class EmailNotificationChannelTest {
                             new NotificationChannelProperties(
                                     new NotificationChannelProperties.Channels(
                                             new NotificationChannelProperties.Email(false, FROM_ADDRESS),
-                                            new NotificationChannelProperties.Slack(true, "secret", "http://localhost"),
+                                            new NotificationChannelProperties.Slack(true, "secret", "http://localhost", null, null),
                                             new NotificationChannelProperties.Sms(true, "+1234")),
                                     new NotificationChannelProperties.OperatorAlert("operator@test.com", null)));
             assertThat(disabled.isEnabled()).isFalse();

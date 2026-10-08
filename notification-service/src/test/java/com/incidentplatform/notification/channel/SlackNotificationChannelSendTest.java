@@ -9,6 +9,7 @@ import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.slack.SlackMessageStore;
 import com.incidentplatform.shared.domain.Severity;
+import io.github.resilience4j.retry.RetryRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 import java.net.http.HttpClient;
@@ -43,7 +43,7 @@ import static org.mockito.Mockito.times;
 
 /**
  * Regression test for the bug documented in {@link SlackNotificationChannel#send}:
- * the Slack message {@code ts} returned by {@code postIncidentMessage} (then {@code sendWithAckButton}) was
+ * the Slack message {@code ts} returned by {@code postIncidentMessage} (now {@link SlackApiClient#postMessage}) was
  * previously discarded entirely — {@link SlackMessageStore#save} was never
  * called anywhere in the codebase, so the "update every Slack message for
  * this incident after ACK" feature never worked in any deployment (not a
@@ -103,7 +103,7 @@ class SlackNotificationChannelSendTest {
                 new NotificationChannelProperties.Channels(
                         new NotificationChannelProperties.Email(true, "alerts@test.com"),
                         new NotificationChannelProperties.Slack(
-                                true, "signing-secret", "http://localhost:" + wireMock.port()),
+                                true, "signing-secret", "http://localhost:" + wireMock.port(), null, null),
                         new NotificationChannelProperties.Sms(true, "+1234567890")),
                 new NotificationChannelProperties.OperatorAlert("operator@test.com", null));
 
@@ -118,15 +118,17 @@ class SlackNotificationChannelSendTest {
         // JdkClientHttpRequestFactory defaults to HTTP/2 which causes
         // RST_STREAM errors against WireMock (same fix already applied in
         // IncidentAckClientTest/OncallClientImplTest).
-        final HttpClient httpClient = HttpClient.newBuilder()
-                .version(HttpClient.Version.HTTP_1_1)
-                .connectTimeout(Duration.ofSeconds(3))
-                .build();
+        // Built with new, so without Spring's proxy: no retry and no fallback
+        // here. What they add is SlackApiClientResilienceTest's (backlog #0-103).
+        final SlackApiClient slackApi = new SlackApiClient(
+                RestClient.builder(),
+                HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1),
+                new ObjectMapper(),
+                properties,
+                RetryRegistry.ofDefaults());
 
         return new SlackNotificationChannel(
-                RestClient.builder()
-                        .requestFactory(new JdkClientHttpRequestFactory(httpClient)),
-                new ObjectMapper(),
+                slackApi,
                 properties,
                 messageStore,
                 slackWorkspaceClient,
@@ -136,6 +138,39 @@ class SlackNotificationChannelSendTest {
     @AfterEach
     void tearDown() {
         wireMock.stop();
+    }
+
+    @Test
+    @DisplayName("a send's worst case is two calls' (broadcast and DM), each with its retries (review of #0-103)")
+    void worstCaseSendIsTwoCalls() {
+        // RetryRegistry.ofDefaults(): 3 attempts, 500 ms apart; default timeouts 3 s + 5 s.
+        assertThat(channel.worstCaseSendTime()).isEqualTo(Duration.ofSeconds(25).multipliedBy(2));
+    }
+
+    /** Pins the count NotificationScheduler's lock check multiplies by (third review of #0-103). */
+    @Test
+    @DisplayName("a send with the broadcast and a DM makes exactly MAX_CALLS_PER_SEND Slack calls")
+    void sendMakesAtMostMaxCalls() {
+        channel.send(buildRequest("U0123456789"));
+
+        wireMock.verify(SlackNotificationChannel.MAX_CALLS_PER_SEND,
+                postRequestedFor(urlPathEqualTo("/chat.postMessage")));
+    }
+
+    @Test
+    @DisplayName("a disabled Slack channel adds nothing to the scheduler's worst case")
+    void disabledChannelHasNoWorstCase() {
+        final NotificationChannelProperties disabled = new NotificationChannelProperties(
+                new NotificationChannelProperties.Channels(
+                        new NotificationChannelProperties.Email(true, "alerts@test.com"),
+                        new NotificationChannelProperties.Slack(false, "signing-secret", "http://localhost", null, null),
+                        new NotificationChannelProperties.Sms(true, "+1234567890")),
+                null);
+        final SlackApiClient slackApi = new SlackApiClient(RestClient.builder(), HttpClient.newBuilder(),
+                new ObjectMapper(), disabled, RetryRegistry.ofDefaults());
+
+        assertThat(new SlackNotificationChannel(slackApi, disabled, messageStore, slackWorkspaceClient, meterRegistry)
+                .worstCaseSendTime()).isZero();
     }
 
     @Test
@@ -336,7 +371,7 @@ class SlackNotificationChannelSendTest {
         slackAnswers("/chat.postMessage", "{\"ok\":false,\"error\":\"Bad Thing\\nforged line\"}");
 
         final ch.qos.logback.classic.Logger logger =
-                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SlackNotificationChannel.class);
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SlackApiClient.class);
         final ch.qos.logback.classic.Level level = logger.getLevel();
         final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
                 new ch.qos.logback.core.read.ListAppender<>();
@@ -400,25 +435,6 @@ class SlackNotificationChannelSendTest {
                         assertThat(e.detail()).isEqualTo(code);
                     });
         }
-    }
-
-    /**
-     * Second review: send() calls postIncidentMessage on itself, past the retry
-     * proxy and its fallback, so an HTTP error must be classified there too, not
-     * reach the caller raw (recorded as an unexpected error).
-     */
-    @Test
-    @DisplayName("an HTTP error on the send path is classified by its status, Slack's body not kept")
-    void httpErrorOnSendPath() {
-        wireMock.stubFor(post(urlPathEqualTo("/chat.postMessage"))
-                .willReturn(aResponse().withStatus(401).withBody("{\"error\":\"secret body\"}")));
-
-        assertThatThrownBy(() -> channel.send(buildRequest("U0123456789")))
-                .isInstanceOfSatisfying(NotificationException.class, e -> {
-                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_AUTH_FAILED);
-                    assertThat(e.detail()).isEqualTo("http_401");
-                })
-                .hasMessageNotContaining("secret");
     }
 
     /**
