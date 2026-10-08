@@ -2,20 +2,15 @@ package com.incidentplatform.notification.scheduler;
 
 import com.incidentplatform.notification.channel.SlackApiClient;
 import com.incidentplatform.notification.channel.SlackNotificationChannel;
+import com.incidentplatform.notification.support.ApplicationYml;
 import io.github.resilience4j.retry.RetryRegistry;
 import io.github.resilience4j.springboot3.retry.autoconfigure.RetryAutoConfiguration;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.context.properties.bind.Binder;
-import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.core.env.ConfigurableEnvironment;
-import org.springframework.core.env.PropertySource;
-import org.springframework.core.io.ClassPathResource;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -39,7 +34,7 @@ class NotificationSchedulerDefaultsTest {
     @DisplayName("budget + 30 s margin + Slack's worst-case send (its calls with the real retry) fits the 4-minute lock")
     void shippedDefaultsFitTheLock() {
         new ApplicationContextRunner()
-                .withInitializer(context -> onlyApplicationYml(context.getEnvironment()))
+                .withInitializer(context -> ApplicationYml.only(context.getEnvironment()))
                 .withConfiguration(AutoConfigurations.of(RetryAutoConfiguration.class))
                 .run(context -> {
                     final Binder yml = Binder.get(context.getEnvironment());
@@ -62,21 +57,5 @@ class NotificationSchedulerDefaultsTest {
                     assertThatCode(() -> NotificationScheduler.validated(budget, send))
                             .doesNotThrowAnyException();
                 });
-    }
-
-    /**
-     * application.yml alone, every {@code ${VAR:default}} left to its default: no
-     * variable of the machine running the test may change what is checked.
-     */
-    private static void onlyApplicationYml(ConfigurableEnvironment environment) {
-        environment.getPropertySources().stream().map(PropertySource::getName).toList()
-                .forEach(environment.getPropertySources()::remove);
-        try {
-            new YamlPropertySourceLoader()
-                    .load("application.yml", new ClassPathResource("application.yml"))
-                    .forEach(environment.getPropertySources()::addLast);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
     }
 }

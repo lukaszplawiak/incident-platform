@@ -2,6 +2,8 @@ package com.incidentplatform.notification.channel;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.core.IntervalFunction;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.retry.RetryRegistry;
@@ -136,6 +138,20 @@ class SlackApiClientTest {
 
             final IllegalArgumentException bug = new IllegalArgumentException("a bug");
             assertThatThrownBy(() -> SlackApiClient.failure("#c", bug)).isSameAs(bug);
+        }
+
+        @Test
+        @DisplayName("an open breaker is SLACK_UNAVAILABLE with its own code, circuit_open (backlog #0-104)")
+        void openBreaker() {
+            final CallNotPermittedException open = CallNotPermittedException.createCallNotPermittedException(
+                    CircuitBreaker.ofDefaults(SlackApiClient.CIRCUIT_BREAKER_NAME));
+
+            assertThat(SlackApiClient.failure("#c", open)).satisfies(e -> {
+                assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_UNAVAILABLE);
+                assertThat(e.reason().permanent()).isFalse();
+                assertThat(e.detail()).isEqualTo("circuit_open");
+                assertThat(e.getCause()).isSameAs(open);
+            });
         }
 
         @Test

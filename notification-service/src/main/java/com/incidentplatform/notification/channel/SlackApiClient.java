@@ -4,6 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.core.functions.Either;
 import io.github.resilience4j.retry.RetryConfig;
 import io.github.resilience4j.retry.RetryRegistry;
@@ -26,7 +28,8 @@ import java.util.Set;
 
 /**
  * The two Slack Web API calls the platform makes, {@code chat.postMessage} and
- * {@code chat.update}, each retried and its failure classified.
+ * {@code chat.update}, each retried behind a circuit breaker and its failure
+ * classified.
  *
  * <h2>Why a bean of its own (backlog #0-103)</h2>
  * The calls and their {@code @Retry} used to be methods of {@link
@@ -47,6 +50,23 @@ import java.util.Set;
  * cheap, a lost one is a page nobody got. Retried are network errors (incl. the
  * timeouts below) and 5xx, per {@code resilience4j.retry.instances.slack}; an
  * {@code "ok": false} answer, a 4xx and a 429 are not.
+ *
+ * <h2>Circuit breaker (backlog #0-104)</h2>
+ * With the retry and the timeouts of #0-103, a Slack that accepts connections
+ * and does not answer cost every entry about 51 s, so the scheduler sent about
+ * three entries per run and every other tenant's email and SMS waited; the ACK
+ * updates held {@code slackTaskExecutor}'s threads as long. The {@code slack}
+ * breaker opens after network errors and 5xx (nothing a tenant's own
+ * workspace answers counts; nor do Slack's own {@code ok:false} outage codes
+ * or a 200 that cannot be read, which answer at once and which a {@link
+ * NotificationException} does not tell from a tenant's), and the calls then
+ * fail at once as {@code SLACK_UNAVAILABLE} ({@code circuit_open}) until a
+ * trial call succeeds. It has
+ * no fallback of its own: Resilience4j puts the retry around it, an open
+ * breaker's {@link CallNotPermittedException} is not retried, and the retry's
+ * fallback classifies it. Accepted: while it is open, Slack messages fail
+ * without being tried, and nothing sends them later (#0-32). The scheduler's
+ * lock check still counts the closed breaker's worst case, the longest.
  *
  * <h2>Timeouts (backlog #0-103)</h2>
  * The client used to be built from the bare {@code RestClient.Builder}, which
@@ -70,6 +90,9 @@ public class SlackApiClient {
 
     /** The {@code resilience4j.retry.instances} entry both calls use. */
     public static final String RETRY_NAME = "slack";
+
+    /** The {@code resilience4j.circuit-breaker.instances} entry both calls use (backlog #0-104). */
+    public static final String CIRCUIT_BREAKER_NAME = "slack";
 
     /** Slack's {@code error} codes it documents as worth trying again later. */
     private static final Set<String> TRANSIENT_ERRORS =
@@ -163,6 +186,7 @@ public class SlackApiClient {
      * @throws NotificationException when Slack did not post it (after the retries)
      */
     @Retry(name = RETRY_NAME, fallbackMethod = "postMessageFallback")
+    @CircuitBreaker(name = CIRCUIT_BREAKER_NAME)
     public String postMessage(String channel, Map<String, Object> message, String botToken) {
         final Map<String, Object> payload = new LinkedHashMap<>(message);
         payload.put("channel", channel);
@@ -175,6 +199,7 @@ public class SlackApiClient {
      * @throws NotificationException when Slack did not update it (after the retries)
      */
     @Retry(name = RETRY_NAME, fallbackMethod = "updateMessageFallback")
+    @CircuitBreaker(name = CIRCUIT_BREAKER_NAME)
     public void updateMessage(String channel, String ts, Map<String, Object> message, String botToken) {
         final Map<String, Object> payload = new LinkedHashMap<>(message);
         payload.put("channel", channel);
@@ -300,6 +325,13 @@ public class SlackApiClient {
         if (cause instanceof RestClientException) {
             return new NotificationException("SLACK", channel,
                     NotificationFailureReason.SLACK_UNAVAILABLE, cause);
+        }
+        if (cause instanceof CallNotPermittedException) {
+            // Backlog #0-104: the breaker is open, Slack was not called. Not the
+            // tenant's; its own code, so the log and the counter tell it from a
+            // call that was made and failed.
+            return new NotificationException("SLACK", channel,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, "circuit_open", cause);
         }
         if (cause instanceof RuntimeException unexpected) {
             throw unexpected;

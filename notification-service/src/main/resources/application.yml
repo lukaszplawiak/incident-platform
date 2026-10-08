@@ -327,6 +327,40 @@ resilience4j:
           - org.springframework.web.client.ResourceAccessException
           - org.springframework.web.client.HttpServerErrorException
 
+      # SlackApiClient's chat.postMessage and chat.update (backlog #0-104). Same idea as
+      # the breakers above, but without a fallback of its own: Resilience4j wraps the
+      # retry around the breaker, so each attempt passes it, and an open breaker's
+      # CallNotPermittedException goes, unretried, to the retry's fallback (SLACK_UNAVAILABLE,
+      # circuit_open). A fallback here would hide the failure from the retry (the question of
+      # backlog #0-23). Only network errors and 5xx count. Ignored, so they never open it: a
+      # tenant's revoked token, a channel the bot is not in, a rate limit (4xx, 429, ok:false)
+      # - Slack answering, and no one tenant may open it for the others - and also Slack's
+      # own ok:false outage codes (internal_error, service_unavailable) and a 200 that cannot
+      # be read: each of those answers at once, so it does not hold the scheduler, and
+      # NotificationException does not tell them from a tenant's own. While it is open, Slack
+      # messages fail at once and are not sent later (backlog #0-32), accepted: they were lost
+      # after the retries anyway, and every other channel no longer waits about 51 s per entry.
+      slack:
+        # Second review: a channel's outage must not mark the service DOWN (the reason
+        # management.health.mail is disabled above); its state stays in the metrics
+        # (resilience4j_circuitbreaker_state, alert SlackCircuitOpen).
+        register-health-indicator: false
+        # Time-based (review): a count window would join two failed messages hours apart.
+        # Each attempt is a call, so 5 means at least two messages whose attempts failed.
+        sliding-window-type: TIME_BASED
+        sliding-window-size: 60
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 1
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - org.springframework.web.client.HttpServerErrorException
+        ignore-exceptions:
+          - org.springframework.web.client.HttpClientErrorException
+          - com.incidentplatform.notification.channel.NotificationException
+
   retry:
     instances:
       # SlackApiClient's chat.postMessage and chat.update. Backlog #0-103: until then the

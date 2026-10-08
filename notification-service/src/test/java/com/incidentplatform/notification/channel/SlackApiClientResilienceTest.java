@@ -9,8 +9,12 @@ import com.incidentplatform.notification.client.SlackWorkspaceClient;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.dto.NotificationRequest;
 import com.incidentplatform.notification.slack.SlackMessageStore;
+import com.incidentplatform.notification.support.ApplicationYml;
 import com.incidentplatform.shared.domain.Severity;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
 import io.github.resilience4j.retry.RetryRegistry;
+import io.github.resilience4j.springboot3.circuitbreaker.autoconfigure.CircuitBreakerAutoConfiguration;
 import io.github.resilience4j.springboot3.retry.autoconfigure.RetryAutoConfiguration;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.AfterAll;
@@ -59,14 +63,15 @@ import static org.mockito.Mockito.mock;
  * for the same mistake in backlog #0-21, so a call that no longer goes through
  * the proxy, or a retry that no longer covers a 5xx or a timeout, fails here.
  */
-@SpringJUnitConfig(SlackApiClientResilienceTest.TestConfig.class)
+@SpringJUnitConfig(classes = SlackApiClientResilienceTest.TestConfig.class,
+        initializers = SlackApiClientResilienceTest.ApplicationYmlInitializer.class)
 @TestPropertySource(properties = {
-        // Kept independent of application.yml so the test pins what it relies on;
-        // the retried exceptions are application.yml's.
-        "resilience4j.retry.instances.slack.max-attempts=3",
+        // application.yml's own slack retry and breaker (third review of #0-104:
+        // no copy to drift from it), with only these two changed: a short wait
+        // between attempts, and an open state long enough that no test sees it
+        // turn half-open by itself.
         "resilience4j.retry.instances.slack.wait-duration=10ms",
-        "resilience4j.retry.instances.slack.retry-exceptions[0]=org.springframework.web.client.ResourceAccessException",
-        "resilience4j.retry.instances.slack.retry-exceptions[1]=org.springframework.web.client.HttpServerErrorException"
+        "resilience4j.circuitbreaker.instances.slack.wait-duration-in-open-state=10m"
 })
 @DisplayName("SlackApiClient — the retry is really in the send path (backlog #0-103)")
 class SlackApiClientResilienceTest {
@@ -99,10 +104,20 @@ class SlackApiClientResilienceTest {
     @Autowired
     private RetryRegistry retryRegistry;
 
+    @Autowired
+    private CircuitBreakerRegistry circuitBreakerRegistry;
+
     @BeforeEach
     void reset() {
         WIRE_MOCK.resetAll();
         clearInvocations(messageStore);
+        // Shared by every test of the context: the failures one test makes
+        // would otherwise open it for the next.
+        breaker().reset();
+    }
+
+    private CircuitBreaker breaker() {
+        return circuitBreakerRegistry.circuitBreaker(SlackApiClient.CIRCUIT_BREAKER_NAME);
     }
 
     @AfterAll
@@ -228,6 +243,105 @@ class SlackApiClientResilienceTest {
         WIRE_MOCK.verify(2, postRequestedFor(urlPathEqualTo(UPDATE)));
     }
 
+    /**
+     * Backlog #0-104: after enough network errors or 5xx the breaker opens, and
+     * a send then fails at once, without calling Slack and without a retry
+     * (the retry wraps the breaker; CallNotPermittedException is not retried).
+     */
+    @Test
+    @DisplayName("breaker: 5xx open it, then a send fails at once as SLACK_UNAVAILABLE (circuit_open), Slack not called")
+    void breakerOpensOnServerErrorsAndFailsFast() {
+        WIRE_MOCK.stubFor(post(urlPathEqualTo(POST)).willReturn(aResponse().withStatus(503)));
+        // The counts below assume application.yml's 3 attempts per message.
+        assertThat(retryRegistry.retry(SlackApiClient.RETRY_NAME).getRetryConfig().getMaxAttempts()).isEqualTo(3);
+
+        // 3 attempts, then 2 more: the fifth failed call opens it (5 of 5).
+        assertThatThrownBy(() -> channel.send(request())).isInstanceOf(NotificationException.class);
+        assertThatThrownBy(() -> channel.send(request())).isInstanceOf(NotificationException.class);
+        assertThat(breaker().getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        WIRE_MOCK.verify(5, postRequestedFor(urlPathEqualTo(POST)));
+
+        assertThatThrownBy(() -> channel.send(request()))
+                .isInstanceOfSatisfying(NotificationException.class, e -> {
+                    assertThat(e.reason()).isEqualTo(NotificationFailureReason.SLACK_UNAVAILABLE);
+                    assertThat(e.detail()).isEqualTo("circuit_open");
+                });
+        WIRE_MOCK.verify(5, postRequestedFor(urlPathEqualTo(POST)));
+    }
+
+    @Test
+    @DisplayName("breaker: timeouts open it too, not only 5xx")
+    void breakerOpensOnTimeouts() {
+        WIRE_MOCK.stubFor(post(urlPathEqualTo(POST)).willReturn(okAnswer()
+                .withFixedDelay((int) READ_TIMEOUT.multipliedBy(4).toMillis())));
+
+        assertThatThrownBy(() -> channel.send(request())).isInstanceOf(NotificationException.class);
+        assertThatThrownBy(() -> channel.send(request())).isInstanceOf(NotificationException.class);
+
+        assertThat(breaker().getState()).isEqualTo(CircuitBreaker.State.OPEN);
+    }
+
+    @Test
+    @DisplayName("breaker: half-open, a trial call that fails opens it again; the rest of that send is refused")
+    void breakerReopensAfterAFailedTrial() {
+        WIRE_MOCK.stubFor(post(urlPathEqualTo(POST)).willReturn(aResponse().withStatus(503)));
+        breaker().transitionToOpenState();
+        breaker().transitionToHalfOpenState();
+
+        assertThatThrownBy(() -> channel.send(request()))
+                .isInstanceOfSatisfying(NotificationException.class,
+                        e -> assertThat(e.detail()).isEqualTo("circuit_open"));
+
+        assertThat(breaker().getState()).isEqualTo(CircuitBreaker.State.OPEN);
+        // The one trial reached Slack; the retry's next attempt met the reopened breaker.
+        WIRE_MOCK.verify(1, postRequestedFor(urlPathEqualTo(POST)));
+    }
+
+    @Test
+    @DisplayName("breaker: the ACK update shares it — open, an update fails at once without calling Slack")
+    void breakerCoversTheAckUpdate() {
+        breaker().transitionToOpenState();
+
+        assertThatThrownBy(() -> channel.updateMessageAfterAck(ON_CALL, TS, "Jane", request(), BOT_TOKEN))
+                .isInstanceOfSatisfying(NotificationException.class,
+                        e -> assertThat(e.detail()).isEqualTo("circuit_open"));
+        WIRE_MOCK.verify(0, postRequestedFor(urlPathEqualTo(UPDATE)));
+    }
+
+    /** Backlog #0-104: no one tenant's workspace can open it for the others. */
+    @Test
+    @DisplayName("breaker: a revoked token (401), a rate limit (429) and ok:false never open it")
+    void breakerIgnoresWhatATenantsWorkspaceAnswers() {
+        for (final int status : new int[] {401, 429}) {
+            WIRE_MOCK.stubFor(post(urlPathEqualTo(POST)).willReturn(aResponse().withStatus(status)));
+            for (int i = 0; i < 6; i++) {
+                assertThatThrownBy(() -> channel.send(request())).isInstanceOf(NotificationException.class);
+            }
+        }
+        WIRE_MOCK.stubFor(post(urlPathEqualTo(POST)).willReturn(aResponse().withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"ok\":false,\"error\":\"invalid_auth\"}")));
+        for (int i = 0; i < 6; i++) {
+            assertThatThrownBy(() -> channel.send(request())).isInstanceOf(NotificationException.class);
+        }
+
+        assertThat(breaker().getState()).isEqualTo(CircuitBreaker.State.CLOSED);
+        assertThat(breaker().getMetrics().getNumberOfFailedCalls()).isZero();
+    }
+
+    @Test
+    @DisplayName("breaker: half-open, a trial call that succeeds closes it and the message is delivered")
+    void breakerClosesAfterASuccessfulTrial() {
+        WIRE_MOCK.stubFor(post(urlPathEqualTo(POST)).willReturn(okAnswer()));
+        breaker().transitionToOpenState();
+        breaker().transitionToHalfOpenState();
+
+        channel.send(request());
+
+        assertThat(breaker().getState()).isEqualTo(CircuitBreaker.State.CLOSED);
+        then(messageStore).should().save(request().incidentId(), ON_CALL, TENANT_ID, TS);
+    }
+
     /** {@code path} answers each status in turn, then ok from there on. */
     private static void answers(String path, int... statuses) {
         String state = Scenario.STARTED;
@@ -256,9 +370,19 @@ class SlackApiClientResilienceTest {
                 ON_CALL, "[CRITICAL] High CPU", "message", Severity.CRITICAL, "High CPU");
     }
 
+    static class ApplicationYmlInitializer
+            implements org.springframework.context.ApplicationContextInitializer<
+                    org.springframework.context.ConfigurableApplicationContext> {
+        @Override
+        public void initialize(org.springframework.context.ConfigurableApplicationContext context) {
+            ApplicationYml.addLast(context.getEnvironment());
+        }
+    }
+
     @Configuration
     @ImportAutoConfiguration({
             AopAutoConfiguration.class,
+            CircuitBreakerAutoConfiguration.class,
             RetryAutoConfiguration.class
     })
     static class TestConfig {
