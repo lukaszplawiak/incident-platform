@@ -698,8 +698,12 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     is logged and counted (`notification.channel.failed{channel="SLACK_BROADCAST"}`), not a `notification_log` row
     (one row per channel, and the Slack row is the delivery's). A bare 550/551/553 without an enhanced code is
     still read as the recipient's (RFC 5321's "mailbox"), accepted: a relay sending a bare "550 Relaying denied"
-    is the case it misses. `send()` calls `postIncidentMessage` on `this`, past the `@Retry` proxy and its fallback
-    (#0-103), so it classifies an HTTP error itself (`post`). Resilience4j calls a fallback for every exception, so
+    is the case it misses. The Slack calls live in `SlackApiClient` (#0-103: they were methods of the channel,
+    called on `this` past the `@Retry` proxy, so no send was ever retried). It has its own timeouts
+    (`notification.channels.slack.connect-timeout`/`read-timeout`, 3 s/5 s; the bare `RestClient.Builder` set no
+    read timeout; the read timeout also cuts a trickling body), never follows a redirect (pinned: the request carries
+    the tenant's bot token), and a retried post may show twice, accepted (Slack takes no idempotency key). Its fallbacks do
+    not log, the caller does (WARN/ERROR by permanence). Resilience4j calls a fallback for every exception, so
     the fallback passes an already classified `NotificationException` through and rethrows anything that is not
     the HTTP client's (recorded by type); `SlackActionService.tryUpdateMessage` therefore catches
     `RuntimeException` too, or one bug would stop the other channels' ACK updates.
@@ -792,9 +796,16 @@ lookup has been failing for `notification.scheduler.lookup-retry-window`, then b
 The window runs from the entry's first failed lookup (`first_lookup_failure_at`), not from its
 creation, or a restart would park a whole backlog on one blip. `@Retry(name = "oncall")` on these
 clients is probably inactive (backlog #0-23); the scheduler's PENDING retry is the real one.
-`findBySlackUserId` still fails open. A scheduler run stops after `processing-budget`, which must
-stay below the 4-minute ShedLock (validated at startup), and loads at most `batch-size` entries,
-oldest first.
+`findBySlackUserId` still fails open. A scheduler run stops after `processing-budget` (PT2M30S),
+which must stay below the 4-minute ShedLock (validated at startup), and loads at most `batch-size`
+entries, oldest first. The budget is checked between entries, so the lock must also outlast the
+entry in flight: a 30 s margin plus each channel's `NotificationChannel.worstCaseSendTime()`
+(review of backlog #0-103: Slack's broadcast and DM, each 3 attempts of connect + read timeout plus
+backoff, about 51 s; `SlackApiClient.worstCaseCall`), also validated at startup
+(`NotificationSchedulerDefaultsTest` keeps `application.yml`'s defaults inside it). A new channel
+that retries or waits long says so through `worstCaseSendTime()`. Nothing yet cuts Slack off while
+it hangs: every entry pays the worst case until it answers (circuit breaker: #0-104). Email and SMS
+still declare nothing and live inside the 30 s margin (#0-105).
 
 Slack is per tenant (backlog #0-21): auth-service's `SlackWorkspace` holds each tenant's bot token
 (AES-256-GCM under `slack.encryption-key`, deliberately not the MFA key), default channel and
@@ -834,6 +845,18 @@ tenant either — idempotency, like every other query, is tenant-scoped.
   `1..2` (the two levels `EscalationTask` creates); anything else is dead-lettered, not coerced
   to `0` (`0` means "not an escalation"). Raise `MAX_ESCALATION_LEVEL` in
   notification-service's `IncidentEventConsumer` together with the escalation chain.
+
+### A Resilience4j annotation works only on a call from another bean (backlog #0-21, #0-103)
+
+`@Retry`, `@CircuitBreaker` and their fallbacks are Spring AOP: a method called on `this` runs
+without them, silently. It happened twice in notification-service: `SlackWorkspaceClient`'s
+breaker (#0-21, split into `CachingSlackWorkspaceClient` / `SlackWorkspaceClientImpl`) and the
+Slack send's retry (#0-103, split into `SlackApiClient`). The fix both times was a bean of its own
+for the remote call, not a `@Lazy` self-reference. A test built with `new` cannot see the
+difference; `SlackWorkspaceClientResilienceTest` and `SlackApiClientResilienceTest` build a
+minimal Spring context (AOP + Resilience4j auto-configuration, WireMock) and count the requests.
+A new annotated client needs such a test, and a connect and read timeout, or a hung call never
+throws and is never retried.
 
 ### Coverage is enforced twice: per module, and on a PR's changed lines (backlog #0-57)
 
