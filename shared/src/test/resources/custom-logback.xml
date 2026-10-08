@@ -1,0 +1,11 @@
+<!-- StructuredLoggingDefaultsTest: a Logback file of a service's own, which would replace the JSON encoder. -->
+<configuration>
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+</configuration>

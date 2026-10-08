@@ -1,0 +1,8 @@
+# StructuredLoggingDefaultsTest: what README "Step 2" puts in a developer's application-local.yml.
+logging:
+  structured:
+    format:
+      console: ""
+platform:
+  logging:
+    plain-text: true

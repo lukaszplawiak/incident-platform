@@ -1,0 +1,5 @@
+# Backlog #0-94: every service logs JSON (ECS); a service that would not refuses to start.
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.incidentplatform.shared.logging.StructuredLoggingDefaults
+org.springframework.context.ApplicationListener=\
+com.incidentplatform.shared.logging.StructuredLoggingGuard
