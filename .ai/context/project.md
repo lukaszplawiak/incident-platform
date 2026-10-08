@@ -803,8 +803,22 @@ entry in flight: a 30 s margin plus each channel's `NotificationChannel.worstCas
 (review of backlog #0-103: Slack's broadcast and DM, each 3 attempts of connect + read timeout plus
 backoff, about 51 s; `SlackApiClient.worstCaseCall`), also validated at startup
 (`NotificationSchedulerDefaultsTest` keeps `application.yml`'s defaults inside it). A new channel
-that retries or waits long says so through `worstCaseSendTime()`. Nothing yet cuts Slack off while
-it hangs: every entry pays the worst case until it answers (circuit breaker: #0-104). Email and SMS
+that retries or waits long says so through `worstCaseSendTime()`. Slack is behind a circuit breaker
+(`slack`, backlog #0-104): after network errors or 5xx (at least 5 calls in 60 s, half failing) it opens, Slack
+calls fail at once as `SLACK_UNAVAILABLE` (`circuit_open`) and a trial call every 30 s decides when to
+close it; the lock check still counts the closed breaker's worst case. It has no fallback of its own:
+Resilience4j puts the retry outside the breaker, an open breaker's `CallNotPermittedException` is not in
+the retry's list, and the retry's fallback classifies it (a fallback on the breaker would turn every
+failure into a result before the retry sees it, the #0-23 problem). It ignores 4xx, 429 and `ok:false`,
+so no tenant's workspace can open it for the others; that also leaves out Slack's own `ok:false` outage
+codes and an unreadable 200, which answer at once. It registers no health indicator: a channel's outage
+must not mark the service DOWN (as with mail). Accepted until #0-32: while it is open, Slack messages
+are recorded FAILED without being tried and never resent, a whole batch's worth in one run. Alert
+`SlackCircuitOpen` (high) is on refused calls (`resilience4j_circuitbreaker_not_permitted_calls_total`,
+any in the last 10 minutes, held 5 minutes), not on the breaker's state: it turns half-open after 30 s
+and waits for a real call, so with no traffic a state rule kept firing after Slack recovered. Every
+refusal is a lost notification, so a short burst fires it too; a shorter window missed an outage whose
+refusals were minutes apart (sparse Slack traffic). Email and SMS
 still declare nothing and live inside the 30 s margin (#0-105).
 
 Slack is per tenant (backlog #0-21): auth-service's `SlackWorkspace` holds each tenant's bot token
