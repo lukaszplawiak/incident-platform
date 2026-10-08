@@ -673,6 +673,39 @@ groups:
             service's scheduler, its ShedLock row (paused-tenants-sync-<table>) and
             its ERROR log ("Pause sync").
 
+      - alert: SlackCircuitOpen
+        # Backlog #0-104: notification-service's "slack" circuit breaker (around
+        # SlackApiClient's chat.postMessage and chat.update) refused Slack calls
+        # within the last 10 minutes: Slack's API timed out or answered 5xx. Only that opens it, never a tenant's revoked token or a
+        # channel the bot is not in. Each refused call is a Slack message that
+        # failed at once as SLACK_UNAVAILABLE (circuit_open) and is not sent
+        # later (backlog #0-32); email and SMS still go.
+        # Review: on the refusals, not on the breaker's state. A breaker turns
+        # half-open 30 s after opening and waits there for a real call to try,
+        # so with no Slack traffic a state rule kept firing after Slack had
+        # recovered; refusals happen only while messages are being lost. A 10m
+        # window under a 5m for (second review): every refused message is a lost
+        # notification, so a short burst of refusals fires it too, and refusals a
+        # few minutes apart, as when Slack traffic is sparse, keep it firing; a
+        # shorter window would miss an outage that loses a message every few
+        # minutes. It resolves 10 minutes after the last refusal.
+        expr: |
+          sum by (job) (
+            increase(resilience4j_circuitbreaker_not_permitted_calls_total{job="notification-service", name="slack"}[10m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} is not sending Slack messages: its Slack circuit breaker is open"
+          description: >
+            The Slack circuit breaker of {{ $labels.job }} has refused Slack calls
+            within the last 10 minutes: Slack's API timed out or failed. Each
+            refused call is a tenant's Slack notification that failed and is not
+            resent; email and SMS still go. Check status.slack.com and the
+            SLACK_UNAVAILABLE lines in the service's log.
+
       - alert: WebSocketSessionUntracked
         # Backlog #0-82, step 2 (review): an authenticated STOMP session whose
         # socket incident-service does not track, so a suspension of its tenant

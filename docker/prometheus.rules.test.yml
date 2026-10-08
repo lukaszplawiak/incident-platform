@@ -785,3 +785,60 @@ tests:
             exp_annotations:
               summary: "MFA recovery requests keep failing in the scheduler"
               description: "auth-service's MfaRecoveryScheduler failed on MFA recovery requests for the last 15 minutes. Its ERROR log \"MFA recovery: could not\" names the request and the cause.\n"
+
+  # Backlog #0-104: SlackCircuitOpen fires once refusals have been seen for 5
+  # minutes (two instances, one refusing, summed per job), and keeps firing
+  # through refusals minutes apart (sparse Slack traffic, second review).
+  - interval: 1m
+    input_series:
+      - series: 'resilience4j_circuitbreaker_not_permitted_calls_total{job="notification-service",instance="notification-1",kind="not_permitted",name="slack"}'
+        values: '0 0 2 2 2 2 5 5 5 5 7 7 7 7 7 9 9 9'
+      - series: 'resilience4j_circuitbreaker_not_permitted_calls_total{job="notification-service",instance="notification-2",kind="not_permitted",name="slack"}'
+        values: '0x17'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SlackCircuitOpen
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: SlackCircuitOpen
+        exp_alerts: &slack_circuit_open
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: notification-service
+            exp_annotations:
+              summary: "notification-service is not sending Slack messages: its Slack circuit breaker is open"
+              description: "The Slack circuit breaker of notification-service has refused Slack calls within the last 10 minutes: Slack's API timed out or failed. Each refused call is a tenant's Slack notification that failed and is not resent; email and SMS still go. Check status.slack.com and the SLACK_UNAVAILABLE lines in the service's log.\n"
+      - eval_time: 16m
+        alertname: SlackCircuitOpen
+        exp_alerts: *slack_circuit_open
+
+  # Second review of #0-104: a short burst of refusals fires it too (each is a
+  # lost message) and it resolves 10 minutes after the last one; an idle breaker
+  # (half-open, nothing to refuse: counter flat), another breaker's refusals and
+  # another job's "slack" breaker never fire it.
+  - interval: 1m
+    input_series:
+      - series: 'resilience4j_circuitbreaker_not_permitted_calls_total{job="notification-service",instance="notification-1",kind="not_permitted",name="slack"}'
+        values: '0 0 3 6 6x14'
+      - series: 'resilience4j_circuitbreaker_not_permitted_calls_total{job="notification-service",instance="notification-1",kind="not_permitted",name="oncall"}'
+        values: '0+5x17'
+      - series: 'resilience4j_circuitbreaker_not_permitted_calls_total{job="other-service",instance="other-1",kind="not_permitted",name="slack"}'
+        values: '0+5x17'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SlackCircuitOpen
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: SlackCircuitOpen
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: notification-service
+            exp_annotations:
+              summary: "notification-service is not sending Slack messages: its Slack circuit breaker is open"
+              description: "The Slack circuit breaker of notification-service has refused Slack calls within the last 10 minutes: Slack's API timed out or failed. Each refused call is a tenant's Slack notification that failed and is not resent; email and SMS still go. Check status.slack.com and the SLACK_UNAVAILABLE lines in the service's log.\n"
+      - eval_time: 16m
+        alertname: SlackCircuitOpen
+        exp_alerts: []
