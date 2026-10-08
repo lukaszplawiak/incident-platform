@@ -170,6 +170,13 @@ notification:
       # per-App, not per-workspace (verified against Slack's own docs).
       signing-secret: ${SLACK_SIGNING_SECRET}
       api-base-url: ${SLACK_API_BASE_URL:https://slack.com/api}
+      # Backlog #0-103: timeouts of SlackApiClient's calls to the Slack Web API, each
+      # attempt (resilience4j.retry.instances.slack retries a timeout). Apart from
+      # notification.client.*, which are for calls inside the cluster.
+      # Slack answers in well under a second; 5 s (not 10 s, review of #0-103) keeps the
+      # worst case of a send small enough for notification.scheduler.processing-budget.
+      connect-timeout: ${SLACK_CONNECT_TIMEOUT:3s}
+      read-timeout: ${SLACK_READ_TIMEOUT:5s}
     sms:
       enabled: true
       from-number: ${SMS_FROM:+1234567890}
@@ -196,8 +203,11 @@ notification:
     lookup-retry-window: ${NOTIFICATION_LOOKUP_RETRY_WINDOW:PT10M}
     # One run stops after this long and leaves the rest for the next cycle. Keep it below the
     # ShedLock lockAtMostFor (4m) of processPendingNotifications, or a second replica starts on
-    # the same PENDING entries.
-    processing-budget: ${NOTIFICATION_SCHEDULER_PROCESSING_BUDGET:PT3M}
+    # the same PENDING entries. The lock must also outlast the entry in flight: a 30 s margin
+    # plus what the channels say a send can take, i.e. Slack's retries and timeouts (3 attempts
+    # x (3 s + 5 s) + 1.5 s backoff, twice: about 51 s), checked at startup. Lowered from PT3M
+    # in the review of backlog #0-103, which made Slack's retry run on the send path.
+    processing-budget: ${NOTIFICATION_SCHEDULER_PROCESSING_BUDGET:PT2M30S}
     # At most this many PENDING entries are loaded per run, oldest first (backlog #0-10; same idea
     # as escalation-service's scheduler-batch-size).
     batch-size: ${NOTIFICATION_SCHEDULER_BATCH_SIZE:200}
@@ -319,6 +329,10 @@ resilience4j:
 
   retry:
     instances:
+      # SlackApiClient's chat.postMessage and chat.update. Backlog #0-103: until then the
+      # send path called postIncidentMessage on the channel itself, past Spring's proxy, so
+      # this retry applied only to the ACK update. A retried post may show twice (Slack has
+      # no idempotency key), accepted: a duplicate beats a lost incident message.
       slack:
         max-attempts: ${SLACK_RETRY_MAX_ATTEMPTS:3}
         wait-duration: ${SLACK_RETRY_WAIT_MS:500ms}

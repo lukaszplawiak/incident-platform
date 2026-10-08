@@ -14,7 +14,8 @@ import org.springframework.validation.annotation.Validated;
  * <ul>
  *   <li>{@code EmailNotificationChannel}: {@code notification.channels.email.enabled},
  *       {@code notification.channels.email.from}</li>
- *   <li>{@code SlackNotificationChannel}: {@code notification.channels.slack.enabled}</li>
+ *   <li>{@code SlackNotificationChannel}: {@code notification.channels.slack.enabled}; {@code SlackApiClient}:
+ *       {@code api-base-url}, {@code connect-timeout}, {@code read-timeout} (backlog #0-103)</li>
  *   <li>{@code SlackSignatureVerifier}: {@code notification.channels.slack.signing-secret}</li>
  *   <li>{@code SmsNotificationChannel}: {@code notification.channels.sms.enabled},
  *       {@code notification.channels.sms.from-number}</li>
@@ -36,6 +37,8 @@ import org.springframework.validation.annotation.Validated;
  *       enabled: true
  *       signing-secret: ${SLACK_SIGNING_SECRET}
  *       api-base-url: ${SLACK_API_BASE_URL:https://slack.com/api}
+ *       connect-timeout: ${SLACK_CONNECT_TIMEOUT:3s}
+ *       read-timeout: ${SLACK_READ_TIMEOUT:5s}
  *     sms:
  *       enabled: true
  *       from-number: ${SMS_FROM:+1234567890}
@@ -100,8 +103,36 @@ public record NotificationChannelProperties(
             // previously, being unable to test the HTTP call at all).
             // Defaults to the real Slack API in application.yml.
             @NotBlank(message = "notification.channels.slack.api-base-url must not be blank")
-            String apiBaseUrl
-    ) {}
+            String apiBaseUrl,
+
+            // Backlog #0-103: SlackApiClient's own timeouts. The client had none
+            // (the bare RestClient.Builder sets no read timeout), so a Slack that
+            // never answered held the scheduler's thread and was never retried.
+            // Apart from notification.client.*, which are for calls inside the
+            // cluster. Absent means the defaults below; zero or negative is
+            // rejected at startup, as it would mean no timeout at all.
+            Duration connectTimeout,
+            Duration readTimeout
+    ) {
+
+        public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(3);
+        public static final Duration DEFAULT_READ_TIMEOUT = Duration.ofSeconds(5);
+
+        public Slack {
+            connectTimeout = positive(connectTimeout, DEFAULT_CONNECT_TIMEOUT,
+                    "notification.channels.slack.connect-timeout");
+            readTimeout = positive(readTimeout, DEFAULT_READ_TIMEOUT,
+                    "notification.channels.slack.read-timeout");
+        }
+
+        private static Duration positive(Duration value, Duration fallback, String key) {
+            final Duration resolved = value != null ? value : fallback;
+            if (resolved.isZero() || resolved.isNegative()) {
+                throw new IllegalArgumentException(key + " must be positive");
+            }
+            return resolved;
+        }
+    }
 
     public record Sms(
             boolean enabled,

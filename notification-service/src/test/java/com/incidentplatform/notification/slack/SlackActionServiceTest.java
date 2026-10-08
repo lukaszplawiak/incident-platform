@@ -185,6 +185,52 @@ class SlackActionServiceTest {
         }
 
         /**
+         * Backlog #0-103 (review): SlackApiClient's fallback no longer logs a
+         * failed update, so this class does, once per channel, by permanence.
+         */
+        @Test
+        @DisplayName("a failed update is logged once per channel: WARN when the tenant's to fix, ERROR otherwise, "
+                + "by the platform's reason")
+        void failedUpdateLoggedByPermanence() {
+            givenTenantWorkspace();
+            final String secondChannel = "#oncall-team-a";
+            given(messageStore.findAllChannelsForIncident(INCIDENT_ID))
+                    .willReturn(List.of(CHANNEL, secondChannel));
+            given(messageStore.find(INCIDENT_ID, secondChannel))
+                    .willReturn(Optional.of("9999.111111"));
+            willThrow(new NotificationException("SLACK", CHANNEL,
+                    NotificationFailureReason.SLACK_REJECTED, "message_not_found", null))
+                    .given(slackChannel).updateMessageAfterAck(
+                            eq(CHANNEL), eq(MESSAGE_TS), anyString(), any(), anyString());
+            willThrow(new NotificationException("SLACK", secondChannel,
+                    NotificationFailureReason.SLACK_UNAVAILABLE, "http_503", null))
+                    .given(slackChannel).updateMessageAfterAck(
+                            eq(secondChannel), eq("9999.111111"), anyString(), any(), anyString());
+
+            final ch.qos.logback.classic.Logger logger =
+                    (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SlackActionService.class);
+            final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                service.updateSlackMessages(INCIDENT_ID, TENANT_ID, CHANNEL, MESSAGE_TS, "Jane Doe");
+            } finally {
+                logger.detachAppender(appender);
+            }
+
+            final var lines = appender.list.stream()
+                    .filter(e -> e.getFormattedMessage().startsWith("Failed to update Slack message after ACK"))
+                    .toList();
+            assertThat(lines).extracting(ch.qos.logback.classic.spi.ILoggingEvent::getLevel)
+                    .containsExactly(ch.qos.logback.classic.Level.WARN, ch.qos.logback.classic.Level.ERROR);
+            assertThat(lines.get(0).getFormattedMessage())
+                    .contains("channel=" + CHANNEL, "SLACK_REJECTED (message_not_found)");
+            assertThat(lines.get(1).getFormattedMessage())
+                    .contains("channel=" + secondChannel, "SLACK_UNAVAILABLE (http_503)");
+        }
+
+        /**
          * Backlog #0-93 (review): the channel's fallback rethrows an exception
          * that is not the HTTP client's; it must still fail only its channel.
          */
