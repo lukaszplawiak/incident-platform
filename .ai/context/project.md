@@ -681,8 +681,28 @@ chain never added `ApiKeyAuthFilter`; the lookup there was a no-op).
     message stays in the ERROR log (and, for a channel's own failure, in `notification_log`). postmortem:
     `PostmortemRetryScheduler.failureText` records a fixed text (`GEMINI_FAILED`) for a `GeminiException`
     (its message is built from the HTTP client's or Jackson's and can quote Gemini's response) and the type
-    for anything else, on the postmortem and in the event; the full exception is logged. Third-party text inside a
-    channel's own `NotificationException` (SMTP reply, Slack error body) still passes: #0-93.
+    for anything else, on the postmortem and in the event; the full exception is logged. A channel's own
+    `NotificationException` carries a `NotificationFailureReason` and at most a provider code checked as
+    `[a-z0-9_]{1,64}` (Slack's `error`, `http_<status>`); its message is built from those alone, so even code that
+    logs or stores `getMessage()` gets the platform's words, and the provider's error is only its cause (#0-93).
+    Email reasons come from walking the exception, `MailSendException.getMessageExceptions()` and
+    `MessagingException.getNextException()` included. A 5xx on RCPT is the tenant's rejected address only when the
+    reply names the address (Angus' `SMTPAddressFailedException` with an enhanced `5.1.x`, or 550/551/553 without
+    one, and only to `RCPT`); "550 5.7.1 Relaying denied" is a policy refusal, the platform's, so `EMAIL_FAILED`
+    at ERROR. An `AddressException` is the tenant's only when its `getRef()` is the recipient (a malformed `from`
+    is the operator's).
+    Slack's Web API answers most failures with HTTP 200 and `"ok": false`: both `chat.postMessage` and
+    `chat.update` check it (`requireOk`); a missing `error` is `SLACK_REJECTED`, a token Slack refuses
+    (`invalid_auth`, `token_revoked`, `account_inactive`, HTTP 401) `SLACK_AUTH_FAILED`, at ERROR. A refused
+    broadcast does not stop the on-call DM: the send counts as delivered when the DM went, the broadcast's failure
+    is logged and counted (`notification.channel.failed{channel="SLACK_BROADCAST"}`), not a `notification_log` row
+    (one row per channel, and the Slack row is the delivery's). A bare 550/551/553 without an enhanced code is
+    still read as the recipient's (RFC 5321's "mailbox"), accepted: a relay sending a bare "550 Relaying denied"
+    is the case it misses. `send()` calls `postIncidentMessage` on `this`, past the `@Retry` proxy and its fallback
+    (#0-103), so it classifies an HTTP error itself (`post`). Resilience4j calls a fallback for every exception, so
+    the fallback passes an already classified `NotificationException` through and rethrows anything that is not
+    the HTTP client's (recorded by type); `SlackActionService.tryUpdateMessage` therefore catches
+    `RuntimeException` too, or one bug would stop the other channels' ACK updates.
   - Counters behind alerts are registered at zero when their owner is built (`UnrecordedAuditEvents` in
     `shared` for `audit.event.unrecorded`, the reasons of `audit.events.rejected` in `AuditEventConsumer`;
     as `AuthEmailScheduler` does): a counter created at its first increment starts its series at 1, and

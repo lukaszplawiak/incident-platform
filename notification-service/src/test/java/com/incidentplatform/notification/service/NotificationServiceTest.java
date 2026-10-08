@@ -2,6 +2,7 @@ package com.incidentplatform.notification.service;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.channel.NotificationException;
+import com.incidentplatform.notification.channel.NotificationFailureReason;
 import com.incidentplatform.notification.domain.NotificationQueueEntry;
 import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.domain.NotificationQueueStatus;
@@ -288,7 +289,7 @@ class NotificationServiceTest {
             notificationService.processEntry(entry);
 
             then(persistenceService).should(never())
-                    .recordChannelFailed(any(), any(), any(), anyInt(), any(), any(), any());
+                    .recordChannelFailed(any(), any(), any(), anyInt(), any(), any(), any(), any());
             then(slackChannel).should().send(slackRequest);
             then(persistenceService).should().recordChannelSent(
                     eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("SLACK"),
@@ -315,10 +316,11 @@ class NotificationServiceTest {
                             new NotificationRouter.ChannelRequest(emailChannel, emailRequest),
                             new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
                     )));
-            willThrow(new NotificationException("EMAIL", "test@test.com", "SMTP down"))
+            willThrow(new NotificationException("EMAIL", "test@test.com",
+                    NotificationFailureReason.EMAIL_TRANSPORT_UNAVAILABLE, null))
                     .given(emailChannel).send(emailRequest);
             willThrow(new IllegalStateException("database down")).given(persistenceService)
-                    .recordChannelFailed(any(), any(), any(), anyInt(), eq("EMAIL"), any(), any());
+                    .recordChannelFailed(any(), any(), any(), anyInt(), eq("EMAIL"), any(), any(), any());
 
             notificationService.processEntry(entry);
 
@@ -344,10 +346,58 @@ class NotificationServiceTest {
 
             then(persistenceService).should().recordChannelFailed(
                     eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("EMAIL"),
-                    eq(emailRequest.recipient()), eq("Unexpected error: IllegalStateException"));
+                    eq(emailRequest.recipient()), eq("UNEXPECTED"), eq("Unexpected error: IllegalStateException"));
+            assertThat(meterRegistry.counter("notification.channel.failed", "channel", "EMAIL",
+                    "reason", "UNEXPECTED").count()).isEqualTo(1.0);
             then(persistenceService).should(never())
                     .recordChannelSent(any(), any(), any(), anyInt(), any(), any(), any(), any());
             then(persistenceService).should().markSent(entry);
+        }
+
+        /**
+         * Backlog #0-93 (review): operators alert on ERROR, so a failure that is
+         * the platform's (permanent() false) must be logged at ERROR, and one the
+         * tenant has to fix (permanent() true) at WARN, with the provider's own
+         * error attached as the exception and never in the message.
+         */
+        @Test
+        @DisplayName("a failure is logged at WARN when it is the tenant's to fix, ERROR when the platform's, the "
+                + "provider's error attached")
+        void logLevelFollowsPermanence() {
+            final ch.qos.logback.classic.Logger logger =
+                    (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(NotificationService.class);
+            final ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                    new ch.qos.logback.core.read.ListAppender<>();
+            appender.start();
+            logger.addAppender(appender);
+            try {
+                for (final NotificationFailureReason reason : List.of(
+                        NotificationFailureReason.EMAIL_RECIPIENT_REJECTED,
+                        NotificationFailureReason.EMAIL_AUTHENTICATION_FAILED)) {
+                    final NotificationRequest emailRequest = buildRequest("EMAIL");
+                    given(emailChannel.channelName()).willReturn("EMAIL");
+                    given(router.route(any(), any(), any(), any(), any(), any(), any()))
+                            .willReturn(NotificationRouter.Routing.send(List.of(
+                                    new NotificationRouter.ChannelRequest(emailChannel, emailRequest))));
+                    willThrow(new NotificationException("EMAIL", "test@test.com", reason,
+                            new IllegalStateException("535 relay smtp.internal said no")))
+                            .given(emailChannel).send(emailRequest);
+
+                    notificationService.processEntry(buildPendingEntry());
+                }
+            } finally {
+                logger.detachAppender(appender);
+            }
+
+            final var failures = appender.list.stream()
+                    .filter(e -> e.getFormattedMessage().startsWith("Notification failed:")).toList();
+            assertThat(failures).hasSize(2);
+            assertThat(failures.get(0).getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+            assertThat(failures.get(0).getFormattedMessage()).contains("EMAIL_RECIPIENT_REJECTED")
+                    .doesNotContain("smtp.internal");
+            assertThat(failures.get(1).getLevel()).isEqualTo(ch.qos.logback.classic.Level.ERROR);
+            assertThat(failures.get(1).getFormattedMessage()).contains("EMAIL_AUTHENTICATION_FAILED");
+            assertThat(failures).allSatisfy(e -> assertThat(e.getThrowableProxy()).isNotNull());
         }
 
         @Test
@@ -365,8 +415,10 @@ class NotificationServiceTest {
                             new NotificationRouter.ChannelRequest(slackChannel, slackRequest)
                     )));
 
+            // The cause is what the mail library said; it must not be recorded (backlog #0-93).
             willThrow(new NotificationException("EMAIL", "test@test.com",
-                    "SMTP connection failed"))
+                    NotificationFailureReason.EMAIL_RECIPIENT_REJECTED,
+                    new IllegalStateException("550 5.1.1 <test@test.com> unknown; relay smtp.internal:587")))
                     .given(emailChannel).send(emailRequest);
 
             notificationService.processEntry(entry);
@@ -376,7 +428,10 @@ class NotificationServiceTest {
 
             then(persistenceService).should().recordChannelFailed(
                     eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("EMAIL"),
-                    eq(emailRequest.recipient()), eq("SMTP connection failed"));
+                    eq(emailRequest.recipient()), eq("EMAIL_RECIPIENT_REJECTED"),
+                    eq("EMAIL_RECIPIENT_REJECTED: The mail server rejected the recipient address"));
+            assertThat(meterRegistry.counter("notification.channel.failed", "channel", "EMAIL",
+                    "reason", "EMAIL_RECIPIENT_REJECTED").count()).isEqualTo(1.0);
             then(persistenceService).should().recordChannelSent(
                     eq(INCIDENT_ID), eq(TENANT_ID), eq(EVENT_TYPE), eq(0), eq("SLACK"),
                     eq(slackRequest.recipient()), any(), any());

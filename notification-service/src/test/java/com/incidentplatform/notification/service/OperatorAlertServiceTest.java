@@ -2,6 +2,7 @@ package com.incidentplatform.notification.service;
 
 import com.incidentplatform.notification.channel.NotificationChannel;
 import com.incidentplatform.notification.channel.NotificationException;
+import com.incidentplatform.notification.channel.NotificationFailureReason;
 import com.incidentplatform.notification.config.NotificationChannelProperties;
 import com.incidentplatform.notification.domain.UndeliverableReason;
 import com.incidentplatform.notification.dto.NotificationRequest;
@@ -155,7 +156,8 @@ class OperatorAlertServiceTest {
     @Test
     @DisplayName("a failed send does not silence the operator for the whole interval: it is retried after a minute")
     void failedSendIsRetriedAfterAMinute() {
-        willThrow(new NotificationException("EMAIL", OPERATOR_EMAIL, "smtp down", null))
+        willThrow(new NotificationException("EMAIL", OPERATOR_EMAIL,
+                NotificationFailureReason.EMAIL_TRANSPORT_UNAVAILABLE, null))
                 .given(emailChannel).send(any());
         final OperatorAlertService service = service(OPERATOR_EMAIL);
 
@@ -243,7 +245,8 @@ class OperatorAlertServiceTest {
     @Test
     @DisplayName("swallows a failure to send — an alert must not fail the queue entry")
     void swallowsSendFailure() {
-        willThrow(new NotificationException("EMAIL", OPERATOR_EMAIL, "smtp down", null))
+        willThrow(new NotificationException("EMAIL", OPERATOR_EMAIL,
+                NotificationFailureReason.EMAIL_TRANSPORT_UNAVAILABLE, null))
                 .given(emailChannel).send(any());
 
         assertThatCode(() -> service(OPERATOR_EMAIL).undeliverable(

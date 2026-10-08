@@ -81,7 +81,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
 | [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
-| [0-93](#0-93-notification-channel-errors-carry-third-party-text-into-notification_log-and-the-audit-trail) | Notification channel errors carry third-party text into `notification_log` and the audit trail | tech-debt | Low | Open |
 | [0-94](#0-94-logs-are-plain-text-with-no-structure-escaping-or-collection) | Logs are plain text, with no structure, escaping or collection | design | Medium | Open |
 | [0-95](#0-95-kafka-messages-have-no-envelope-correlation-id-schema-version-producer) | Kafka messages have no envelope (correlation id, schema version, producer) | design | Low | Open |
 | [0-97](#0-97-kafka-consumers-on-defaulterrorhandler-and-a-dead-letter-replay) | Kafka consumers on `DefaultErrorHandler`, and a dead-letter replay | design | Low | Open |
@@ -90,6 +89,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-100](#0-100-a-locally-built-jar-contains-the-developers-application-localyml) | A locally built jar contains the developer's `application-local.yml` | tech-debt | Low | Open |
 | [0-101](#0-101-offboard-a-tenant) | Offboard a tenant | design | Medium | Open |
 | [0-102](#0-102-the-pause-of-suspended-tenants-background-work-at-scale) | The pause of suspended tenants' background work at scale | performance | Low | Open |
+| [0-103](#0-103-the-slack-retry-never-applies-to-a-notification-send) | The Slack retry never applies to a notification send | bug | Medium | Open |
 
 ---
 
@@ -489,7 +489,10 @@ send itself.
 
 **What already exists.** Idempotency in `notification_log` is keyed per channel (incident + tenant + event type
 + escalation level + channel). If an entry stayed PENDING after a partial send, the next cycle would skip the
-channels that already went out, so a per-channel retry needs no migration for that part.
+channels that already went out, so a per-channel retry needs no migration for that part. Since #0-93 every
+channel failure carries a `NotificationFailureReason` marked permanent or not (a rejected address, a Slack channel
+the bot is not in, versus an unreachable server or a rate limit), so what is worth retrying is already decided;
+what is left is the per-channel state and its retry window.
 
 **Open questions.** (1) The router asks oncall-service again on every cycle, and the on-call can change between
 cycles: a retried Slack DM could go to someone other than the person who got the email. Pin the resolved
@@ -819,6 +822,9 @@ data, and a permanently rejected address is retried for 7 days for nothing.
 (`MailAuthenticationException`, `MailSendException` caused by `ConnectException`,
 `SocketTimeoutException`) versus a rejected recipient (`SendFailedException` with invalid addresses,
 SMTP 5xx on RCPT). Tag the counter (`cause=transport|recipient|other`) and alert only on `transport`.
+notification-service already does this classification (#0-93, `EmailNotificationChannel.classify`, with a
+recipient rejection only for an SMTP reply naming the address: an enhanced `5.1.x`, or 550/551/553 without one,
+so "550 5.7.1 Relaying denied" stays the platform's); moving it to `shared` would give both services one rule.
 Decide whether a permanent recipient rejection gives up at once (`PERMANENTLY_FAILED`, reason
 `RECIPIENT_REJECTED`) and how the tenant's admin learns about it (audit event, admin UI), since it
 is not the operator's to fix. Check how 4xx (greylisting, mailbox full) is reported, since that must
@@ -1419,26 +1425,6 @@ operators.
 
 ---
 
-### 0-93. Notification channel errors carry third-party text into `notification_log` and the audit trail
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-84)
-
-**Problem.** A channel's own failure (`NotificationException`) is recorded with its message, as the
-platform's own text: in `notification_log` whole, and in the `NOTIFICATION_FAILED` audit event cut to 500
-characters on one line (`AuditText.error`, #0-84). But the email and Slack channels build that message by
-appending the underlying library's (`EmailNotificationChannel`: the mail exception's; `SlackNotificationChannel`:
-the Slack client's or HTTP error's), so an SMTP server's reply or a Slack error body reaches rows the tenant
-reads. Same-tenant only, and older than #0-84; unexpected exceptions are already recorded by type only.
-
-**How production systems handle it.** The adapter maps a provider failure to the platform's own reason (a
-status, an error code) for anything persisted or shown; the provider's raw text goes to logs only.
-
-**Approach.** Give `NotificationException` a platform-authored reason (e.g. `SMTP_REJECTED`, `SLACK_HTTP_429`)
-used for `notification_log.error_message` (which today stores the whole message) and the audit event, and log
-the cause with its message where it is caught. postmortem-service already does this for Gemini (#0-84).
-
----
-
 ### 0-94. Logs are plain text, with no structure, escaping or collection
 
 **Type:** design · **Priority:** Medium · **Status:** Open (raised in the analysis of #0-91/#0-92; to be analysed as a whole)
@@ -1626,6 +1612,27 @@ its own latency.
 
 ---
 
+### 0-103. The Slack retry never applies to a notification send
+
+**Type:** bug · **Priority:** Medium · **Status:** Open (found in the second review of #0-93)
+
+**Problem.** `SlackNotificationChannel.postIncidentMessage` carries `@Retry(name = "slack")` (3 attempts,
+exponential backoff from 500 ms, on `ResourceAccessException` and `HttpServerErrorException`) and a fallback. But
+`send()` calls it on `this`, and Spring's proxy only sees calls from outside the bean, so for every incident
+notification neither the retry nor the fallback runs: one dropped connection or one Slack 5xx fails the channel at
+once, and nothing tries it again (#0-32). Only `updateMessageAfterAck`, called from `SlackActionService`, goes
+through the proxy. The tests never noticed: they call the fallback directly, or build the channel without Spring.
+#0-93 made `send()` classify the HTTP error itself (`post`), so the recorded reason is right; the retry is still
+missing.
+
+**Options.** Move the HTTP call to a bean of its own (`SlackApiClient`, its methods carrying `@Retry`), which the
+channel calls through the proxy, the usual fix and the clearest; or inject the channel's own proxy
+(`@Lazy` self-reference), smaller but easy to undo by accident; or retry in code (`Retry.decorateSupplier` from the
+registry) where the call is made. A test that goes through Spring's proxy (a `@SpringBootTest` slice with WireMock)
+must show the retry, which no test does today.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -1667,6 +1674,7 @@ its own latency.
 | 0-39 | Closed by #0-91/#0-92: every producer writes the header (through `TenantRecords`), the resolver dead-letters a record whose header and payload tenant differ, and `AuditEventConsumer` resolves through it like every consumer | PR #452 |
 | 0-81 | `application-test.yml` sat in `src/main/resources` of auth-, incident- and ingestion-service, so it shipped in every jar and image, the auth and incident copies with a hard-coded `jwt.secret` and auth's with a valid `mfa.encryption-key`, applied wherever the `test` profile was switched on. No test activated that profile any more (its only user, `BaseIntegrationTest`, went with backlog #45; tests set their keys with `@TestPropertySource`), so the three files are deleted rather than moved to `src/test/resources`. A CI step in "Build, Test & Coverage" (`.github/scripts/check-packaged-profiles.sh`, its cases in `test-packaged-profiles.sh` run first) fails on any committed `application-<profile>.{yml,yaml,properties}` under `*/src/main/resources` or its `config/`, on a profile document (a `spring.config.activate.on-profile` key, nested or dotted, not the words in a comment) in a base `application.*`, on a base `application.*` that switches a profile on (`spring.profiles.active` / `include` / `default` / `group`: in the jar it would apply in every environment, past #0-63's check of the manifests), and (review) on a key ending in `secret`, `encryption-key`, `private-key` or `api-key` (any case, kebab or camelCase) in a base `application.*` that is not a `${VAR}` placeholder without default, quoted or not, since a key written straight into the base file ships just the same (postmortem-service's `gemini.api-key` lost its `your-api-key-here` default for it; compose and every overlay set `GEMINI_API_KEY`); it has no allow-list (review: an empty, untested one), so a profile in a jar needs a backlog decision and a change to the script. This closes what #0-63's manifest check could not (a run outside the manifests). The developer's gitignored `application-local.yml` in locally built jars: #0-100 | PR #455 |
 | 0-82 | Nothing ended a tenant (split out of #0-80). An operator now suspends and resumes a tenant, `FULL` or `READ_ONLY`, enforced in auth-service (step 1), in every service and on STOMP (2a), and in the background work of notification-, escalation- and postmortem-service (2b); every auth-service table holding a tenant's data has a foreign key to `tenants` (last part). Full record of the decisions: [the item](#0-82-suspend-and-offboard-a-tenant). Offboarding: #0-101; the pause at scale: #0-102 | PRs #456, #457, #458, #459 |
+| 0-93 | A notification channel's failure was recorded with a message built from the mail library's or the Slack client's (an SMTP server's reply, the relay's host and port, a Slack response body) in `notification_log` and the tenant-readable `NOTIFICATION_FAILED` audit event. Now `NotificationException` carries a `NotificationFailureReason` (email: recipient rejected, transport unavailable, authentication failed, other; Slack: rejected, rate-limited, unavailable, workspace missing or unreadable, nothing posted), each marked permanent or not, and at most a provider code checked as `[a-z0-9_]{1,64}` (Slack's `error`, `http_<status>`); its message is built from those alone and the provider's error is only its cause, logged where it is caught (WARN when permanent, the tenant's to fix; ERROR otherwise). The audit event gets a `reason` field; `notification.channel.failed{channel,reason}` counts failed sends (`UNEXPECTED` for an exception no channel anticipated). Found while doing it: Slack answers most failures with HTTP 200 and `"ok": false`, which was read as a delivery, so a message to a channel the bot is not in, or with a revoked token, was recorded SENT; both `chat.postMessage` and `chat.update` now check `ok`. Also: the scheduler's catch-all recorded an unexpected exception's message on the queue entry, now its type. In review: only an SMTP refusal naming the address (enhanced `5.1.x`, or 550/551/553 without one) is the tenant's rejected address, so a relay or policy refusal ("550 5.7.1 Relaying denied") stays the platform's, logged at ERROR; an exception that is not the HTTP client's, rethrown by the Slack fallback, fails only its channel on the ACK update path instead of leaving the loop (`SlackActionService.tryUpdateMessage`); a Slack error that is not a plain code leaves a DEBUG trace. Second review: an `ok:false` without an `error` is `SLACK_REJECTED` (it threw a NullPointerException); a token Slack no longer accepts is `SLACK_AUTH_FAILED`, at ERROR; a refused broadcast no longer stops the on-call DM (before #0-93 it passed as a success, so the DM always went), and the send counts as delivered when the DM went; `send()` classifies an HTTP error itself, as it calls `postIncidentMessage` past the retry proxy (found then, #0-103); a malformed address or a 5xx counts as the tenant's only when it is the recipient's, on `RCPT`. Third review: a refused broadcast is counted (`channel="SLACK_BROADCAST"`) as well as logged. Accepted: a bare 550 without an enhanced code is read as the recipient's (a relay answering a bare "550 Relaying denied" is missed); a Slack answer that cannot be read is a failure, not retried, though Slack may have posted the message (its API always answers JSON, so this is a proxy or an outage). No migration (`error_message` is text). The classification stays in notification-service; auth-service's #0-55 can share it. Per-channel retry by permanence: #0-32 | PR #460 |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |

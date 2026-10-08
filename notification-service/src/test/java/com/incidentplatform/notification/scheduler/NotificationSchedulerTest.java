@@ -456,7 +456,8 @@ class NotificationSchedulerTest {
 
             scheduler.processPendingNotifications();
 
-            then(persistenceService).should().markFailed(entry, "oncall-service unreachable");
+            // Backlog #0-93: by the exception's type, never its message.
+            then(persistenceService).should().markFailed(entry, "Unexpected error: RuntimeException");
             then(queueRepository).should(never()).save(any());
         }
 

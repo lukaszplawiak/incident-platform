@@ -166,6 +166,14 @@ public class NotificationPersistenceService {
      * most 500 characters; found in review: an unbounded message could make
      * the event too large to store, and fail this write with it).
      *
+     * <p>Backlog #0-93: both the error and the reason are the platform's own
+     * text: a channel's failure is its {@code NotificationFailureReason} and
+     * the text built from it, never a provider's message; the reason is also a
+     * field of its own in the audit event, for a reader that filters on it.
+     *
+     * @param reason       the {@code NotificationFailureReason}'s name, or
+     *                     {@code UNEXPECTED} for an exception no channel
+     *                     anticipated; {@code null} is recorded as "unknown"
      * @param errorMessage why the send failed, written by the platform (the
      *                     caller passes {@link AuditText#unexpected} for an
      *                     exception it did not anticipate, never that
@@ -176,7 +184,7 @@ public class NotificationPersistenceService {
     public void recordChannelFailed(UUID incidentId, String tenantId,
                                     String eventType, int escalationLevel,
                                     String channelName, String recipient,
-                                    String errorMessage) {
+                                    String reason, String errorMessage) {
         final String error = errorMessage != null ? errorMessage : "unknown";
         logRepository.save(NotificationLog.failed(
                 incidentId, tenantId, eventType, escalationLevel,
@@ -190,6 +198,7 @@ public class NotificationPersistenceService {
                 String.format("Notification failed via %s to %s: %s", channelName, recipient, auditError),
                 Map.of("channel", channelName,
                         "recipient", recipient,
+                        "reason", reason != null ? reason : "unknown",
                         "error", auditError));
     }
 }
