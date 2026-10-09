@@ -15,7 +15,7 @@ help:
 	@echo "                        logi: Loki/Alloy/proxy Dockera, serwisy); wymaga docker/.env"
 	@echo "                        z DB_PASSWORD, POSTGRES_ADMIN_PASSWORD i GRAFANA_ADMIN_PASSWORD"
 	@echo "    make dev-down     — zatrzymaj kontenery (też wymaga haseł w docker/.env)"
-	@echo "    make grafana-password-check — czy Grafana nadal przyjmuje admin/admin"
+	@echo "    make grafana-password-check — hasło Grafany krótsze niż 16 znaków albo nadal admin/admin"
 	@echo "    make dev-reset    — zatrzymaj + usuń volumes (czysta baza)"
 	@echo "    make dev-logs     — logi wszystkich kontenerów"
 	@echo "    make kafka-ui     — otwórz Kafka UI w przeglądarce"

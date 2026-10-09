@@ -7,9 +7,10 @@
 #
 #   1. GRAFANA_ADMIN_PASSWORD shorter than 16 characters. compose's `:?`
 #      refuses only an empty one. Read as compose reads it: the shell's
-#      variable first, then docker/.env (`export`, spaces around `=`, quotes
-#      and an unquoted ` # comment` handled the way compose does, a UTF-8 BOM
-#      some Windows editors write stripped). A line it cannot read is said
+#      variable first, then docker/.env (`export`, spaces around `=`, quotes,
+#      backslash escapes inside double quotes and an unquoted ` # comment`
+#      handled the way compose does, a UTF-8 BOM some Windows editors write
+#      stripped). A line it cannot read is said
 #      so, not guessed at; so is a value with `$` outside single quotes,
 #      which compose interpolates, so its length here is not Grafana's.
 #   2. Grafana still accepting admin/admin: GF_SECURITY_ADMIN_PASSWORD applies
@@ -46,8 +47,31 @@ env_value() {
     value="${value#"${value%%[![:space:]]*}"}"
     case "$value" in
         \'*\'*) value=${value#\'}; value=${value%%\'*}; printf '%s' "$value"; return 0 ;;
-        \"*\"*) value=${value#\"}; value=${value%%\"*} ;;
-        \"*|\'*) return 2 ;;
+        \"*)
+            # compose (checked on v2) turns \" \\ \$ \a \b \f \n \r \t \v \0 into
+            # one character each, keeps any other backslash pair as two, and
+            # does not interpolate an escaped \$. Only the length matters here.
+            local rest=${value#\"} out= c closed= interpolated=
+            while [ -n "$rest" ]; do
+                c=${rest:0:1}; rest=${rest:1}
+                case "$c" in
+                    \\)
+                        case "${rest:0:1}" in
+                            [\"\\\$abfnrtv0]) out+=x ;;
+                            *) out+="\\${rest:0:1}" ;;
+                        esac
+                        rest=${rest:1}
+                        ;;
+                    \") closed=1; break ;;
+                    \$) interpolated=1; out+=$c ;;
+                    *) out+=$c ;;
+                esac
+            done
+            [ -n "$closed" ] || return 2
+            [ -z "$interpolated" ] || return 3
+            printf '%s' "$out"; return 0
+            ;;
+        \'*) return 2 ;;
         *)
             value=${value%%[[:space:]]#*}
             value="${value%"${value##*[![:space:]]}"}"

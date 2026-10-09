@@ -91,6 +91,14 @@ case_ "unquoted comment not counted" "$LENGTH" "GRAFANA_ADMIN_PASSWORD=short # a
 case_ "double-quoted short" "$LENGTH" "GRAFANA_ADMIN_PASSWORD=\"short\" # c\n"
 case_ "double-quoted # kept" - "GRAFANA_ADMIN_PASSWORD=\"abcdefgh #ijklmnop\"\n"
 case_ "unterminated quote" "$UNREADABLE" "GRAFANA_ADMIN_PASSWORD=\"$LONG\n"
+# Backslash escapes inside double quotes, as compose v2 reads them (checked
+# with `docker compose config`): \" \\ \$ \n ... are one character, any other
+# pair two, and an escaped $ is not interpolated.
+case_ "escaped quote does not end the value (16)" - "GRAFANA_ADMIN_PASSWORD=\"abcdefghijklm\\\\\"pq\"\n"
+case_ "escaped backslash is one character (15)" "$LENGTH" "GRAFANA_ADMIN_PASSWORD=\"abcdefghijklmn\\\\\\\\\"\n"
+case_ "escaped \$ is literal, not interpolated" - "GRAFANA_ADMIN_PASSWORD=\"abcdefghijklmnop\\\\\$\"\n"
+case_ "unknown escape keeps both characters (16)" - "GRAFANA_ADMIN_PASSWORD=\"abcdefghijklmn\\\\q\"\n"
+case_ "escaped closing quote leaves it unterminated" "$UNREADABLE" "GRAFANA_ADMIN_PASSWORD=\"$LONG\\\\\"\n"
 case_ "unquoted \$: compose interpolates" "$DOLLAR" "GRAFANA_ADMIN_PASSWORD=ab\$cdefghijklmnopqrs\n"
 case_ "double-quoted \${}: compose interpolates" "$DOLLAR" "GRAFANA_ADMIN_PASSWORD=\"ab\${X}cd\"\n"
 case_ "single-quoted \$ is literal" "$LENGTH" "GRAFANA_ADMIN_PASSWORD='ab\$c'\n"
