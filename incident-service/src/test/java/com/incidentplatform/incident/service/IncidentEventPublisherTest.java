@@ -130,21 +130,6 @@ class IncidentEventPublisherTest {
                 .isEqualTo(IncidentEventTypes.INCIDENT_CLOSED);
     }
 
-    @Test
-    @DisplayName("publishEscalated writes a PENDING outbox row with the correct event type")
-    void publishEscalatedWritesOutboxRow() {
-        final Incident incident = buildIncident();
-
-        publisher.publishEscalated(incident, UUID.randomUUID(), 2);
-
-        final ArgumentCaptor<IncidentEventOutbox> captor =
-                ArgumentCaptor.forClass(IncidentEventOutbox.class);
-        then(outboxRepository).should().save(captor.capture());
-
-        assertThat(captor.getValue().getEventType())
-                .isEqualTo(IncidentEventTypes.INCIDENT_ESCALATED);
-    }
-
     /**
      * Regression coverage for backlog #0-12: every {@code publishXxx} method
      * must carry {@code Incident.teamId} onto the event it stages. This is
@@ -166,9 +151,8 @@ class IncidentEventPublisherTest {
         publisher.publishAcknowledged(incident, UUID.randomUUID());
         publisher.publishResolved(incident, UUID.randomUUID());
         publisher.publishClosed(incident, UUID.randomUUID(), null);
-        publisher.publishEscalated(incident, UUID.randomUUID(), 1);
 
-        then(outboxRepository).should(org.mockito.Mockito.times(5)).save(captor.capture());
+        then(outboxRepository).should(org.mockito.Mockito.times(4)).save(captor.capture());
 
         for (final IncidentEventOutbox entry : captor.getAllValues()) {
             assertThat(entry.getPayload())

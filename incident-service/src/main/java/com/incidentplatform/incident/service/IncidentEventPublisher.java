@@ -7,7 +7,6 @@ import com.incidentplatform.incident.domain.IncidentEventOutbox;
 import com.incidentplatform.incident.repository.IncidentEventOutboxRepository;
 import com.incidentplatform.shared.events.IncidentAcknowledgedEvent;
 import com.incidentplatform.shared.events.IncidentClosedEvent;
-import com.incidentplatform.shared.events.IncidentEscalatedEvent;
 import com.incidentplatform.shared.events.IncidentEvent;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.events.IncidentOpenedEvent;
@@ -132,23 +131,6 @@ public class IncidentEventPublisher {
         );
         stage(incident.getId(), incident.getTenantId(),
                 IncidentEventTypes.INCIDENT_CLOSED, event);
-    }
-
-    public void publishEscalated(Incident incident,
-                                 UUID escalateTo,
-                                 int escalationLevel) {
-        final IncidentEscalatedEvent event = new IncidentEscalatedEvent(
-                incident.getId(),
-                incident.getTenantId(),
-                escalateTo,
-                escalationLevel,
-                incident.getSeverity(),
-                incident.getTitle(),
-                Instant.now(),
-                incident.getTeamId()
-        );
-        stage(incident.getId(), incident.getTenantId(),
-                IncidentEventTypes.INCIDENT_ESCALATED, event);
     }
 
     /**

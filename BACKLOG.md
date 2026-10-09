@@ -50,7 +50,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-5](#0-5-testcontainers-and-kafka-test-jars-ship-in-every-service-jar) | Testcontainers and Kafka test jars ship in every service jar | tech-debt | Medium | Open |
 | [0-6](#0-6-untracked-todos-need-a-backlog-reference) | Untracked `TODO`s need a backlog reference | tech-debt | Low | Open |
 | [0-7](#0-7-incident-service-coerces-escalationlevel-with-asint0) | incident-service coerces `escalationLevel` with `asInt(0)` | bug | Low | Open |
-| [0-8](#0-8-dead-publishescalated-and-a-stale-javadoc-in-incident-service) | Dead `publishEscalated` and a stale Javadoc in incident-service | tech-debt | Low | Open |
 | [0-13](#0-13-asymmetric-service-tokens-or-mtls-for-service-identity) | Asymmetric service tokens or mTLS for service identity | design | Medium | Open |
 | [0-14](#0-14-by-slack-is-open-to-any-authenticated-role) | `GET /by-slack/{id}` is open to any authenticated role | tech-debt | Low | Open |
 | [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
@@ -240,36 +239,6 @@ incident rather than a lost notification) and apply the same validation if warra
 
 **Acceptance.** A malformed level is dead-lettered or rejected instead of silently recorded as `0`;
 consumer test added.
-
----
-
-### 0-8. Dead `publishEscalated` and a stale Javadoc in incident-service
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open
-**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** incident-service (com.incidentplatform.incident.service, com.incidentplatform.incident.kafka)
-
-**Problem.** `IncidentEventPublisher.publishEscalated(...)` has no callers. The Javadoc of
-`IncidentEscalationEventConsumer` still says incident-service publishes `IncidentEscalatedEvent`
-for manual REST-driven escalation, so the only producer today is escalation-service's
-`EscalationScheduler`.
-
-**Work.** Remove the dead method (or wire the manual-escalation path if it is meant to exist) and
-correct the Javadoc. If a manual path is ever added it must publish a level that cannot collide
-with the automatic one, because a repeat escalation at the same level is deduplicated.
-
-**Acceptance criteria.** Decided (2026-10-09): remove the method; incident-service has no manual
-escalation endpoint to wire.
-AC1. `IncidentEventPublisher` has no `publishEscalated` method and no `IncidentEscalatedEvent` import;
-incident-service compiles.
-AC2. `IncidentEventPublisherTest` no longer has `publishEscalatedWritesOutboxRow`, and
-`everyPublishMethodCarriesTeamId` covers the four remaining publish methods (`times(4)`), still asserting
-the team id on each payload.
-AC3. The Javadoc of `IncidentEscalationEventConsumer` names escalation-service's `EscalationScheduler` as
-the only producer of `IncidentEscalatedEvent`, says nothing of a manual REST-driven escalation, and keeps
-one sentence: a manual escalation path, if one is ever added, must publish a level that cannot collide with
-the automatic one, as a repeat escalation at the same level is deduplicated. Evidence: the diff, judged by
-`review-docs`.
 
 ---
 
