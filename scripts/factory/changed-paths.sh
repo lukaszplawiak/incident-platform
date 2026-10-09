@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# ============================================================
+# What the current branch changes relative to its merge base with the base branch, as JSON. The
+# autopilot uses it to pick the reviewers to run and to stop on changes only the owner may make, and two
+# more things:
+#   areas      the modules and areas the diff reaches, in the vocabulary of **Touches:**
+#              (scripts/factory/_backlog.sh) — compared with the item's Touches and the architect's plan;
+#   ruleFiles  the rule files of .ai/rules/review/ that apply to this diff: general, architecture and
+#              security always, the others when the diff reaches their area — the implementer self-checks
+#              against those its plan did not list, before the panel sees the change.
+#   changed-paths.sh [base-ref] [since-sha]
+# With since-sha, "delta" lists what changed since that commit (for review rounds 2+).
+# ============================================================
+set -uo pipefail
+. "$(dirname "$0")/_common.sh"
+
+base=${1:-$(base_ref)}
+since=${2:-}
+mb=$(git merge-base "$base" HEAD 2>/dev/null) || { jq -n --arg b "$base" '{error:("no merge base with " + $b)}'; exit 1; }
+files=$(git diff --no-renames --name-only "$mb"...HEAD)
+delta='[]'
+if [ -n "$since" ]; then
+    delta=$(git diff --no-renames --name-only "$since"..HEAD | jq -R . | jq -s .)
+fi
+
+json_list() { printf '%s\n' "$1" | sed '/^$/d' | jq -R . | jq -s .; }
+match() { printf '%s\n' "$files" | grep -E "$1" || true; }
+
+protected=$(match '^(\.ai/rules/|\.ai/plan/|\.ai/audit/decisions\.md$|\.claude/|\.github/|architecture-tests/|AGENTS\.md$|scripts/factory/|scripts/factory-admin/|\.devcontainer/)')
+build_config=$(match '^(\.mvn/|mvnw(\.cmd)?$)')
+skip_props=$(git diff --no-renames "$mb"...HEAD -- '*pom.xml' | grep -E '^\+' | grep -vE '^\+\+\+' | grep -E 'skipTests|maven\.test\.skip|testFailureIgnore|<skip>[[:space:]]*true|haltOnFailure|jacoco\.skip|<excludes>|<exclude>' | head -3 || true)
+[ -n "$skip_props" ] && build_config="$build_config"$'\n'"pom.xml: skip/exclude property added"
+# CLAUDE.md: only its agent-editable blocks are the implementer's (CLAUDE.md, "Commands").
+claude_md=false
+if grep -qx 'CLAUDE.md' <<<"$files"; then
+    strip() { awk '/<!-- agent-editable:start/{skip=1} !skip{print} /<!-- agent-editable:end/{skip=0}'; }
+    markers() { grep -n 'agent-editable:' | sed 's/^[0-9]*://'; }
+    if [ "$(git show "$mb:CLAUDE.md" 2>/dev/null | strip)" != "$(git show HEAD:CLAUDE.md | strip)" ] \
+       || [ "$(git show "$mb:CLAUDE.md" 2>/dev/null | markers)" != "$(git show HEAD:CLAUDE.md | markers)" ]; then claude_md=true; fi
+fi
+migrations=$(match '/src/main/resources/db/migration/.*\.(sql|java)$')
+edited_applied=""
+for f in $migrations; do
+    if git cat-file -e "$base:$f" 2>/dev/null && ! git diff --quiet "$mb" HEAD -- "$f"; then edited_applied="$edited_applied$f"$'\n'; fi
+done
+# a deleted applied migration
+for f in $(git diff --no-renames --name-only --diff-filter=D "$mb"...HEAD | grep -E '/src/main/resources/db/migration/' || true); do
+    git cat-file -e "$base:$f" 2>/dev/null && edited_applied="$edited_applied$f (deleted)"$'\n'
+done
+entities=$(git diff "$mb"...HEAD -- '*.java' | grep -E '^\+.*@(Entity|Table|Column|Version)\b' | head -1 || true)
+k8s=$(match '(^k8s/|(^|/)Dockerfile$|(^|/)pom\.xml$)')
+pom_supply=$(git diff "$mb"...HEAD -- '*pom.xml' | grep -E '^\+.*<(plugin|repository|pluginRepository|dependency)>' | head -5 || true)
+deleted_tests=$(git diff --no-renames --name-only --diff-filter=D "$mb"...HEAD | grep -E '/src/test/' || true)
+disabled_added=$(git diff "$mb"...HEAD -- '*.java' | grep -cE '^\+.*@Disabled' || true)
+docs=$(match '(\.md$|/src/main/resources/application[^/]*\.ya?ml$)')
+mods=$(printf '%s\n' "$files" | cut -d/ -f1 | sort -u | grep -E '^(shared|service-parent|[a-z]+-service)$' || true)
+root_pom=$(match '^pom\.xml$')
+# Areas: Maven modules by their directory; the rest by path. Process files (.ai/ except context/, the
+# backlog) are not part of an item's reach.
+areas=$(printf '%s\n' "$files" | sed '/^$/d' | awk -F/ '
+    $1 ~ /^(shared|service-parent|auth-service|ingestion-service|incident-service|notification-service|escalation-service|postmortem-service|oncall-service)$/ { print $1; next }
+    $1 == "docs" { print "docs"; next }
+    $1 == "k8s" { print "k8s"; next }
+    $1 == "docker" { print "docker"; next }
+    $1 == ".github" || $1 == "scripts" { print "ci"; next }
+    $0 ~ /^\.ai\/context\// || $1 == "architecture-tests" { print "root"; next }
+    $1 == ".ai" || $0 ~ /^BACKLOG(-DONE)?\.md$/ { next }
+    NF == 1 { print "root"; next }
+    { print "root" }' | sort -u)
+# Rule files the diff calls for, beyond the core three. Triggers are deliberately broad: a false trigger
+# costs one self-check by the implementer, a missed one costs a review round.
+added_java=$(git diff "$mb"...HEAD -- '*.java' | grep -E '^\+' | grep -vE '^\+\+\+' || true)
+rule_files="general"$'\n'"architecture"$'\n'"security"
+{ [ -n "$migrations" ] || [ -n "$entities" ]; } && rule_files="$rule_files"$'\n'"migration"
+[ -n "$k8s" ] && rule_files="$rule_files"$'\n'"k8s"
+# Here-strings, not `printf | grep -q`: under pipefail an early match would SIGPIPE the printf and the
+# pipeline would count as false on a large diff.
+grep -qE '@(KafkaListener|Scheduled|Query|Modifying|Async|Cacheable)\b|extends (Jpa|Crud|PagingAndSorting|ListCrud)Repository|findAll\(|Executor|KafkaTemplate|RestClient|WebClient|@Transactional' <<<"$added_java" \
+    && rule_files="$rule_files"$'\n'"performance"
+{ [ -n "$(match '(\.md$|/src/main/resources/application[^/]*\.ya?ml$)' | grep -vE '^(\.ai/(work|decisions)/|BACKLOG(-DONE)?\.md$)')" ] \
+  || grep -qE '@(RestController|Controller|(Get|Post|Put|Patch|Delete|Request)Mapping)\b' <<<"$added_java"; } \
+    && rule_files="$rule_files"$'\n'"docs"
+
+ready_flag=$(git diff "$mb"...HEAD -- BACKLOG.md | grep -E '^\+' | grep -vE '^\+\+\+' | grep -E '\*\*Autopilot:\*\*[[:space:]]*ready([^a-z-]|$)' | head -1 || true)
+
+jq -n --argjson files "$(json_list "$files")" --argjson protected "$(json_list "$protected")" \
+      --argjson migrations "$(json_list "$migrations")" --argjson editedApplied "$(json_list "$edited_applied")" \
+      --arg entities "$entities" --argjson k8s "$(json_list "$k8s")" --arg pomSupply "$pom_supply" \
+      --argjson deletedTests "$(json_list "$deleted_tests")" --argjson disabledAdded "${disabled_added:-0}" \
+      --argjson docs "$(json_list "$docs")" --argjson modules "$(json_list "$mods")" --arg rootPom "$root_pom" --arg readyFlag "$ready_flag" \
+      --argjson buildConfig "$(json_list "$build_config")" --argjson claudeMd "$claude_md" \
+      --argjson delta "$delta" --arg base "$base" --arg mb "$mb" --arg head "$(git rev-parse HEAD)" \
+      --argjson areas "$(json_list "$areas")" --argjson ruleFiles "$(json_list "$rule_files")" '
+{ base:$base, mergeBase:$mb, head:$head, files:$files, delta:$delta, modules:$modules,
+  areas:$areas, ruleFiles:$ruleFiles,
+  protectedTouched:$protected,
+  migrationTouched:(($migrations|length)>0 or ($entities|length)>0),
+  editedAppliedMigrations:$editedApplied,
+  k8sOrBuildTouched:(($k8s|length)>0),
+  pomSupplyChainChange:(($pomSupply|length)>0), pomSupplyChainLines:$pomSupply,
+  allModules:(($rootPom|length)>0 or ($modules|index("shared"))!=null or ($modules|index("service-parent"))!=null),
+  deletedTests:$deletedTests, disabledTestsAdded:$disabledAdded,
+  docsTouched:(($docs|length)>0), readyFlagAdded:(($readyFlag|length)>0),
+  buildConfigChanged:$buildConfig, claudeMdOutsideBlocks:$claudeMd,
+  needsHuman:( ($protected|length)>0 or ($editedApplied|length)>0 or ($pomSupply|length)>0
+               or ($deletedTests|length)>0 or $disabledAdded>0 or ($readyFlag|length)>0
+               or ($buildConfig|length)>0 or $claudeMd ) }'

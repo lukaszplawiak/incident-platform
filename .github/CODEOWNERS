@@ -1,0 +1,26 @@
+# ============================================================
+# Human-owned paths of the AI factory (backlog #0-113). With "Require review from Code Owners" on in the
+# branch protection of main, a PR touching any of these waits for the owner's approval; every other PR
+# can merge on green checks alone (the autopilot's --auto merge).
+#
+# Replace the placeholder with your GitHub login (e.g. @lukasz) before enabling the protection rule:
+# GitHub ignores lines whose owner it cannot resolve, and then nothing is protected.
+# ============================================================
+
+# What the agents are judged by, and their own configuration
+/.ai/rules/                 @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/.ai/audit/decisions.md     @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/.ai/plan/                  @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/.claude/                   @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/AGENTS.md                  @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/CLAUDE.md                  @REPLACE-WITH-YOUR-GITHUB-LOGIN
+
+# The gates
+/.github/                   @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/architecture-tests/        @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/scripts/factory/           @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/scripts/factory-admin/     @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/.devcontainer/             @REPLACE-WITH-YOUR-GITHUB-LOGIN
+
+# The build: plugins and repositories in the root POM run wherever `mvn verify` runs (#0-110)
+/pom.xml                    @REPLACE-WITH-YOUR-GITHUB-LOGIN

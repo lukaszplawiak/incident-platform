@@ -50,3 +50,9 @@ HELP.md
 # ignored, not one filename, so any secret written there is covered.
 docker/secrets/*
 !docker/secrets/.gitkeep
+
+# AI factory (backlog #0-113): local run state, logs and the kill switch never leave this machine.
+.ai/runs/
+.ai/STOP
+# Personal Claude Code permissions (each developer's own)
+.claude/settings.local.json

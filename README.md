@@ -332,6 +332,48 @@ in Settings).
 - Security scanning and dependency updates: see [Security Scanning](#security-scanning) and
   [Dependency Updates — Renovate](#dependency-updates--renovate) in CI/CD.
 
+### AI factory (unattended agents)
+
+Controls around the autopilot that implements `BACKLOG.md` items without a human in the loop
+([docs/ai-factory.md](docs/ai-factory.md), backlog #0-113). The premise: an agent's instructions are not a
+security boundary, so every rule that matters is also enforced outside the model.
+
+- **Human-owned paths**: `.ai/rules/`, `.ai/plan/` (the approved order of work), `.claude/`, `.github/`, `architecture-tests/`, `AGENTS.md`, the gates'
+  own files (`scripts/factory/`, `.devcontainer/`, `.mvn/`, `mvnw`) are denied to autopilot sessions for the file
+  tools (`.claude/settings.autopilot.json`), guarded heuristically for the shell
+  (`.claude/hooks/guard-protected-bash.sh`), stop an item before review when committed
+  (`scripts/factory/changed-paths.sh`), and need the owner's review on a PR (`.github/CODEOWNERS`, effective
+  once the protection rule requires it). Factory scripts run only while identical to `main`
+  (`guard-factory-scripts.sh`).
+- **Factory guards** (`.github/workflows/factory-guards.yml`): a PR that deletes, renames away or disables
+  tests, removes assertions, adds a Maven plugin, repository or dependency, changes what verification runs
+  (`.mvn/`, `mvnw`, skip properties), edits or deletes an applied Flyway migration, or marks a backlog item
+  ready fails unless its author is the owner or the owner approved its current commit. The same workflow
+  validates the execution queue against the backlog (`scripts/factory/check-queue.sh`).
+- **The next item is chosen by code** (`scripts/factory/next-item.sh`), from the files on the run's base
+  commit: only `ready` items, dependencies done, no open PR or branch, in the order of the owner-approved
+  queue. Follow-ups an agent proposes enter as `proposed` and run only after the owner's `/ready`.
+- **Skipping verification is refused** in autopilot sessions (`guard-tests.sh`: `-DskipTests`, `--no-verify`,
+  `-fn`, `exec:` goals, another `settings.xml`, …), the test gate tests the committed HEAD of a clean tree, and
+  applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`).
+  Hook tests: `.claude/hooks/test-hooks.sh`.
+- **Least privilege per agent**: reviewers, the architect and the auditors run read-only Bash allow-lists
+  and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); the autopilot session is `dontAsk`
+  with an explicit allow-list; `WebFetch`/`WebSearch` are denied (an agent that reads untrusted text must not
+  be able to send data out).
+- **Network**: autopilot runs happen in the devcontainer (`.devcontainer/`), whose firewall allows only its
+  own DNS resolver, the Anthropic API, GitHub, Maven Central and the Docker host. It narrows exfiltration, it
+  does not prevent it: the host's Docker (needed by Testcontainers) and GitHub itself remain channels.
+- **Merge**: shadow mode does not rely on the agents — `gh pr merge` is denied to autopilot sessions and the
+  only push a hook allows is `git push -u origin <type>/<branch>`, until #0-113's bot account and branch
+  protection exist. A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
+  the preflight honours.
+
+**Known gaps**: the GitHub settings themselves (#0-113); no secret scanning (#0-109); no Maven Enforcer
+(#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines;
+subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
+where only the session-level hooks apply. Layers and their limits: docs/ai-factory.md, "What isolates what".
+
 ### Container images
 
 - **Multi-stage builds**: each service's Dockerfile builds with the JDK image and ships only the JRE image

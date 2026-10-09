@@ -1,5 +1,28 @@
 {
+  "$comment": "Shared project settings for every Claude Code session in this repository. Autopilot sessions add .claude/settings.autopilot.json on top (claude --settings .claude/settings.autopilot.json). Changes need the owner's review (CODEOWNERS).",
   "permissions": {
-    "defaultMode": "plan"
-  }
+    "defaultMode": "plan",
+    "deny": [
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push --force-with-lease *)",
+      "Bash(git push origin main *)",
+      "Bash(git push origin HEAD:main *)",
+      "Read(./docker/.env)",
+      "Read(./docker/secrets/**)",
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-migrations.sh" }
+        ]
+      }
+    ]
+  },
+  "cleanupPeriodDays": 90
 }

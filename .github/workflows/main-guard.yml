@@ -1,0 +1,45 @@
+# ============================================================
+# Main guard — a red main stops the autopilot (backlog #0-113)
+#
+# When CI fails on main, open (once) an issue labelled `autopilot-stop`. The autopilot's preflight
+# (scripts/factory/preflight.sh) refuses to start while such an issue is open, and also reads main's
+# latest CI result itself, so this issue is the visible, remote half of the stop: closable from a phone,
+# and a place to note what broke. Reverting is the owner's decision, not automated: the failing commit is
+# not always the one to revert.
+# ============================================================
+
+name: Main guard
+
+on:
+  workflow_run:
+    workflows: [ CI ]
+    types: [ completed ]
+    branches: [ main ]
+
+# GITHUB_TOKEN scope (backlog #0-59): read, plus issues: write for the stop issue only.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  stop-on-red-main:
+    name: Stop the autopilot on a red main
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open the autopilot-stop issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          open=$(gh issue list --label autopilot-stop --state open --json number --jq 'length')
+          if [ "$open" -gt 0 ]; then
+            echo "an autopilot-stop issue is already open"
+            exit 0
+          fi
+          body=$(printf 'CI failed on main at %s: %s\n\nThe autopilot will not start while this issue is open. Fix or revert main, check that CI is green, then close this issue.\n' "$HEAD_SHA" "$RUN_URL")
+          gh issue create --label autopilot-stop \
+            --title "CI is red on main (${HEAD_SHA:0:7}): autopilot stopped" \
+            --body "$body"

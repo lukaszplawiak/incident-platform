@@ -1,0 +1,169 @@
+{
+  "$comment": "Added on top of .claude/settings.json for unattended autopilot sessions only: claude --settings .claude/settings.autopilot.json, then /backlog-autopilot. dontAsk: anything not allowed below is denied, nobody is there to approve it. Deny wins over allow. Paths use ./ (relative to the session's working directory, the repository root): a leading / would be relative to this file's directory. Human-owned paths cannot be written; the network tools are off (an agent that reads untrusted text must not be able to send data out); verification cannot be skipped (hooks). `gh pr merge` stays denied until backlog #0-113 (bot account, branch protection) is done: that is what makes shadow mode structural rather than a prompt. Phase 3 (docs/ai-factory.md): remove `Bash(gh pr merge *)` from deny, keep the `--admin` deny, and add `Bash(gh pr merge * --squash --auto)` to allow.",
+  "permissions": {
+    "defaultMode": "dontAsk",
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Workflow(backlog-autopilot)",
+      "Workflow(audit)",
+      "Workflow(docs-audit)",
+      "Workflow(seed-bugs)",
+      "Bash(./mvnw *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git rev-parse *)",
+      "Bash(git merge-base *)",
+      "Bash(git ls-files *)",
+      "Bash(git blame *)",
+      "Bash(git branch --list *)",
+      "Bash(git switch *)",
+      "Bash(git checkout -b *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git rm *)",
+      "Bash(git mv *)",
+      "Bash(git fetch origin main)",
+      "Bash(git push -u origin *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh pr ready *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh issue view *)",
+      "Bash(gh run view *)",
+      "Bash(gh issue list *)",
+      "Bash(gh run list *)",
+      "Bash(gh label list *)",
+      "Bash(scripts/factory/*)",
+      "Bash(./scripts/factory/*)",
+      "Bash(ls *)",
+      "Bash(mkdir -p .ai/work/*)",
+      "Bash(mkdir -p .ai/runs/*)",
+      "Bash(cp -r .ai/work/_template *)",
+      "Bash(jar tf *)",
+      "Bash(kubectl kustomize *)",
+      "Bash(kubeconform *)"
+    ],
+    "deny": [
+      "Edit(./.ai/rules/**)",
+      "Write(./.ai/rules/**)",
+      "Edit(./.claude/**)",
+      "Write(./.claude/**)",
+      "Edit(./.github/**)",
+      "Write(./.github/**)",
+      "Edit(./architecture-tests/**)",
+      "Write(./architecture-tests/**)",
+      "Edit(./AGENTS.md)",
+      "Write(./AGENTS.md)",
+      "Edit(./scripts/factory/**)",
+      "Write(./scripts/factory/**)",
+      "Edit(./scripts/factory-admin/**)",
+      "Edit(./.ai/plan/**)",
+      "Write(./.ai/plan/**)",
+      "Write(./scripts/factory-admin/**)",
+      "Edit(./.devcontainer/**)",
+      "Write(./.devcontainer/**)",
+      "Edit(./mvnw)",
+      "Write(./mvnw)",
+      "Edit(./mvnw.cmd)",
+      "Write(./mvnw.cmd)",
+      "Edit(./.mvn/**)",
+      "Write(./.mvn/**)",
+      "Edit(./.git/**)",
+      "Write(./.git/**)",
+      "Edit(./.ai/runs/LOCK)",
+      "Write(./.ai/runs/LOCK)",
+      "Edit(./.ai/runs/state.json)",
+      "Write(./.ai/runs/state.json)",
+      "Edit(./.ai/STOP)",
+      "Write(./.ai/STOP)",
+      "Edit(./.ai/audit/decisions.md)",
+      "Write(./.ai/audit/decisions.md)",
+      "Read(**/application-local.yml)",
+      "Read(**/application-local.yaml)",
+      "Read(./docker/.env)",
+      "Read(./docker/secrets/**)",
+      "Read(~/.config/gh/**)",
+      "Read(~/.claude/.credentials.json)",
+      "Read(~/.claude.json)",
+      "Read(~/.ssh/**)",
+      "Read(~/.netrc)",
+      "Read(~/.git-credentials)",
+      "Read(~/.m2/settings*.xml)",
+      "WebFetch",
+      "WebSearch",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push --force-with-lease *)",
+      "Bash(git push origin main *)",
+      "Bash(git push origin HEAD:main *)",
+      "Bash(git reset --hard *)",
+      "Bash(git rebase *)",
+      "Bash(git config *)",
+      "Bash(gh pr merge * --admin *)",
+      "Bash(gh api *)",
+      "Bash(gh repo *)",
+      "Bash(gh secret *)",
+      "Bash(gh auth *)",
+      "Bash(scripts/factory-admin/*)",
+      "Bash(./scripts/factory-admin/*)",
+      "Bash(rm -rf *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(ssh *)",
+      "Bash(scp *)",
+      "Bash(docker *)",
+      "Bash(sudo *)",
+      "Bash(git push -u origin main*)",
+      "Bash(git push * HEAD:main*)",
+      "Bash(git push * main)",
+      "Bash(gh pr merge *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-tests.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-protected-bash.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-git-push.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-factory-scripts.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-migrations.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "FACTORY_AUDIT_EVERY": "10",
+    "FACTORY_MAX_BLOCKED": "2",
+    "FACTORY_MAX_MERGES_PER_DAY": "5"
+  }
+}
