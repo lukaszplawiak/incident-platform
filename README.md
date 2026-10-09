@@ -347,22 +347,30 @@ security boundary, so every rule that matters is also enforced outside the model
   (`guard-factory-scripts.sh`).
 - **Factory guards** (`.github/workflows/factory-guards.yml`): a PR that deletes, renames away or disables
   tests, removes assertions, adds a Maven plugin, repository or dependency, changes what verification runs
-  (`.mvn/`, `mvnw`, skip properties), edits or deletes an applied Flyway migration, or marks a backlog item
+  (`.mvn/`, `mvnw`, skip properties, the coverage check's threshold, rule, goal, phase or includes), edits or deletes an applied Flyway migration, or marks a backlog item
   ready fails unless its author is the owner or the owner approved its current commit. The same workflow
   validates the execution queue against the backlog (`scripts/factory/check-queue.sh`).
 - **The next item is chosen by code** (`scripts/factory/next-item.sh`), from the files on the run's base
   commit: only `ready` items, dependencies done, no open PR or branch, in the order of the owner-approved
   queue. Follow-ups an agent proposes enter as `proposed` and run only after the owner's `/ready`.
 - **Skipping verification is refused** in autopilot sessions (`guard-tests.sh`: `-DskipTests`, `--no-verify`,
-  `-fn`, `exec:` goals, another `settings.xml`, …), the test gate tests the committed HEAD of a clean tree, and
-  applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`).
+  `-fn`, `exec:` goals, another `settings.xml`, …), the test gate tests the committed HEAD of a clean tree with
+  its own Maven settings (`scripts/factory/maven-settings.xml`, no `~/.mavenrc`, no `MAVEN_OPTS`: nothing an
+  agent's code can write in the home directory decides what runs), the file tools of an autopilot session
+  write only inside the repository (`guard-write-in-repo.sh`), and applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`).
   Hook tests: `.claude/hooks/test-hooks.sh`.
 - **Least privilege per agent**: reviewers, the architect and the auditors run read-only Bash allow-lists
-  and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); the autopilot session is `dontAsk`
+  and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); every agent searches with `git grep`
+  only, with an allow-list of options checked on the command as bash splits it (so no abbreviated or quoted
+  `--untracked`, `--no-index`, `-f` or `-O`, no `$` expansion, no unquoted glob before `--`, no line
+  continuation, which bash joins before running; the latter is refused in every autopilot command): tracked files
+  only, so a gitignored secret is never read and no program is run; the
+  autopilot session is `dontAsk`
   with an explicit allow-list; `WebFetch`/`WebSearch` are denied (an agent that reads untrusted text must not
   be able to send data out).
 - **Network**: autopilot runs happen in the devcontainer (`.devcontainer/`), whose firewall allows only its
-  own DNS resolver, the Anthropic API, GitHub, Maven Central and the Docker host. It narrows exfiltration, it
+  own DNS resolver, the Anthropic API, GitHub, Maven Central and the Docker host over IPv4, closes IPv6 to all
+  but loopback, and blocks all traffic if its own setup fails (`FIREWALL SETUP FAILED`). It narrows exfiltration, it
   does not prevent it: the host's Docker (needed by Testcontainers) and GitHub itself remain channels.
 - **Merge**: shadow mode does not rely on the agents — `gh pr merge` is denied to autopilot sessions and the
   only push a hook allows is `git push -u origin <type>/<branch>`, until #0-113's bot account and branch
