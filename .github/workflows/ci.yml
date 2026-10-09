@@ -30,15 +30,24 @@ jobs:
   # ──────────────────────────────────────────────────────────
   # Job 1: Build, test and coverage
   #
-  # Always runs in full, regardless of which paths changed — every
-  # service depends on `shared`, so there's no safe way to skip modules
-  # here. This is also the fast, cheap, always-correct baseline check;
-  # only the expensive downstream jobs (Docker builds, smoke test) are
-  # worth being selective about.
+  # Runs in full or not at all — every service depends on `shared`, so
+  # there's no safe way to skip modules here. Not at all only on a pull
+  # request that changes Markdown alone (`code` from detect-changes, see
+  # the job's own comment); on every other PR and on every push to main
+  # it builds and tests everything.
   # ──────────────────────────────────────────────────────────
   build-and-test:
     name: Build, Test & Coverage
     runs-on: ubuntu-latest
+    # Skipped on a pull request that changes Markdown only (the backlog, /ready, runbooks, .ai/), where a
+    # full `mvn verify` of every module takes minutes and tests nothing that changed: nothing the build,
+    # its tests or its check scripts read is Markdown. A non-Markdown file anywhere, in docs/ and .ai/
+    # too, runs it (check-structured-logging.sh scans every tracked yml/json/sh, wherever it lives). Skipped at the job, not with `paths-ignore`
+    # on the workflow: a skipped job counts as passed for a required check, while a workflow that does not
+    # run leaves a required check waiting for ever (#0-113). Always run on a push to main (the safety net)
+    # and whenever detect-changes did not succeed, so a failure there cannot skip the build silently.
+    needs: detect-changes
+    if: ${{ !cancelled() && (github.event_name == 'push' || needs.detect-changes.result != 'success' || needs.detect-changes.outputs.code == 'true') }}
 
     steps:
       - name: Checkout code
@@ -206,7 +215,10 @@ jobs:
   # ──────────────────────────────────────────────────────────
   # Job 2: Detect what changed
   #
-  # Feeds two downstream decisions:
+  # Feeds three downstream decisions:
+  # - `code` (boolean): does the change touch anything but Markdown?
+  #   false skips build-and-test (job 1) and the smoke test (job 5) on a
+  #   pull request; a push to main always runs both.
   # - `services` (JSON array): which service Docker images actually
   #   need building. Any single service filter matching means only
   #   that service is rebuilt. A change under `shared/**` (every
@@ -230,11 +242,27 @@ jobs:
     outputs:
       services: ${{ steps.compute.outputs.services }}
       infra: ${{ steps.filter.outputs.infra }}
+      code: ${{ steps.code.outputs.code }}
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
+
+      # `code`: does the change touch anything but Markdown? A step of its own because
+      # `predicate-quantifier: every` (a file counts only if it matches every pattern, here "anything" and
+      # not Markdown) applies to all filters of a step, and the filters below are lists of alternatives.
+      # Patterns match dotfiles too: a non-Markdown file anywhere, .github/ and .claude/ included, is
+      # code. A renamed file is listed under its old name as well, so X.java -> X.md is code.
+      - name: Filter code changes
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        id: code
+        with:
+          predicate-quantifier: 'every'
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
 
       - name: Filter changed paths
         uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
@@ -718,7 +746,12 @@ jobs:
     # detect-changes ever changed or broke silently, this job's own
     # safety net for the push-to-main case should not silently disappear
     # along with it.
-    if: github.event_name == 'push' || needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.services != '[]'
+    #
+    # And `code`: a pull request that changes Markdown only (a service's
+    # README matches its `services` filter) has nothing to boot differently,
+    # as build-and-test (job 1) concludes too; it no longer waits for this
+    # job's 20 minutes.
+    if: github.event_name == 'push' || (needs.detect-changes.outputs.code == 'true' && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.services != '[]'))
     timeout-minutes: 20
     # docker-compose.yml requires both database passwords (backlog #0-78) and
     # Grafana's admin password (#0-94 step 2), and interpolates them for every
