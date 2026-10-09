@@ -39,6 +39,12 @@ RUN chmod 0755 /usr/local/bin/init-firewall.sh
 # preflight, 2026-10-09). One repository, one user in this container: trust it system-wide, so a rebuild
 # keeps it (a --global setting lives in the container's home and is lost).
 RUN git config --system --add safe.directory /workspace
+# git push uses gh's login (the machine account's token, in the gh volume): the credential helper
+# `gh auth setup-git` would write, but in the system config, as `setup-git` writes ~/.gitconfig, which a
+# rebuild loses while the gh login survives (seen 2026-10-09: push then asked for a password). The empty
+# entry clears any helper configured before it. It holds no secret: without a gh login, a push fails.
+RUN git config --system --add credential.https://github.com.helper '' \
+    && git config --system --add credential.https://github.com.helper '!/usr/bin/gh auth git-credential'
 
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
