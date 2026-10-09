@@ -231,7 +231,7 @@ Optionally add a CI grep that fails on a new `TODO` without `backlog #`.
 
 ### 0-7. incident-service coerces `escalationLevel` with `asInt(0)`
 
-**Type:** bug · **Priority:** Low · **Status:** Open
+**Type:** bug · **Priority:** Low · **Status:** In progress — autopilot run 20261009-185712
 **Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** incident-service (kafka)
 
