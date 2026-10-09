@@ -1,11 +1,9 @@
 # Proofs: 0-8
 
-Each acceptance criterion and the evidence that shows it (`.ai/rules/acceptance.md`). No pasted logs and
-no secrets: the full output is in `.ai/runs/<item>/` (gitignored), named here.
-
 | Criterion | Evidence | Kind |
 |---|---|---|
-| AC1 | `<Class>#<method>` asserts <outcome> | test |
-| AC2 | `.github/scripts/check-<x>.sh` fails without the change (its test case: `<name>`) | CI check |
+| AC1 | incident-service compiles and `IncidentEventPublisherTest` runs; `git grep publishEscalated` finds no code | test |
+| AC2 | `IncidentEventPublisherTest#everyPublishMethodCarriesTeamId` asserts times(4) and the teamId in each payload; `publishEscalatedWritesOutboxRow` absent | test |
+| AC3 | diff of `IncidentEscalationEventConsumer` class Javadoc | review |
 
-Test run: `./mvnw verify -pl <modules>` — PASS, <n> tests, log `.ai/runs/<item>/tests-r<round>.log`.
+Test run: `./mvnw test -pl incident-service -am -Dtest=IncidentEventPublisherTest` - PASS (run by the implementer; the gate's log is `.ai/runs/0-8/`).

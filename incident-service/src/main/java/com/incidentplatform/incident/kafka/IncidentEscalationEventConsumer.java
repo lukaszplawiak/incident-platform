@@ -21,13 +21,18 @@ import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 /**
- * Closes the loop on incident escalation: incident-service publishes
- * {@code IncidentEscalatedEvent} (via {@link com.incidentplatform.incident.service.IncidentEventPublisher}
- * for manual REST-driven escalation, and escalation-service publishes the same
- * event type for automatic timeout-driven escalation) — but until this consumer
- * existed, incident-service never read its own event back, so
- * {@code Incident.escalationLevel} only reflected manual changes and was never
- * updated by escalation-service's automatic {@code EscalationScheduler}.
+ * Closes the loop on incident escalation: escalation-service's
+ * {@code EscalationScheduler} is the only producer of
+ * {@code IncidentEscalatedEvent} on {@code incidents.lifecycle}, and this
+ * consumer keeps {@code Incident.escalationLevel} in step with it. A manual
+ * escalation path, if one is ever added, must publish a level that cannot
+ * collide with the automatic one, as a repeat escalation at the same level is
+ * deduplicated on purpose (ADR-0017).
+ *
+ * <h2>Changed (backlog #0-8)</h2>
+ * The unused incident-service producer
+ * {@code IncidentEventPublisher.publishEscalated} was removed; this Javadoc
+ * used to name it as a second producer.
  *
  * <p>This consumer listens to {@code incidents.lifecycle} for
  * {@code IncidentEscalatedEvent} specifically and calls

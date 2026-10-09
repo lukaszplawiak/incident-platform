@@ -1,33 +1,24 @@
 # Handoff: 0-8
 
-Facts only. No reasoning about why the change is good: reviewers judge it themselves. Updated by the
-implementer after every round.
-
 ## Changed
-- <file / endpoint / topic / migration / config key>: <what changed>
+- incident-service `IncidentEventPublisher`: removed `publishEscalated` and the `IncidentEscalatedEvent` import.
+- incident-service `IncidentEventPublisherTest`: removed `publishEscalatedWritesOutboxRow`; `everyPublishMethodCarriesTeamId` now calls the four remaining publish methods, `times(4)`, still asserting the teamId on each payload.
+- incident-service `IncidentEscalationEventConsumer`: class Javadoc names `EscalationScheduler` as the only producer, one sentence on non-colliding levels (ADR-0017), "Changed (backlog #0-8)" note.
+- incident-service `Incident#recordEscalation` Javadoc: now says it consumes escalation-service's event.
 
 ## How to verify
-- `./mvnw test -pl <module> -Dtest=<Class>` — <what it shows>
+- `./mvnw test -pl incident-service -am -Dtest=IncidentEventPublisherTest -Dsurefire.failIfNoSpecifiedTests=false` - passed (the module compiles without `publishEscalated`).
 
 ## Tests changed and why
-- (only if an existing test changed) <test>: <the acceptance criterion or requirement that changed it>
+- `IncidentEventPublisherTest#publishEscalatedWritesOutboxRow`: deleted, AC2 requires it because the method under test is gone.
+- `IncidentEventPublisherTest#everyPublishMethodCarriesTeamId`: `publishEscalated` call removed, `times(5)` to `times(4)` (AC2).
 
 ## Deliberately out of scope
-- <thing>: <backlog item or reason>
+- `V4__add_escalation_level_to_incidents.sql` comment: a migration on main is not edited.
 
 ## Noticed, not touched
-- <defect elsewhere>: <file:line> — proposed backlog item: <one line>
+- none
 
 ## Follow-up needed
-<!-- Work this item showed is needed but is not part of it (.ai/rules/planning.md, "Follow-ups"); at most 3.
-     The shipper turns each entry into a backlog item with **Autopilot:** proposed. Delete this comment
-     and leave the section empty when there is none. -->
-### <title, as a backlog item title>
-- Why: <what is missing and what fails or stays incomplete without it, 1–2 lines>
-- Touches: <module (packages), …>
-- Risk: <low|high> · Complexity: <low|medium|high>
-- Draft criteria:
-  - AC1. <observable, checkable by a test>
 
 ## Disputed
-- <finding id>: <reason, citing code or a rule>

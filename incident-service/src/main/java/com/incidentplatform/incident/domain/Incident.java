@@ -211,7 +211,7 @@ public class Incident {
      * level 2 at the same time.
      *
      * <p>Called by IncidentEscalationEventConsumer when incident-service
-     * consumes its own published event back from incidents.lifecycle —
+     * consumes escalation-service's event back from incidents.lifecycle —
      * closing the loop so the locally stored escalation level always reflects
      * what escalation-service's EscalationScheduler has actually done,
      * including automatic (timeout-driven) escalations that never go through
