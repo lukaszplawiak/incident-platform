@@ -77,5 +77,30 @@ out=$(scripts/factory/changed-paths.sh main)
 if printf '%s' "$out" | jq -e '.needsHuman and (.editedAppliedMigrations | length == 1)' >/dev/null; then echo "  ok: edited applied migration"
 else echo "::error::edited applied migration not flagged"; failures=$((failures+1)); fi
 
+# The coverage check: main gets a POM with a JaCoCo rule, each case changes it on a branch.
+git checkout -q main
+jacoco_pom() { printf '<project><properties>\n<jacoco.version>%s</jacoco.version>\n</properties><build><plugins><plugin>\n<executions><execution><phase>%s</phase><goals>\n<goal>check</goal>\n</goals><configuration><rules><rule><limits><limit>\n<counter>LINE</counter>\n<value>COVEREDRATIO</value>\n<minimum>%s</minimum>\n</limit></limits></rule></rules></configuration></execution></executions></plugin></plugins></build></project>\n' "$1" "$2" "$3"; }
+jacoco_pom 0.8.12 verify 0.60 > pom.xml
+git add pom.xml && git -c user.email=t@t -c user.name=t commit -qm pom
+coverage_case() {
+    local name=$1 want=$2 content=$3
+    git checkout -q -B feat/0-1-t main
+    printf '%s' "$content" > pom.xml
+    git -c user.email=t@t -c user.name=t commit -qam t
+    local got; got=$(scripts/factory/changed-paths.sh main | jq -r '.needsHuman')
+    if [ "$got" = "$want" ]; then echo "  ok: $name"; else echo "::error::$name: needsHuman=$got, expected $want"; failures=$((failures+1)); fi
+    # The CI half of the same rule (check-factory-guards.sh, rule 6) must agree: the two scripts hold the
+    # pattern twice, and only this keeps them equal.
+    local ci=false
+    bash "$SRC/.github/scripts/check-factory-guards.sh" main HEAD >/dev/null 2>&1 || ci=true
+    if [ "$ci" = "$want" ]; then echo "  ok: $name (factory guards agree)"; else echo "::error::$name: check-factory-guards flagged=$ci, expected $want"; failures=$((failures+1)); fi
+}
+coverage_case "coverage minimum lowered" true  "$(jacoco_pom 0.8.12 verify 0.10)"
+coverage_case "coverage check moved to another phase" true "$(jacoco_pom 0.8.12 deploy 0.60)"
+coverage_case "coverage check goal removed" true "$(jacoco_pom 0.8.12 verify 0.60 | grep -v '<goal>check')"
+coverage_case "coverage narrowed by an include" true "$(jacoco_pom 0.8.12 verify 0.60 | sed 's#</configuration>#\n<includes>\n<include>**/Easy*</include>\n</includes>\n</configuration>#')"
+coverage_case "inherited rule wiped by combine.self" true "$(jacoco_pom 0.8.12 verify 0.60 | sed 's#</configuration>#\n<rules combine.self="override"/>\n</configuration>#')"
+coverage_case "jacoco version bump only" false "$(jacoco_pom 0.8.13 verify 0.60)"
+
 if [ "$failures" -gt 0 ]; then echo "$failures changed-paths test(s) failed"; exit 1; fi
 echo "All changed-paths tests passed."

@@ -7,8 +7,9 @@
 #   3. a POM that adds a <plugin>, <repository>, <pluginRepository> or <dependency>;
 #   4. a Flyway migration that exists in <base> and was modified or deleted;
 #   5. a backlog item whose `**Autopilot:** ready` line was added (only the owner marks items ready);
-#   6. build configuration that decides what verification runs: `.mvn/`, `mvnw`, or a POM line that skips
-#      or excludes tests or coverage.
+#   6. build configuration that decides what verification runs: `.mvn/`, `mvnw`, a POM line that skips
+#      or excludes tests or coverage, or any added or removed line of the coverage check's configuration
+#      (<minimum>, <rule>, <limit>, the `check` goal, a <phase>, an <include>...; not the plugin's version).
 # Renames are not followed (--no-renames): a test renamed out of src/test/**/*.java counts as deleted.
 # Prints one ::error line per finding and exits 1 when there is any, 0 otherwise. Whether an approval
 # overrides the result is decided by .github/workflows/factory-guards.yml, not here.
@@ -75,6 +76,12 @@ while IFS= read -r f; do
     added_pom=$({ git diff "$mb" "$head" -- "$f" | grep -E '^\+' | grep -vE '^\+\+\+' || true; })
     if grep -qE 'skipTests|maven\.test\.skip|testFailureIgnore|<skip>[[:space:]]*true|haltOnFailure|jacoco\.skip|<excludes?>' <<<"$added_pom"; then
         flag "$f" "adds a property that skips or excludes tests or coverage"
+    fi
+    # Same patterns as scripts/factory/changed-paths.sh: a lowered <minimum> or a deleted rule weakens the
+    # coverage check as much as a skip property.
+    changed_pom=$({ git diff "$mb" "$head" -- "$f" | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' || true; })
+    if grep -qE '<(minimum|maximum|counter|value|element|limits?|rules?|phase|includes?)([[:space:]/>])|<goal>[[:space:]]*check[[:space:]]*</goal>' <<<"$changed_pom"; then
+        flag "$f" "changes the coverage check's configuration (threshold, rule, goal or phase)"
     fi
 done < <(git diff --no-renames --name-only "$mb" "$head" -- 'pom.xml' '*/pom.xml')
 
