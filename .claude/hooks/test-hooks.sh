@@ -167,5 +167,99 @@ expect 2 "architect amends"               "$R" --architect -- "$(bash_call 'git 
 expect 2 "reviewer cannot commit"         "$R" -- "$(bash_call 'git commit -m x')"
 expect 0 "auditor gh pr diff"             "$R" --gh-read -- "$(bash_call 'gh pr diff 12')"
 
+echo "git grep (the agents' only search: no Grep/Glob tool, plain grep -r would read gitignored secrets)"
+expect 0 "reviewer git grep"              "$R" -- "$(bash_call 'git grep -n TenantContext -- *.java')"
+expect 0 "reviewer git grep in a revision" "$R" -- "$(bash_call 'git grep -n -e foo HEAD~1 -- shared')"
+expect 0 "reviewer git grep fixed string" "$R" -- "$(bash_call 'git grep -F -n x.y')"
+expect 2 "reviewer git grep -O"           "$R" -- "$(bash_call 'git grep -Osh foo')"
+expect 2 "reviewer git grep bundled -nO"  "$R" -- "$(bash_call 'git grep -nOvim foo')"
+expect 2 "reviewer git grep pager"        "$R" -- "$(bash_call 'git grep --open-files-in-pager=sh foo')"
+expect 2 "reviewer git grep --no-index"   "$R" -- "$(bash_call 'git grep --no-index foo')"
+expect 2 "reviewer git grep ignored files" "$R" -- "$(bash_call 'git grep --untracked --no-exclude-standard PASSWORD')"
+expect 2 "reviewer git grep -f"           "$R" -- "$(bash_call 'git grep -f docker/x foo')"
+expect 2 "reviewer git grep bundled -nf"  "$R" -- "$(bash_call 'git grep -nf patterns.txt')"
+expect 2 "reviewer git grep --file="      "$R" -- "$(bash_call 'git grep --file=patterns.txt')"
+expect 2 "reviewer git grep piped"        "$R" -- "$(bash_call 'git grep foo | head')"
+expect 0 "implementer git grep"           "$P" -- "$(bash_call 'git grep -n TenantContext -- *.java')"
+expect 0 "implementer git grep a rule"    "$P" -- "$(bash_call 'git grep -n SEC-03 -- .ai/rules')"
+expect 2 "implementer git grep -O"        "$P" -- "$(bash_call 'git grep -O foo')"
+expect 2 "implementer git grep untracked" "$P" -- "$(bash_call 'git grep --untracked --no-exclude-standard secret')"
+expect 0 "plain grep is not git grep"     "$P" -- "$(bash_call 'cat README.md')"
+
+echo "git grep: allow-list, bash word splitting (review of the factory hardening, sec-4c1e)"
+expect 2 "abbreviated --untracked"        "$R" -- "$(bash_call 'git grep --untr --no-exclude-st -h -i secret')"
+expect 2 "abbreviated --no-index"         "$R" -- "$(bash_call 'git grep --no-ind foo')"
+expect 2 "abbreviated pager"              "$R" -- "$(bash_call 'git grep --open=sh -l x -- f')"
+expect 2 "abbreviated --count too"        "$R" -- "$(bash_call 'git grep --cou foo')"
+expect 2 "quoted -O"                      "$R" -- "$(bash_call "git grep '-Osh' foo")"
+expect 2 "double-quoted --untracked"      "$R" -- "$(bash_call 'git grep "--untracked" foo')"
+expect 2 "option split by quotes"         "$R" -- "$(bash_call "git grep -''-untracked foo")"
+expect 2 "option behind a backslash"      "$R" -- "$(bash_call 'git grep \--untracked foo')"
+expect 2 "variable"                       "$R" -- "$(bash_call 'git grep $OPT foo')"
+expect 2 "variable in double quotes"      "$R" -- "$(bash_call 'git grep "$OPT" foo')"
+expect 2 "ANSI-C quoting"                 "$R" -- "$(bash_call "git grep \$'\\x2d-untracked' foo")"
+expect 2 "brace expansion"                "$R" -- "$(bash_call 'git grep {--untracked,x} foo')"
+expect 2 "unquoted glob before --"        "$R" -- "$(bash_call 'git grep -n foo *.java')"
+expect 2 "unterminated quote"             "$R" -- "$(bash_call "git grep 'foo")"
+expect 0 "glob after --"                  "$R" -- "$(bash_call 'git grep -n foo -- *.java')"
+expect 0 "quoted glob pattern"            "$R" -- "$(bash_call "git grep -n -E 'Tenant.*Id' -- shared")"
+expect 0 "pattern starting with a dash"   "$R" -- "$(bash_call 'git grep -n -e -foo')"
+expect 0 "context options"                "$R" -- "$(bash_call 'git grep -n -A3 -B 2 --context=4 foo')"
+expect 0 "long safe options"              "$R" -- "$(bash_call 'git grep --count --ignore-case --fixed-strings foo')"
+expect 0 "bundled safe short options"     "$R" -- "$(bash_call 'git grep -niw foo')"
+expect 0 "git log --grep is not git grep" "$R" -- "$(bash_call 'git log --oneline --grep=backlog')"
+expect 2 "implementer abbreviated option" "$P" -- "$(bash_call 'git grep --untr --no-exclude-st secret')"
+expect 2 "implementer quoted option"      "$P" -- "$(bash_call 'git grep "--no-index" foo')"
+expect 0 "implementer plain search"       "$P" -- "$(bash_call "git grep -n 'TenantContext.set' -- shared")"
+
+echo "git grep: only a git grep command is checked, and it must be one (review round 2)"
+expect 0 "commit message mentioning git grep"      "$P" -- "$(bash_call 'git commit -m "docs: use git grep here"')"
+expect 0 "commit message ending in git grep"       "$P" -- "$(bash_call 'git commit -m "docs: search with git grep"')"
+expect 0 "git log --grep"                          "$P" -- "$(bash_call 'git log --oneline --grep=backlog')"
+expect 2 "git grep after &&"                       "$P" -- "$(bash_call 'ls && git grep --untr --no-exclude-st secret')"
+expect 2 "git grep after ;"                        "$P" -- "$(bash_call 'ls; git grep --no-ind secret')"
+expect 2 "grep behind a backslash"                 "$P" -- "$(bash_call 'git gr\ep --untr secret')"
+expect 2 "grep in quotes"                          "$P" -- "$(bash_call 'git "grep" --untr secret')"
+expect 2 "git options before grep"                 "$P" -- "$(bash_call 'git -C . grep --untr secret')"
+expect 2 "reviewer: git options before grep"       "$R" -- "$(bash_call 'git -c core.quotepath=off grep foo')"
+
+echo "line continuation (review round 2, sec-b7d2)"
+expect 2 "grep split by a continuation"            "$P" -- "$(bash_call $'git gr\\\nep --untr secret')"
+expect 2 "git split by a continuation"             "$P" -- "$(bash_call $'g\\\nit grep --untr secret')"
+expect 2 "a secret split by a continuation"        "$P" -- "$(bash_call $'cat docker/.e\\\nnv')"
+expect 2 "continuation inside double quotes"       "$P" -- "$(bash_call $'git grep "--untr\\\nacked" secret')"
+expect 0 "multi-line commit message in quotes"     "$P" -- "$(bash_call $'git commit -m "fix: x\n\nbody line"')"
+# The same, one layer down: git_grep_unsafe alone, without guard-protected-bash's own continuation check.
+lib_refuses() {
+    local name=$1 out
+    out=$(bash -c '. "$1"/_lib.sh; git_grep_unsafe "$2"' _ "$HOOKS" "$2")
+    if [ -n "$out" ]; then echo "  ok: $name"; else echo "::error::$name: git_grep_unsafe let it through"; failures=$((failures+1)); fi
+}
+lib_refuses "git_grep_unsafe: grep split by a continuation" $'git gr\\\nep --untr secret'
+lib_refuses "git_grep_unsafe: git split by a continuation"  $'g\\\nit grep --untr secret'
+
+echo "write guards: one helper (review of the factory hardening, arc-5e1d)"
+expect 2 "migration via nonexistent dir and .." "$M" -- "$(file_call Edit nosuchdir/../svc/src/main/resources/db/migration/V1__a.sql)"
+expect 2 "write-scope: .. through a nonexistent dir" "$W" .ai/audit/ -- "$(file_call Write .ai/audit/nosuch/../../rules/x.md)"
+expect 2 "write-scope: notebook outside its scope" "$W" .ai/audit/ -- '{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"svc/n.ipynb"}}'
+(cd "$WORK/repo" && ln -s "$HOME/.mavenrc" link-to-mavenrc)
+
+WR="$HOOKS/guard-write-in-repo.sh"
+expect 2 ".. through a nonexistent directory" "$WR" -- "$(file_call Write nosuchdir/../../outside.txt)"
+expect 2 "deep .. to the home directory"  "$WR" -- "$(file_call Write nosuchdir/../../../../../../../../.claude/settings.json)"
+expect 2 "a symlink pointing outside"     "$WR" -- "$(file_call Write link-to-mavenrc)"
+echo "guard-write-in-repo"
+expect 0 "write a source file"            "$WR" -- "$(file_call Write svc/src/main/java/A.java)"
+expect 0 "edit by absolute path"          "$WR" -- "$(file_call Edit "$WORK/repo/svc/src/main/java/A.java")"
+expect 0 "edit through a symlinked path"  "$WR" -- "$(file_call Edit "$WORK/link/svc/src/main/java/A.java")"
+expect 0 "a new file in a new directory"  "$WR" -- "$(file_call Write .ai/work/0-25/handoff.md)"
+expect 2 "user settings of Claude Code"   "$WR" -- "$(file_call Write "$HOME/.claude/settings.json")"
+expect 2 "maven settings"                 "$WR" -- "$(file_call Write "$HOME/.m2/settings.xml")"
+expect 2 "mavenrc"                        "$WR" -- "$(file_call Edit "$HOME/.mavenrc")"
+expect 2 "tmp"                            "$WR" -- "$(file_call Write /tmp/x)"
+expect 2 "dot-dot out of the repository"  "$WR" -- "$(file_call Write ../outside.txt)"
+expect 2 "notebook outside"               "$WR" -- '{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"/tmp/n.ipynb"}}'
+expect 2 "no path"                        "$WR" -- '{"tool_name":"Write","tool_input":{}}'
+
 if [ "$failures" -gt 0 ]; then echo "$failures hook test(s) failed"; exit 1; fi
 echo "All hook tests passed."

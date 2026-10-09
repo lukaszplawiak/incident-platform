@@ -1,5 +1,5 @@
 {
-  "$comment": "Added on top of .claude/settings.json for unattended autopilot sessions only: claude --settings .claude/settings.autopilot.json, then /backlog-autopilot. dontAsk: anything not allowed below is denied, nobody is there to approve it. Deny wins over allow. Paths use ./ (relative to the session's working directory, the repository root): a leading / would be relative to this file's directory. Human-owned paths cannot be written; the network tools are off (an agent that reads untrusted text must not be able to send data out); verification cannot be skipped (hooks). `gh pr merge` stays denied until backlog #0-113 (bot account, branch protection) is done: that is what makes shadow mode structural rather than a prompt. Phase 3 (docs/ai-factory.md): remove `Bash(gh pr merge *)` from deny, keep the `--admin` deny, and add `Bash(gh pr merge * --squash --auto)` to allow.",
+  "$comment": "Added on top of .claude/settings.json for unattended autopilot sessions only: claude --settings .claude/settings.autopilot.json, then /backlog-autopilot. dontAsk: anything not allowed below is denied, nobody is there to approve it. Deny wins over allow. Paths use ./ (relative to the session's working directory, the repository root): a leading / would be relative to this file's directory. Human-owned paths cannot be written, and nothing outside the repository can be written with the file tools (hook guard-write-in-repo.sh); the network tools are off (an agent that reads untrusted text must not be able to send data out); verification cannot be skipped (hooks). `gh pr merge` stays denied until backlog #0-113 (bot account, branch protection) is done: that is what makes shadow mode structural rather than a prompt. Phase 3 (docs/ai-factory.md): remove `Bash(gh pr merge *)` from deny, keep the `--admin` deny, and add `Bash(gh pr merge * --squash --auto)` to allow.",
   "permissions": {
     "defaultMode": "dontAsk",
     "allow": [
@@ -21,6 +21,7 @@
       "Bash(git merge-base *)",
       "Bash(git ls-files *)",
       "Bash(git blame *)",
+      "Bash(git grep *)",
       "Bash(git branch --list *)",
       "Bash(git switch *)",
       "Bash(git checkout -b *)",
@@ -151,8 +152,12 @@
         ]
       },
       {
-        "matcher": "Edit|Write|MultiEdit",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-write-in-repo.sh"
+          },
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-migrations.sh"

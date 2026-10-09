@@ -6,7 +6,7 @@ model: claude-opus-5-5
 maxTurns: 25
 hooks:
   PreToolUse:
-    - matcher: "Edit|Write|MultiEdit"
+    - matcher: "Edit|Write|MultiEdit|NotebookEdit"
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/write-scope.sh .ai/audit/"

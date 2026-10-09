@@ -4,7 +4,8 @@
 # commands. The `tools:` field of an agent cannot restrict Bash to some commands (a specifier there does
 # not narrow the tool), so this hook does.
 #
-#   readonly-bash.sh            git diff/log/show/status/rev-parse/merge-base/ls-files/blame/cat-file
+#   readonly-bash.sh            git diff/log/show/status/rev-parse/merge-base/ls-files/blame/cat-file/grep
+#                               (git grep: tracked files only, never -O, --no-index, --untracked, -f)
 #   readonly-bash.sh --k8s      ... plus `kubectl kustomize` and `kubeconform` (review-k8s)
 #   readonly-bash.sh --gh-read  ... plus `gh pr list/view/diff`, `gh issue list/view`, `gh run list/view` (auditors)
 #   readonly-bash.sh --architect ... plus `git add` of .ai/decisions/ and .ai/work/ paths, and `git commit`
@@ -31,11 +32,13 @@ case "$cmd" in
     *--output*|*--ext-diff*|*--textconv*|*--no-index*) block "git option not allowed here (it can write files, run programs or read outside the repository)" ;;
 esac
 
+why=$(git_grep_unsafe "$cmd"); [ -z "$why" ] || block "$why"
+
 set -f  # no glob expansion while splitting the command into words
 # shellcheck disable=SC2086
 set -- $cmd
 case "$1 ${2:-}" in
-    "git diff"|"git log"|"git show"|"git status"|"git rev-parse"|"git merge-base"|"git ls-files"|"git blame"|"git cat-file")
+    "git diff"|"git log"|"git show"|"git status"|"git rev-parse"|"git merge-base"|"git ls-files"|"git blame"|"git cat-file"|"git grep")
         exit 0 ;;
     "git branch")
         case "$cmd" in

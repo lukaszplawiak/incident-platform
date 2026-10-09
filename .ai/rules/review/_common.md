@@ -103,9 +103,15 @@ end it with the same JSON in a fenced block.
 
 ## Your limits (every reviewer)
 
-Your tools are Read, Grep, Glob, and Bash for read-only git (`diff`, `log`, `show`, `status`, `blame`,
-`rev-parse`, `merge-base`, `ls-files`, `cat-file`, listing branches) — a hook enforces the list and refuses
-`--no-index`, `--output` and chaining; the k8s reviewer may also run `kubectl kustomize` and `kubeconform`. You have no
+Your tools are Read, and Bash for read-only git (`diff`, `log`, `show`, `status`, `blame`, `rev-parse`,
+`merge-base`, `ls-files`, `cat-file`, `grep`, listing branches) — a hook enforces the list and refuses
+`--no-index`, `--output` and chaining; the k8s reviewer may also run `kubectl kustomize` and `kubeconform`.
+**Search with `git grep`** (`git grep -n <pattern> -- <paths>`; tracked files only, so never a secret).
+The hook allows only its listed options (`-n -i -w -l -L -c -h -H -E -F -P -v -o -e -A/-B/-C`, their long
+names, `--count`, `--name-only`…, written out in full: git's abbreviations are refused), no `$`, and no
+unquoted `*`/`?`/`[` before `--` — quote a regex pattern, put paths after `--`.
+the Grep and Glob tools your definition names do not exist in every Claude Code version, and a review that
+cannot find the other uses of what the diff changes is guessing. `ls-files` lists files by pattern. You have no
 network, no `gh` or GitHub API, no `git ls-remote`, no interpreter (python, ruby, awk, jq) and no Maven,
 Docker or test runner. The autopilot runs the tests before you are called, and gives you the result.
 In both review rounds of backlog #0-60, three of four reviewers reported runs of exactly these tools, so:
