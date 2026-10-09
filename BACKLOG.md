@@ -118,6 +118,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-113](#0-113-repository-settings-the-ai-factory-depends-on) | Repository settings the AI factory depends on | ci | High | Open |
 | [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
+| [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
+| [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
+| [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 
 ---
 
@@ -229,6 +232,8 @@ Optionally add a CI grep that fails on a new `TODO` without `backlog #`.
 ### 0-7. incident-service coerces `escalationLevel` with `asInt(0)`
 
 **Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** incident-service (kafka)
 
 **Problem.** `IncidentEscalationEventConsumer` reads the level with
 `event.path("escalationLevel").asInt(0)` and passes it to `Incident.recordEscalation(int)`. A
@@ -239,6 +244,23 @@ incident rather than a lost notification) and apply the same validation if warra
 
 **Acceptance.** A malformed level is dead-lettered or rejected instead of silently recorded as `0`;
 consumer test added.
+
+**Acceptance criteria.** Verified (2026-10-09, `/ready`): the effect is real, a malformed event overwrites
+a recorded level (2 becomes 0). The consumer already dead-letters an `IllegalArgumentException` with a
+content-free reason (`KafkaFailures.reason`, #0-96), so the fix is validation that throws one. Decided: the
+upper bound is a constant local to incident-service, `2`, as in notification-service (one constant shared by
+the three services is #0-117); lowering an already-recorded level is #0-118; a CHECK on the column is out of
+scope. All criteria are checked in `IncidentEscalationEventConsumerTest`.
+AC1. An `incident.escalated` event without `escalationLevel` is dead-lettered through
+`deadLetterThenAcknowledge` with the record's tenant; `recordEscalationLevel` is never called and the record
+is not acknowledged directly.
+AC2. The same for an `escalationLevel` that is `null`, a string (`"2"`, `"x"`) or a non-integer number
+(`1.5`).
+AC3. The same for an integer outside 1..2: `0`, `-1`, `3`.
+AC4. A valid level (`1` and `2`) is still recorded through `recordEscalationLevel` with that level, then
+acknowledged, in that order.
+AC5. The dead-letter reason of an invalid level does not contain the record's value: it starts with
+`IllegalArgumentException at ` and does not contain the offending value.
 
 ---
 
@@ -2009,6 +2031,46 @@ outside the allow-list, directly or through any container it can start.
 AC2. The Testcontainers tests still run in the autopilot's test gate (B, C), or the gate's reduced scope
 is documented and CI covers the rest (A).
 AC3. `docs/ai-factory.md` and README "Infrastructure Hardening" describe the boundary as it is.
+
+---
+
+### 0-117. The escalation level bound is hard-coded in three services
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found by `/ready #0-7`, 2026-10-09)
+
+**Problem.** The highest escalation level, `2`, is written separately in escalation-service
+(`EscalationTask.isMaxLevel()`, `>= 2`), notification-service (`IncidentEventConsumer.MAX_ESCALATION_LEVEL`)
+and, after #0-7, incident-service. A third level added in one place would be dead-lettered by the others.
+
+**Approach (to analyse).** One constant in `shared` next to `IncidentEscalatedEvent`, used by all three; a
+change to `shared` changes all seven services (CLAUDE.md), so it is its own item, not part of #0-7.
+
+---
+
+### 0-118. An out-of-order escalation event lowers a recorded level
+
+**Type:** bug · **Priority:** Low · **Status:** Open (found by `/ready #0-7`, 2026-10-09; not verified)
+
+**Problem.** `Incident.recordEscalation(int)` assigns the level unconditionally, so an `IncidentEscalatedEvent`
+of level 1 consumed after one of level 2 (a redelivery, a replay from the dead-letter topic) sets the
+incident back to 1. Whether `incidents.lifecycle` can deliver them out of order for one incident (both keyed
+by the incident id, one partition) needs checking first.
+
+**Approach (to analyse).** Keep the higher level (never lower it from this consumer), with a test; or decide
+that ordering by key makes it impossible and close this item with that reasoning.
+
+---
+
+### 0-119. postmortem-service coerces `durationMinutes` with `asInt(0)`
+
+**Type:** bug · **Priority:** Low · **Status:** Open (noticed by `/ready #0-7`, 2026-10-09; effect not verified)
+
+**Problem.** postmortem-service's `IncidentEventConsumer` reads `event.path("durationMinutes").asInt(0)`, the
+pattern #0-7 removes from incident-service: a missing or malformed duration becomes `0` silently. Whether a 0
+duration is harmful there (a postmortem stating the incident lasted no time) is not checked.
+
+**Approach.** Verify the effect, then validate as #0-7 does (dead-letter through the existing path) if it
+matters.
 
 ---
 
