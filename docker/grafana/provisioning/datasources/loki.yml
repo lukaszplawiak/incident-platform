@@ -1,0 +1,11 @@
+apiVersion: 1
+
+# Backlog #0-94 step 2: the platform's own logs (docker/loki.yml). Not the
+# default datasource: dashboards and alerts are on Prometheus.
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: false
+    editable: false

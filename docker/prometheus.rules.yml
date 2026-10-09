@@ -66,6 +66,161 @@ groups:
             integration are not arriving.
 
   # ────────────────────────────────────────────────────────────────
+  # Log collection (backlog #0-94, step 2) -- are the platform's logs
+  # reaching Loki? A pipeline that stops says nothing by itself: the
+  # logs of the incident it should explain would simply be missing.
+  # docker-socket-proxy -> Alloy -> Loki, all in docker-compose.yml.
+  # ────────────────────────────────────────────────────────────────
+  - name: logs
+    rules:
+
+      - alert: LogPipelineDown
+        # Loki or Alloy unreachable for Prometheus. Alloy down: no container's
+        # lines are read; they wait in Docker's json-file log and Alloy picks
+        # up from its saved positions when it is back, but only what rotation
+        # kept (3 x 10 MB per container, x-logging in docker-compose.yml): a
+        # chatty service fills that in minutes, so an outage longer than that
+        # loses its oldest lines, uncounted (no alert says how many). Loki
+        # down: Alloy retries each batch for about 8.5 minutes and then drops
+        # it (LogsDropped); this rule fires first.
+        expr: |
+          up{job=~"loki|alloy"} == 0
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} (log collection) is down"
+          description: >
+            {{ $labels.job }} has been unreachable for Prometheus for more than
+            5 minutes. The platform's logs are not reaching Loki.
+
+      - alert: LogPipelineRestarting
+        # Review of #0-94 step 2: a Loki or Alloy that keeps restarting (an
+        # OOM kill under its mem_limit, a crash at start) is up between
+        # restarts, and every up=1 sample resets LogPipelineDown's 5 minutes,
+        # so that rule may never fire while lines are being lost. Two restarts
+        # in 30 minutes, at once: a deploy or a manual restart is one, and a
+        # slow loop (an OOM kill every 6-10 minutes after a heavy query) gives
+        # one or two per 15 minutes, which a first version (3 in 15m) missed.
+        expr: |
+          changes(process_start_time_seconds{job=~"loki|alloy"}[30m]) >= 2
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "{{ $labels.job }} (log collection) keeps restarting"
+          description: >
+            {{ $labels.job }} has restarted {{ $value }} times in 30 minutes.
+            While it does, the platform's logs are not reliably reaching Loki.
+            Check its own log and its memory against mem_limit.
+
+      - alert: LogPipelineNotScraped
+        # Review of #0-94 step 2: LogPipelineDown needs an up series, which
+        # exists only while Prometheus has a scrape job for the target. A job
+        # removed from prometheus.yml (or renamed) leaves nothing to be 0, so
+        # that rule would stay silent while nothing watches the pipeline.
+        # absent() keeps the job label of its equality matcher.
+        expr: |
+          absent(up{job="loki"}) or absent(up{job="alloy"})
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "Prometheus does not scrape {{ $labels.job }} (log collection)"
+          description: >
+            Prometheus has had no {{ $labels.job }} target for more than 5
+            minutes, so nothing watches whether the platform's logs reach Loki.
+            Check the {{ $labels.job }} job in docker/prometheus.yml.
+
+      - alert: LogsNotFlowing
+        # Review of #0-94 step 2: Loki and Alloy up, discovery working, and yet
+        # no line sent: a container_name no longer matching incident-*, targets
+        # lost, a proxy that lists but no longer streams logs. Every other rule
+        # here stays quiet then. A live stack never sends nothing for 10
+        # minutes: the proxy alone logs each of Alloy's discovery calls (every
+        # 10 s), and over 3 hours of an idle local stack the fewest lines Loki
+        # got in a minute was 112 (measured when writing this rule).
+        # What it cannot see: only total silence fires it. The proxy's own
+        # lines keep the counter moving, so the services' lines alone going
+        # missing (one service, or all seven) does not; that needs a query on
+        # the lines' content per service, Loki's ruler, backlog #0-107. No
+        # series at all (Alloy not scraped) is LogPipelineNotScraped's, and an
+        # Alloy restart (the counter back to 0) is a reset increase() handles.
+        expr: |
+          sum by (job) (
+            increase(loki_write_sent_entries_total{job="alloy"}[10m])
+          ) == 0
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "No log lines are reaching Loki"
+          description: >
+            Alloy has sent no line to Loki for at least 15 minutes, although
+            the platform's containers log all the time. Check Alloy's targets
+            (its UI on the logs network) and the incident-* container names.
+
+      - alert: LogDiscoveryFailing
+        # Alloy cannot list the containers through docker-socket-proxy (proxy
+        # down, or the Docker API refusing). Alloy's own component health stays
+        # "healthy" when this happens (found when the proxy was stopped while
+        # writing this rule); only its service discovery counts the failures.
+        # A 2m window under a 5m for: discovery refreshes every 10 s, so an
+        # outage fails it about 12 times a window, and only failures that go on
+        # for 5 minutes fire. With [10m] (review of #0-94 step 2) one failed
+        # refresh, e.g. the proxy restarting, held increase() above 0 for 10
+        # minutes and fired a high alert by itself.
+        expr: |
+          sum by (job) (
+            increase(prometheus_sd_refresh_failures_total{job="alloy", mechanism="docker"}[2m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "Alloy cannot list the platform's containers"
+          description: >
+            Alloy's Docker discovery has kept failing for at least 5 minutes.
+            Containers are not being read, so their logs are not reaching Loki.
+            Check that incident-docker-socket-proxy is running.
+
+      - alert: LogsDropped
+        # Alloy gave up on log lines: Loki refused or could not take them after
+        # every retry, or a queue or limit was full (the reason label says
+        # which). Those lines are lost for good, so any drop fires; for: 1m only
+        # rides out a single scrape. Also counted: lines Loki refuses as too
+        # far behind their stream, about an hour older than its newest line
+        # (Loki's out-of-order window, much tighter than the 7 days of
+        # reject_old_samples_max_age). An Alloy that lost its positions (its
+        # volume, or a crash before it saved them) re-reads each container's
+        # Docker log from the start and sends such lines: it fires once then,
+        # and those lines are really not in Loki (seen while this was written:
+        # 1161 lines dropped with "entry too far behind"). Late by design:
+        # Alloy retries a batch for about 8.5 minutes first (the backoff in
+        # docker/alloy/config.alloy), so
+        # during a Loki outage LogPipelineDown is the earlier signal. Alloy
+        # registers the counter at 0 for every reason when it starts, so
+        # increase() sees the first drop too.
+        expr: |
+          sum by (job, reason) (
+            increase(loki_write_dropped_entries_total{job="alloy"}[10m])
+          ) > 0
+        for: 1m
+        labels:
+          severity: high
+          scope: platform
+        annotations:
+          summary: "Alloy dropped log lines ({{ $labels.reason }})"
+          description: >
+            Alloy dropped {{ $value | humanize }} log lines in the last 10
+            minutes ({{ $labels.reason }}). They are not in Loki and will not be.
+            Check Loki and Alloy's own log.
+
+  # ────────────────────────────────────────────────────────────────
   # Infrastructure alerts
   # ────────────────────────────────────────────────────────────────
   - name: infrastructure

@@ -3,7 +3,7 @@
 # Użycie: make <komenda>
 # ============================================================
 
-.PHONY: help dev-up dev-down dev-logs dev-reset build test clean
+.PHONY: help dev-up dev-down dev-logs dev-reset grafana-password-check build test clean
 
 # Domyślna komenda — pokaż pomoc
 help:
@@ -11,8 +11,11 @@ help:
 	@echo "  Incident Platform — dostępne komendy:"
 	@echo ""
 	@echo "  Środowisko lokalne:"
-	@echo "    make dev-up       — uruchom PostgreSQL, Redis, Kafka, Kafka UI"
-	@echo "    make dev-down     — zatrzymaj kontenery"
+	@echo "    make dev-up       — uruchom cały stack docker-compose (infrastruktura, monitoring,"
+	@echo "                        logi: Loki/Alloy/proxy Dockera, serwisy); wymaga docker/.env"
+	@echo "                        z DB_PASSWORD, POSTGRES_ADMIN_PASSWORD i GRAFANA_ADMIN_PASSWORD"
+	@echo "    make dev-down     — zatrzymaj kontenery (też wymaga haseł w docker/.env)"
+	@echo "    make grafana-password-check — czy Grafana nadal przyjmuje admin/admin"
 	@echo "    make dev-reset    — zatrzymaj + usuń volumes (czysta baza)"
 	@echo "    make dev-logs     — logi wszystkich kontenerów"
 	@echo "    make kafka-ui     — otwórz Kafka UI w przeglądarce"
@@ -41,6 +44,14 @@ dev-up:
 	@echo "  Kafka      : localhost:9092"
 	@echo "  Kafka UI   : http://localhost:8090"
 	@echo "  pgAdmin    : http://localhost:5050"
+	@echo "  Grafana    : http://localhost:3000 (logi: Explore -> Loki)"
+	@$(MAKE) --no-print-directory grafana-password-check
+
+# Backlog #0-94 step 2: ostrzega o słabym haśle Grafany (czyta logi wszystkich
+# tenantów) i o wolumenie sprzed GRAFANA_ADMIN_PASSWORD, który ma nadal
+# admin/admin. Szczegóły i powody: docker/grafana-password-check.sh.
+grafana-password-check:
+	@docker/grafana-password-check.sh
 
 dev-down:
 	@echo "► Zatrzymuję środowisko..."
