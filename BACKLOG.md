@@ -245,7 +245,7 @@ consumer test added.
 
 ### 0-8. Dead `publishEscalated` and a stale Javadoc in incident-service
 
-**Type:** tech-debt · **Priority:** Low · **Status:** Open
+**Type:** tech-debt · **Priority:** Low · **Status:** In progress — autopilot run 20261009-180700
 **Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** incident-service (com.incidentplatform.incident.service, com.incidentplatform.incident.kafka)
 
