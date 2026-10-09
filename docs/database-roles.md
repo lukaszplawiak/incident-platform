@@ -198,7 +198,9 @@ The docker-compose smoke test then checks the role after every service has run i
 
 1. Create `docker/.env` from the template. `DB_PASSWORD` and `POSTGRES_ADMIN_PASSWORD` are
    required, and `docker compose` refuses to start without them. The template's values are for
-   development only.
+   development only. `GRAFANA_ADMIN_PASSWORD` is required too and empty in the template on purpose
+   (Grafana reads every tenant's logs, backlog #0-94 step 2): set your own, or every `docker compose`
+   command below stops with its message.
 
    ```bash
    cp docker/.env.example docker/.env

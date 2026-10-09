@@ -34,7 +34,7 @@ The system is built for **multiple tenants** — each organization's data is ful
 - **AI-generated postmortems** via Gemini API triggered automatically on incident resolution
 - **Centralized audit log** — every event across all services assembled into a single chronological timeline per incident
 - **Real-time updates** via WebSocket (STOMP) for live incident dashboards
-- **Full observability** — Prometheus metrics, Grafana dashboards, structured logging with MDC context
+- **Full observability** — Prometheus metrics, Grafana dashboards, structured JSON logs with MDC context collected in Loki
 
 ---
 
@@ -201,7 +201,7 @@ A multi-tenant platform onboards customers while it runs. A Flyway seed gave eve
 | API Docs | SpringDoc OpenAPI 3 | Auto-generated, available at `/swagger-ui.html` |
 | Build | Maven multi-module | Shared dependency management, incremental builds |
 | Observability | Micrometer + Prometheus + Grafana | HTTP metrics, JVM, Kafka lag, rate limit rejections |
-| Logging | SLF4J + MDC, Spring Boot structured logging | One JSON (ECS) object per line, `tenantId`, `requestId`, `userId`, `kafkaMessageId` as fields (backlog #0-94) |
+| Logging | SLF4J + MDC, Spring Boot structured logging, Alloy + Loki | One JSON (ECS) object per line, `tenantId`, `requestId`, `userId`, `kafkaMessageId` as fields; collected in Loki for 15 days in docker-compose (backlog #0-94) |
 | Containers | Docker Compose + Kubernetes (Kustomize) | Local infra + production-ready k8s overlays |
 | CI / Security | GitHub Actions · Renovate · OWASP Dependency-Check · Snyk | Build, test, coverage, automated dependency updates, CVE scanning |
 ---
@@ -562,6 +562,27 @@ Summary; details in [Resilience & Security](#security).
   `platform.logging.plain-text: true` lets plain text through, for a developer's `spring-boot:run` in the
   gitignored `application-local.yml`; CI fails on that switch, or a Logback file, in any tracked file
   (`check-structured-logging.sh`).
+- **Log collection** (backlog #0-94, step 2, docker-compose): Alloy reads every `incident-*` container's output and
+  ships it to Loki, kept 15 days (the compactor deletes older lines) and read in Grafana. Alloy reaches the Docker
+  API only through `docker-socket-proxy` (GET on containers and networks, every other call refused, on an
+  internal network with Alloy alone, pinned by digest), never through the socket, which is root on the host. Loki
+  and Alloy answer without authentication, so neither publishes a port and both are on an internal `logs` network
+  with only Grafana and Prometheus: no service, kafka-ui or pgAdmin can reach them. Prometheus is the one
+  container on both `default` and `logs`: it scrapes Loki and Alloy but proxies neither, so reaching it gives no
+  way to their data (it was reachable from `default` before). Loki's delete API is off, so
+  nothing can erase lines before the retention does. Grafana, Loki's only reader, is not on the services' network
+  either (it would be a way around the `logs` network), listens on `127.0.0.1` only and has an admin password with
+  no default. The proxy, Loki and Alloy run read-only, with no capabilities and no privilege gain (Alloy as its
+  image's `alloy` user, not root), each under a memory limit. Only the seven services' JSON is parsed, a level
+  outside TRACE..ERROR becoming `OTHER`; another container's lines are kept as they are, so Postgres, Kafka and
+  pgAdmin output is in Loki too, for 15 days, and can carry tenant values (a Postgres error quoting a row): it is
+  read under the same rule as the services' lines, by whoever can log in to Grafana.
+  `tenantId`, `requestId`, `userId` and `kafkaMessageId` are structured metadata, not labels, so no value from a
+  request adds a stream. Docker keeps at most 3 x 10 MB of each container's log (`x-logging`). A pipeline that
+  stops raises `LogPipelineDown`, `LogPipelineRestarting`, `LogPipelineNotScraped`, `LogsNotFlowing`, `LogDiscoveryFailing` or `LogsDropped`; the smoke
+  test checks that every service's lines arrive parsed, that the proxy refuses writes, that the pipeline's
+  networks are internal and hold exactly the containers they should, and that this hardening is in the compose
+  file.
 - **Tenant id and Kafka tenant** (backlogs #0-91, #0-92): every tenant id is a slug of 3-63 `[a-z0-9-]`
   (`TenantIds`), enforced by a `CHECK` on every table with a `tenant_id` in every service, when a token is issued and read
   (`JwtUtils`, `JwtAuthFilter`), on the `X-Tenant-Id` header of auth-service's public endpoints (400),
@@ -601,7 +622,9 @@ Summary; details in [Resilience & Security](#security).
 ### Local stack (docker-compose)
 
 Built for a developer machine, not for a shared host: well-known credentials are expected there (the
-`docker/.env.example` values `incident_secret` and `postgres_admin_dev`, and `admin`/`admin`). What it does protect: the monitoring stack's secrets (the operator tenant's Integration API key, the
+`docker/.env.example` values `incident_secret` and `postgres_admin_dev`, and pgAdmin's `admin`). Grafana is the
+exception since it reads every tenant's logs (backlog #0-94 step 2): it is published on `127.0.0.1` only, its
+admin password (`GRAFANA_ADMIN_PASSWORD`) has no default, and its image is pinned. What it does protect: the monitoring stack's secrets (the operator tenant's Integration API key, the
 dead man's switch URL) live in `docker/secrets/`, which is gitignored as a whole and mounted read-only; every email
 goes to Mailpit, never to a real address.
 
@@ -668,8 +691,14 @@ Open items from the audit and earlier, most important first within each area. Ea
     backlog #0-101.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
-  - Nothing collects the logs: each container's go with it, and nothing alerts on their content (backlog #0-94,
-    step 2); no trace id links one operation's lines across services (step 3). Since step 1 they are JSON with
+  - Logs are collected only in docker-compose; Kubernetes has no log collection, and no Prometheus, Alertmanager
+    or Grafana either: backlog #0-106. Nothing alerts on what a line says: #0-107. Whoever can log in to Grafana
+    reads every tenant's lines (there is no access per tenant; locally Grafana is on `127.0.0.1` with a password of
+    the developer's own); whoever controls Alloy can read every container's environment (secrets included) and
+    files (archive, export) through the
+    socket proxy, which cannot narrow `/containers` further (#0-94 step 2). One tenant's lines cannot be deleted
+    before the 15 days are up (one Loki org, no tenant label): offboarding, #0-101. No trace id links one operation's
+    lines across services (#0-94 step 3). Since step 1 they are JSON with
     every value escaped, so a value from outside can no longer split or forge a line; a service would refuse to
     start otherwise, unless a deployment outside this repository sets `PLATFORM_LOGGING_PLAINTEXT` on purpose
     (logged as a warning at every start). auth-service's break-glass command logs JSON too.
@@ -690,8 +719,12 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Local stack**
   - A jar built on a developer's machine (`./mvnw package`) contains their gitignored `application-local.yml`
     with real local secrets; images and CI-built jars do not: backlog #0-100.
-  - Every docker-compose port is published on all interfaces, Postgres included, where the admin is a superuser with
-    the password from `docker/.env` (the template's is a known dev value): backlog #0-72.
+  - Every port docker-compose publishes, except Grafana's (on `127.0.0.1` only; Loki, Alloy and the socket proxy
+    publish none), is on all interfaces, Postgres included, where the admin is a
+    superuser with the password from `docker/.env` (the template's is a known dev value): backlog #0-72. That
+    includes Prometheus, unauthenticated with `--web.enable-lifecycle` (anyone can make it reload or quit); since
+    #0-94 step 2 it is also on the `logs` network, where it only scrapes, so it must not get the admin API or a
+    remote-write or federation path that would carry what it reaches there.
 
 ---
 
@@ -717,6 +750,22 @@ Every log line is one JSON object in Elastic Common Schema (backlog #0-94), with
 ```
 
 Filter by field (`tenantId`, `requestId`, `userId`, `kafkaMessageId`, `service.name`, `log.level`) in any log store that reads JSON (Loki, ELK, CloudWatch). `requestId` is per service for now; a trace id that follows one operation across services is #0-94's step 3. Locally, `spring-boot:run` can print plain text instead (README "Step 2").
+
+### Logs — Alloy + Loki + Grafana
+
+In docker-compose, Alloy collects the output of every container named `incident-*` and sends it to Loki (backlog #0-94, step 2), where it is kept for 15 days. To read the logs, open Grafana → Explore → **Loki**:
+
+```logql
+{service="incident-service"}                            # one service (the compose service name)
+{service=~".+-service", level="ERROR"}                  # every platform service's errors
+{service=~".+-service"} | tenantId="acme"               # one tenant's lines (structured metadata)
+{service=~".+-service"} | requestId="e87b7a28-..."      # one request
+{service="notification-service"} | json | message=~"(?i).*slack.*"
+```
+
+`tenantId` and the other identifiers are what the line says, not authenticated facts: a service's own log lines are trustworthy because they go through the platform's encoder, but anything a service writes raw to stdout (a library's println) could carry a `tenantId` of its own. Treat them as a search aid, not as evidence of which tenant did what; that is the audit log's job.
+
+The labels are `service`, `container` and `level` (only the seven services' lines are parsed for a level). `tenantId`, `requestId`, `userId` and `kafkaMessageId` are structured metadata, so a filter on them follows `|`. Lines that are not JSON (Postgres, Kafka, Redis) are kept as they are. A service started with `spring-boot:run` is not a container, so its lines stay in its terminal. Alloy reads the Docker API through `docker-socket-proxy`, which permits only GET on containers and networks. Loki and Alloy publish no port and are on an internal `logs` network with only Grafana and Prometheus; Loki's delete API is off. Prometheus scrapes both, for the `LogPipelineDown`, `LogPipelineRestarting`, `LogPipelineNotScraped`, `LogsNotFlowing`, `LogDiscoveryFailing` and `LogsDropped` alerts.
 
 ### Management Port Isolation
 
@@ -777,7 +826,7 @@ Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays wit
 
 ### Job 5 — Docker Compose Smoke Test
 
-Boots PostgreSQL, Redis, Kafka and all 7 services with `docker compose up` and curls each service's health endpoint. Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed.
+Boots PostgreSQL, Redis, Kafka, the log pipeline (docker-socket-proxy, Loki, Alloy) and all 7 services with `docker compose up`, curls each service's health endpoint, checks the services' DB role, and checks that every service's lines reach Loki parsed (`.github/scripts/test-log-collection.sh`, backlog #0-94). Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed.
 
 ### Security Scanning
 
@@ -863,11 +912,15 @@ The CI badge at the top of this README reflects the current status of the `main`
 
 ### Step 1 — Start infrastructure
 
-docker-compose needs `docker/.env`: `DB_PASSWORD` and `POSTGRES_ADMIN_PASSWORD` are required, and compose refuses to
-start without them. The template's values are for development only.
+docker-compose needs `docker/.env`: `DB_PASSWORD`, `POSTGRES_ADMIN_PASSWORD` and `GRAFANA_ADMIN_PASSWORD` are
+required, and compose refuses to start without them. The template's database values are for development only;
+Grafana's is empty on purpose (it reads every tenant's logs, backlog #0-94), so set your own, at least 16
+characters (`make dev-up` warns about a shorter one; compose itself refuses only an empty one).
 
 ```bash
 cp docker/.env.example docker/.env      # once; Option B in Step 4 fills in the rest
+openssl rand -base64 24                 # paste the output into docker/.env as GRAFANA_ADMIN_PASSWORD=<output>
+                                        # (.env files do not run $(...): pasted as is, the text would be the password)
 docker compose -f docker/docker-compose.yml up -d postgres redis kafka kafka-ui pgadmin
 ```
 
@@ -1048,7 +1101,8 @@ auth-service:
 cd docker
 cp -n .env.example .env   # if Step 1 has not created it yet
 # Edit .env — fill in JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY
-# (DB_PASSWORD and POSTGRES_ADMIN_PASSWORD already have dev values):
+# (DB_PASSWORD and POSTGRES_ADMIN_PASSWORD already have dev values;
+# GRAFANA_ADMIN_PASSWORD is the one you set in Step 1):
 #   JWT_SECRET=$(openssl rand -base64 64)
 #   MFA_ENCRYPTION_KEY=$(openssl rand -base64 32)
 #   SLACK_ENCRYPTION_KEY=$(openssl rand -base64 32)   # a different value
@@ -1068,8 +1122,8 @@ docker compose up -d
 
 ### Step 5 — (Optional) Start monitoring stack
 
-The monitoring stack (Prometheus, Alertmanager, Grafana, kafka-exporter, plus Mailpit and a
-heartbeat sink) watches the platform itself. Alertmanager sends the platform's own alerts three
+The monitoring stack (Prometheus, Alertmanager, Grafana, kafka-exporter, the log pipeline
+(docker-socket-proxy, Loki, Alloy), plus Mailpit and a heartbeat sink) watches the platform itself. Alertmanager sends the platform's own alerts three
 ways (backlog #0-16, `docker/alertmanager.yml`):
 
 - **Watchdog** (always firing) → a dead man's switch URL about every 2 minutes (the route sets
@@ -1149,16 +1203,22 @@ alerts' direct email from Alertmanager does not depend on this. Renew or replace
 Then start the monitoring stack:
 
 ```bash
-docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafana kafka-exporter
+docker compose -f docker/docker-compose.yml up -d alertmanager prometheus grafana kafka-exporter \
+  docker-socket-proxy loki alloy
 ```
 
 | Tool | URL | Credentials |
 |---|---|---|
 | Prometheus | http://localhost:9090 | — |
 | Alertmanager | http://localhost:9093 | — |
-| Grafana | http://localhost:3000 | admin / admin |
+| Grafana | http://localhost:3000 | admin / `GRAFANA_ADMIN_PASSWORD` |
 | Mailpit (operator email, invites) | http://localhost:8025 | — |
 | Heartbeat sink | `docker logs incident-heartbeat-sink` | — |
+| Logs (Loki) | Grafana → Explore → Loki (no port of its own) | admin / `GRAFANA_ADMIN_PASSWORD` |
+
+> Grafana's admin password is applied only when its `grafana_data` volume is first created. A volume from
+> before backlog #0-94 step 2 still has `admin`: change it with
+> `docker exec incident-grafana grafana cli admin reset-admin-password '<the value of GRAFANA_ADMIN_PASSWORD in docker/.env>'`.
 
 > The monitoring stack is optional for local development — all 7 services run and process
 > alerts without it.
@@ -1199,14 +1259,15 @@ Port 8097: UP
 | Kafka UI | http://localhost:8090 | — |
 | pgAdmin | http://localhost:5050 | admin@incident.com / admin |
 | Prometheus | http://localhost:9090 | — |
-| Grafana | http://localhost:3000 | admin / admin |
+| Grafana | http://localhost:3000 (this machine only) | admin / `GRAFANA_ADMIN_PASSWORD` |
 
 ---
 
 ## Running on Kubernetes
 
-> **Monitoring stack note**: Prometheus, Alertmanager, Grafana and kafka-exporter
-> are part of the `docker-compose.yml` setup only — they are not deployed in Kubernetes.
+> **Monitoring stack note**: Prometheus, Alertmanager, Grafana, kafka-exporter and the log
+> pipeline (Loki, Alloy) are part of the `docker-compose.yml` setup only — they are not deployed
+> in Kubernetes (backlog #0-106).
 > In a production Kubernetes environment, monitoring is typically handled by a separate
 > stack (e.g. `kube-prometheus-stack` via Helm), configured with the same routes as
 > `docker/alertmanager.yml` and a `platform-operator` Integration API key as a Secret.
@@ -1578,9 +1639,10 @@ curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
 ## Makefile commands
 
 ```bash
-make dev-up          # Start infrastructure (postgres, redis, kafka)
+make dev-up          # Start the whole docker-compose stack (infra, monitoring, log pipeline, services); needs the three passwords in docker/.env
 make dev-down        # Stop all containers
 make dev-reset       # Stop + remove volumes (clean database)
+make grafana-password-check # Warn if Grafana still accepts admin/admin (a volume from before GRAFANA_ADMIN_PASSWORD); runs at the end of dev-up
 make build           # Build all modules (skip tests)
 make test            # Run all tests
 make run-ingestion   # Start ingestion-service locally (profile=local)
@@ -1754,16 +1816,19 @@ incident-platform/
 │       └── service/               # OncallScheduleService (overlap detection, current on-call)
 │
 ├── docker/
-│   ├── docker-compose.yml         # Full stack: infrastructure + all 7 application services
+│   ├── docker-compose.yml         # Full stack: infrastructure, monitoring, log pipeline + all 7 application services
 │   ├── .env.example               # Environment variable template — copy to .env and fill in
-│   ├── prometheus.yml             # Scrape config for all 7 services (management ports 8091-8097) + kafka-exporter
-│   ├── prometheus.rules.yml       # Alert rules (scope: platform): Watchdog, infrastructure, ingestion, services (incl. the Slack breaker), Kafka lag, JVM
+│   ├── prometheus.yml             # Scrape config for all 7 services (management ports 8091-8097) + kafka-exporter, loki, alloy
+│   ├── prometheus.rules.yml       # Alert rules (scope: platform): Watchdog, infrastructure, ingestion, services (incl. the Slack breaker), Kafka lag, JVM, log pipeline (`logs`)
 │   ├── prometheus.rules.test.yml  # promtool unit tests for the rules (run in CI)
 │   ├── alertmanager.yml           # Routes: Watchdog → dead man's switch, critical → operator email, all → ingestion (ApiKey)
 │   ├── deadmans-switch-url.example # Local heartbeat URL — copy to secrets/deadmans-switch-url
 │   ├── secrets/                   # gitignored: platform-operator-api-key, deadmans-switch-url
+│   ├── loki.yml                   # Loki: 15-day retention, no delete API, no port (backlog #0-94)
+│   ├── alloy/config.alloy         # Alloy: Docker discovery via the socket proxy → ECS parsing → Loki
+│   ├── grafana-password-check.sh  # make dev-up: warns about a weak or default Grafana admin password
 │   └── grafana/
-│       └── provisioning/          # Grafana datasource auto-provisioning
+│       └── provisioning/          # Grafana datasources (Prometheus, Loki) and dashboards, auto-provisioned
 │
 └── k8s/
     ├── base/                      # Deployments, Services, HPA, Ingress, ConfigMap, Namespace

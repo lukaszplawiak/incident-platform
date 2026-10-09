@@ -81,7 +81,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
 | [0-86](#0-86-integration-tests-load-the-web-slice-test-configuration) | Integration tests load the web-slice test configuration | tech-debt | Low | Open |
 | [0-87](#0-87-operator-mfa-enrolment-is-not-bound-to-the-invite) | Operator MFA enrolment is not bound to the invite | design | Low | Open |
-| [0-94](#0-94-logs-are-plain-text-with-no-structure-escaping-or-collection) | Logs are plain text, with no structure, escaping or collection | design | Medium | Open (step 1 done: JSON) |
+| [0-94](#0-94-logs-are-plain-text-with-no-structure-escaping-or-collection) | Logs are plain text, with no structure, escaping or collection | design | Medium | Open (steps 1, 2 done: JSON, collection) |
 | [0-95](#0-95-kafka-messages-have-no-envelope-correlation-id-schema-version-producer) | Kafka messages have no envelope (correlation id, schema version, producer) | design | Low | Open |
 | [0-97](#0-97-kafka-consumers-on-defaulterrorhandler-and-a-dead-letter-replay) | Kafka consumers on `DefaultErrorHandler`, and a dead-letter replay | design | Low | Open |
 | [0-98](#0-98-mfa-recovery-verifies-the-person-by-procedure-only) | MFA recovery verifies the person by procedure only | design | Low | Open |
@@ -90,6 +90,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-101](#0-101-offboard-a-tenant) | Offboard a tenant | design | Medium | Open |
 | [0-102](#0-102-the-pause-of-suspended-tenants-background-work-at-scale) | The pause of suspended tenants' background work at scale | performance | Low | Open |
 | [0-105](#0-105-the-email-channels-worst-case-send-is-not-checked-against-the-scheduler-lock) | The email channel's worst-case send is not checked against the scheduler lock | performance | Low | Open |
+| [0-106](#0-106-kubernetes-has-no-observability-stack) | Kubernetes has no observability stack | design | Medium | Open |
+| [0-107](#0-107-no-alert-reads-log-content) | No alert reads log content | design | Low | Open |
 
 ---
 
@@ -1073,8 +1075,8 @@ build artifact.
 - Third-party images in `k8s/` are not tracked by Renovate, whose `kubernetes` manager needs file patterns that
   `renovate.json` does not set: `apache/kafka:3.7.0` (compose runs 3.9.2), `redis:7-alpine`, `postgres:16-alpine`,
   `busybox:1.36`.
-- `docker/docker-compose.yml` uses `:latest` for `provectuslabs/kafka-ui`, `danielqsj/kafka-exporter`,
-  `dpage/pgadmin4` and `grafana/grafana`.
+- `docker/docker-compose.yml` uses `:latest` for `provectuslabs/kafka-ui`, `danielqsj/kafka-exporter` and
+  `dpage/pgadmin4` (`grafana/grafana` was pinned to `13.2.3` in #0-94 step 2, as it reads every tenant's logs).
 
 **Approach.** Pin every third-party image to a version tag (and a digest where Renovate can keep it current), enable
 Renovate's `kubernetes` manager for `k8s/**/*.yml`, and deploy service images by immutable tag (the commit SHA) or
@@ -1084,14 +1086,15 @@ digest once a registry exists.
 
 ### 0-72. docker-compose publishes every port on all interfaces, with default credentials
 
-**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+**Type:** tech-debt · **Priority:** Low · **Status:** Open — Grafana done in #0-94 step 2 (found in the 2026-09-30 infrastructure security audit)
 
 **Problem.** Every `ports:` entry in `docker/docker-compose.yml` has the form `"5432:5432"`, which binds `0.0.0.0`,
 so on any shared network (office, café) other machines reach Postgres (the services' role with `incident_secret`, and
 since #0-78 the `postgres` superuser with `postgres_admin_dev`, both the `docker/.env.example` values), Redis (no password), Kafka
-(plaintext), pgAdmin and Grafana (both `admin`/`admin`), Prometheus (with `--web.enable-lifecycle`, which lets anyone
+(plaintext), pgAdmin (`admin`), Prometheus (with `--web.enable-lifecycle`, which lets anyone
 reload or shut it down), Alertmanager and every service's management port. Docker's port publishing also bypasses
-host firewalls such as `ufw`.
+host firewalls such as `ufw`. Grafana is no longer one of them: since it reads every tenant's logs (#0-94 step 2)
+it is on `127.0.0.1:3000` with `GRAFANA_ADMIN_PASSWORD` (no default) instead of `admin`/`admin` on every interface.
 
 **Approach.** Prefix every published port with `127.0.0.1:`. Services talk to each other on the compose network and
 need no published ports for that; only the ports a developer opens in a browser or a client need publishing.
@@ -1434,7 +1437,7 @@ operators.
 
 ### 0-94. Logs are plain text, with no structure, escaping or collection
 
-**Type:** design · **Priority:** Medium · **Status:** Open — step 1 done (PR #463), steps 2 and 3 open (raised in the analysis of #0-91/#0-92)
+**Type:** design · **Priority:** Medium · **Status:** Open — step 1 done (PR #463), step 2 done (PR #TBD), step 3 open (raised in the analysis of #0-91/#0-92)
 
 **Problem (before step 1).** Every service logged plain text: six shared the pattern
 `%d [%X{tenantId}] [%X{requestId}] [%X{userId}] %-5level %logger - %msg%n`, auth-service uses Spring Boot's
@@ -1501,9 +1504,114 @@ metrics and traces. Spring Boot 3.4+ (this project: 3.5) has built-in structured
      packaged service jar logs JSON from its first line (checked on oncall-service).
    - *Not covered:* a deployment outside this repository setting the switch on purpose (whoever can, can also
      change the image; it is logged), and the content of an exception's message (escaped, not filtered).
-2. **Collection — open.** Loki + Alloy in docker-compose next to Prometheus/Grafana/Alertmanager, a Grafana
-   datasource, retention, who may read the logs (tenant content and PII, #0-48); k8s with it or as its own step;
-   alerts on log content if any.
+2. **Collection — done (decided 2026-10-09).** docker-compose only: `docker-socket-proxy` → Alloy → Loki, read in
+   Grafana (Explore → Loki), every new image (and Grafana) pinned by tag. k8s has no monitoring at all (no Prometheus, Grafana or
+   Alertmanager), so logs there come with the rest of it, in #0-106, not alone.
+   - *Collection.* Alloy (`docker/alloy/config.alloy`) discovers the containers named `incident-*` (the filter does
+     not depend on the compose project name) and reads their stdout from the Docker API. Labels stay few and
+     bounded: `service` (the compose service), `container`, `level` (from ECS's `log.level`). `tenantId`,
+     `requestId`, `userId` and `kafkaMessageId` are **structured metadata** of each line, queryable
+     (`| tenantId="acme"`) without a stream per value: the cardinality reason the `tenant` tag left
+     `kafka.records.received` in #0-92. Only the services (compose names ending in `-service`) are parsed
+     (`stage.match`): another container's JSON (kafka-ui, a library image) sets no level and no identifiers, as its
+     values are not the platform's and as labels could add streams without bound. Lines that are not JSON
+     (Postgres, Kafka, Redis) are kept unparsed. A service's level outside TRACE..ERROR (JSON of its own on its
+     raw stdout) becomes `OTHER`, so `level` has at most six values. The other containers' raw lines are kept too,
+     on purpose, under the same 15 days: an incident on the platform is often in Postgres, Kafka or the proxy, not
+     only in the services. They may carry tenant content (a Postgres error quoting a row, a Kafka UI request), so
+     they get the same access rules as the services' lines, nothing looser. A
+     service run with `spring-boot:run` is no container and is not collected, nor is auth-service's break-glass
+     command (`docker compose run --rm`, docs/tenant-provisioning.md: its container is not named `incident-*` and is
+     removed when it ends); its audit events are recorded as usual, its log lines go only to the operator's
+     terminal. Positions are kept on a volume, so a
+     restarted Alloy does not resend everything.
+   - *Docker API.* Through `tecnativa/docker-socket-proxy`, never the socket: the socket is root on the host,
+     and `:ro` protects the file, not the API. The proxy answers GET on `/containers` and `/networks` (Alloy's
+     discovery lists both) and refuses the rest, every POST (exec, stop, create) included, and is on an
+     `internal` network with Alloy alone. Rejected: the socket mounted in Alloy (the usual tutorial; a compromised
+     collector would own the host) and Docker's Loki logging driver (a plugin on every developer's host, and a
+     `logging:` block in every service). *Not covered:* the proxy cannot narrow `/containers` further, so whoever
+     controls Alloy can still read every container's environment (secrets included, Grafana's password too, through
+     inspect) and files (archive, export); and `attach/ws`, a GET that upgrades to a websocket able to feed a
+     container's stdin (checked: 101), harmless here as no container keeps stdin open. Much less than root on the
+     host, but not nothing. The proxy is pinned by
+     digest (the one container with the socket) and hardened (read-only root with a tmpfs for its rendered config,
+     every capability dropped, `no-new-privileges`, 128 MiB), and the smoke test fails if a write gets through it or its
+     network is not internal. The way
+     past it, should it matter, is a collector with no Docker API at all: `loki.source.file` over Docker's
+     `/var/lib/docker/containers` mounted read-only (works on a Linux host, not inside Docker Desktop's VM, so not
+     for the developers' machines) or a logging driver; kept for k8s, where Alloy reads the kubelet's files (#0-106).
+   - *Retention and access.* 15 days (`retention_period: 360h`, compactor `retention_enabled`; without it Loki
+     deletes nothing), the same as Prometheus: one window for investigating an incident on the platform from both,
+     and no tenant content kept longer. Lines older than 7 days are refused, and so is a line about an hour behind its stream's newest (Loki's
+     out-of-order window): an Alloy that lost its positions re-reads old Docker logs, those lines are dropped and
+     `LogsDropped` fires once (seen in testing). Loki has `auth_enabled: false` (one
+     org): whoever reaches it can read, push and query every line. So it publishes no port, its delete API is off
+     (`deletion_mode: disabled`; retention does not need it), and it is on the internal `logs` network alone with
+     Alloy, Grafana and Prometheus; Alloy, whose HTTP API shows its config, is on `logs` and `docker-api` only. The
+     services, kafka-ui, pgAdmin and the rest are on `default` and cannot reach either (a first version had both on
+     `default`, where any compromised container could read every tenant's logs and erase lines). Grafana is its
+     only reader, so who may read the logs is who may log in to Grafana; it is on `logs` (Loki and Prometheus are
+     there) and on `grafana-ui`, a network of its own only to publish its port, not on `default`: from there a
+     compromised container could log in (an old volume still has `admin`) and query Loki through Grafana's
+     datasource proxy, around the `logs` network (found in the third review). The smoke test checks that none of
+     the proxy, Loki, Alloy and Grafana is on `default` in the compose file, that Loki and Alloy (and Grafana when
+     it runs) do not answer from the services' network (only a curl DNS, connect or timeout error counts, never a
+     docker failure) and the proxy is on internal networks only, and that Loki and Alloy answer on `logs`; it also pins exactly who is on
+     `logs`, `docker-api` and `grafana-ui`, and that the first two are internal, so adding a service or a UI
+     image to one of them fails CI.
+     Grafana was `admin`/`admin` on every interface (#0-72); since it reads tenant content it is published
+     on `127.0.0.1` only, its admin password is `GRAFANA_ADMIN_PASSWORD` with no default (empty in
+     `.env.example`, so compose refuses to run until a developer sets one; CI sets a dummy) and its image is
+     pinned (`13.2.3`, was `latest`). The password applies to a new `grafana_data` volume only; an older one keeps
+     `admin` until reset (README Step 5), and `make dev-up` warns while Grafana still accepts `admin`/`admin`, or when the password is under 16 characters (`docker/grafana-password-check.sh`, reading it as compose does: BOM, `export`, quotes, inline comments, and a `$` outside single quotes said to be interpolated rather than measured; its 23 cases, with a stub curl, run in CI's build job, `.github/scripts/test-grafana-password-check.sh`).
+     Grafana sends nothing it does not need (usage reporting, update and plugin checks, news feed off) and installs
+     no plugin from its UI, as `grafana-ui` gives it a route out. Memory is capped (Loki 1 GiB, Alloy 512 MiB, about
+     150 and 80 MiB in use when measured), so a heavy query cannot starve the services on a laptop or CI runner;
+     Loki also runs with `GOMEMLIMIT` and bounds each query (no longer than the retention, 8 parallel parts and 16 for the TSDB index (128 by
+     default), 500 series, 2000 lines, 2 GB read, 1 minute (the HTTP server's timeouts, 30 s by default, raised to 70 s so they do not cut it first), 4 at once; the index-stats and volume caches off), and its ingestion rate is written out (4 MB/s, bursts of 8), which caps the rate, not the
+     disk. Its WAL replay is capped at 400 MB (the default, 4 GB, is above the container's limit: after one OOM
+     kill the replay would pass it again and Loki would restart for ever). Alloy has `GOMEMLIMIT` too and sends no
+     usage report. Loki and Alloy are hardened like the proxy (read-only root, no capabilities, no privilege
+     gain), Alloy running as its image's `alloy` user (473) rather than root; a line over 64 KB is cut (4 queries x 2000 lines x 256 KB, Loki's own size, would not fit 1 GiB), not
+     refused (a refusal would count as a drop). `LogPipelineRestarting` (two restarts in 30 minutes) covers the
+     restart loop `LogPipelineDown` cannot see, as every `up=1` between restarts resets its 5 minutes. Alloy's
+     and Loki's own lines are collected too, on purpose (they are where a pipeline problem shows); while Loki is
+     down, Alloy's errors about it wait in its queue like any other line. Grafana 13 downloads app plugins from grafana.com at start (seen: advisor, the Drilldown apps,
+     Pyroscope); `GF_PLUGINS_PREINSTALL_DISABLED` stops it, as none is needed where every tenant's logs can be
+     read. No access per tenant: the logs are the platform's, read by its
+     operators. One tenant's lines cannot be deleted before the retention is up: #0-101. Usage reporting to
+     Grafana Labs is off. Docker keeps at most 3 x 10 MB of each container's json-file log (`x-logging` in
+     compose; it grew without bound before), Alloy having shipped it.
+   - *Alerts on the pipeline* (`logs` group in `prometheus.rules.yml`, all `high`, to the platform webhook): a
+     pipeline that stops says nothing by itself. `LogPipelineDown` (Loki or Alloy unreachable for 5 minutes),
+     `LogPipelineRestarting` (two restarts in 30 minutes, at once: a loop keeps `up` mostly 1, so
+     `LogPipelineDown` stays quiet; a first version, three in 15 minutes, missed a slow loop of one OOM kill
+     every 6-10 minutes), `LogsNotFlowing` (Alloy sent no line for 15 minutes while up and discovering: a
+     renamed container, lost targets; a live stack is never silent that long, as the proxy alone logs each
+     discovery call; 112 lines a minute was the fewest in 3 idle hours, measured),
+     `LogPipelineNotScraped` (no `up` series for either for 5 minutes: a scrape job removed or renamed, which
+     `LogPipelineDown` cannot see; added in review),
+     `LogDiscoveryFailing` (Alloy's Docker discovery kept failing for 5 minutes: a 2-minute window, as a 10-minute
+     one let a single failed refresh fire it, e.g. the proxy is
+     down: Alloy's own component health stays "healthy" then, found by stopping the proxy) and `LogsDropped` (any
+     line Alloy gave up on, per reason; lost for good; late by design, as Alloy retries a batch for about 8.5
+     minutes first, its backoff written out in `config.alloy`; the counter exists at 0 for every reason from
+     Alloy's start, so the first drop counts). Rotation bounds what an Alloy outage can catch up on: a chatty
+     service fills its 3 x 10 MB in minutes, and lines rotated away meanwhile are lost uncounted. promtool tests for each (sustained, blip, idle, other
+     job/mechanism), and `routes test` lines in CI. Alerts on what the lines say: #0-107.
+   - *CI.* `validate-monitoring-config` runs `loki -verify-config`, `alloy validate` and `alloy fmt` (canonical
+     form) on the images it reads from the compose file, so the tags cannot drift apart. The smoke test starts the pipeline with the services and runs
+     `.github/scripts/test-log-collection.sh`: every service's lines are in Loki with a `level`; a probe
+     container's JSON line has its level as a label and `tenantId`/`requestId` as structured metadata, never
+     labels; a line that is not JSON arrives unparsed; the proxy, asked from Alloy's network, answers Alloy's
+     reads and refuses writes (aimed at a container that does not exist, so a misconfigured proxy cannot make the
+     check stop a real one) and other reads; every network of the proxy, Loki and Alloy is internal, and neither
+     Loki nor Alloy answers from the services' network; a non-service container's JSON is not parsed. One
+     deadline for the whole run (4 minutes; one per check could add up past the job's timeout), and every request
+     to Loki has its own 10 s limit. Breaking the `service` relabel, the level path, the tenant mapping, the
+     services-only match, `POST=0`, `internal` or Loki's network makes it fail (checked). `test-postgres-roles.sh`
+     checks compose refuses to run without `GRAFANA_ADMIN_PASSWORD`, as it does for the database passwords.
 3. **Tracing — open.** Micrometer Tracing with OpenTelemetry: `trace.id`/`span.id` in every line, `traceparent`
    across HTTP and Kafka (the header half of #0-95), so one alert can be followed from ingestion to its notifications.
 
@@ -1626,7 +1734,11 @@ deletion in every service (an internal per-service "delete tenant" step, the orc
 recording each one), Redis included; then `OFFBOARDED`, a tombstone that keeps the id taken (ties into
 #0-85). Decide first: the export format, the grace period, the audit trail's retention (often longer than
 the customer), backups, and whether the destructive step needs a second operator (#0-87). Run it from an
-approval, keep a tested runbook.
+approval, keep a tested runbook. The platform's own logs too (since #0-94 step 2): Loki keeps every tenant's
+lines for 15 days in one org with no tenant label, so one tenant's cannot be deleted sooner; either the
+offboarding waits out the retention (state it in the export/erasure answer), or it uses Loki's delete API with
+a `tenantId` structured-metadata filter (needs `deletion_mode` set and the compactor's delete requests; to be
+tried).
 
 **When.** Before the first customer leaves, or the first erasure request for a whole organisation.
 
@@ -1680,6 +1792,37 @@ for SMS once it has a real provider.
 
 ---
 
+### 0-106. Kubernetes has no observability stack
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the analysis of #0-94 step 2)
+
+**Problem.** `k8s/` deploys the seven services, Postgres, Redis and Kafka, and nothing that watches them: no
+Prometheus, Alertmanager or Grafana, so none of the alerts in `docker/prometheus.rules.yml` (the operator's email,
+the dead man's switch, #0-16) exist in a cluster, and since #0-94 step 2 no log collection either: logs live in
+each pod's stdout until it is replaced. Everything in `docker/` (compose) is all the platform has.
+
+**Approach (to analyse).** The usual way is the kube-prometheus-stack / Grafana's Kubernetes monitoring Helm charts,
+or the same components as Kustomize manifests: Prometheus (or Alloy as the scraper) with the same rule file, Alertmanager with
+the same routes, Loki, and Alloy as a DaemonSet reading `/var/log/pods` (no Docker socket: the kubelet's files, with
+RBAC for pod metadata only). Retention and access as decided for compose in #0-94 step 2; a managed backend is the
+other option. Touches #0-64 (securityContext) and #0-65 (NetworkPolicy: who may reach Loki).
+
+### 0-107. No alert reads log content
+
+**Type:** design · **Priority:** Low · **Status:** Open (left out of #0-94 step 2 by decision)
+
+**Problem.** Since #0-94 step 2 the platform's logs are in Loki, but nothing reads them for alerts: Loki's ruler is
+off (`docker/loki.yml`). Most signals already are metrics with alerts (errors per service, failed deliveries, the
+outbox, Kafka redeliveries), so this is for what only a line shows, e.g. `StructuredLoggingGuard`'s WARN that
+plain-text logs were switched on in a deployment (#0-94 step 1), or a burst of ERROR lines from a service whose
+metrics look healthy.
+
+**Approach (to analyse).** Loki's ruler with LogQL alerting rules sent to the same Alertmanager (rules in the repo,
+tested like the Prometheus ones if a tool allows), or recording rules turning a log query into a metric that a
+Prometheus rule alerts on. Only for signals no metric gives.
+
+---
+
 ## Done
 
 | # | Title | Delivered in |
@@ -1725,6 +1868,7 @@ for SMS once it has a real provider.
 | 0-103 | `SlackNotificationChannel.send()` called `postIncidentMessage` on `this`, past Spring's proxy, so its `@Retry` (3 attempts, backoff from 500 ms, on network errors and 5xx) and fallback never ran for an incident notification: one dropped connection or one Slack 5xx failed the channel at once (found in the second review of #0-93). The two Slack Web API calls moved to a bean of their own, `SlackApiClient` (`postMessage`, `updateMessage`, `@Retry` + fallback, `requireOk` and the #0-93 classification), which the channel calls through the proxy, the split #0-21 made for the same mistake. Found while doing it: the Slack client had no timeout (built from the bare `RestClient.Builder`, no read timeout), so a Slack that never answered held the scheduler's thread and, never throwing, was never retried; it now has its own, `notification.channels.slack.connect-timeout` / `read-timeout` (3 s / 5 s, positive, apart from `notification.client.*`; the read timeout also cuts a body that trickles in). The fallbacks no longer log: the send path's caller already did, and the ACK path (`SlackActionService.tryUpdateMessage`) now logs a failed update itself, WARN or ERROR by permanence. Accepted: `chat.postMessage` takes no idempotency key, so a post retried after a read timeout or a 5xx may show twice; a duplicate beats a lost incident message. In review: with the retry running, a hanging Slack costs about 25 s per call and 51 s per entry (broadcast and DM), and the scheduler checks its budget only between entries, so an entry started just before the budget ran out could outlive the 4-minute ShedLock and a second replica send the same notifications; the scheduler now refuses to start unless budget + 30 s + each channel's `worstCaseSendTime()` fits the lock (`SlackApiClient.worstCaseCall`, from the `slack` retry's own config), the default budget went from PT3M to PT2M30S and the read timeout from the 10 s first chosen to 5 s. `SlackApiClientResilienceTest` goes through Spring's proxy from `send()` (WireMock: 5xx, a read timeout and a trickling body retried or cut, 401 and `ok:false` not, the ACK update retried); the standalone-`Retry` tests it replaces could not see the bypass. `NotificationSchedulerDefaultsTest` keeps `application.yml`'s defaults inside the lock, with the retry Resilience4j's auto-configuration builds from the file. Second review: the client never follows a redirect, pinned rather than left to the JDK's default (the request carries the tenant's bot token). Email and SMS declaring their own worst case: #0-105. No circuit breaker yet: #0-104. Per-channel retry across scheduler runs is still #0-32 | PR #461 |
 | 0-104 | Since #0-103 a Slack call that times out is retried, so while Slack accepted connections and did not answer, every entry with a Slack channel cost about 51 s: the scheduler sent about three entries per run, every other tenant's email and SMS waited, Slack got three times the requests, and the ACK updates held `slackTaskExecutor`'s threads as long. `SlackApiClient`'s two calls are now behind a circuit breaker, `slack` (time-based 60 s window, at least 5 calls, 50%, 30 s open, one trial call, no health indicator: a channel's outage must not mark the service DOWN), the service's other breakers' idea but without a fallback of its own: Resilience4j puts the retry outside it, an open breaker's `CallNotPermittedException` is not retried, and the retry's fallback classifies it as `SLACK_UNAVAILABLE` with its own code, `circuit_open` (it would have been recorded as UNEXPECTED). Only network errors and 5xx count; 4xx, 429 and `ok:false` are ignored, so no tenant's workspace can open it for the others (Slack's own `ok:false` outage codes and an unreadable 200 with them: they answer at once). One breaker for every tenant (Slack's API is one service; one per workspace would multiply breakers and series and not help when Slack is down). Accepted until #0-32: while it is open, Slack messages are recorded FAILED without being tried and never resent, a run's whole batch at once (noted in #0-32). The scheduler's lock check (#0-103) still counts the closed breaker's worst case. Alert `SlackCircuitOpen` (high): the breaker refused calls (`not_permitted_calls_total`) within the last 10 minutes, held 5 minutes; in review it moved off the breaker's state, which stays half-open with no traffic and kept the alert up after Slack recovered, and from a 3-minute window to 10 minutes, as every refusal is a lost notification and refusals minutes apart (sparse traffic) slipped through the shorter one (promtool tests: sustained, sparse, a burst that fires and resolves, idle, another breaker, another job). `SlackApiClientResilienceTest` through the proxy, on `application.yml`'s own settings (opened by 5xx and by timeouts and failing fast without calling Slack, the ACK update too, not opened by 401/429/`ok:false`, closed by a successful trial and reopened by a failed one); `SlackResilienceConfigTest` checks `application.yml`'s breaker (every setting) and retry as Resilience4j builds them. Rejected: a deadline passed into the send (bounds only the last entry, does not spare Slack), Slack in a pool of its own (changes when an entry counts as sent, close to #0-32) | PR #462 |
 | 0-94 (step 1) | Every service logs one JSON object per line in ECS (Spring Boot's structured logging, set for all seven by `shared`'s `StructuredLoggingDefaults`), so every value is escaped and the MDC keys are fields; plain text only in a developer's `application-local.yml`. Steps 2 (collection) and 3 (tracing) stay open: [the item](#0-94-logs-are-plain-text-with-no-structure-escaping-or-collection) | PR #463 |
+| 0-94 (step 2) | The platform's container logs are collected in docker-compose: `docker-socket-proxy` (GET on containers and networks only) → Alloy → Loki, 15 days, read in Grafana; `service`/`container`/`level` labels, tenant, request, user and Kafka message ids as structured metadata; alerts `LogPipelineDown`, `LogPipelineRestarting`, `LogPipelineNotScraped`, `LogsNotFlowing`, `LogDiscoveryFailing`, `LogsDropped`; Loki and Alloy on an internal network of their own with Grafana and Prometheus, Loki's delete API off; the smoke test checks the lines arrive parsed, the proxy stays read-only and Loki and Alloy cannot be reached from the services; Grafana off the services' network, on `127.0.0.1` with a required admin password and a pinned image; the proxy, Loki and Alloy read-only with no capabilities (Alloy not root); a level outside TRACE..ERROR stored as `OTHER`; Docker logs rotated. k8s: #0-106, alerts on content: #0-107; step 3 (tracing) stays open: [the item](#0-94-logs-are-plain-text-with-no-structure-escaping-or-collection) | PR #TBD |
 | — | Register a default no-op `TokenRevocationChecker` so incident-service starts (unblocked CI on `main`) | PR #410 |
 | — | Key notification idempotency on tenant + escalation level; stop dropping level-2 escalations | PR #411 |
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |
