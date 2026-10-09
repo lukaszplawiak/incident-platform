@@ -54,6 +54,10 @@ unfinished or untested, stop and say so instead of finishing it here.
       `## Notes for reviewers` (anything that could look like a mistake but
       isn't, discrepancies with docs, etc.)
 
+7. **Backlog.** If this change finishes a backlog item, the same PR moves it: remove its section and its
+   row from `BACKLOG.md`, and add a row to `BACKLOG-DONE.md` (`| <n> | <what was delivered> | PR #<number> |`)
+   — commit that as `chore: close backlog #<n>` after the PR exists, so the number is known.
+
 Stop and ask before any step if:
 - the changes span what looks like more than one logical commit — ask whether
   to split them

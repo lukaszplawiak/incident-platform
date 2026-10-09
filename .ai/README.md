@@ -1,9 +1,11 @@
 # AI Workspace
 
-> This directory contains structured knowledge for AI assistants working on Incident Platform.
+> This directory contains structured knowledge for AI assistants working on Incident Platform, and the
+> rules the AI factory (the autopilot that works through `BACKLOG.md`) is held to.
 >
 > The AI Workspace is treated as part of the production engineering system.
-> Changes to this directory should follow the same review standards as source code changes.
+> Changes to this directory follow the same review standards as source code changes, and
+> `.ai/rules/` is owned by the human maintainer (CODEOWNERS): agents read it and never edit it.
 
 ---
 
@@ -64,124 +66,120 @@ Examples:
 
 ---
 
+## 4. Less, read selectively
+
+Every line an agent reads costs context and attention, and an instruction an agent does not need still
+changes what it does. Files that load into every session (`CLAUDE.md`, `AGENTS.md`) stay short; the rest
+is read by the task that needs it (the reading order below). Agents propose additions; a human writes
+them. A rule that never catches anything is removed at the next audit.
+
+---
+
 # Workspace Structure
 
-The AI Workspace is introduced incrementally.
-
-Not all directories below may exist yet.
-
-The target structure:
+Directories are created when they provide real value. Current structure:
 
 ```text
 .ai/
-
-├── README.md
-
-├── context/
-│   ├── project.md
-│   ├── architecture.md
-│   ├── backend.md
-│   ├── frontend.md
-│   ├── security.md
-│   └── infrastructure.md
-│
-├── rules/
-│   ├── engineering.md
-│   ├── backend.md
-│   ├── frontend.md
-│   └── testing.md
-│
-├── decisions/
-│   └── adr-index.md
-│
-├── agents/
-│   ├── architect.md
-│   ├── backend-developer.md
-│   ├── frontend-developer.md
-│   └── reviewer.md
-│
-├── playbooks/
-│   ├── new-feature.md
-│   ├── bug-fix.md
-│   └── refactoring.md
-│
-├── workflows/
-│   ├── feature-development.md
-│   └── pull-request-review.md
-│
-└── reviews/
-    ├── architecture-review.md
-    └── code-review.md
+├── README.md                  ← this file: map, reading order, file contract
+├── context/                   ← what the system is and which invariants hold
+│   ├── project.md             ← purpose, domain, users, service map, index of decisions
+│   ├── architecture.md        ← shared, persistence, decided patterns (moved from CLAUDE.md)
+│   ├── security.md            ← tenant isolation and authentication (moved from CLAUDE.md)
+│   └── infrastructure.md      ← CI rules and supply chain (moved from CLAUDE.md)
+├── decisions/                 ← ADRs: README.md is the index, _template.md the format
+├── rules/                     ← HUMAN-OWNED criteria the agents are judged by
+│   ├── review/                ← one file per review dimension + _common.md
+│   ├── acceptance.md          ← what counts as evidence that an acceptance criterion holds
+│   ├── ready.md               ← when a backlog item may be marked `ready` for the autopilot
+│   ├── planning.md            ← order, Touches and follow-ups of the execution queue
+│   ├── implementation.md      ← how the implementer works (calibrated by audits)
+│   └── audit.md               ← how audits rate findings and when they may recommend a change
+├── plan/                      ← HUMAN-OWNED: the approved order of work
+│   ├── README.md              ← what the queue is and who changes it
+│   └── queue.md               ← execution queue (planner proposes via /plan-backlog, owner merges; created by the first plan)
+├── audit/                     ← audit reports and the owner's decisions on them
+│   ├── decisions.md           ← ledger: every recommendation and what the owner decided
+│   └── benchmark/             ← seeded-defect patterns used to measure the reviewers
+├── work/_template/            ← templates of the per-item working files
+├── work/<item>/               ← EPHEMERAL: exists only on the item's branch, removed before merge
+├── runs/                      ← raw logs of autopilot runs (gitignored)
+└── STOP                       ← local kill switch (gitignored); present = the autopilot does not start
 ```
 
-Directories will be created when they provide real value.
+Not created yet, on purpose: `context/frontend.md` (no frontend in this repository yet),
+`rules/frontend.md`, and the `agents/`, `playbooks/`, `workflows/` and `reviews/` directories of the
+earlier target structure. Agent definitions live in `.claude/agents/` (one implementation, no
+tool-neutral copy that could drift); review criteria live in `rules/review/`; workflows in
+`.claude/workflows/`.
 
 ---
 
 # Reading Order
 
-Before making any implementation decision, AI assistants should follow this order:
+Before making any implementation decision, read in this order, and only what your task needs.
 
 ## Step 1 — Understand the system
 
-Read:
+```
+.ai/context/project.md            (always: purpose, service map)
+```
+
+## Step 2 — Understand the area you touch
+
+| Your change touches | Read |
+|---|---|
+| a tenant id, authentication, a filter chain, an HTTP client between services, Kafka, a notification recipient, tenant status | `.ai/context/security.md` |
+| `shared`, an entity, a repository, a migration, a scheduler, an outbox, retries | `.ai/context/architecture.md` |
+| `.github/`, a Dockerfile, `k8s/`, `docker/`, a POM's plugins | `.ai/context/infrastructure.md` |
+
+## Step 3 — Check previous decisions
 
 ```
-.ai/context/project.md
-.ai/context/architecture.md
+.ai/decisions/README.md           (the index; then only the ADRs whose area you touch)
 ```
+
+Existing decisions are respected unless a new ADR changes them.
+
+## Step 4 — Check the rules you will be judged by
+
+| Role | Read |
+|---|---|
+| implementer | `.ai/rules/implementation.md`, the item's acceptance criteria; `.ai/rules/review/general.md`, `architecture.md`, `security.md` in full and `_common.md` (blocking criteria); from the other review files, the rules the plan lists, or the whole file when the autopilot asks for a self-check |
+| reviewer of dimension D | `.ai/rules/review/_common.md`, `.ai/rules/review/<D>.md` |
+| acceptance reviewer | `.ai/rules/acceptance.md` |
+| architect | `.ai/rules/ready.md`, all of `.ai/rules/review/` (it selects the rules the implementer gets), `.ai/rules/planning.md` ("Touches") |
+| planner | `.ai/rules/planning.md`, `.ai/rules/ready.md`, `.ai/plan/queue.md` |
+| auditor | `.ai/rules/audit.md`, `.ai/audit/decisions.md` |
 
 ---
 
-## Step 2 — Understand the technology area
+# File Contract
 
-Depending on the task:
+Who writes and who reads each file. One writer per file per stage; `progress.md` is append-only.
 
-Backend:
-
-```
-.ai/context/backend.md
-```
-
-Frontend:
-
-```
-.ai/context/frontend.md
-```
-
-Infrastructure:
-
-```
-.ai/context/infrastructure.md
-```
-
-Security-related work:
-
-```
-.ai/context/security.md
-```
-
----
-
-## Step 3 — Check constraints
-
-Read relevant rules:
-
-```
-.ai/rules/
-```
-
----
-
-## Step 4 — Check previous decisions
-
-Before introducing a new architectural approach:
-
-```
-.ai/decisions/
-```
-
-Existing decisions should be respected unless explicitly changed.
+| File | Written by | Read by |
+|---|---|---|
+| `BACKLOG.md` (item text, `ready`) | owner | picker, architect, acceptance-reviewer |
+| `BACKLOG.md` (status `In progress` / `Blocked`) | picker / autopilot | owner |
+| `BACKLOG.md` (`**Touches:**`, added `**Depends on:**`) | planner, ready-checker (drafts) — owner approves by merge | planner, `next-item.sh`, `check-queue.sh` |
+| `BACKLOG.md` (new `proposed` follow-up items) | shipper, from `handoff.md` "Follow-up needed" | owner (`/ready`) |
+| `.ai/plan/queue.md` | planner (proposal, `/plan-backlog`) — **owner approves by merge**; autopilot never | `next-item.sh`, `check-queue.sh`, planner |
+| `BACKLOG-DONE.md` (new row) + removal from `BACKLOG.md` | shipper, `/ship` | everyone resolving `backlog #N` |
+| `CLAUDE.md` inside `agent-editable` blocks | implementer | everyone |
+| `CLAUDE.md` elsewhere, `AGENTS.md` | owner | everyone |
+| `.ai/context/*` | owner; implementer in the same PR when the change creates the knowledge (reviewed by `review-docs`) | per reading order |
+| `.ai/decisions/NNNN-*.md` | architect (`Proposed`, reversible decisions only), owner (`Accepted`) | implementer, reviewers |
+| `.ai/rules/**` | **owner only** (deny rules + CODEOWNERS); audits only recommend | reviewers, implementer, architect, auditors |
+| `.ai/work/<item>/progress.md` | every stage, append-only | autopilot on resume, every stage |
+| `.ai/work/<item>/handoff.md` | implementer | reviewers, acceptance-reviewer |
+| `.ai/work/<item>/proofs.md` | implementer | acceptance-reviewer |
+| `.ai/runs/<item>/` (gitignored) | implementer (test logs), autopilot | owner when debugging |
+| `.ai/audit/<date>.md` | audit workflow | owner |
+| `.ai/audit/decisions.md` | `/apply-audit` (owner-run) | auditors |
+| `.ai/audit/benchmark/patterns.md` | owner | `seed-bugs` workflow |
+| `.ai/STOP` | owner, circuit breaker | autopilot at start |
+| PR description (verdicts in `<details>`), PR labels | shipper; `human:*` labels by the owner | auditors |
 
 ---
 
@@ -203,7 +201,12 @@ AI assistants should not:
 - introduce frameworks without justification,
 - rewrite working code without clear benefit,
 - create abstractions only for theoretical future needs,
-- ignore existing architectural decisions.
+- ignore existing architectural decisions,
+- edit the rules they are judged by (`.ai/rules/`), their own configuration (`.claude/`) or CI
+  (`.github/`).
+
+How these apply per session: `CLAUDE.md` "Working style" governs interactive sessions with the owner;
+an autopilot agent follows its definition in `.claude/agents/`.
 
 ---
 
@@ -263,15 +266,14 @@ Ask:
 
 If yes, update `.ai`.
 
-Examples:
-
 | Change | Update |
 |---|---|
-| New service | architecture.md |
-| New technology decision | ADR |
-| New coding convention | rules |
-| New business workflow | context |
-| New development process | playbooks/workflows |
+| New service | `context/project.md` (service map), CLAUDE.md (ports), `context/architecture.md` |
+| New technology or architectural decision | a new ADR in `decisions/` |
+| New invariant on tenant isolation or authentication | `context/security.md` + ADR |
+| New CI rule | `context/infrastructure.md` |
+| New review criterion, or a criterion that keeps missing | `rules/review/<dimension>.md` (owner, usually via an audit) |
+| New business workflow | `context/project.md` |
 
 ---
 
@@ -280,20 +282,17 @@ Examples:
 Current phase:
 
 ```
-Phase 1 - Context Foundation
+Phase 2 - AI factory, shadow mode
 ```
 
 Implemented:
 
-- AI Workspace structure
-- Documentation principles
-- Initial project context
+- AI Workspace structure, documentation principles, project context
+- Context split by area; decisions as ADRs
+- Review criteria per dimension, acceptance, readiness and audit rules
+- Agents (`.claude/agents/`), the autopilot and audit workflows (`.claude/workflows/`)
 
-Not implemented yet:
-
-- specialized agents,
-- automated workflows,
-- development playbooks,
-- AI review processes.
-
-These will be introduced incrementally as the project evolves.
+Not implemented yet (tracked in `BACKLOG.md`): architecture tests (#0-108), secret scanning (#0-109),
+Maven Enforcer (#0-110), OpenAPI diff (#0-111), mutation testing (#0-112); the GitHub settings the
+autopilot depends on (#0-113). Until #0-113 is done the autopilot runs in shadow mode only (it opens PRs,
+the owner merges). The phases are described in `docs/ai-factory.md`.

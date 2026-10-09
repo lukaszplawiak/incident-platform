@@ -1,0 +1,36 @@
+{
+  "name": "incident-platform AI factory",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "runArgs": [
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW",
+    "--add-host=host.docker.internal:host-gateway"
+  ],
+  "remoteUser": "dev",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=incident-platform-claude,target=/home/dev/.claude,type=volume",
+    "source=incident-platform-gh,target=/home/dev/.config/gh,type=volume",
+    "source=incident-platform-m2,target=/home/dev/.m2,type=volume"
+  ],
+  "containerEnv": {
+    "TESTCONTAINERS_HOST_OVERRIDE": "host.docker.internal",
+    "TESTCONTAINERS_RYUK_DISABLED": "false",
+    "OLLAMA_URL": "http://host.docker.internal:11434",
+    "FACTORY_BASE_REF": "origin/main",
+    "FACTORY_NTFY_TOPIC": "${localEnv:FACTORY_NTFY_TOPIC}",
+    "FACTORY_NTFY_SERVER": "${localEnv:FACTORY_NTFY_SERVER}"
+  },
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh ${FACTORY_NTFY_TOPIC:+$(echo ${FACTORY_NTFY_SERVER:-https://ntfy.sh} | sed -E 's#^https?://##; s#/.*##')}",
+  "hostRequirements": {
+    "memory": "16gb"
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "moby": false
+    }
+  }
+}

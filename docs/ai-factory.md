@@ -1,0 +1,219 @@
+# AI factory: runbook
+
+How the autopilot works through `BACKLOG.md` unattended, what the owner does, and how to set it up.
+The map of files and who may write them is in `.ai/README.md`; this document is the operating manual.
+
+## In one picture
+
+```
+next-item.sh (code: ready follow-up → approved queue .ai/plan/queue.md, strictly in order → priority) → picker
+  → architect (plan, predicted modules, the rules the implementer must have in front of it)
+  → implementer (Opus; implementer-light on Sonnet for Complexity: low)
+  → self-check: rule files the diff calls for, from which the plan listed no rule → implementer reads and checks them
+  → path gate (scripts/factory/changed-paths.sh)                                human-owned path, applied migration, POM supply chain,
+                                                                                 build config, deleted/disabled tests, ready flag,
+                                                                                 CLAUDE.md outside its blocks → BLOCKED
+  → test gate (scripts/factory/run-tests.sh: ./mvnw verify of HEAD, clean tree)  fixable → implementer (≤2) · env failure → BLOCKED
+  → review panel, in parallel: general · architecture · security · performance · docs (+ migration, k8s when touched)
+       invalid verdict → BLOCKED (fail closed) · NEEDS_HUMAN → BLOCKED · upheld dispute → BLOCKED
+       blocking → implementer → test gate → the reviewers that blocked + security + general, on the delta
+       (≤3 rounds) · same findings again → BLOCKED
+  → acceptance-reviewer        REJECT → one fix → tests → one delta round → acceptance again · NEEDS_HUMAN → BLOCKED (risk-high: owner merges)
+  → shipper (outside the loop) PR with the full review record · item moved to BACKLOG-DONE.md · auto-merge only outside shadow mode
+  → CI + Factory guards + CODEOWNERS on the PR · Main guard: red main → autopilot-stop issue
+```
+
+Every arrow is code in `.claude/workflows/backlog-autopilot.js`; agents do the work, the script decides.
+A BLOCKED item becomes a draft PR labelled `blocked`, which is also the lock that keeps the picker away
+from it.
+
+## Phases
+
+| Phase | What | Done when |
+|---|---|---|
+| 0 | Prepare items: `/ready #0-N` per item (numbered acceptance criteria, risk, complexity, `ready`) | ~10 items `ready` on `main` |
+| 1 | Use the panel by hand: `/review` (same agents and rules as the autopilot) | you trust its findings on your own changes |
+| 1b | Plan the order: `/plan-backlog` proposes `.ai/plan/queue.md` (order, Touches, why); you edit and merge it | a queue you agree with is on `main` |
+| 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label each PR (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
+| 3 | Auto-merge, after #0-113 (bot account, branch protection): in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
+| 4 | Audits every 10 items (the preflight stops with "audit due") | acceptance of recommendations stays in 40–80% |
+| 5 | Later: more audit targets (implementer, architect, planner — Scope and rule-selection misses), cloud runs. Never: two items at once (#0-114, decided against) | — |
+
+## Setup (once)
+
+1. **Devcontainer** (`.devcontainer/`). Docker Desktop: give the VM 16–20 GB, and restrict *Settings →
+   Resources → File sharing* to the directory that holds your projects — the container can reach the
+   host's Docker (Testcontainers needs it), and whoever controls Docker can mount any shared directory.
+   Without an IDE: `npm i -g @devcontainers/cli`, then `devcontainer up --workspace-folder .` and
+   `devcontainer exec --workspace-folder . bash`. The firewall starts with the container and tests
+   itself; `example.com` must be unreachable.
+2. **Logins inside the container** (stored in named volumes, so a rebuild keeps them): `claude` (your
+   subscription) and `gh auth login` with the **bot account's** token (#0-113), not yours, then
+   `gh auth setup-git` so that `git push` uses that token too. Prefer a fine-grained token limited to this
+   repository (Contents, Pull requests, Issues: read and write); if GitHub does not offer the repository
+   to the bot (fine-grained tokens of collaborators on a repository owned by another user have not always
+   been supported), use a classic token with the `repo` scope — the bot has access to nothing but this
+   repository, so that scope reaches no further. Set the bot's git identity: `git config --global
+   user.name "…-bot"` and `user.email` (the bot's `…@users.noreply.github.com` address).
+   `.claude/settings.local.json` is personal: its allow rules would merge into the autopilot's `dontAsk`
+   session, so the preflight refuses to start while it exists in the workspace. Stop tracking it
+   (`git rm --cached .claude/settings.local.json`; it is now in `.gitignore`) and keep your copy outside
+   the workspace while the autopilot runs.
+3. **GitHub** (#0-113): bot as collaborator with Write; branch protection on `main` with required checks
+   ("Build, Test & Coverage", "Docker Compose Smoke Test", "Factory guards"), CODEOWNERS review, no bypass
+   for administrators; "Automatically delete head branches"; the labels listed in #0-113. Replace the
+   placeholder in `.github/CODEOWNERS` with your login.
+4. **Before the first run**, in an autopilot session, run `/workflow-authoring` and check two things in
+   `.claude/workflows/backlog-autopilot.js` (and the same constant in `audit.js`, `docs-audit.js`,
+   `seed-bugs.js`): `AGENT_TYPE_OPTION`, the `agent()` option that selects a custom agent (not in the
+   public docs we checked), and the call shape of `parallel()` in `runAll()`. The preflight's isolation
+   check stops the run if the first is wrong.
+5. Optional: export `FACTORY_NTFY_TOPIC` (a long random string) on the host before starting the
+   container, for phone notifications; the container passes it on and the firewall then allows the ntfy
+   host (`FACTORY_NTFY_SERVER`, default ntfy.sh). Only event names and item/PR numbers are sent.
+
+## Running it
+
+```bash
+# inside the devcontainer, on a clean main
+claude --settings .claude/settings.autopilot.json
+> /backlog-autopilot                                   # next ready item, shadow mode
+> /backlog-autopilot  with args {"item": "#0-25"}      # a specific item
+> /backlog-autopilot  with args {"item": "#0-25", "branch": "refactor/0-25-…"}   # resume after you resolved a BLOCKED item
+```
+
+One item per run. The session settings make it `dontAsk`: everything not allowed is refused, nobody is
+asked. `/workflows` shows progress; `p` pauses, `x` stops.
+
+**Which item.** Code decides, not an agent: `scripts/factory/next-item.sh` reads `BACKLOG.md`,
+`BACKLOG-DONE.md` and `.ai/plan/queue.md` on the run's base commit and the open PRs, and takes, in order:
+
+1. a `ready` **follow-up** whose parent is done — work an item showed was needed runs right after it;
+2. the **approved queue**, strictly in order: its first row that is not done, if it can start (ready,
+   dependencies done, no open PR or branch). If it cannot, nothing starts — in shadow mode the autopilot
+   waits for your merge of the previous item, so every item is built on code you have reviewed;
+3. without a queue file, `ready` items by **priority**.
+
+`{"item": "#0-25"}` overrides the choice (the item still has to be ready, unblocked and unlocked). When
+nothing can start, the run ends with `NOTHING_TO_DO` and names the row and why.
+
+**Which rules the implementer reads.** The panel judges every change against the full files of
+`.ai/rules/review/`. The implementer reads `general.md`, `architecture.md` and `security.md` in full for
+every item; from `performance.md`, `migration.md`, `k8s.md` and `docs.md` it reads the rules the architect
+listed in the plan, each with why it applies. After implementing, `changed-paths.sh` maps the diff onto
+rule files (a migration → `migration.md`, a Kafka listener or a repository → `performance.md`, an endpoint
+or a `.md` → `docs.md`, a manifest or POM → `k8s.md`); a file from which the plan listed no rule sends
+the implementer back to read it in full and check its change (`self-check`) before the panel sees it.
+This runs once, after implementing; later fix rounds are judged by the panel. A
+missed rule then costs a self-check, not a review round; the PR records which rules were planned and
+which self-check ran, and the audit counts selection misses (`.ai/rules/audit.md`).
+
+**Which implementer.** `Complexity: low` items go to `implementer-light` (the same definition, on
+Sonnet), the rest to `implementer` (Opus) — the implementer is the most expensive agent of a run. A
+light implementer that finds the item is not small stops it, so you can re-rate it.
+
+## Planning the order
+
+`/plan-backlog` (interactive, in your normal session) asks the `planner` agent for a queue: the items in
+order, a `**Touches:**` line per item (modules and packages it will change, found in the code), the
+reasoning per item, and what was left out and why. `scripts/factory/check-queue.sh` rejects an
+inconsistent proposal (a dependency queued after its dependant, a human-only or design item, an unknown
+module); the skill shows you the table, applies your
+changes, and commits it on a `plan/<date>` branch. **Your merge is the approval**; the queue is
+human-owned like `.ai/rules/` (CODEOWNERS, denied to the autopilot), and CI re-checks it on every PR.
+Rules: `.ai/rules/planning.md`.
+
+**Scope that grows.** An implementer that finds more work than the item planned finishes the item and
+describes the rest under "Follow-up needed" in its handoff; the shipper adds each as a backlog item with
+`**Autopilot:** proposed` and `**Follow-up of:**` in the same PR, and you get a notification. `/ready` it
+and merge: once its parent is merged too, it runs next. Work without which the item itself cannot pass
+stops the item (BLOCKED) instead.
+
+**Scope, measured three times.** Each PR shows "Scope": the item's Touches (predicted at `/ready`), the
+architect's modules (predicted just before implementing) and the areas the diff reached, with a
+category — `consistent`, `backlog-estimate-off`, `plan-off`, `implementation-drift`, `unclear-item`
+(`.ai/rules/audit.md` explains each). A prediction holds when the diff stays within it; which one failed
+says which stage was off. Nothing is blocked on it. Touches is an experiment with
+an exit criterion (`.ai/rules/planning.md`): if it never teaches anything, it goes.
+
+**Stopping it**: create `.ai/STOP` (local), or open an issue labelled `autopilot-stop` (works from a
+phone). The preflight also refuses to start when: main's CI is red, the working tree is dirty, 2 items
+in a row were BLOCKED, an audit is due, the daily merge limit (5) is reached, or another run holds the
+lock (`scripts/factory/state.sh unlock` clears a stale one).
+
+The breaker and the audit counter are reset only by the owner, outside the autopilot session (which may
+not run `scripts/factory-admin/`): after resolving the BLOCKED items, delete `.ai/STOP` and run
+`scripts/factory-admin/state-reset.sh blocked`; after an audit, `/apply-audit` runs
+`scripts/factory-admin/state-reset.sh audit`. The run state lives in `.ai/runs/` (gitignored): `LOCK`
+holds the run id and the base commit every gate compares against, `state.json` the counters.
+
+## The owner's routine
+
+| When | What | Time |
+|---|---|---|
+| per new item | `/ready #0-N`: confirm criteria, risk, complexity, Touches; merge the backlog change | 5 min |
+| per follow-up | a PR created `proposed` items: `/ready` the ones you want next, delete or re-plan the others | 5 min |
+| when the queue is done, or every ~10 items | `/plan-backlog`, edit, merge | 15–20 min |
+| daily, in shadow mode | review and merge the autopilot's PRs; **label each one** `human:*` | 10–20 min |
+| when it happens | BLOCKED draft PRs: decide, fix or split, then resume with `branch` | 5–20 min |
+| every 10 items | `/audit` (args `since`, `date`), tick decisions in the report, `/apply-audit <report>`, merge its PR | 20–30 min |
+| every 10–15 items | `/docs-audit`; look at the architecture as a whole (what no single review sees) | ~1 h |
+| sometimes | do an item yourself, then `/review` and `/ship` — the knowledge should end up in you, not only in the repository | — |
+
+Spot checks must be real (read the diff, run the tests), or the `human:*` labels measure nothing.
+
+## What isolates what
+
+The agents' instructions are not a boundary; these are, each with its limit:
+
+| Layer | Stops | Does not stop |
+|---|---|---|
+| `dontAsk` + deny rules (`settings.autopilot.json`) | file-tool writes to human-owned paths and to the gates' own files; the network tools; force pushes, merges, `gh api` | what a shell command does indirectly — hence the hooks |
+| Hooks (`.claude/hooks/`, tested by `test-hooks.sh`) | skipped verification, `exec:` goals, shell writes to protected paths, pushes other than a feature branch, running tampered factory scripts, secret reads | a shell command shaped to get past a pattern: they are heuristics |
+| Gates on commits (`changed-paths.sh` before review, CI "Factory guards" on the PR) | the same changes once committed, whatever produced them | — the PR is the last and most reliable line |
+| CODEOWNERS + branch protection (#0-113) | a merge of any of it without the owner | — once configured; until then shadow mode is what keeps `main` safe |
+| Devcontainer + firewall | access to your host account, files and credentials; network beyond Anthropic, GitHub, Maven Central | the host's Docker (Testcontainers needs it, and a container it starts is outside the firewall); data through DNS the resolver forwards; GitHub itself as a channel |
+
+## Measuring the reviewers
+
+- **Owner labels** on PRs are the ground truth the audit needs; without them confidence stays `medium`
+  and security/architecture rules can never be relaxed.
+- **Seeded defects**: `/seed-bugs` with args `{"pattern": "P-01", "commit": "<merged sha>", "runId":
+  "<id>"}` plants a known defect from `.ai/audit/benchmark/patterns.md` on a throwaway `seed/` branch and
+  records who caught it in `.ai/audit/benchmark/results.md`. Rotate patterns; delete the branch after.
+- **Escaped defects**: an item that fixes a defect an earlier item introduced carries
+  `**Fixes:** #0-N · **Escaped from:** review-<dimension>` (BACKLOG.md conventions).
+
+## Pinned versions
+
+Agent models are full ids in `.claude/agents/*.md`; Claude Code is pinned to the version the
+devcontainer image was built with (`DISABLE_AUTOUPDATER=1`). Treat an upgrade of either like a dependency
+upgrade: change it on purpose, then run a few seeded defects and compare `results.md` before trusting it.
+
+## Local model (experimental, optional)
+
+`scripts/factory/local-review.sh` (advisory second opinion in the PR, never blocks; the autopilot runs
+it with `{"localReview": true}`) and `scripts/factory-admin/local-implement.sh` (you run it by hand, for a
+`Complexity: low` item while your limit is exhausted; the branch stays local and is reviewed later by the
+normal panel with `{"item", "branch"}`). Both point Claude Code at Ollama on the host (`OLLAMA_URL`). Measure first: with the test stack running, a 27B model may not fit
+next to it in 32 GB.
+
+## Cloud (later)
+
+Everything is files in the repository, so the same setup can run elsewhere: Claude Code routines (check
+first that the cloud environment can run Docker for Testcontainers) or GitHub Actions with this
+devcontainer image. Check the current rules for subscription usage of non-interactive runs before
+moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `NOT_STARTED: agent isolation check failed` | `AGENT_TYPE_OPTION` is wrong: reviewers ran as general-purpose agents |
+| `NOT_STARTED: label '…' does not exist` | create the labels of #0-113 |
+| a hook says "factory scripts were changed on this branch" | `scripts/factory/` differs from the base commit in `.ai/runs/LOCK` (or `origin/main` without a run) — either the branch touched it (owner's decision) or `main` moved on: rebase the branch by hand |
+| every run `BLOCKED: test environment failure` | Docker not reachable from the container, or the firewall blocks Maven Central |
+| a reviewer "returned no valid verdict" | it answered prose instead of JSON; check its transcript; repeated → audit finding |
+| `NOTHING_TO_DO` | the reason names the next queue row and why it cannot start: not `ready` on main, a dependency not done, or an open PR/branch (a lock — usually the previous item waiting for your merge). "The approved queue is done" → `/plan-backlog` |
+| `NOT_STARTED: the queue on main is invalid` | a merged change broke `.ai/plan/queue.md` (e.g. an item it lists was removed); `scripts/factory/check-queue.sh` names the rows — fix them or re-plan |
+| a hook blocks a legitimate command | read the hook's message; the hooks are tested by `.claude/hooks/test-hooks.sh` — fix the hook and its test together |
