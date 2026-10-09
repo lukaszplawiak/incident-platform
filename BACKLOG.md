@@ -246,6 +246,8 @@ consumer test added.
 ### 0-8. Dead `publishEscalated` and a stale Javadoc in incident-service
 
 **Type:** tech-debt · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** incident-service (com.incidentplatform.incident.service, com.incidentplatform.incident.kafka)
 
 **Problem.** `IncidentEventPublisher.publishEscalated(...)` has no callers. The Javadoc of
 `IncidentEscalationEventConsumer` still says incident-service publishes `IncidentEscalatedEvent`
@@ -255,6 +257,19 @@ for manual REST-driven escalation, so the only producer today is escalation-serv
 **Work.** Remove the dead method (or wire the manual-escalation path if it is meant to exist) and
 correct the Javadoc. If a manual path is ever added it must publish a level that cannot collide
 with the automatic one, because a repeat escalation at the same level is deduplicated.
+
+**Acceptance criteria.** Decided (2026-10-09): remove the method; incident-service has no manual
+escalation endpoint to wire.
+AC1. `IncidentEventPublisher` has no `publishEscalated` method and no `IncidentEscalatedEvent` import;
+incident-service compiles.
+AC2. `IncidentEventPublisherTest` no longer has `publishEscalatedWritesOutboxRow`, and
+`everyPublishMethodCarriesTeamId` covers the four remaining publish methods (`times(4)`), still asserting
+the team id on each payload.
+AC3. The Javadoc of `IncidentEscalationEventConsumer` names escalation-service's `EscalationScheduler` as
+the only producer of `IncidentEscalatedEvent`, says nothing of a manual REST-driven escalation, and keeps
+one sentence: a manual escalation path, if one is ever added, must publish a level that cannot collide with
+the automatic one, as a repeat escalation at the same level is deduplicated. Evidence: the diff, judged by
+`review-docs`.
 
 ---
 
