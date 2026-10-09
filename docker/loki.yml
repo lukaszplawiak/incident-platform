@@ -1,0 +1,150 @@
+# Loki: the store of the platform's own logs (backlog #0-94, step 2).
+#
+# Alloy (docker/alloy/config.alloy) ships every container's stdout here; Grafana
+# is the only reader (Explore -> Loki). One process, one org, data on the
+# loki_data volume. Checked in CI with `loki -verify-config` on the image tag
+# docker-compose.yml runs.
+#
+# auth_enabled: false means one tenant ("fake") and no authentication on the
+# HTTP API: whoever reaches port 3100 can read, push and query every line. So
+# the port is published nowhere and Loki is on the internal "logs" network
+# alone, with the three containers that need it (Alloy pushes, Grafana reads,
+# Prometheus scrapes); the services, kafka-ui, pgAdmin and the rest are on
+# "default" and cannot resolve or reach it (review of #0-94 step 2: Loki was
+# on "default" with every container; the smoke test now checks it is not).
+# The lines hold tenant content and PII (#0-48); who may read them is who may
+# log in to Grafana (README "Infrastructure Hardening").
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+  # A query may run for query_timeout (1m, limits_config below), but the HTTP
+  # server cuts every request after 30 s by default (checked with
+  # -print-config-stderr on 3.7.8): a slow Explore query would end in a
+  # dropped connection, not in Loki's own timeout error. A little above
+  # query_timeout, so Loki's limit is the one that answers.
+  http_server_read_timeout: 70s
+  http_server_write_timeout: 70s
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    # Never move this date forward: Loki refuses lines older than the first
+    # period's start ("no schema config found"), and data stored before it
+    # would become unreadable. A new schema is a new entry with a later date.
+    - from: 2026-10-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # 15 days, the same as Prometheus's --storage.tsdb.retention.time: one window
+  # in which an incident on the platform can be investigated from both, and no
+  # tenant content kept longer than that in Loki (decided in #0-94 step 2;
+  # Docker's own json-file logs, at most 3 x 10 MB per container, and the
+  # volumes after `make dev-down` are outside it).
+  retention_period: 360h
+  # tenantId, requestId, userId and kafkaMessageId travel as structured
+  # metadata, not labels (docker/alloy/config.alloy).
+  allow_structured_metadata: true
+  # Bounds on what one query may cost, under the container's 1 GiB (review
+  # of #0-94 step 2: an unfiltered Explore query over 15 days could take
+  # Loki past it and get it OOM-killed). No query spans more than the
+  # retention, a query is split into at most 8 parallel parts, and a log
+  # query returns at most 2000 lines. With GOMEMLIMIT (docker-compose.yml)
+  # the Go GC works against the limit instead of past it.
+  max_query_length: 361h
+  max_query_parallelism: 8
+  # The TSDB index's own fan-out, separate from the above: 128 by default
+  # (checked with -print-config-stderr on 3.7.8), far beyond what 1 GiB holds.
+  tsdb_max_query_parallelism: 16
+  # A metric query returns at most this many series (the default, written
+  # out because it bounds memory too).
+  max_query_series: 500
+  # 2000, not the default 5000: querier.max_concurrent runs 4 queries at once,
+  # and 4 x 5000 lines x 64 KB (about 1.25 GB) would not fit; 4 x 2000 x 64 KB
+  # (about 512 MB) does, under the 800MiB GOMEMLIMIT. Explore pages past it.
+  max_entries_limit_per_query: 2000
+  # Ingestion, written out rather than left to the defaults: 4 MB/s per org
+  # with bursts of 8, 3 MB/s per stream. Over it Loki answers 429 and Alloy
+  # retries (LogsDropped if it gives up). It caps the rate, not the disk: a
+  # service left at DEBUG for 15 days still fills loki_data accordingly.
+  # A line over 64 KB (an exception with a long chain) is cut to that size
+  # and kept, not refused: a refusal counts as a drop and fires LogsDropped.
+  # 64 KB, not Loki's 256 KB: a query returns up to 2000 lines, four at
+  # once, and 4 x 2000 x 256 KB (about 2 GB) would not fit the container;
+  # 4 x 2000 x 64 KB (about 512 MB) does. An ECS line with a stack trace is a
+  # few KB to a few tens of KB.
+  max_line_size: 64KB
+  max_line_size_truncate: true
+  # What one query may read from storage, and for how long it may run: 0
+  # (unlimited) and 1m by default, written out with a bound.
+  max_query_bytes_read: 2GB
+  query_timeout: 1m
+  ingestion_rate_mb: 4
+  ingestion_burst_size_mb: 8
+  per_stream_rate_limit: 3MB
+  # Lines older than this are refused rather than stored past the retention.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  # No delete API: with no authentication, it would let anything that reaches
+  # Loki erase lines (its own traces) before the retention does. Retention
+  # (the compactor below) does not use it. Deleting one tenant's lines early,
+  # should offboarding need it, is #0-101's decision.
+  deletion_mode: disabled
+
+compactor:
+  working_directory: /loki/compactor
+  # Without this the compactor only compacts and retention_period deletes
+  # nothing: logs would be kept for ever.
+  retention_enabled: true
+  retention_delete_delay: 2h
+  delete_request_store: filesystem
+
+ingester:
+  wal:
+    # The WAL (on by default, /loki/wal) is replayed at start. Its default
+    # ceiling is 4GB, four times the container's 1 GiB: after an OOM kill
+    # with a large WAL the replay would pass the limit again and Loki would
+    # restart for ever (review of #0-94 step 2). Past this ceiling the replay
+    # flushes to storage as it goes instead of holding it all in memory.
+    replay_memory_ceiling: 400MB
+
+query_range:
+  # Results caching is off by default, except these two embedded caches of
+  # index stats and volume results (on, 100 MB of heap each). Turned off: 200
+  # MB under the 800MiB GOMEMLIMIT for queries a single developer's Explore
+  # session barely repeats.
+  cache_index_stats_results: false
+  cache_volume_results: false
+
+querier:
+  # Queries Loki runs at once; with max_query_parallelism, what bounds a
+  # heavy Explore session's memory.
+  max_concurrent: 4
+
+ruler:
+  # Alerts on log content are backlog #0-107; until then Loki evaluates no
+  # rules and sends nothing to Alertmanager.
+  enable_api: false
+
+analytics:
+  # No usage report to stats.grafana.org from a platform holding tenant logs.
+  reporting_enabled: false

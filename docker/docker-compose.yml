@@ -1,3 +1,12 @@
+# Backlog #0-94 step 2: every container's log is Docker's json-file, which
+# grows without bound by default; Alloy ships it to Loki, so a few rotated
+# files are all Docker needs to keep.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   # ----------------------------------------------------------
   # PostgreSQL 16
@@ -5,6 +14,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: incident-postgres
+    logging: *default-logging
     restart: unless-stopped
     environment:
       POSTGRES_DB: incidentdb
@@ -44,6 +54,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: incident-redis
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "6379:6379"
@@ -62,6 +73,7 @@ services:
   kafka:
     image: apache/kafka:3.9.2
     container_name: incident-kafka
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "9092:9092"
@@ -95,6 +107,7 @@ services:
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: incident-kafka-ui
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "8090:8080"
@@ -121,6 +134,7 @@ services:
   kafka-exporter:
     image: danielqsj/kafka-exporter:latest
     container_name: incident-kafka-exporter
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "9308:9308"
@@ -145,6 +159,7 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: incident-pgadmin
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "5050:80"
@@ -170,6 +185,7 @@ services:
   mailpit:
     image: axllent/mailpit:v1.31.2
     container_name: incident-mailpit
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "1025:1025"
@@ -186,6 +202,7 @@ services:
   heartbeat-sink:
     image: mendhak/http-https-echo:42
     container_name: incident-heartbeat-sink
+    logging: *default-logging
     restart: unless-stopped
     environment:
       HTTP_PORT: 8080
@@ -206,6 +223,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.34.1
     container_name: incident-alertmanager
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "9093:9093"
@@ -235,6 +253,7 @@ services:
   prometheus:
     image: prom/prometheus:v3.13.3
     container_name: incident-prometheus
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "9090:9090"
@@ -251,6 +270,10 @@ services:
       - '--web.enable-lifecycle'
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # logs: scrapes Loki and Alloy (#0-94 step 2); default: everything else.
+    networks:
+      - default
+      - logs
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
              "http://localhost:9090/-/healthy"]
@@ -259,19 +282,38 @@ services:
       retries: 5
 
   # ----------------------------------------------------------
-  # Grafana: http://localhost:3000
-  # Login: admin / admin
-  # Datasource: Prometheus (auto-configured)
+  # Grafana: http://localhost:3000 (this machine only)
+  # Login: admin / GRAFANA_ADMIN_PASSWORD from docker/.env
+  # Datasources: Prometheus (default) and Loki, provisioned from
+  # docker/grafana/provisioning/datasources/
   # ----------------------------------------------------------
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2.3
     container_name: incident-grafana
+    logging: *default-logging
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      # Backlog #0-94 step 2: Grafana reads every tenant's logs (Loki), so it
+      # is reachable from this machine only, and its admin password has no
+      # default (it was admin/admin on every interface, #0-72).
+      - "127.0.0.1:3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      # Applied only when grafana_data is first created; for an existing volume
+      # see README "Step 5" (grafana cli admin reset-admin-password).
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in docker/.env (see docker/.env.example)}
       GF_SECURITY_ADMIN_USER: admin
+      # Grafana reads every tenant's logs and has a route out (grafana-ui is
+      # not internal, to publish its port): nothing it does not need to send
+      # goes out, and no plugin is installed from its UI (#0-94 step 2).
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+      GF_ANALYTICS_CHECK_FOR_UPDATES: 'false'
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: 'false'
+      GF_PLUGINS_PLUGIN_ADMIN_ENABLED: 'false'
+      # Grafana 13 downloads a set of app plugins from grafana.com at start
+      # (seen: advisor, Logs/Metrics/Traces Drilldown, Pyroscope); none is
+      # needed, and each would run where every tenant's logs can be read.
+      GF_PLUGINS_PREINSTALL_DISABLED: 'true'
+      GF_NEWS_NEWS_FEED_ENABLED: 'false'
       GF_USERS_ALLOW_SIGN_UP: 'false'
       GF_DATASOURCES_DEFAULT_NAME: Prometheus
       GF_DATASOURCES_DEFAULT_TYPE: prometheus
@@ -281,12 +323,166 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+    # Not on default (review of #0-94 step 2): Grafana reads every tenant's
+    # logs, and from default any compromised service, kafka-ui or pgAdmin
+    # could log in to it and query Loki through its datasource proxy, around
+    # the logs network. logs: Loki and Prometheus (both there); grafana-ui:
+    # only to publish the port on 127.0.0.1.
+    networks:
+      - logs
+      - grafana-ui
     depends_on:
       prometheus:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
              "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------
+  # Log collection (backlog #0-94, step 2): docker-socket-proxy -> Alloy -> Loki,
+  # read in Grafana (Explore -> Loki). Every container named incident-* is
+  # collected; tenantId, requestId, userId and kafkaMessageId are structured
+  # metadata of each line (docker/alloy/config.alloy). Kept 15 days
+  # (docker/loki.yml). No port of the three is published, and none of them is
+  # on "default": Loki and Alloy answer without authentication, so they sit on
+  # the internal "logs" network with Grafana and Prometheus only (review: on
+  # "default" any service, kafka-ui or pgAdmin could read every tenant's logs).
+  # ----------------------------------------------------------
+
+  # Docker API for Alloy, read-only. The socket is root on the host whether
+  # mounted :ro or not (":ro" protects the file, not the API), so Alloy never
+  # gets it: this proxy answers GET on /containers and /networks (Alloy's
+  # discovery lists both), plus /version and /_ping, and 403 to anything else,
+  # every POST (exec, stop, create) included. Reachable only on the internal
+  # docker-api network, shared with Alloy alone. NOT narrowed further: GET
+  # /containers also covers inspect (every container's environment, so
+  # JWT_SECRET, DB_PASSWORD, the encryption keys and Grafana's password),
+  # archive (a path's files) and export (the whole filesystem); whoever
+  # controls Alloy can read those (README "Not done yet", #0-94). And one
+  # GET that writes: attach/ws upgrades to a websocket that can feed a
+  # container's stdin (checked: 101); no container here keeps stdin open, so
+  # nothing reads it, but "read-only" is the proxy's rule, not a guarantee.
+  # Pinned by digest as well as tag: it is the one container holding the socket.
+  # The checks in .github/scripts/test-log-collection.sh fail if a write gets
+  # through or the network is not internal.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.5.0@sha256:1f5038b54f06c3e18422902cf00ba21803d1c97805aae032e5e6673d532d3459
+    container_name: incident-docker-socket-proxy
+    logging: *default-logging
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1
+      NETWORKS: 1
+      # The image allows these by default; Alloy needs none of them.
+      EVENTS: 0
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Hardened (review of #0-94 step 2): no capabilities (it binds 2375 and
+    # talks to a socket, needing none), no privilege gain, a read-only root;
+    # the entrypoint renders haproxy.cfg into /tmp, hence the small tmpfs.
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m
+      - /run:size=1m
+    # About 32 MiB in use (measured, #0-94 step 2).
+    mem_limit: 128m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - docker-api
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider",
+             "http://localhost:2375/_ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  loki:
+    image: grafana/loki:3.7.8
+    container_name: incident-loki
+    logging: *default-logging
+    restart: unless-stopped
+    command:
+      - '-config.file=/etc/loki/loki.yml'
+    volumes:
+      - ./loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    networks:
+      - logs
+    # About 150 MiB idle (measured, #0-94 step 2); the rest is for queries. A
+    # limit keeps a heavy query from starving the services on a laptop or the
+    # CI runner; past it Loki restarts and LogPipelineDown says so. GOMEMLIMIT
+    # makes the Go GC work to stay under it; the query limits in loki.yml
+    # bound what a query asks for.
+    mem_limit: 1g
+    environment:
+      GOMEMLIMIT: 800MiB
+    # Hardened like the proxy (review of #0-94 step 2): Loki holds every
+    # tenant's lines. It runs as uid 10001 and writes only to loki_data.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # No healthcheck: the image is distroless (no shell, no wget). Prometheus
+    # scrapes it (LogPipelineDown) and Alloy retries a push until it is ready.
+
+  alloy:
+    image: grafana/alloy:v1.20.1
+    container_name: incident-alloy
+    logging: *default-logging
+    restart: unless-stopped
+    command:
+      - 'run'
+      - '--server.http.listen-addr=0.0.0.0:12345'
+      # No usage report to Grafana Labs (it has no route out anyway).
+      - '--disable-reporting'
+      - '--storage.path=/var/lib/alloy/data'
+      - '/etc/alloy/config.alloy'
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Read positions: a restart resumes where it stopped instead of sending
+      # every container's log again.
+      - alloy_data:/var/lib/alloy/data
+    # About 80 MiB in use (measured, #0-94 step 2); the rest holds batches
+    # while Loki is retried. GOMEMLIMIT makes the Go GC work to stay under it.
+    mem_limit: 512m
+    environment:
+      GOMEMLIMIT: 400MiB
+    # Hardened like the proxy (review of #0-94 step 2): Alloy reads the Docker
+    # API, so whoever takes it reads every container's environment. It runs as
+    # the image's own alloy user, not root (with no capabilities, root could not
+    # even write the data directory the image gives to that user), and writes
+    # only to alloy_data (and /tmp). A volume an older Alloy filled as root
+    # needs: docker run --rm -v docker_alloy_data:/d alpine chown -R 473:473 /d
+    user: "473:473"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # logs: pushes to Loki, scraped by Prometheus; docker-api: the proxy.
+    # Not on default (its HTTP API shows its config and pipeline).
+    networks:
+      - logs
+      - docker-api
+    depends_on:
+      docker-socket-proxy:
+        condition: service_healthy
+      loki:
+        condition: service_started
+    healthcheck:
+      # No wget or curl in the image; bash's /dev/tcp asks /-/ready.
+      test: ["CMD", "bash", "-c",
+             "exec 3<>/dev/tcp/127.0.0.1/12345 && printf 'GET /-/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q ' 200 ' <&3"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -321,6 +517,7 @@ services:
       context: ..
       dockerfile: auth-service/Dockerfile
     container_name: incident-auth-service
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${AUTH_SERVICE_PORT:-8087}:8087"
@@ -406,6 +603,7 @@ services:
       context: ..
       dockerfile: ingestion-service/Dockerfile
     container_name: incident-ingestion-service
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${INGESTION_SERVICE_PORT:-8081}:8081"
@@ -449,6 +647,7 @@ services:
       context: ..
       dockerfile: incident-service/Dockerfile
     container_name: incident-incident-service
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${INCIDENT_SERVICE_PORT:-8082}:8082"
@@ -490,6 +689,7 @@ services:
       context: ..
       dockerfile: notification-service/Dockerfile
     container_name: incident-notification-service
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${NOTIFICATION_SERVICE_PORT:-8083}:8083"
@@ -545,6 +745,7 @@ services:
       context: ..
       dockerfile: escalation-service/Dockerfile
     container_name: incident-escalation-service
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${ESCALATION_SERVICE_PORT:-8084}:8084"
@@ -586,6 +787,7 @@ services:
       context: ..
       dockerfile: postmortem-service/Dockerfile
     container_name: incident-postmortem-service
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${POSTMORTEM_SERVICE_PORT:-8085}:8085"
@@ -629,6 +831,7 @@ services:
       context: ..
       dockerfile: oncall-service/Dockerfile
     container_name: incident-oncall-service
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "${ONCALL_SERVICE_PORT:-8086}:8086"
@@ -667,3 +870,19 @@ volumes:
   prometheus_data:
   alertmanager_data:
   grafana_data:
+  loki_data:
+  alloy_data:
+
+networks:
+  # Backlog #0-94 step 2: the Docker API proxy's only network. internal: no
+  # route out, and no other container but Alloy joins it.
+  docker-api:
+    internal: true
+  # Backlog #0-94 step 2 (review): Loki and Alloy, which answer without
+  # authentication, with the two containers that read them (Grafana,
+  # Prometheus). internal: no route out; the services are not on it.
+  logs:
+    internal: true
+  # Grafana's port only (#0-94 step 2): a container on internal networks alone
+  # cannot publish one. Nothing else joins it.
+  grafana-ui:

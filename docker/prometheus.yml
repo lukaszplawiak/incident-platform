@@ -106,3 +106,22 @@ scrape_configs:
       - targets: ['localhost:9090']
         labels:
           service: 'prometheus'
+
+  # ----------------------------------------------------------------
+  # Log collection (backlog #0-94, step 2): Loki and Alloy feed the
+  # LogPipelineDown, LogPipelineRestarting, LogPipelineNotScraped,
+  # LogsNotFlowing, LogDiscoveryFailing and LogsDropped rules. The job names are what those rules match on:
+  # renaming one fires LogPipelineNotScraped. Neither port is published;
+  # Prometheus reaches both on the internal "logs" network.
+  # ----------------------------------------------------------------
+  - job_name: 'loki'
+    static_configs:
+      - targets: ['loki:3100']
+        labels:
+          service: 'loki'
+
+  - job_name: 'alloy'
+    static_configs:
+      - targets: ['alloy:12345']
+        labels:
+          service: 'alloy'

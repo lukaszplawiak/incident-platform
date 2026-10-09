@@ -842,3 +842,240 @@ tests:
       - eval_time: 16m
         alertname: SlackCircuitOpen
         exp_alerts: []
+
+  # Backlog #0-94 step 2: LogPipelineDown fires for Loki or Alloy down for 5
+  # minutes, never for a blip, and not for a service's job (PlatformServiceDown).
+  - interval: 1m
+    input_series:
+      - series: 'up{job="loki",instance="loki:3100",service="loki"}'
+        values: '1 1 0x10'
+      - series: 'up{job="alloy",instance="alloy:12345",service="alloy"}'
+        values: '1 0 0 1x9'
+      - series: 'up{job="incident-service",instance="host.docker.internal:8092",service="incident-service"}'
+        values: '0x11'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: LogPipelineDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: LogPipelineDown
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: loki
+              instance: "loki:3100"
+              service: loki
+            exp_annotations:
+              summary: "loki (log collection) is down"
+              description: "loki has been unreachable for Prometheus for more than 5 minutes. The platform's logs are not reaching Loki.\n"
+
+  # Review of #0-94 step 2: LogPipelineRestarting fires at the second restart
+  # within 30 minutes (up between them, so LogPipelineDown stays quiet), even
+  # a slow loop 9 minutes apart; one restart never fires it, nor another
+  # job's restarts. alloy restarts once: pins >= 2 against >= 1; loki fires
+  # at once at its second: pins >= 2 against >= 3 and that there is no for:.
+  - interval: 1m
+    input_series:
+      - series: 'process_start_time_seconds{job="loki",instance="loki:3100",service="loki"}'
+        values: '100x8 640x8 1180x8'
+      - series: 'process_start_time_seconds{job="alloy",instance="alloy:12345",service="alloy"}'
+        values: '100x5 400x20'
+      - series: 'process_start_time_seconds{job="incident-service",instance="host.docker.internal:8092"}'
+        values: '1+1x25'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: LogPipelineRestarting
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: LogPipelineRestarting
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: loki
+              instance: "loki:3100"
+              service: loki
+            exp_annotations:
+              summary: "loki (log collection) keeps restarting"
+              description: "loki has restarted 2 times in 30 minutes. While it does, the platform's logs are not reliably reaching Loki. Check its own log and its memory against mem_limit.\n"
+
+  # Review of #0-94 step 2: LogPipelineNotScraped fires for a pipeline job
+  # Prometheus no longer scrapes (alloy here, loki in the next case), never
+  # for one it does.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="loki",instance="loki:3100",service="loki"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: LogPipelineNotScraped
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: LogPipelineNotScraped
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: alloy
+            exp_annotations:
+              summary: "Prometheus does not scrape alloy (log collection)"
+              description: "Prometheus has had no alloy target for more than 5 minutes, so nothing watches whether the platform's logs reach Loki. Check the alloy job in docker/prometheus.yml.\n"
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="alloy",instance="alloy:12345",service="alloy"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: LogPipelineNotScraped
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: loki
+            exp_annotations:
+              summary: "Prometheus does not scrape loki (log collection)"
+              description: "Prometheus has had no loki target for more than 5 minutes, so nothing watches whether the platform's logs reach Loki. Check the loki job in docker/prometheus.yml.\n"
+
+  - interval: 1m
+    input_series:
+      - series: 'up{job="loki",instance="loki:3100",service="loki"}'
+        values: '1x10'
+      - series: 'up{job="alloy",instance="alloy:12345",service="alloy"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LogPipelineNotScraped
+        exp_alerts: []
+
+  # LogDiscoveryFailing fires on Docker discovery failures sustained for 5
+  # minutes; a flat counter, another mechanism and another job never fire it.
+  - interval: 1m
+    input_series:
+      - series: 'prometheus_sd_refresh_failures_total{job="alloy",instance="alloy:12345",component_id="discovery.docker.containers",mechanism="docker"}'
+        values: '0 0 6+6x12'
+      - series: 'prometheus_sd_refresh_failures_total{job="alloy",instance="alloy:12345",component_id="discovery.other",mechanism="file"}'
+        values: '0+6x14'
+      - series: 'prometheus_sd_refresh_failures_total{job="prometheus",instance="localhost:9090",mechanism="docker"}'
+        values: '0+6x14'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LogDiscoveryFailing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: LogDiscoveryFailing
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: alloy
+            exp_annotations:
+              summary: "Alloy cannot list the platform's containers"
+              description: "Alloy's Docker discovery has kept failing for at least 5 minutes. Containers are not being read, so their logs are not reaching Loki. Check that incident-docker-socket-proxy is running.\n"
+
+  - interval: 1m
+    input_series:
+      - series: 'prometheus_sd_refresh_failures_total{job="alloy",instance="alloy:12345",component_id="discovery.docker.containers",mechanism="docker"}'
+        values: '3x14'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: LogDiscoveryFailing
+        exp_alerts: []
+
+  # Review of #0-94 step 2: one failed refresh (the proxy restarting) never
+  # fires LogDiscoveryFailing; with a 10m window it did, 9 minutes later.
+  - interval: 1m
+    input_series:
+      - series: 'prometheus_sd_refresh_failures_total{job="alloy",instance="alloy:12345",component_id="discovery.docker.containers",mechanism="docker"}'
+        values: '0 0 1 1x15'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: LogDiscoveryFailing
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: LogDiscoveryFailing
+        exp_alerts: []
+
+  # Review of #0-94 step 2: LogsNotFlowing fires when Alloy's sent counter
+  # stays flat for 10m plus the 5m for, never while lines flow, nor for
+  # another job's counter.
+  - interval: 1m
+    input_series:
+      - series: 'loki_write_sent_entries_total{job="alloy",instance="alloy:12345",component_id="loki.write.default",host="loki:3100",tenant=""}'
+        values: '0+300x5 1500x25'
+      - series: 'loki_write_sent_entries_total{job="other",instance="other:1",host="x"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: LogsNotFlowing
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: LogsNotFlowing
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: LogsNotFlowing
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: alloy
+            exp_annotations:
+              summary: "No log lines are reaching Loki"
+              description: "Alloy has sent no line to Loki for at least 15 minutes, although the platform's containers log all the time. Check Alloy's targets (its UI on the logs network) and the incident-* container names.\n"
+
+  # Review of #0-94 step 2: an Alloy restart puts the sent counter back to 0;
+  # lines flowing after it are a reset, not silence, so LogsNotFlowing stays
+  # quiet. A raw difference over 10 minutes is negative for those 10 minutes,
+  # so a rule on it with `<= 0` would fire at 18m.
+  - interval: 1m
+    input_series:
+      - series: 'loki_write_sent_entries_total{job="alloy",instance="alloy:12345",component_id="loki.write.default",host="loki:3100",tenant=""}'
+        values: '0+300x10 0+300x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: LogsNotFlowing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: LogsNotFlowing
+        exp_alerts: []
+
+  # Review of #0-94 step 2: no sent counter at all (Alloy not scraped) is
+  # LogPipelineNotScraped's to report, not LogsNotFlowing's.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="loki",instance="loki:3100"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LogsNotFlowing
+        exp_alerts: []
+
+  # LogsDropped: a single drop fires after 1m (the lines are lost) and resolves
+  # once it leaves the 10m window; drops by another job never fire it.
+  - interval: 1m
+    input_series:
+      - series: 'loki_write_dropped_entries_total{job="alloy",instance="alloy:12345",component_id="loki.write.default",host="loki:3100",reason="ingester_error",tenant=""}'
+        values: '0 0 0 40x15'
+      - series: 'loki_write_dropped_entries_total{job="alloy",instance="alloy:12345",component_id="loki.write.default",host="loki:3100",reason="queue_is_full",tenant=""}'
+        values: '0x18'
+      - series: 'loki_write_dropped_entries_total{job="other",instance="other:1",reason="ingester_error"}'
+        values: '0+10x18'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: LogsDropped
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: LogsDropped
+        exp_alerts:
+          - exp_labels:
+              severity: high
+              scope: platform
+              job: alloy
+              reason: ingester_error
+            exp_annotations:
+              summary: "Alloy dropped log lines (ingester_error)"
+              description: "Alloy dropped 40 log lines in the last 10 minutes (ingester_error). They are not in Loki and will not be. Check Loki and Alloy's own log.\n"
+      - eval_time: 16m
+        alertname: LogsDropped
+        exp_alerts: []

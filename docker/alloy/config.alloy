@@ -1,0 +1,126 @@
+// Alloy: ships the platform's container logs to Loki (backlog #0-94, step 2).
+//
+// Every container of docker-compose.yml (container_name incident-*) is read
+// from the Docker API, its JSON (ECS) lines parsed, and sent to Loki. Checked
+// in CI with `alloy validate` on the image tag docker-compose.yml runs.
+//
+// The Docker API is reached through docker-socket-proxy, never the socket
+// itself: the socket is root on the host, and mounting it read-only does not
+// limit the API. The proxy answers only GET on /containers (list, inspect,
+// logs) and /networks, which discovery.docker lists too (without NETWORKS=1 in
+// docker-compose.yml discovery fails, and only LogDiscoveryFailing says so),
+// plus /version and /_ping; anything else is a 403.
+//
+// A service started with `spring-boot:run` is not a container: its lines stay
+// in the developer's terminal.
+
+discovery.docker "containers" {
+	host             = "tcp://docker-socket-proxy:2375"
+	refresh_interval = "10s"
+}
+
+discovery.relabel "containers" {
+	targets = discovery.docker.containers.targets
+
+	// Only this stack's containers. Each sets container_name: incident-<name>,
+	// so the filter does not depend on the compose project name, which follows
+	// the directory or -p.
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/incident-.*"
+		action        = "keep"
+	}
+
+	// container: the name without Docker's leading slash.
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	// service: the compose service name (auth-service, postgres, kafka, ...),
+	// the label every query starts from. The smoke test in CI fails without it.
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+		target_label  = "service"
+	}
+}
+
+loki.source.docker "containers" {
+	host       = "tcp://docker-socket-proxy:2375"
+	targets    = discovery.relabel.containers.output
+	forward_to = [loki.process.ecs.receiver]
+}
+
+// The seven services log one ECS object per line (StructuredLoggingDefaults in
+// shared, #0-94 step 1). ECS nests its own fields ({"log":{"level":"INFO"}},
+// read as log.level; the shape is pinned by StructuredLoggingDefaultsTest in
+// shared, so a change there must change this too) and puts the MDC keys at the
+// top level. Lines that are not JSON (Postgres, Kafka, Redis, ...) fail
+// stage.json, which only logs that at debug and passes the line on as it is.
+loki.process "ecs" {
+	// Only the platform's services (compose service names ending in -service)
+	// are parsed. Any other container's JSON (kafka-ui, a library image, ...)
+	// sets no level and no identifiers: its values are not the platform's, and
+	// as labels they could add streams without bound (review of #0-94 step 2).
+	stage.match {
+		selector = "{service=~\".+-service\"}"
+
+		stage.json {
+			expressions = {
+				level            = "log.level",
+				tenant_id        = "tenantId",
+				request_id       = "requestId",
+				user_id          = "userId",
+				kafka_message_id = "kafkaMessageId",
+			}
+		}
+
+		// A level outside the five ECS writes becomes OTHER: a service's raw
+		// stdout (a library's println, a crash dump) can carry JSON of its own,
+		// and each distinct level would be a stream (review of #0-94 step 2).
+		// A line with no level keeps none.
+		stage.template {
+			source   = "level"
+			template = "{{ if not .Value }}{{ else if eq .Value \"TRACE\" \"DEBUG\" \"INFO\" \"WARN\" \"ERROR\" }}{{ .Value }}{{ else }}OTHER{{ end }}"
+		}
+
+		// Labels stay few and bounded (service, container, level): every distinct
+		// label set is a stream in Loki. ECS writes the level in upper case
+		// (TRACE, DEBUG, INFO, WARN, ERROR).
+		stage.labels {
+			values = {
+				level = "",
+			}
+		}
+
+		// Unbounded identifiers go to structured metadata, queryable per line
+		// (| tenantId="acme") without making a stream per value. The same reason the
+		// tenant tag was removed from kafka.records.received in #0-92. A line without
+		// one of them (a library's, or outside a request) simply has none.
+		stage.structured_metadata {
+			values = {
+				tenantId       = "tenant_id",
+				requestId      = "request_id",
+				userId         = "user_id",
+				kafkaMessageId = "kafka_message_id",
+			}
+		}
+	}
+
+	forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+
+		// Alloy's defaults, written out because LogsDropped depends on them: a
+		// batch Loki does not take is retried 10 times, 500ms doubling up to 5m
+		// apart, about 8.5 minutes in all, and only then dropped and counted.
+		// While Loki is down, LogPipelineDown is the earlier signal.
+		min_backoff_period  = "500ms"
+		max_backoff_period  = "5m"
+		max_backoff_retries = 10
+	}
+}
