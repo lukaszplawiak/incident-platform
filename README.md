@@ -843,7 +843,9 @@ GitHub Actions pipeline runs on every push and pull request to `main`.
 
 ### Job 1 — Build, Test & Coverage
 
-Runs on every push and every PR:
+Runs on every push to `main`, and on every PR that changes more than Markdown (a PR touching only `.md`
+files — the backlog, `/ready`, runbooks — skips it, and the smoke test too: nothing the build, its tests or
+its check scripts read is Markdown; skipped at the job, so it still counts as passed for a required check):
 
 ```
 Checkout → Java 21 setup (Temurin) → Compile → Run tests with JaCoCo → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
@@ -880,7 +882,7 @@ Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays wit
 
 ### Job 5 — Docker Compose Smoke Test
 
-Boots PostgreSQL, Redis, Kafka, the log pipeline (docker-socket-proxy, Loki, Alloy) and all 7 services with `docker compose up`, curls each service's health endpoint, checks the services' DB role, and checks that every service's lines reach Loki parsed (`.github/scripts/test-log-collection.sh`, backlog #0-94). Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed.
+Boots PostgreSQL, Redis, Kafka, the log pipeline (docker-socket-proxy, Loki, Alloy) and all 7 services with `docker compose up`, curls each service's health endpoint, checks the services' DB role, and checks that every service's lines reach Loki parsed (`.github/scripts/test-log-collection.sh`, backlog #0-94). Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed, unless the pull request changes Markdown only.
 
 ### Security Scanning
 
