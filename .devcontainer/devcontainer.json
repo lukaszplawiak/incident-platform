@@ -26,6 +26,14 @@
     "source=incident-platform-m2,target=/home/dev/.m2,type=volume"
   ],
   "containerEnv": {
+    // Every commit made in this container is the machine account's (#0-113), whoever types it: the
+    // variables win over any user.name/user.email, including a .gitconfig an IDE copies in from the host,
+    // and a rebuild keeps them. The address is the account's GitHub noreply one, so no real mailbox
+    // reaches the public history. Pushing as the bot is gh's login (a token in the gh volume).
+    "GIT_AUTHOR_NAME": "lukaszplawiakbot",
+    "GIT_AUTHOR_EMAIL": "340222835+lukaszplawiakbot@users.noreply.github.com",
+    "GIT_COMMITTER_NAME": "lukaszplawiakbot",
+    "GIT_COMMITTER_EMAIL": "340222835+lukaszplawiakbot@users.noreply.github.com",
     "TESTCONTAINERS_HOST_OVERRIDE": "host.docker.internal",
     "TESTCONTAINERS_RYUK_DISABLED": "false",
     "OLLAMA_URL": "http://host.docker.internal:11434",

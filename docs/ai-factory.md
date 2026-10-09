@@ -51,17 +51,24 @@ from it.
    itself; `example.com` must be unreachable, and the start log ends with `Firewall up: … IPv6 closed`
    (or `not present`). If its setup fails, it blocks all traffic and says `FIREWALL SETUP FAILED`.
 2. **Logins inside the container** (stored in named volumes, so a rebuild keeps them): `claude` (your
-   subscription) and `gh auth login` with the **bot account's** token (#0-113), not yours, then
-   `gh auth setup-git` so that `git push` uses that token too. Prefer a fine-grained token limited to this
-   repository (Contents, Pull requests, Issues: read and write); if GitHub does not offer the repository
-   to the bot (fine-grained tokens of collaborators on a repository owned by another user have not always
-   been supported), use a classic token with the `repo` scope — the bot has access to nothing but this
-   repository, so that scope reaches no further. Set the bot's git identity: `git config --global
-   user.name "…-bot"` and `user.email` (the bot's `…@users.noreply.github.com` address).
+   subscription) and the **bot account's** token (#0-113), not yours:
+   `gh auth login --with-token` (paste, Enter, Ctrl-D), then `gh auth setup-git` so that `git push` uses
+   that token too. The token: a fine-grained one cannot name a repository owned by another user's
+   personal account (its "Resource owner" offers only the bot), so it is a **classic** token with the
+   `repo` and `read:org` scopes (`gh` refuses a classic token without `read:org`; the bot belongs to no
+   organisation, so it reads nothing) and **without** `workflow` (GitHub then refuses a push that changes
+   `.github/workflows/`). The bot reaches nothing but this repository, so `repo` reaches no further —
+   keep it that way (a classic token follows every repository the bot is later invited to). Give the token
+   an expiry (90 days) and replace it before then: a classic token does not expire unless told to.
+   The commit identity (the bot and its `…@users.noreply.github.com` address) and git's trust of
+   `/workspace` come from `devcontainer.json` and the image: nothing to set by hand. On the bot account,
+   *Settings → Emails → Keep my email addresses private* and *Block command line pushes that expose my
+   email* keep a real address out of the history even if a commit gets past these variables.
+   You work in the same container as the bot: a commit you make there is the bot's too.
    `.claude/settings.local.json` is personal: its allow rules would merge into the autopilot's `dontAsk`
    session, so the preflight refuses to start while it exists in the workspace (the container mounts the
-   same directory). It is gitignored and never committed; move your copy out of the workspace while the
-   autopilot runs, and back afterwards.
+   same directory). It is gitignored and never committed; keep it out of the workspace (rules you want on
+   the host belong in `~/.claude/settings.json` there, which the container does not see).
 3. **GitHub** (#0-113): bot as collaborator with Write; branch protection on `main` with required checks
    ("Build, Test & Coverage", "Docker Compose Smoke Test", "Factory guards"), required CODEOWNERS review
    (only once the bot account exists, see below), no bypass for administrators; "Automatically delete head

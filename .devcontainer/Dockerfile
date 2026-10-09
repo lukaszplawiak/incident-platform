@@ -33,6 +33,13 @@ RUN (getent group ${USER_GID} || groupadd --gid ${USER_GID} ${USERNAME}) \
 COPY init-firewall.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/init-firewall.sh
 
+# The workspace is the host's directory, mounted, and Docker Desktop can report it under another owner
+# than `dev`: git then refuses every command there ("detected dubious ownership"), and gh, which asks git
+# which repository it is in, fails after it (labels "missing", CI status unreadable: seen at the first
+# preflight, 2026-10-09). One repository, one user in this container: trust it system-wide, so a rebuild
+# keeps it (a --global setting lives in the container's home and is lost).
+RUN git config --system --add safe.directory /workspace
+
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
 
