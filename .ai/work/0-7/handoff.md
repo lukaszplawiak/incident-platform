@@ -1,33 +1,18 @@
 # Handoff: 0-7
 
-Facts only. No reasoning about why the change is good: reviewers judge it themselves. Updated by the
-implementer after every round.
-
 ## Changed
-- <file / endpoint / topic / migration / config key>: <what changed>
+- incident-service IncidentEscalationEventConsumer: `escalationLevel` is validated (JSON int in 1..MAX_ESCALATION_LEVEL=2, private constant) instead of `asInt(0)`; invalid values throw IllegalArgumentException into the existing poison-pill catch (deadLetterThenAcknowledge). Javadoc "Fixed (backlog #0-7)" added.
+- IncidentEscalationEventConsumerTest: new nested class EscalationLevelValidation and a raw-level record helper; existing tests unchanged.
 
 ## How to verify
-- `./mvnw test -pl <module> -Dtest=<Class>` — <what it shows>
-
-## Tests changed and why
-- (only if an existing test changed) <test>: <the acceptance criterion or requirement that changed it>
+- `./mvnw test -pl shared,incident-service -am -Dtest=IncidentEscalationEventConsumerTest -Dsurefire.failIfNoSpecifiedTests=false` - all pass.
 
 ## Deliberately out of scope
-- <thing>: <backlog item or reason>
+- Shared constant: #0-117. Level lowered by out-of-order event: #0-118. postmortem durationMinutes: #0-119.
 
 ## Noticed, not touched
-- <defect elsewhere>: <file:line> — proposed backlog item: <one line>
+- none
 
 ## Follow-up needed
-<!-- Work this item showed is needed but is not part of it (.ai/rules/planning.md, "Follow-ups"); at most 3.
-     The shipper turns each entry into a backlog item with **Autopilot:** proposed. Delete this comment
-     and leave the section empty when there is none. -->
-### <title, as a backlog item title>
-- Why: <what is missing and what fails or stays incomplete without it, 1–2 lines>
-- Touches: <module (packages), …>
-- Risk: <low|high> · Complexity: <low|medium|high>
-- Draft criteria:
-  - AC1. <observable, checkable by a test>
 
 ## Disputed
-- <finding id>: <reason, citing code or a rule>

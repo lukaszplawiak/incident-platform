@@ -19,6 +19,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -97,6 +99,96 @@ class IncidentEscalationEventConsumerTest {
                 TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
                 TENANT_ID.getBytes(StandardCharsets.UTF_8)));
         return record;
+    }
+
+    /** A record whose escalationLevel is the given raw JSON fragment, or absent when null. */
+    private ConsumerRecord<String, String> buildRawLevelRecord(UUID incidentId, String rawLevel) {
+        final String levelField = rawLevel == null ? "" : ",\"escalationLevel\":" + rawLevel;
+        final String payload = String.format("{\"incidentId\":\"%s\",\"tenantId\":\"%s\"%s}",
+                incidentId, TENANT_ID, levelField);
+        final ConsumerRecord<String, String> record =
+                new ConsumerRecord<>(TOPIC, 0, 0L, incidentId.toString(), payload);
+        record.headers().add(new RecordHeader(IncidentEventTypes.HEADER_NAME,
+                IncidentEventTypes.INCIDENT_ESCALATED.getBytes(StandardCharsets.UTF_8)));
+        record.headers().add(new RecordHeader(
+                TenantKafkaProducerInterceptor.TENANT_ID_HEADER,
+                TENANT_ID.getBytes(StandardCharsets.UTF_8)));
+        return record;
+    }
+
+    private void assertDeadLettered(ConsumerRecord<String, String> record) {
+        then(commandService).shouldHaveNoInteractions();
+        then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                anyString(), eq(acknowledgment));
+        then(acknowledgment).shouldHaveNoInteractions();
+    }
+
+    @Nested
+    @DisplayName("escalationLevel validation (backlog #0-7)")
+    class EscalationLevelValidation {
+
+        @Test
+        @DisplayName("dead-letters an event without escalationLevel")
+        void deadLettersMissingEscalationLevel() {
+            final ConsumerRecord<String, String> record = buildRawLevelRecord(UUID.randomUUID(), null);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            assertDeadLettered(record);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"null", "\"2\"", "\"x\"", "1.5"})
+        @DisplayName("dead-letters a null, text or fractional escalationLevel")
+        void deadLettersMalformedEscalationLevel(String raw) {
+            final ConsumerRecord<String, String> record = buildRawLevelRecord(UUID.randomUUID(), raw);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            assertDeadLettered(record);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"0", "-1", "3"})
+        @DisplayName("dead-letters an escalationLevel outside 1..2")
+        void deadLettersOutOfRangeEscalationLevel(String raw) {
+            final ConsumerRecord<String, String> record = buildRawLevelRecord(UUID.randomUUID(), raw);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            assertDeadLettered(record);
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {1, 2})
+        @DisplayName("records a valid escalationLevel, then acknowledges")
+        void recordsValidEscalationLevel(int level) {
+            final UUID incidentId = UUID.randomUUID();
+            final ConsumerRecord<String, String> record = buildRawLevelRecord(incidentId, String.valueOf(level));
+            given(commandService.recordEscalationLevel(incidentId, TENANT_ID, level)).willReturn(true);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            final InOrder order = inOrder(commandService, acknowledgment);
+            order.verify(commandService).recordEscalationLevel(incidentId, TENANT_ID, level);
+            order.verify(acknowledgment).acknowledge();
+            then(deadLetterPublisher).shouldHaveNoInteractions();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"\"level-secret-value\"", "987654321"})
+        @DisplayName("the reason of an invalid level never quotes the record's value")
+        void invalidLevelReasonDoesNotQuoteValue(String raw) {
+            final ConsumerRecord<String, String> record = buildRawLevelRecord(UUID.randomUUID(), raw);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                    argThat(reason -> reason.startsWith("IllegalArgumentException at ")
+                            && !reason.contains("level-secret-value")
+                            && !reason.contains("987654321")),
+                    eq(acknowledgment));
+        }
     }
 
     @Nested
