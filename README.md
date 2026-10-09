@@ -692,7 +692,9 @@ Open items from the audit and earlier, most important first within each area. Ea
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
   - Logs are collected only in docker-compose; Kubernetes has no log collection, and no Prometheus, Alertmanager
-    or Grafana either: backlog #0-106. Nothing alerts on what a line says: #0-107. Whoever can log in to Grafana
+    or Grafana either: backlog #0-106. Nothing alerts on what a line says, nor on one service (or all seven) going
+    silent: `LogsNotFlowing` fires only when no line at all arrives, and the proxy's own lines keep it quiet
+    (#0-107). Whoever can log in to Grafana
     reads every tenant's lines (there is no access per tenant; locally Grafana is on `127.0.0.1` with a password of
     the developer's own); whoever controls Alloy can read every container's environment (secrets included) and
     files (archive, export) through the
@@ -1642,7 +1644,7 @@ curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
 make dev-up          # Start the whole docker-compose stack (infra, monitoring, log pipeline, services); needs the three passwords in docker/.env
 make dev-down        # Stop all containers
 make dev-reset       # Stop + remove volumes (clean database)
-make grafana-password-check # Warn if Grafana still accepts admin/admin (a volume from before GRAFANA_ADMIN_PASSWORD); runs at the end of dev-up
+make grafana-password-check # Warn if GRAFANA_ADMIN_PASSWORD is under 16 characters, or Grafana still accepts admin/admin (a volume from before it); runs at the end of dev-up
 make build           # Build all modules (skip tests)
 make test            # Run all tests
 make run-ingestion   # Start ingestion-service locally (profile=local)

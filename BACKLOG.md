@@ -1564,7 +1564,7 @@ metrics and traces. Spring Boot 3.4+ (this project: 3.5) has built-in structured
      on `127.0.0.1` only, its admin password is `GRAFANA_ADMIN_PASSWORD` with no default (empty in
      `.env.example`, so compose refuses to run until a developer sets one; CI sets a dummy) and its image is
      pinned (`13.2.3`, was `latest`). The password applies to a new `grafana_data` volume only; an older one keeps
-     `admin` until reset (README Step 5), and `make dev-up` warns while Grafana still accepts `admin`/`admin`, or when the password is under 16 characters (`docker/grafana-password-check.sh`, reading it as compose does: BOM, `export`, quotes, inline comments, and a `$` outside single quotes said to be interpolated rather than measured; its 23 cases, with a stub curl, run in CI's build job, `.github/scripts/test-grafana-password-check.sh`).
+     `admin` until reset (README Step 5), and `make dev-up` warns while Grafana still accepts `admin`/`admin`, or when the password is under 16 characters (`docker/grafana-password-check.sh`, reading it as compose does: BOM, `export`, quotes, inline comments, and a `$` outside single quotes said to be interpolated rather than measured; its 28 cases, with a stub curl, run in CI's build job, `.github/scripts/test-grafana-password-check.sh`).
      Grafana sends nothing it does not need (usage reporting, update and plugin checks, news feed off) and installs
      no plugin from its UI, as `grafana-ui` gives it a route out. Memory is capped (Loki 1 GiB, Alloy 512 MiB, about
      150 and 80 MiB in use when measured), so a heavy query cannot starve the services on a laptop or CI runner;
@@ -1815,7 +1815,9 @@ other option. Touches #0-64 (securityContext) and #0-65 (NetworkPolicy: who may 
 off (`docker/loki.yml`). Most signals already are metrics with alerts (errors per service, failed deliveries, the
 outbox, Kafka redeliveries), so this is for what only a line shows, e.g. `StructuredLoggingGuard`'s WARN that
 plain-text logs were switched on in a deployment (#0-94 step 1), or a burst of ERROR lines from a service whose
-metrics look healthy.
+metrics look healthy. Also a service that stops logging: `LogsNotFlowing` (#0-94 step 2) fires only when Alloy
+sends no line at all, and `docker-socket-proxy` logs each of Alloy's discovery calls, so one service, or all seven,
+going silent never fires it; a per-service query on the lines (`absent_over_time` per `service`) would.
 
 **Approach (to analyse).** Loki's ruler with LogQL alerting rules sent to the same Alertmanager (rules in the repo,
 tested like the Prometheus ones if a tool allows), or recording rules turning a log query into a metric that a
