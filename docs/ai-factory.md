@@ -35,7 +35,7 @@ from it.
 | 1 | Use the panel by hand: `/review` (same agents and rules as the autopilot) | you trust its findings on your own changes |
 | 1b | Plan the order: `/plan-backlog` proposes `.ai/plan/queue.md` (order, Touches, why); you edit and merge it | a queue you agree with is on `main` |
 | 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label each PR (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
-| 3 | Auto-merge, after #0-113 (bot account, branch protection): in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
+| 3 | Auto-merge, after #0-113 (bot account, branch protection) and #0-116 (code an agent runs must not be able to drop the devcontainer's firewall): in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
 | 4 | Audits every 10 items (the preflight stops with "audit due") | acceptance of recommendations stays in 40–80% |
 | 5 | Later: more audit targets (implementer, architect, planner — Scope and rule-selection misses), cloud runs. Never: two items at once (#0-114, decided against) | — |
 
@@ -45,7 +45,9 @@ from it.
    Resources → File sharing* to the directory that holds your projects — the container can reach the
    host's Docker (Testcontainers needs it), and whoever controls Docker can mount any shared directory.
    Without an IDE: `npm i -g @devcontainers/cli`, then `devcontainer up --workspace-folder .` and
-   `devcontainer exec --workspace-folder . bash`. The firewall starts with the container and tests
+   `devcontainer exec --workspace-folder . bash` (`.devcontainer/devcontainer-lock.json` pins the
+   docker-outside-of-docker feature by digest). Always enter with `devcontainer exec`: the container's
+   main process runs as root, so a plain `docker exec` without `-u dev` lands as root. The firewall starts with the container and tests
    itself; `example.com` must be unreachable, and the start log ends with `Firewall up: … IPv6 closed`
    (or `not present`). If its setup fails, it blocks all traffic and says `FIREWALL SETUP FAILED`.
 2. **Logins inside the container** (stored in named volumes, so a rebuild keeps them): `claude` (your
@@ -177,7 +179,7 @@ The agents' instructions are not a boundary; these are, each with its limit:
 | Hooks (`.claude/hooks/`, tested by `test-hooks.sh`) | skipped verification, `exec:` goals, shell writes to protected paths, file-tool writes outside the repository (and `..` or a symlink as the last component), any `git grep` option outside an allow-list (abbreviated, quoted or expanded forms included), a line continuation (backslash-newline) in any command, pushes other than a feature branch, running tampered factory scripts, secret reads | a shell command shaped to get past a pattern: they are heuristics |
 | Gates on commits (`changed-paths.sh` before review, CI "Factory guards" on the PR) | the same changes once committed, whatever produced them | — the PR is the last and most reliable line |
 | CODEOWNERS + branch protection (#0-113) | a merge of any of it without the owner | — once configured; until then shadow mode is what keeps `main` safe |
-| Devcontainer + firewall | access to your host account, files and credentials; network beyond Anthropic, GitHub, Maven Central (IPv4; IPv6 only loopback; a failed setup blocks everything) | the host's Docker (Testcontainers needs it, and a container it starts is outside the firewall); data through DNS the resolver forwards; GitHub itself as a channel |
+| Devcontainer + firewall | the agents' own commands: access to your host account, files and credentials; network beyond Anthropic, GitHub, Maven Central (IPv4; IPv6 only loopback; a failed setup blocks everything) | **code an agent runs** (a test): Testcontainers needs the host's Docker, and Docker access is root over the devcontainer itself, so such code can drop the firewall, start a container outside it, or read files the agents' tools may not (#0-116, accepted for shadow mode only); data through DNS the resolver forwards; GitHub itself as a channel |
 
 ## Measuring the reviewers
 
@@ -192,7 +194,9 @@ The agents' instructions are not a boundary; these are, each with its limit:
 ## Pinned versions
 
 Agent models are full ids in `.claude/agents/*.md`; Claude Code is pinned to the version the
-devcontainer image was built with (`DISABLE_AUTOUPDATER=1`). Treat an upgrade of either like a dependency
+devcontainer image was built with (`DISABLE_AUTOUPDATER=1`); the devcontainer's docker-outside-of-docker
+feature is pinned by digest in `.devcontainer/devcontainer-lock.json` (`devcontainer upgrade` moves it).
+Treat an upgrade of any of them like a dependency
 upgrade: change it on purpose, then run a few seeded defects and compare `results.md` before trusting it.
 
 ## Local model (experimental, optional)
@@ -218,6 +222,8 @@ moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs.
 | `NOT_STARTED: label '…' does not exist` | create the labels of #0-113 |
 | a hook says "factory scripts were changed on this branch" | `scripts/factory/` differs from the base commit in `.ai/runs/LOCK` (or `origin/main` without a run) — either the branch touched it (owner's decision) or `main` moved on: rebase the branch by hand |
 | every run `BLOCKED: test environment failure` | Docker not reachable from the container, or the firewall blocks Maven Central |
+| `permission denied while trying to connect to the docker API` inside the container | the container's main process must run as root (`"containerUser": "root"` in `devcontainer.json`) for the docker-outside-of-docker feature to proxy the socket to `dev`; rebuild with `devcontainer up --workspace-folder . --remove-existing-container` |
+| `mkdir: cannot create directory '/home/dev/.m2/wrapper': Permission denied` (or `gh` cannot store its login) | a volume created before the image made its mount point, so it is root's: remove it if it is empty (`docker volume rm incident-platform-m2` / `incident-platform-gh`) and start the container again; to keep its contents (a Maven cache, a login), give it to `dev` instead: `docker run --rm -v incident-platform-m2:/v alpine chown -R 1000:1000 /v` |
 | `FIREWALL SETUP FAILED: all traffic is blocked` at container start | a required domain did not resolve or GitHub's IP ranges could not be fetched; the message above it names the cause. Fix it and restart the container (an optional domain only warns) |
 | a reviewer "returned no valid verdict" | it answered prose instead of JSON; check its transcript; repeated → audit finding |
 | `NOTHING_TO_DO` | the reason names the next queue row and why it cannot start: not `ready` on main, a dependency not done, or an open PR/branch (a lock — usually the previous item waiting for your merge). "The approved queue is done" → `/plan-backlog` |

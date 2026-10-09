@@ -23,7 +23,8 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o 
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
     && apt-get update && apt-get install -y --no-install-recommends gh && rm -rf /var/lib/apt/lists/*
 
-# Non-root user; sudo only for the firewall script.
+# Non-root user; sudo only for the firewall script. The container's main process still runs as root
+# ("containerUser" in devcontainer.json, for the Docker socket proxy): see the comment there and #0-116.
 RUN (getent group ${USER_GID} || groupadd --gid ${USER_GID} ${USERNAME}) \
     && (id -u ${USER_UID} >/dev/null 2>&1 && usermod -l ${USERNAME} -d /home/${USERNAME} -m $(id -nu ${USER_UID}) || useradd --uid ${USER_UID} --gid ${USER_GID} -m -s /bin/bash ${USERNAME}) \
     && echo "${USERNAME} ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/${USERNAME} \
@@ -34,6 +35,11 @@ RUN chmod 0755 /usr/local/bin/init-firewall.sh
 
 USER ${USERNAME}
 WORKDIR /home/${USERNAME}
+
+# The mount points of the named volumes (devcontainer.json), created here as `dev`: Docker gives a new
+# volume the owner of the directory it is mounted over, and one the image does not have is root's. Without
+# this, ~/.m2 and ~/.config/gh were root-owned: Maven could not write its cache, gh could not store the login.
+RUN mkdir -p /home/${USERNAME}/.m2 /home/${USERNAME}/.config/gh /home/${USERNAME}/.claude
 
 # Claude Code, native installer. Updates are off in the container (DISABLE_AUTOUPDATER): the version the
 # autopilot runs is the one this image was built with — rebuild the image to upgrade, then run the

@@ -9,6 +9,15 @@
     "--add-host=host.docker.internal:host-gateway"
   ],
   "remoteUser": "dev",
+  // The container's main process runs as root; you and the agents work as `dev` (remoteUser). The
+  // docker-outside-of-docker feature's start script (docker-init.sh) needs root to proxy the host's Docker
+  // socket (root:root, 660 on Docker Desktop) to one `dev` may use. Run as `dev`, it calls sudo, which
+  // the Dockerfile allows `dev` only for init-firewall.sh, and the proxy never starts: no Docker for
+  // Testcontainers. Widening sudo (tee, rm, socat) would give `dev` root in a second way: Docker access
+  // already is root over this container (`docker exec -u 0` into it works), so code an agent runs can
+  // drop the firewall. Accepted for shadow mode, to be closed before auto-merge: backlog #0-116.
+  // Enter with `devcontainer exec`: a plain `docker exec` without `-u dev` lands as root.
+  "containerUser": "root",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
   "workspaceFolder": "/workspace",
   "mounts": [
