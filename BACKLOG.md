@@ -118,6 +118,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
 | [0-113](#0-113-repository-settings-the-ai-factory-depends-on) | Repository settings the AI factory depends on | ci | High | Open |
 | [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
+| [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 
 ---
 
@@ -1958,7 +1959,7 @@ AC2. Once required, a score under the threshold fails the check.
 
 ### 0-113. Repository settings the AI factory depends on
 
-**Type:** ci · **Priority:** High · **Status:** Open
+**Type:** ci · **Priority:** High · **Status:** Open — machine account `lukaszplawiakbot` (Write) and the labels done 2026-10-09; branch protection, auto-delete and the token in the devcontainer open
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 
 **Problem.** The autopilot's merge safety is in GitHub settings, not in this repository: without them a
@@ -1980,6 +1981,50 @@ bot token can merge around every check. None of these settings is visible in a d
 AC1. A test PR from the machine account cannot be merged by it while a required check is red.
 AC2. A PR touching `.ai/rules/` stays unmergeable until the owner approves it.
 AC3. README "Infrastructure Hardening" records the settings.
+
+---
+
+### 0-116. The devcontainer firewall does not bind code an agent runs
+
+**Type:** design · **Priority:** High · **Status:** Open — accepted for shadow mode (decision 2026-10-09); must be done before phase 3 (auto-merge)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** —
+
+**Problem.** The devcontainer's firewall (`.devcontainer/init-firewall.sh`) is `iptables` in the same network
+namespace the agents run in, and it holds only while nothing there is root. Testcontainers needs Docker, so
+the container reaches the host's Docker (docker-outside-of-docker), and Docker access is root over the
+devcontainer itself: `docker exec -u 0 <this container> …` works from `dev` (checked 2026-10-09), and so
+would a container on the host network or in this container's network namespace. Code an agent writes and
+runs (a test) can therefore drop the firewall or send data out around it, read files the agents' tools may
+not (`docker/.env`, `application-local.yml`), and start containers outside it. The agents' own commands
+are still bound: `Bash(docker *)`, `curl` and `sudo` are denied in `.claude/settings.autopilot.json`, and
+the hooks refuse what they can recognise.
+
+**Decided for now (2026-10-09).** Accepted while the autopilot runs in shadow mode: the machine account's
+token reaches this repository only, CI runs on every PR, the owner reads each PR before merging, and the
+autopilot cannot merge. Recorded in `docs/ai-factory.md` ("What isolates what") and README "Infrastructure
+Hardening". Not accepted for unattended merging: this item is a precondition of phase 3.
+
+**Options (to analyse before implementation).**
+- **A. No Docker in the devcontainer.** The firewall becomes a real boundary (no root for `dev`); the
+  test gate runs unit tests only and Testcontainers tests run in CI alone, so items touching repositories,
+  migrations or Kafka show their failures only on the PR.
+- **B. A filtering Docker API proxy (recommended).** The container gets a proxy instead of the socket,
+  deny by default on the request body: no `exec` into the devcontainer, no `Privileged`, no `CapAdd`, no
+  host or `container:` network mode, no host PID, no bind mounts outside an allow-list, and only listed
+  images (`postgres:16-alpine`, `apache/kafka`, Ryuk): an image name is itself a channel, as pulling
+  `<host>/<data>:tag` contacts that host. The path-only proxy used for Alloy (#0-94 step 2, tecnativa)
+  cannot inspect bodies, so this is a component of our own, with its own tests, kept in step with the
+  calls Testcontainers makes.
+- **C. The boundary outside the container**: a separate VM (Lima, Colima) or cloud runner whose egress is
+  filtered at the host or hypervisor. A second Docker daemon for the tests (dind) on Docker Desktop needs
+  `--privileged`, from which escaping into Docker Desktop's VM, which has the internet, is easy.
+
+**Acceptance criteria** (for the option chosen).
+AC1. From inside the devcontainer, code run as `dev` cannot change the firewall's rules or reach a host
+outside the allow-list, directly or through any container it can start.
+AC2. The Testcontainers tests still run in the autopilot's test gate (B, C), or the gate's reduced scope
+is documented and CI covers the rest (A).
+AC3. `docs/ai-factory.md` and README "Infrastructure Hardening" describe the boundary as it is.
 
 ---
 

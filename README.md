@@ -377,7 +377,9 @@ security boundary, so every rule that matters is also enforced outside the model
   protection exist. A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
   the preflight honours.
 
-**Known gaps**: the GitHub settings themselves (#0-113); no secret scanning (#0-109); no Maven Enforcer
+**Known gaps**: the GitHub settings themselves (#0-113); the devcontainer's firewall binds the agents' own
+commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
+(#0-116, accepted for shadow mode, required before auto-merge); no secret scanning (#0-109); no Maven Enforcer
 (#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines;
 subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
 where only the session-level hooks apply. Layers and their limits: docs/ai-factory.md, "What isolates what".
