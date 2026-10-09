@@ -59,6 +59,6 @@ resolvable.
 | — | Align README/CLAUDE.md with the code; add LICENSE; scrape auth-service in Prometheus | PR #409 |
 | 0-114 | Run two autopilot items at the same time — **closed, not implemented**: the autopilot stays strictly sequential, each item built on a reviewed `main` (`.ai/rules/planning.md`) | decision 2026-10-09 |
 | 0-8 | Removed the dead `IncidentEventPublisher.publishEscalated` (and its test); `IncidentEscalationEventConsumer` and `Incident#recordEscalation` Javadoc now name escalation-service's `EscalationScheduler` as the only producer of `IncidentEscalatedEvent` | PR #472 |
-| 0-7 | `IncidentEscalationEventConsumer` validates `escalationLevel` (JSON integer 1..2) instead of `asInt(0)`; an invalid level is dead-lettered under its tenant with a content-free reason | PR #pending |
+| 0-7 | `IncidentEscalationEventConsumer` validates `escalationLevel` (JSON integer 1..2) instead of `asInt(0)`; an invalid level is dead-lettered under its tenant with a content-free reason | PR #475 |
 
 Items completed before `BACKLOG.md` existed are not listed.
