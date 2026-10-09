@@ -49,7 +49,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-4](#0-4-escalation-event-is-published-at-most-once) | Escalation event is published at-most-once | tech-debt | Medium | Open |
 | [0-5](#0-5-testcontainers-and-kafka-test-jars-ship-in-every-service-jar) | Testcontainers and Kafka test jars ship in every service jar | tech-debt | Medium | Open |
 | [0-6](#0-6-untracked-todos-need-a-backlog-reference) | Untracked `TODO`s need a backlog reference | tech-debt | Low | Open |
-| [0-7](#0-7-incident-service-coerces-escalationlevel-with-asint0) | incident-service coerces `escalationLevel` with `asInt(0)` | bug | Low | Open |
 | [0-13](#0-13-asymmetric-service-tokens-or-mtls-for-service-identity) | Asymmetric service tokens or mTLS for service identity | design | Medium | Open |
 | [0-14](#0-14-by-slack-is-open-to-any-authenticated-role) | `GET /by-slack/{id}` is open to any authenticated role | tech-debt | Low | Open |
 | [0-15](#0-15-incidentackclient-is-not-authorized-on-the-status-endpoint) | `IncidentAckClient` is not authorized on the status endpoint | bug | Medium | Open |
@@ -226,41 +225,6 @@ sit near comments that cite other items, so triage each one:
 
 **Work.** For each: create or link an item and write `TODO (backlog #N)`, or delete it.
 Optionally add a CI grep that fails on a new `TODO` without `backlog #`.
-
----
-
-### 0-7. incident-service coerces `escalationLevel` with `asInt(0)`
-
-**Type:** bug · **Priority:** Low · **Status:** Open
-**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** incident-service (kafka)
-
-**Problem.** `IncidentEscalationEventConsumer` reads the level with
-`event.path("escalationLevel").asInt(0)` and passes it to `Incident.recordEscalation(int)`. A
-missing or non-numeric level becomes `0`. notification-service fixed the same pattern in PR #411
-(required, validated 1..2, otherwise dead-lettered). Verify the effect here (the level is an
-attribute, not part of an idempotency key, so the impact is likely a wrong `escalationLevel` on the
-incident rather than a lost notification) and apply the same validation if warranted.
-
-**Acceptance.** A malformed level is dead-lettered or rejected instead of silently recorded as `0`;
-consumer test added.
-
-**Acceptance criteria.** Verified (2026-10-09, `/ready`): the effect is real, a malformed event overwrites
-a recorded level (2 becomes 0). The consumer already dead-letters an `IllegalArgumentException` with a
-content-free reason (`KafkaFailures.reason`, #0-96), so the fix is validation that throws one. Decided: the
-upper bound is a constant local to incident-service, `2`, as in notification-service (one constant shared by
-the three services is #0-117); lowering an already-recorded level is #0-118; a CHECK on the column is out of
-scope. All criteria are checked in `IncidentEscalationEventConsumerTest`.
-AC1. An `incident.escalated` event without `escalationLevel` is dead-lettered through
-`deadLetterThenAcknowledge` with the record's tenant; `recordEscalationLevel` is never called and the record
-is not acknowledged directly.
-AC2. The same for an `escalationLevel` that is `null`, a string (`"2"`, `"x"`) or a non-integer number
-(`1.5`).
-AC3. The same for an integer outside 1..2: `0`, `-1`, `3`.
-AC4. A valid level (`1` and `2`) is still recorded through `recordEscalationLevel` with that level, then
-acknowledged, in that order.
-AC5. The dead-letter reason of an invalid level does not contain the record's value: it starts with
-`IllegalArgumentException at ` and does not contain the offending value.
 
 ---
 

@@ -78,12 +78,29 @@ import java.util.UUID;
  * {@link IncidentCommandService#recordEscalationLevel} before the record is
  * acknowledged, and a conflict (a transient failure, {@code KafkaFailures})
  * is {@code nack}ed and read again.
+ *
+ * <h2>Fixed (backlog #0-7)</h2>
+ * The level used to be read with {@code asInt(0)}, which turned a missing or
+ * malformed {@code escalationLevel} (absent, {@code null}, text, a fraction)
+ * into {@code 0} and so overwrote a recorded level (2 became 0). It is now
+ * validated: it must be a JSON integer in {@code 1..MAX_ESCALATION_LEVEL}, and
+ * anything else is a poison pill that goes to the dead-letter topic through
+ * the catch below. Lowering a level on an out-of-order event is backlog #0-118
+ * and is not handled here.
  */
 @Component
 public class IncidentEscalationEventConsumer {
 
     private static final Logger log =
             LoggerFactory.getLogger(IncidentEscalationEventConsumer.class);
+
+    /**
+     * Highest escalation level an event may carry. escalation-service creates
+     * only levels 1 and 2, and notification-service's {@code IncidentEventConsumer}
+     * has the same bound. Sharing one constant is backlog #0-117; a future
+     * level 3 must raise all three.
+     */
+    private static final int MAX_ESCALATION_LEVEL = 2;
 
     private final IncidentCommandService commandService;
     private final TenantKafkaRecordResolver tenantRecordResolver;
@@ -190,7 +207,8 @@ public class IncidentEscalationEventConsumer {
     private void handleEscalated(JsonNode event, String tenantId) {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
-        final int escalationLevel = event.path("escalationLevel").asInt(0);
+        // Backlog #0-7: validated, not coerced; an invalid level is a poison pill.
+        final int escalationLevel = extractEscalationLevel(event);
 
         if (commandService.recordEscalationLevel(incidentId, tenantId, escalationLevel)) {
             log.info("Escalation level recorded: incidentId={}, " +
@@ -201,6 +219,17 @@ public class IncidentEscalationEventConsumer {
                             "skipping: incidentId={}, tenant={}",
                     incidentId, tenantId);
         }
+    }
+
+    private int extractEscalationLevel(JsonNode event) {
+        final JsonNode node = event.path("escalationLevel");
+        // isInt() is false for missing, null, text, fractions and longs. The
+        // message names the field and the range only, never the record's value.
+        if (!node.isInt() || node.intValue() < 1 || node.intValue() > MAX_ESCALATION_LEVEL) {
+            throw new IllegalArgumentException(
+                    "escalationLevel must be an integer in 1.." + MAX_ESCALATION_LEVEL);
+        }
+        return node.intValue();
     }
 
     private String extractEventType(ConsumerRecord<?, ?> record) {
