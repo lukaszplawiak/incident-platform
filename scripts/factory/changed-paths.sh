@@ -30,6 +30,15 @@ protected=$(match '^(\.ai/rules/|\.ai/plan/|\.ai/audit/decisions\.md$|\.claude/|
 build_config=$(match '^(\.mvn/|mvnw(\.cmd)?$)')
 skip_props=$(git diff --no-renames "$mb"...HEAD -- '*pom.xml' | grep -E '^\+' | grep -vE '^\+\+\+' | grep -E 'skipTests|maven\.test\.skip|testFailureIgnore|<skip>[[:space:]]*true|haltOnFailure|jacoco\.skip|<excludes>|<exclude>' | head -3 || true)
 [ -n "$skip_props" ] && build_config="$build_config"$'\n'"pom.xml: skip/exclude property added"
+# The coverage check itself: a lowered <minimum>, a removed <rule> or `check` goal, a moved <phase>, an
+# <include> that narrows what is counted (as an <exclude> does; the same element in another plugin, e.g.
+# Surefire's test includes, narrows what runs and is flagged too). An element with attributes counts too:
+# `<rules combine.self="override"/>` in a module POM wipes the inherited rule (review round 3). Added
+# or removed lines both count (a deletion weakens it as much as an edit). Not the plugin's version, so a
+# dependency bump of jacoco-maven-plugin is not flagged. Same patterns as check-factory-guards.sh, rule 6.
+coverage_cfg=$(git diff --no-renames "$mb"...HEAD -- '*pom.xml' | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
+    | grep -E '<(minimum|maximum|counter|value|element|limits?|rules?|phase|includes?)([[:space:]/>])|<goal>[[:space:]]*check[[:space:]]*</goal>' | head -3 || true)
+[ -n "$coverage_cfg" ] && build_config="$build_config"$'\n'"pom.xml: coverage check configuration changed"
 # CLAUDE.md: only its agent-editable blocks are the implementer's (CLAUDE.md, "Commands").
 claude_md=false
 if grep -qx 'CLAUDE.md' <<<"$files"; then

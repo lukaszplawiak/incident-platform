@@ -42,7 +42,18 @@ if [ -z "$mods" ]; then
     exit 0
 fi
 
-./mvnw -B -ntp verify -pl "$mods" -am > "$log" 2>&1
+# Only the repository decides what runs. MAVEN_SKIP_RC: Maven's launcher would otherwise source ~/.mavenrc;
+# -s and -gs: this script's own settings instead of ~/.m2/settings.xml and of the global settings in the
+# downloaded distribution (conf/settings.xml under ~/.m2/wrapper); no MAVEN_OPTS/MAVEN_ARGS/JAVA_TOOL_OPTIONS
+# from the environment. All of these can be written by code an agent runs (its tests), and each can skip
+# tests or swap artifacts. What such code can still change: the local repository and the distribution's
+# own launcher (bin/mvn) under ~/.m2, and an ignored file in the workspace that Maven reads — it can add
+# .mvn/maven.config, jvm.config or extensions.xml and hide them from the clean-tree check above through
+# .git/info/exclude or a global gitignore. The PR's CI, on a fresh runner from the committed tree, is the
+# check that none of this can forge.
+env -u MAVEN_OPTS -u MAVEN_ARGS -u JAVA_TOOL_OPTIONS -u _JAVA_OPTIONS -u JDK_JAVA_OPTIONS MAVEN_SKIP_RC=true \
+    ./mvnw -B -ntp -s scripts/factory/maven-settings.xml -gs scripts/factory/maven-settings.xml \
+    verify -pl "$mods" -am > "$log" 2>&1
 rc=$?
 
 if [ "$rc" -eq 0 ]; then

@@ -71,6 +71,12 @@ case_ fail "a test renamed out of the test pattern" ":" "git mv svc/src/test/jav
 case_ fail "an applied migration deleted" ":" "git rm -q svc/src/main/resources/db/migration/V1__a.sql"
 case_ fail "skipTests in a POM" ":" "printf '<project><properties><skipTests>true</skipTests></properties></project>\n' > pom.xml"
 case_ fail "maven config changed" ":" "mkdir -p .mvn && echo '-DskipTests' > .mvn/maven.config"
+J="printf '<project><build><plugins><plugin><executions><execution>\\n<goals>\\n<goal>check</goal>\\n</goals>\\n<minimum>0.60</minimum>\\n</execution></executions></plugin></plugins></build></project>\\n' > pom.xml"
+case_ fail "coverage minimum lowered" "$J" "sed -i.bak 's/0.60/0.10/' pom.xml && rm pom.xml.bak"
+case_ fail "coverage check goal removed" "$J" "sed -i.bak '/<goal>check<\\/goal>/d' pom.xml && rm pom.xml.bak"
+case_ pass "jacoco version bump only" \
+    "printf '<project><properties><jacoco.version>1</jacoco.version></properties></project>\\n' > pom.xml" \
+    "printf '<project><properties><jacoco.version>2</jacoco.version></properties></project>\\n' > pom.xml"
 
 if [ "$failures" -gt 0 ]; then echo "$failures case(s) failed"; exit 1; fi
 echo "All factory guard cases passed."

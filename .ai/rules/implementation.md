@@ -10,6 +10,10 @@ are in `CLAUDE.md` and `.ai/context/`; this file says how an unattended implemen
 2. Read the rules you are judged by (next section).
 3. Find the existing solution to the same class of problem in this codebase and follow it (CLAUDE.md
    "Working style", step 3). A second mechanism for a solved problem will be rejected (ARC-02).
+   Search with `git grep -n <pattern> -- <paths>` and list files with `git ls-files`: the Grep and Glob
+   tools your definition names do not exist in every Claude Code version, plain `grep`/`find` are not
+   allowed (they would read gitignored secrets), and `git grep` searches tracked files only. A hook allows
+   only common options written in full, no `$`, and no unquoted glob before `--`: quote a regex pattern.
 
 ## The rules you are judged by
 

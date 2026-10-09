@@ -46,7 +46,8 @@ from it.
    host's Docker (Testcontainers needs it), and whoever controls Docker can mount any shared directory.
    Without an IDE: `npm i -g @devcontainers/cli`, then `devcontainer up --workspace-folder .` and
    `devcontainer exec --workspace-folder . bash`. The firewall starts with the container and tests
-   itself; `example.com` must be unreachable.
+   itself; `example.com` must be unreachable, and the start log ends with `Firewall up: … IPv6 closed`
+   (or `not present`). If its setup fails, it blocks all traffic and says `FIREWALL SETUP FAILED`.
 2. **Logins inside the container** (stored in named volumes, so a rebuild keeps them): `claude` (your
    subscription) and `gh auth login` with the **bot account's** token (#0-113), not yours, then
    `gh auth setup-git` so that `git push` uses that token too. Prefer a fine-grained token limited to this
@@ -173,10 +174,10 @@ The agents' instructions are not a boundary; these are, each with its limit:
 | Layer | Stops | Does not stop |
 |---|---|---|
 | `dontAsk` + deny rules (`settings.autopilot.json`) | file-tool writes to human-owned paths and to the gates' own files; the network tools; force pushes, merges, `gh api` | what a shell command does indirectly — hence the hooks |
-| Hooks (`.claude/hooks/`, tested by `test-hooks.sh`) | skipped verification, `exec:` goals, shell writes to protected paths, pushes other than a feature branch, running tampered factory scripts, secret reads | a shell command shaped to get past a pattern: they are heuristics |
+| Hooks (`.claude/hooks/`, tested by `test-hooks.sh`) | skipped verification, `exec:` goals, shell writes to protected paths, file-tool writes outside the repository (and `..` or a symlink as the last component), any `git grep` option outside an allow-list (abbreviated, quoted or expanded forms included), a line continuation (backslash-newline) in any command, pushes other than a feature branch, running tampered factory scripts, secret reads | a shell command shaped to get past a pattern: they are heuristics |
 | Gates on commits (`changed-paths.sh` before review, CI "Factory guards" on the PR) | the same changes once committed, whatever produced them | — the PR is the last and most reliable line |
 | CODEOWNERS + branch protection (#0-113) | a merge of any of it without the owner | — once configured; until then shadow mode is what keeps `main` safe |
-| Devcontainer + firewall | access to your host account, files and credentials; network beyond Anthropic, GitHub, Maven Central | the host's Docker (Testcontainers needs it, and a container it starts is outside the firewall); data through DNS the resolver forwards; GitHub itself as a channel |
+| Devcontainer + firewall | access to your host account, files and credentials; network beyond Anthropic, GitHub, Maven Central (IPv4; IPv6 only loopback; a failed setup blocks everything) | the host's Docker (Testcontainers needs it, and a container it starts is outside the firewall); data through DNS the resolver forwards; GitHub itself as a channel |
 
 ## Measuring the reviewers
 
@@ -217,6 +218,7 @@ moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs.
 | `NOT_STARTED: label '…' does not exist` | create the labels of #0-113 |
 | a hook says "factory scripts were changed on this branch" | `scripts/factory/` differs from the base commit in `.ai/runs/LOCK` (or `origin/main` without a run) — either the branch touched it (owner's decision) or `main` moved on: rebase the branch by hand |
 | every run `BLOCKED: test environment failure` | Docker not reachable from the container, or the firewall blocks Maven Central |
+| `FIREWALL SETUP FAILED: all traffic is blocked` at container start | a required domain did not resolve or GitHub's IP ranges could not be fetched; the message above it names the cause. Fix it and restart the container (an optional domain only warns) |
 | a reviewer "returned no valid verdict" | it answered prose instead of JSON; check its transcript; repeated → audit finding |
 | `NOTHING_TO_DO` | the reason names the next queue row and why it cannot start: not `ready` on main, a dependency not done, or an open PR/branch (a lock — usually the previous item waiting for your merge). "The approved queue is done" → `/plan-backlog` |
 | `NOT_STARTED: the queue on main is invalid` | a merged change broke `.ai/plan/queue.md` (e.g. an item it lists was removed); `scripts/factory/check-queue.sh` names the rows — fix them or re-plan |

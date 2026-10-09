@@ -10,6 +10,7 @@
 # A command that only reads (git diff/log/show, cat, grep, ls, head, tail, wc) passes.
 # Also refused, whatever the verb: commands naming a secret (docker/.env, docker/secrets, application-local,
 # credentials files, gh/ssh config) and `git diff --no-index`, which reads any file around the Read denies.
+# `git grep` options that run a program or read files git does not track (the secrets) are refused too.
 # Fails closed without jq or python3.
 # ============================================================
 set -uo pipefail
@@ -24,6 +25,11 @@ secrets='(docker/\.env|docker/secrets|application-local|\.credentials|\.claude\.
 if printf '%s' "$cmd" | grep -Eq -- "$secrets"; then
     block "the command names a secret file or reads files outside the repository's history (--no-index). Agents never read secrets."
 fi
+# A line continuation (backslash-newline) is joined by bash before it runs the command, so a pattern
+# split across it (`git gr\<newline>ep`, `doc\<newline>ker/.env`) is seen by bash and not by these checks.
+# No command an agent needs is written that way (review round 2, sec-b7d2).
+case "$cmd" in *\\$'\n'*) block "a line continuation (backslash-newline) is not allowed: write the command on one line" ;; esac
+why=$(git_grep_unsafe "$cmd"); [ -z "$why" ] || block "$why"
 if printf '%s' "$cmd" | grep -Eq -- '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|(^|[[:space:];&|])(cp|mv|rm|chmod|ln)[[:space:]])[^;&|]*[[:space:]](\./)?mvnw(\.cmd)?([[:space:]]|$)'; then
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi

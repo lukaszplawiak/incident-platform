@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven settings of the autopilot's test gate (scripts/factory/run-tests.sh passes it as both -s and -gs).
+  Empty on purpose: Maven's defaults (Maven Central, ~/.m2/repository). The gate must not read
+  ~/.m2/settings.xml or the distribution's conf/settings.xml, which code run by an agent could rewrite (an active profile setting
+  maven.test.skip, a mirror serving altered artifacts). Lives under scripts/factory/, so a branch that
+  changes it cannot run the gate (guard-factory-scripts.sh) and needs the owner (CODEOWNERS).
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+</settings>
