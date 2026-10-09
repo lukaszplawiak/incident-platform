@@ -2,6 +2,7 @@
 # ============================================================
 # Tests the PostgreSQL role setup of backlog #0-78 against the real image:
 #   0. docker-compose refuses to start without the two database passwords
+#      or Grafana's (backlog #0-94 step 2), each one on its own
 #   1. k8s/base/infrastructure/postgresql-init.sh on an empty volume, and why
 #      readiness must go over TCP (the init-phase server is socket-only)
 #   2. its guard against APP_DB_USER == POSTGRES_USER
@@ -119,10 +120,13 @@ docker network create "$NET" >/dev/null
 echo "Image: $IMAGE"
 
 # ------------------------------------------------------------
-echo "0. docker-compose refuses to start without the database passwords"
-for var in DB_PASSWORD POSTGRES_ADMIN_PASSWORD; do
+# GRAFANA_ADMIN_PASSWORD (backlog #0-94 step 2) is required the same way; set
+# here so each case lacks only the variable under test (with it unset too,
+# compose reported both and the case passed for the wrong reason).
+echo "0. docker-compose refuses to start without the database and Grafana passwords"
+for var in DB_PASSWORD POSTGRES_ADMIN_PASSWORD GRAFANA_ADMIN_PASSWORD; do
     set +e
-    out=$(cd /tmp && env DB_PASSWORD=x POSTGRES_ADMIN_PASSWORD=x \
+    out=$(cd /tmp && env DB_PASSWORD=x POSTGRES_ADMIN_PASSWORD=x GRAFANA_ADMIN_PASSWORD=x \
           env -u "$var" docker compose -f "$REPO_ROOT/docker/docker-compose.yml" --env-file /dev/null config --quiet 2>&1)
     rc=$?
     set -e
