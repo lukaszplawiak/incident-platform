@@ -86,7 +86,12 @@ public class TenantKafkaRecordInterceptor<K, V> implements RecordInterceptor<K, 
     /** MDC and metric value for a record whose tenant header is not a valid tenant id (backlog #0-92). */
     static final String INVALID = "_invalid";
 
-    private static final String MDC_START_NANOS = "_kafkaStartNanos";
+    /**
+     * The interceptor's own timing, not for a reader: kept out of the JSON log
+     * line by {@code StructuredLoggingDefaults} (backlog #0-94), which names it
+     * through this constant so a rename cannot leak it into every Kafka line.
+     */
+    public static final String MDC_START_NANOS = "_kafkaStartNanos";
 
     private final MeterRegistry meterRegistry;
 

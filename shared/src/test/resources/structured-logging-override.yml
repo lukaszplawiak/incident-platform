@@ -1,0 +1,5 @@
+# StructuredLoggingDefaultsTest: a service's own application.yml overrides the platform default.
+logging:
+  structured:
+    format:
+      console: logstash

@@ -201,7 +201,7 @@ A multi-tenant platform onboards customers while it runs. A Flyway seed gave eve
 | API Docs | SpringDoc OpenAPI 3 | Auto-generated, available at `/swagger-ui.html` |
 | Build | Maven multi-module | Shared dependency management, incremental builds |
 | Observability | Micrometer + Prometheus + Grafana | HTTP metrics, JVM, Kafka lag, rate limit rejections |
-| Logging | SLF4J + MDC | Structured logs with tenantId, requestId, userId |
+| Logging | SLF4J + MDC, Spring Boot structured logging | One JSON (ECS) object per line, `tenantId`, `requestId`, `userId`, `kafkaMessageId` as fields (backlog #0-94) |
 | Containers | Docker Compose + Kubernetes (Kustomize) | Local infra + production-ready k8s overlays |
 | CI / Security | GitHub Actions · Renovate · OWASP Dependency-Check · Snyk | Build, test, coverage, automated dependency updates, CVE scanning |
 ---
@@ -550,6 +550,18 @@ Summary; details in [Resilience & Security](#security).
   longer than the redelivery deadline dead-letters the record at each partition's head, about one per partition per
   deadline; an audit event dead-lettered that way is missing from the trail until replayed by hand (#0-97), and
   raises both `AuditEventsRejected` and `KafkaRecordRedeliveryGaveUp`.
+- **Structured logs** (backlog #0-94, step 1): every service writes one JSON object per line in Elastic Common
+  Schema, to the console and to a log file if one is ever configured. It is Spring Boot's own structured logging,
+  set for all seven by `shared`'s `StructuredLoggingDefaults`. Its encoder escapes every value, so a CR/LF from a
+  Kafka header, a payload field or a library's exception message stays inside its line; before, each call site had
+  to remember not to log a raw value. `tenantId`, `requestId`, `userId` and `kafkaMessageId` are fields of that
+  object (the set is pinned by a test). A service whose logs would not be ECS refuses to start
+  (`StructuredLoggingGuard`), whatever set the format: its configuration, an environment variable or ConfigMap
+  outside this repository, `SPRING_APPLICATION_JSON`, a Logback file of its own, or a reshaped JSON object
+  (`logging.structured.json.*`: a renamed or excluded `tenantId` would vanish from every line). Only
+  `platform.logging.plain-text: true` lets plain text through, for a developer's `spring-boot:run` in the
+  gitignored `application-local.yml`; CI fails on that switch, or a Logback file, in any tracked file
+  (`check-structured-logging.sh`).
 - **Tenant id and Kafka tenant** (backlogs #0-91, #0-92): every tenant id is a slug of 3-63 `[a-z0-9-]`
   (`TenantIds`), enforced by a `CHECK` on every table with a `tenant_id` in every service, when a token is issued and read
   (`JwtUtils`, `JwtAuthFilter`), on the `X-Tenant-Id` header of auth-service's public endpoints (400),
@@ -656,9 +668,13 @@ Open items from the audit and earlier, most important first within each area. Ea
     backlog #0-101.
   - Operator MFA enrolment is not bound to the invite: an owner who misses the 24 h "MFA enabled" email, or whose
     mailbox the password thief also controls, does not stop the thief's factor: backlog #0-87.
-  - Logs are plain text with no escaping and nothing collects them: a value from outside that reaches a log line
-    (a Kafka header other than the tenant's, a payload field) can still split it, fields are not queryable, and
-    each container's logs go with it: backlog #0-94.
+  - Nothing collects the logs: each container's go with it, and nothing alerts on their content (backlog #0-94,
+    step 2); no trace id links one operation's lines across services (step 3). Since step 1 they are JSON with
+    every value escaped, so a value from outside can no longer split or forge a line; a service would refuse to
+    start otherwise, unless a deployment outside this repository sets `PLATFORM_LOGGING_PLAINTEXT` on purpose
+    (logged as a warning at every start). auth-service's break-glass command logs JSON too.
+    An exception's message still reaches the log as the library wrote it (`error.message`,
+    `error.stack_trace`): escaped, not filtered.
   - The MFA recovery of a customer tenant's only admin (#0-90) verifies the person by procedure only: the platform
     holds no contact of the tenant independent of the admin's own mailbox, and checks no DNS record itself:
     backlog #0-98. Whoever holds the admin's mailbox can cancel every such recovery, and whoever holds the
@@ -694,13 +710,13 @@ Prometheus, Alertmanager, Grafana and `kafka-exporter` are included in `docker-c
 
 ### Distributed Tracing Context
 
-Every log line includes MDC context for correlation across services:
+Every log line is one JSON object in Elastic Common Schema (backlog #0-94), with the MDC context as fields:
 
-```
-09:17:32.411 [test-tenant] [req-e87b7a28] [user-11111111] INFO  IncidentCommandService - Incident created: id=3f669983
+```json
+{"@timestamp":"2026-10-08T09:17:32.411Z","log":{"level":"INFO","logger":"com.incidentplatform.incident.service.IncidentCommandService"},"service":{"name":"incident-service"},"message":"Incident created: id=3f669983","tenantId":"test-tenant","requestId":"e87b7a28-...","userId":"11111111-...","ecs":{"version":"8.11"}}
 ```
 
-Format: `[tenantId] [requestId] [userId]` — filter all logs for a specific request or tenant across all services in any log aggregation system (ELK, Loki, CloudWatch).
+Filter by field (`tenantId`, `requestId`, `userId`, `kafkaMessageId`, `service.name`, `log.level`) in any log store that reads JSON (Loki, ELK, CloudWatch). `requestId` is per service for now; a trace id that follows one operation across services is #0-94's step 3. Locally, `spring-boot:run` can print plain text instead (README "Step 2").
 
 ### Management Port Isolation
 
@@ -890,8 +906,15 @@ jwt:
   secret: local-development-secret-key-minimum-64-characters-long-absolutely-not-for-production-use-only
 
 logging:
+  structured:
+    format:
+      console: ""   # plain text locally; every deployment logs JSON (ECS), backlog #0-94
   level:
     com.incidentplatform: DEBUG
+
+platform:
+  logging:
+    plain-text: true   # without it the service refuses to start with plain-text logs
 ```
 
 **The six services that use the database** (all but ingestion-service) also need its password: there is
@@ -922,8 +945,15 @@ slack:
   encryption-key: bG9jYWwtc2xhY2sta2V5LWRldi1vbmx5LTMyYnl0ZSE=
 
 logging:
+  structured:
+    format:
+      console: ""   # plain text locally; every deployment logs JSON (ECS), backlog #0-94
   level:
     com.incidentplatform: DEBUG
+
+platform:
+  logging:
+    plain-text: true   # without it the service refuses to start with plain-text logs
 ```
 
 **incident-service** additionally needs WebSocket allowed origins:
@@ -938,8 +968,15 @@ websocket:
     - http://localhost:3000
 
 logging:
+  structured:
+    format:
+      console: ""   # plain text locally; every deployment logs JSON (ECS), backlog #0-94
   level:
     com.incidentplatform: DEBUG
+
+platform:
+  logging:
+    plain-text: true   # without it the service refuses to start with plain-text logs
 ```
 
 **postmortem-service** additionally needs a Gemini API key:
@@ -952,8 +989,15 @@ gemini:
   api-key: your-gemini-api-key-here
 
 logging:
+  structured:
+    format:
+      console: ""   # plain text locally; every deployment logs JSON (ECS), backlog #0-94
   level:
     com.incidentplatform: DEBUG
+
+platform:
+  logging:
+    plain-text: true   # without it the service refuses to start with plain-text logs
 ```
 
 Every service but auth-service reads from auth-service: each tenant's status (all six, backlog #0-82) and, in **notification-service**, each tenant's Slack workspace. `auth-service.base-url` defaults to `http://localhost:8087`, so nothing is needed locally unless auth-service runs elsewhere; then set it (or `AUTH_SERVICE_URL`) in every one of them:
@@ -1580,6 +1624,7 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | `NotificationChannelPropertiesTest` | Operator alert address validation, `min-interval` default and rejection of zero or negative values; the Slack timeouts' defaults and rejection of zero or negative ones (backlog #0-103) |
 | `SlackResilienceConfigTest` (notification-service) | `application.yml`'s `slack` breaker, built by Resilience4j's auto-configuration: counts only network errors and 5xx and ignores what a tenant's workspace answers (4xx, 429, `ok:false`), its time-based window, threshold and open state, no health indicator; the retry does not retry an open breaker (backlog #0-104) |
 | `NotificationSchedulerDefaultsTest` (notification-service) | `application.yml`'s processing budget, Slack timeouts and Slack retry (as Resilience4j's auto-configuration builds it from the file) together fit the scheduler's 4-minute lock, so the shipped defaults start (backlog #0-103) |
+| `StructuredLoggingDefaultsTest`, `StructuredLoggingGuardTest` (shared) | Every service's logs on a real `SpringApplication`: ECS fields and the pinned MDC key set, a CR/LF from outside kept inside one line (message, argument, MDC value, exception), the log file in ECS too; a start refused for a format set in `application.yml`, by an argument, through `SPRING_APPLICATION_JSON` or by a Logback file of its own (each reason on its own in the guard test); plain text only with `platform.logging.plain-text` (backlog #0-94) |
 | `AuditOutboxTest` (shared, Postgres) | Audit outbox SQL: written in the caller's transaction, due order of its index, the lock-free due check, batch mark-sent, retry by the database's clock, purge in chunks up to a cap, table name checked by the constructor (backlog #0-84) |
 | `AuditOutboxRelayTest` (shared) | Relay: no lock without a due row, pipelined batches, per-row tenant, Kafka failures pause it while a refused record does not, mark failures logged, scrape-time gauges, capped purge, settings incl. the 45-character table name (backlog #0-84) |
 | `AuditOutboxConfigurationTest` (shared) | `audit.outbox.table` turns the outbox and the publisher on (events to the table); without it there is no publisher, and a service injecting one does not start; it wires with Spring Boot's own Kafka and Jackson beans; a bad table name stops the startup (backlog #0-84) |
