@@ -56,13 +56,17 @@ from it.
    repository, so that scope reaches no further. Set the bot's git identity: `git config --global
    user.name "…-bot"` and `user.email` (the bot's `…@users.noreply.github.com` address).
    `.claude/settings.local.json` is personal: its allow rules would merge into the autopilot's `dontAsk`
-   session, so the preflight refuses to start while it exists in the workspace. Stop tracking it
-   (`git rm --cached .claude/settings.local.json`; it is now in `.gitignore`) and keep your copy outside
-   the workspace while the autopilot runs.
+   session, so the preflight refuses to start while it exists in the workspace (the container mounts the
+   same directory). It is gitignored and never committed; move your copy out of the workspace while the
+   autopilot runs, and back afterwards.
 3. **GitHub** (#0-113): bot as collaborator with Write; branch protection on `main` with required checks
-   ("Build, Test & Coverage", "Docker Compose Smoke Test", "Factory guards"), CODEOWNERS review, no bypass
-   for administrators; "Automatically delete head branches"; the labels listed in #0-113. Replace the
-   placeholder in `.github/CODEOWNERS` with your login.
+   ("Build, Test & Coverage", "Docker Compose Smoke Test", "Factory guards"), required CODEOWNERS review
+   (only once the bot account exists, see below), no bypass for administrators; "Automatically delete head
+   branches"; the labels listed in #0-113 (created 2026-10-09). `.github/CODEOWNERS` names the owner's
+   login. Shadow mode on the owner's own account, before the bot exists: leave the required CODEOWNERS
+   review off (an author cannot approve their own PR, so every autopilot PR touching those paths could
+   never merge); the protected paths are then guarded only by the autopilot's path gate and by your review
+   of each PR.
 4. **Before the first run**, in an autopilot session, run `/workflow-authoring` and check two things in
    `.claude/workflows/backlog-autopilot.js` (and the same constant in `audit.js`, `docs-audit.js`,
    `seed-bugs.js`): `AGENT_TYPE_OPTION`, the `agent()` option that selects a custom agent (not in the

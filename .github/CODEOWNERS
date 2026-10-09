@@ -3,24 +3,28 @@
 # branch protection of main, a PR touching any of these waits for the owner's approval; every other PR
 # can merge on green checks alone (the autopilot's --auto merge).
 #
-# Replace the placeholder with your GitHub login (e.g. @lukasz) before enabling the protection rule:
-# GitHub ignores lines whose owner it cannot resolve, and then nothing is protected.
+# The owner must be a login GitHub can resolve: it ignores lines whose owner it cannot, and then nothing
+# is protected. While the autopilot pushes with the owner's own account (shadow mode without the machine
+# account of #0-113), leave "Require review from Code Owners" off: GitHub does not let an author approve
+# their own pull request, so every autopilot PR touching these paths could never merge. With the rule off,
+# this file enforces nothing: the paths below are guarded only by the autopilot's path gate
+# (scripts/factory/changed-paths.sh) and by the owner reading each PR before merging it.
 # ============================================================
 
 # What the agents are judged by, and their own configuration
-/.ai/rules/                 @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/.ai/audit/decisions.md     @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/.ai/plan/                  @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/.claude/                   @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/AGENTS.md                  @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/CLAUDE.md                  @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/.ai/rules/                 @lukaszplawiak
+/.ai/audit/decisions.md     @lukaszplawiak
+/.ai/plan/                  @lukaszplawiak
+/.claude/                   @lukaszplawiak
+/AGENTS.md                  @lukaszplawiak
+/CLAUDE.md                  @lukaszplawiak
 
 # The gates
-/.github/                   @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/architecture-tests/        @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/scripts/factory/           @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/scripts/factory-admin/     @REPLACE-WITH-YOUR-GITHUB-LOGIN
-/.devcontainer/             @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/.github/                   @lukaszplawiak
+/architecture-tests/        @lukaszplawiak
+/scripts/factory/           @lukaszplawiak
+/scripts/factory-admin/     @lukaszplawiak
+/.devcontainer/             @lukaszplawiak
 
 # The build: plugins and repositories in the root POM run wherever `mvn verify` runs (#0-110)
-/pom.xml                    @REPLACE-WITH-YOUR-GITHUB-LOGIN
+/pom.xml                    @lukaszplawiak
