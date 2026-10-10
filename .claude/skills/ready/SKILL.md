@@ -16,6 +16,10 @@ run is decided here.
    `ready` on the owner's behalf; an unanswered question means `not-ready`. If a criterion or Touches
    needs a path the autopilot may not write (`ready.md` point 3, the checker's point 8), say so in that
    message: `ready` is then not an option — only `human-only` or a split. `Risk: high` does not make it one.
+   Answer every question the checker raised; when the answer is "no" (a file it says must change, a criterion
+   it proposes), give the reason in the PR's "Ready check" section (step 6). Backlog #0-125: in `/ready #0-124`
+   the checker asked whether README "Infrastructure Hardening" had to change, the answer was "no" without
+   checking CLAUDE.md "Security inventory", and the implementer then had to add it outside Touches.
 4. Only after the owner answers: edit that item in `BACKLOG.md` — the `**Autopilot:**` line under the
    Type/Priority/Status line (replace it if it exists, e.g. a follow-up's `proposed`; keep its
    `**Follow-up of:**`), the `**Touches:**` line under it, and an `**Acceptance criteria.**` block with the

@@ -45,6 +45,12 @@ clarify in round 3 should have been clarified before the picker ever saw it.
    reach, determined from the code (`.ai/rules/planning.md`, "Touches"). It is a measurement, not a
    limit: the autopilot compares it with the architect's plan and with the diff, and records the result
    in the PR. An experiment with an exit criterion (`planning.md`).
+   It includes the files a convention makes the change write, not only the code: an item that adds, removes
+   or weakens a security control, or closes a gap, updates README "Infrastructure Hardening" (CLAUDE.md
+   "Security inventory") — list `root (README.md "Infrastructure Hardening")` and give it a criterion; an item
+   that creates knowledge not inferable from the source, or a decision, writes `.ai/context/` or an ADR in
+   `.ai/decisions/` (CLAUDE.md "`.ai/`") — list `root (.ai/context/…)` and give it a criterion.
+   Fixed (backlog #0-125): `/ready #0-124` left it out, and the run recorded `backlog-estimate-off` (PR #482).
 
 ## Not ready, on purpose
 
