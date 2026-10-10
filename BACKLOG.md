@@ -2113,6 +2113,15 @@ contradictions in `audit.md`.
 `.ai/rules/audit.md`. Human-only: every file is a protected path. Worth starting once a few BLOCKED or
 reworked items exist to measure.
 
+**Collected cases** (stage introduced → stage detected; recorded here so the audit, once built, starts with them):
+1. #0-42 — an acceptance criterion needed a new `.github/` check the autopilot may not write. Introduced in `/ready`
+   (and passed by the architect), detected at `implement`: BLOCKED, draft PR #477. Fixed by #0-122.
+2. #0-124 — README "Infrastructure Hardening" missing from Touches although the item adds a security control; the
+   checker had asked, the answer dismissed it. Introduced in `/ready` (PR #481), detected at the scope comparison:
+   `backlog-estimate-off` in PR #482 (the implementer added it, correctly). Fixed by #0-125.
+3. PR #482 — DOC-10 on the Context section of an accepted ADR (ADR-0026), which records the state when it was
+   decided; owner label `human:fp-docs`. Introduced and detected in review (docs dimension) — a reviewers-audit case.
+
 ---
 
 ### 0-123. Reviewers are told which tool to use, and every hook refusal names it

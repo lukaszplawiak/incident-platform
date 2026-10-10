@@ -29,7 +29,11 @@ Report:
 2. A draft `**Autopilot:**` line (`not-ready` unless every point holds — even then you write `ready?`, for
    the owner to confirm) with `Risk`, `Complexity` and `Depends on`, each with a one-line reason.
 3. A draft `**Touches:**` line (`.ai/rules/planning.md`, "Touches"): the modules, with the packages in
-   parentheses, that you found in the code the item is about — not guessed from its title.
+   parentheses, that you found in the code the item is about — not guessed from its title — plus what a
+   convention makes the change write: README "Infrastructure Hardening" when the item adds, removes or
+   weakens a security control or closes a gap (CLAUDE.md "Security inventory"), and `.ai/context/` or an ADR
+   when it creates knowledge not inferable from the source or a decision (CLAUDE.md "`.ai/`") — `ready.md`
+   point 8 — each with a draft criterion.
 4. Draft numbered acceptance criteria (`AC1.` …): each one observable, each checkable by a test or a
    CI check script, in the item's own terms. Take them from the item's existing `**Acceptance.**` prose where it
    has some; mark anything you added beyond it as `(proposed)`. Prefer a test in a module, or an existing
