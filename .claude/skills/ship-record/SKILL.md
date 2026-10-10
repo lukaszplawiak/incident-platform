@@ -63,6 +63,9 @@ once this PR is merged too, the autopilot takes them before the next queue row."
 ## For the owner
 - Label this PR after a spot check: `human:agree`, `human:fp-<dimension>` (a blocking finding that was
   wrong), `human:missed-<dimension>` (a defect the panel should have caught). The audit depends on it.
+- If something went wrong earlier than review (BLOCKED, scope off, a problem the panel was not meant to see),
+  optionally `human:introduced-<stage>` (`ready`, `queue`, `pick`, `plan`, `implement`, `review`, `acceptance`,
+  `ship`): where it started. The pipeline audit attributes cases itself; the label confirms or corrects it.
 ```
 
 Then the attribution footer your session's instructions ask for, if any.

@@ -221,6 +221,9 @@ function ruleFilesOf(rules) {
 // Touches (at /ready), the architect's modules (just before implementing), the diff (after). A prediction
 // "holds" when the diff stays within it; predicting more than happened is not a miss. Which prediction
 // failed says which stage was off (.ai/rules/audit.md, "Signals"). Measured, never a gate.
+// The categories below are read by scripts/factory/audit-data.sh (backlog #0-121), which counts every category
+// except consistent, within-plan, within-touches and not-measured as a pipeline case: a new category here must be
+// added there (as clean or as a miss), to the Signals table and the "Pipeline audit" case list in .ai/rules/audit.md.
 function scopeOf(touches, planned, actual) {
   const set = (x) => (Array.isArray(x) && x.length ? [...new Set(x)].sort() : null)
   const t = set(touches), p = set(planned), a = set(actual)

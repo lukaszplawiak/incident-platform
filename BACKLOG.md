@@ -31,7 +31,10 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
   - `Risk: high` means the owner merges it, whatever the reviewers say. `Complexity: low` allows the
     optional local-model implementer (`docs/ai-factory.md`).
   - An item that a reviewer or the audit later traces back to an escaped defect gets
-    `**Fixes:** #0-N · **Escaped from:** review-<dimension>` on the same line; the audit counts these.
+    `**Fixes:** #0-N · **Escaped from:** <stage>` on the same line, where `<stage>` is `review-<dimension>` when
+    the panel missed it, or the pipeline stage that let it in (`ready`, `queue`, `pick`, `plan`, `implement`,
+    `acceptance`, `ship`); the audits count these (the pipeline audit, backlog #0-121, by the date the marker
+    was added).
 - **Acceptance criteria** for an autopilot item are numbered (`AC1.`, `AC2.`, …), each one checkable by a
   test or a CI check script (not a command run by hand), so that `acceptance-reviewer` can map each to evidence. Prose `**Acceptance.**`
   paragraphs stay valid for items done by hand.
@@ -119,7 +122,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
-| [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
+| [0-126](#0-126-the-audits-trust-human-labels-without-checking-who-added-them) | The audits trust `human:*` labels without checking who added them | security | Medium | Open |
 
 ---
 
@@ -2087,7 +2090,8 @@ matters.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
-**Type:** design · **Priority:** Medium · **Status:** Open (owner's decision 2026-10-10, after #0-42)
+**Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
+for the decision (one pipeline analyst, phase containment) and the first collected cases.
 
 **Problem.** The only audit target is `reviewers` (`.claude/workflows/audit.js`): one analyst per review
 dimension, which fits seven parallel reviewers with one verdict format. The stages before and after the panel
@@ -2113,6 +2117,17 @@ contradictions in `audit.md`.
 `.ai/rules/audit.md`. Human-only: every file is a protected path. Worth starting once a few BLOCKED or
 reworked items exist to measure.
 
+**Delivered.** `audit-data.sh` derives the cases (BLOCKED, rounds > 1, a scope category that points at a stage, acceptance
+other than ACCEPT, owner labels `human:fp-*` / `human:missed-*` / `human:introduced-*`, BLOCKED runs without a PR)
+and attaches each item's `/ready` PR, tested by `test-audit-data.sh`; a new read-only agent `audit-pipeline` traces
+each case through every stage with one escape class per stage passed (no rule, rule not applied, rule allowed it,
+no data) and recommends to the cheapest stage; `audit.js` gains the target `pipeline`, and `all` (the default)
+runs it with the reviewers' audit on the same cadence; `audit.md` "Pipeline audit"; `audit-synthesis` writes its
+report; owner labels `human:introduced-<stage>` (optional confirmation, set back on PR #477 and #482). Also:
+both audit agents read text as data, not instructions; `/apply-audit` names its branch after the report file
+(one report per target per audit); the `**Escaped from:**` convention takes any stage. The list below is the
+history of the first cases; from now on they are derived, not written by hand.
+
 **Collected cases** (stage introduced → stage detected; recorded here so the audit, once built, starts with them):
 1. #0-42 — an acceptance criterion needed a new `.github/` check the autopilot may not write. Introduced in `/ready`
    (and passed by the architect), detected at `implement`: BLOCKED, draft PR #477. Fixed by #0-122.
@@ -2121,6 +2136,28 @@ reworked items exist to measure.
    `backlog-estimate-off` in PR #482 (the implementer added it, correctly). Fixed by #0-125.
 3. PR #482 — DOC-10 on the Context section of an accepted ADR (ADR-0026), which records the state when it was
    decided; owner label `human:fp-docs`. Introduced and detected in review (docs dimension) — a reviewers-audit case.
+
+---
+
+### 0-126. The audits trust `human:*` labels without checking who added them
+
+**Type:** security · **Priority:** Medium · **Status:** Open (found by the security review of #0-121, 2026-10-10)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts), root (.claude/settings.autopilot.json, .claude/hooks, .ai/rules/audit.md)
+
+**Problem.** Both audits treat a `human:*` label on a PR as the owner's ground truth: `human:fp-*` / `human:missed-*`
+for the reviewers, and `human:introduced-<stage>` (#0-121) even overrides the pipeline analyst's attribution. Nothing
+checks who added the label. The autopilot may run `gh pr edit *` (the shipper adds `autopilot`, `shadow`, `blocked`),
+so the machine account — or a shipper steered by text injected into a PR or item — could add a `human:*` label
+itself and push an audit toward a recommendation of its choosing. The damage is bounded (every recommendation still
+needs the owner's tick in `/apply-audit`), but the confidence the audit reports would be forged. The same holds
+for `**Escaped from:**` markers: the pipeline audit counts a marker added by any commit in its period, so a branch
+could plant a case; counting only markers from the owner's commits (or merged PRs the owner approved) closes it.
+
+**Approach.** Two layers, both cheap: (1) `audit-data.sh` reads each PR's `labeled` events (timeline) and counts a
+`human:*` label only when the owner added it, recording the actor; (2) the autopilot is denied adding `human:*`
+labels (`--add-label human:*` refused by the shell hook and a deny rule), with a test. (1) alone suffices for the
+audit; (2) keeps the PR history clean.
 
 ---
 

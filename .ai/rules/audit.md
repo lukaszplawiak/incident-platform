@@ -55,9 +55,16 @@ A `high` severity with `low` confidence is listed separately as "serious if true
 
 | Kind | Target |
 |---|---|
-| universal — how the agent works in any project | the agent definition, `.claude/agents/<name>.md` |
-| project-specific — calibration to this codebase | the `## Calibration` section of the rule file the agent reads (`.ai/rules/review/<dimension>.md`, `acceptance.md`, `implementation.md`, `ready.md`) |
+| universal — how the agent works in any project | the agent definition, `.claude/agents/<name>.md` (the ready-checker, planner, architect, implementer, reviewers, acceptance-reviewer, shipper) |
+| a step the owner runs | the skill, `.claude/skills/<name>/SKILL.md` (`/ready`, `/plan-backlog`, `/review`, `/ship`) |
+| project-specific — calibration to this codebase | the `## Calibration` section of the rule file the agent reads (`.ai/rules/review/<dimension>.md`, `acceptance.md`, `implementation.md`, `ready.md`, `planning.md`) |
 | a missing hard gate | a draft backlog item (a test or CI check beats a prompt line) |
+
+The pipeline audit picks the row for the stage it addresses (its section below); for the `review` stage it
+only attributes the case and refers to the reviewers' report, which owns recommendations to the review files —
+so one cycle never gives two answers to the same file, and a PR counts once toward that report's ≥3 cases.
+When no reviewers' report is written in the cycle (target `pipeline` alone, or no autopilot PR), the pipeline
+report lists the review-stage case as an observation for the next reviewers' audit.
 
 Keep files short: a recommendation that would push a calibration section past ~15 lines must also propose
 what to remove.
@@ -117,6 +124,51 @@ here). A blocking finding on a listed rule, or on a
 core rule (`GEN-`, `ARC-`, `SEC-`), is an **implementation miss**: the implementer had the rule in front
 of it. Rules missed repeatedly are candidates for the architect's calibration, or for a test (a rule a
 check enforces needs no one to remember it).
+
+## Pipeline audit
+
+The target `pipeline` (backlog #0-121; agent `audit-pipeline`) audits containment across the whole autopilot,
+where the `reviewers` target compares the reviewers with each other. One analyst for every stage, not one per
+agent: a problem shows up later than it starts, and only the whole chain shows why.
+
+**Cases** are derived by `scripts/factory/audit-data.sh`, never chosen: an autopilot item that was BLOCKED, took
+more than one review round, had a scope category that points at a stage (`backlog-estimate-off`, `plan-off`,
+`implementation-drift`, `unclear-item`, `diff-outside-plan`, `diff-outside-touches`; `consistent`, `within-*` and
+`not-measured` are clean), an acceptance other than ACCEPT, or an owner label `human:fp-*`, `human:missed-*` or
+`human:introduced-*`; a BLOCKED run without a PR; and an escaped defect (`**Fixes:** #0-N · **Escaped from:**
+<stage>`). Each carries the item's merged `/ready` PR.
+
+**Stages**, in order, with the artifacts that show their output:
+
+| Stage | Who | Artifacts |
+|---|---|---|
+| `ready` | `/ready`, `ready-checker`, the owner | the item's text and criteria; the `/ready` PR and its "Ready check" |
+| `queue` | `/plan-backlog`, planner | `.ai/plan/queue.md` and its PR |
+| `pick` | `next-item.sh`, `check-queue.sh`, picker | the run's start; the gates' refusals |
+| `plan` | architect | `.ai/work/<item>/progress.md` (the plan line, the rules listed), a Proposed ADR |
+| `implement` | implementer | the diff, `handoff.md`, the self-check, the test gate |
+| `review` | the panel | the verdicts and rounds in the PR |
+| `acceptance` | acceptance-reviewer | the acceptance JSON |
+| `ship` | shipper, the owner's merge | the PR body, labels, what reached `main` |
+
+For each case: the stage that **introduced** the problem, the stage that **detected** it, and for every stage in
+between exactly one **escape class**:
+
+- **no rule** — nothing in the stage's definition or rules asked for this check;
+- **rule not applied** — the rule was there and the stage (agent or owner) did not apply it;
+- **rule allowed it** — a rule let it through on purpose (e.g. "Risk: high items are allowed to proceed");
+- **no data** — the stage did not have the input that would show it.
+
+A stage that is not meant to catch a class of problem is recorded as "not this stage's job", not as an escape.
+The **containment gap** is the number of stages a problem crossed; a wide gap points at the earliest stage.
+
+**Where a recommendation goes**: to the cheapest stage that could have caught it — a deterministic check first
+(`next-item.sh`, `check-queue.sh`, a CI check: a draft backlog item), else one line in that stage's definition,
+skill or rule file, by the table in "Where a recommendation goes" above. A case whose fix is already on `main`
+measures that fix (its metric), and is not a new recommendation.
+
+**Owner labels**: `human:introduced-<stage>` on the PR confirms the analyst's attribution or corrects it (the label
+wins). It counts as owner confirmation for confidence, as `human:fp-*` does for the reviewers.
 
 ## Seeded defects
 

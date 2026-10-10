@@ -34,10 +34,10 @@ from it.
 | 0 | Prepare items: `/ready #0-N` per item (numbered acceptance criteria, risk, complexity, `ready`) | ~10 items `ready` on `main` |
 | 1 | Use the panel by hand: `/review` (same agents and rules as the autopilot) | you trust its findings on your own changes |
 | 1b | Plan the order: `/plan-backlog` proposes `.ai/plan/queue.md` (order, Touches, why); you edit and merge it | a queue you agree with is on `main` |
-| 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label each PR (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
+| 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label each PR (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`; optionally `human:introduced-<stage>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
 | 3 | Auto-merge, after #0-113 (bot account, branch protection) and #0-116 (code an agent runs must not be able to drop the devcontainer's firewall): in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
-| 4 | Audits every 10 items (the preflight stops with "audit due") | acceptance of recommendations stays in 40–80% |
-| 5 | Later: more audit targets (implementer, architect, planner — Scope and rule-selection misses), cloud runs. Never: two items at once (#0-114, decided against) | — |
+| 4 | Audits every 10 items (the preflight stops with "audit due"): `/audit` runs both targets — `reviewers` (one analyst per dimension) and `pipeline` (backlog #0-121: every case traced from the stage that introduced it to the one that detected it, with why each stage between let it through) — one report each | acceptance of recommendations stays in 40–80% |
+| 5 | Later: cloud runs; a stage of the pipeline audit gets its own analyst only when the data shows it produces most of the cases. Never: two items at once (#0-114, decided against) | — |
 
 ## Setup (once)
 
@@ -197,15 +197,19 @@ The agents' instructions are not a boundary; these are, each with its limit:
 | CODEOWNERS + branch protection (#0-113) | a merge of any of it without the owner | — once configured; until then shadow mode is what keeps `main` safe |
 | Devcontainer + firewall | the agents' own commands: access to your host account, files and credentials; network beyond Anthropic, GitHub, Maven Central (IPv4; IPv6 only loopback; a failed setup blocks everything) | **code an agent runs** (a test): Testcontainers needs the host's Docker, and Docker access is root over the devcontainer itself, so such code can drop the firewall, start a container outside it, or read files the agents' tools may not (#0-116, accepted for shadow mode only); data through DNS the resolver forwards; GitHub itself as a channel |
 
-## Measuring the reviewers
+## Measuring the reviewers and the pipeline
 
 - **Owner labels** on PRs are the ground truth the audit needs; without them confidence stays `medium`
-  and security/architecture rules can never be relaxed.
+  and security/architecture rules can never be relaxed. `human:introduced-<stage>` (optional) confirms or
+  corrects where the pipeline audit says a case started.
+- **Pipeline cases** are derived by `scripts/factory/audit-data.sh` from what the pipeline records (BLOCKED,
+  extra rounds, scope off, acceptance, owner labels, BLOCKED runs without a PR) — nobody logs them by hand.
 - **Seeded defects**: `/seed-bugs` with args `{"pattern": "P-01", "commit": "<merged sha>", "runId":
   "<id>"}` plants a known defect from `.ai/audit/benchmark/patterns.md` on a throwaway `seed/` branch and
   records who caught it in `.ai/audit/benchmark/results.md`. Rotate patterns; delete the branch after.
 - **Escaped defects**: an item that fixes a defect an earlier item introduced carries
-  `**Fixes:** #0-N · **Escaped from:** review-<dimension>` (BACKLOG.md conventions).
+  `**Fixes:** #0-N · **Escaped from:** <stage>` — `review-<dimension>` when the panel missed it, or the pipeline
+  stage that let it in (BACKLOG.md conventions); the pipeline audit counts the markers added in its period.
 
 ## Pinned versions
 
