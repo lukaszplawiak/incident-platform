@@ -2153,7 +2153,7 @@ with it: the architecture reviewer finished in 66 s, against more than 14 minute
 
 ### 0-124. notification-service does not require STARTTLS before sending SMTP credentials
 
-**Type:** bug · **Priority:** Medium · **Status:** Open (found by the security review of #0-42, 2026-10-10)
+**Type:** bug · **Priority:** Medium · **Status:** In progress — autopilot run 20261010-092704
 **Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** — (#0-42 is Done)
 **Touches:** notification-service (resources/application.yml, test/.../support, test/.../config), docker (docker-compose.yml), k8s (overlays/dev/kustomization.yml, comment only)
 
