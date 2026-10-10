@@ -3,31 +3,37 @@
 Facts only. No reasoning about why the change is good: reviewers judge it themselves. Updated by the
 implementer after every round.
 
+## Status
+BLOCKED before any code change (implementer r1).
+
+- AC9 requires `.github/scripts/check-k8s-mail.sh`, its test `.github/scripts/test-k8s-mail.sh`, and a new
+  step in `.github/workflows/ci.yml` (`validate-k8s-manifests`). Plan steps 5, 6 and 7 write under `.github/`.
+- The implementer may not write `.github/`: `.claude/agents/implementer.md` ("Out of scope, never: … `.github/`
+  … If the item cannot be done without one of them, stop and answer `blocked: true`"),
+  `.ai/rules/implementation.md` ("Never … touch … `.github/` … if the item needs it, stop and say so"), and
+  `.claude/settings.autopilot.json` denies `Edit(./.github/**)` and `Write(./.github/**)`;
+  `.claude/hooks/guard-protected-bash.sh` refuses Bash writes there.
+- The item is `Risk: high` and its Touches line names `ci (.github/scripts, .github/workflows/ci.yml)`, so the
+  owner expected this; the autopilot's permissions do not allow it.
+
 ## Changed
-- <file / endpoint / topic / migration / config key>: <what changed>
+- Nothing outside `.ai/work/0-42/` (this file and `progress.md`).
 
 ## How to verify
-- `./mvnw test -pl <module> -Dtest=<Class>` — <what it shows>
+- `git diff 87aace9 -- . ':!.ai/work'` is empty.
 
-## Tests changed and why
-- (only if an existing test changed) <test>: <the acceptance criterion or requirement that changed it>
+## Proposed split (owner decides)
+- A: the `.github/` part (check-k8s-mail.sh, test-k8s-mail.sh, the ci.yml step) written by the owner, or the
+  whole item done interactively — plan steps 5–7 in `progress.md` are complete enough to follow.
+- B: the k8s / notification-service comments / README / `.ai/context/infrastructure.md` part (plan steps 1–4
+  and 8) can run through the autopilot once A exists on the branch (or on `main`), since AC1–AC8 have no
+  test without the checker.
 
 ## Deliberately out of scope
-- <thing>: <backlog item or reason>
+- Everything in the plan: the item stops on AC9, which cannot be met without writing `.github/`.
 
 ## Noticed, not touched
-- <defect elsewhere>: <file:line> — proposed backlog item: <one line>
 
 ## Follow-up needed
-<!-- Work this item showed is needed but is not part of it (.ai/rules/planning.md, "Follow-ups"); at most 3.
-     The shipper turns each entry into a backlog item with **Autopilot:** proposed. Delete this comment
-     and leave the section empty when there is none. -->
-### <title, as a backlog item title>
-- Why: <what is missing and what fails or stays incomplete without it, 1–2 lines>
-- Touches: <module (packages), …>
-- Risk: <low|high> · Complexity: <low|medium|high>
-- Draft criteria:
-  - AC1. <observable, checkable by a test>
 
 ## Disputed
-- <finding id>: <reason, citing code or a rule>
