@@ -338,21 +338,29 @@ Controls around the autopilot that implements `BACKLOG.md` items without a human
 ([docs/ai-factory.md](docs/ai-factory.md), backlog #0-113). The premise: an agent's instructions are not a
 security boundary, so every rule that matters is also enforced outside the model.
 
-- **Human-owned paths**: `.ai/rules/`, `.ai/plan/` (the approved order of work), `.claude/`, `.github/`, `architecture-tests/`, `AGENTS.md`, the gates'
-  own files (`scripts/factory/`, `.devcontainer/`, `.mvn/`, `mvnw`) are denied to autopilot sessions for the file
-  tools (`.claude/settings.autopilot.json`), guarded heuristically for the shell
-  (`.claude/hooks/guard-protected-bash.sh`), stop an item before review when committed
-  (`scripts/factory/changed-paths.sh`), and need the owner's review on a PR (`.github/CODEOWNERS`, effective
-  once the protection rule requires it). Factory scripts run only while identical to `main`
-  (`guard-factory-scripts.sh`).
+- **Human-owned paths**, one list: `.ai/rules/protected-paths.md` (backlog #0-122) — `.ai/rules/`, `.ai/plan/`
+  (the approved order of work), `.ai/audit/decisions.md`, `.claude/`, `.github/`, `architecture-tests/`,
+  `AGENTS.md`, the gates' own files (`scripts/factory/`, `scripts/factory-admin/`, `.devcontainer/`) and the
+  build configuration (`.mvn/`, `mvnw`, `mvnw.cmd`); `CLAUDE.md` outside its `agent-editable` blocks. They are
+  denied to autopilot sessions for the file tools (`.claude/settings.autopilot.json`), guarded heuristically
+  for the shell (`.claude/hooks/guard-protected-bash.sh`), stop an item before review when committed
+  (`scripts/factory/changed-paths.sh`, which reads the list from the base commit and refuses to run without
+  it), and need the owner's review on a PR (`.github/CODEOWNERS`, effective once the protection rule
+  requires it). Factory scripts run only while identical to `main` (`guard-factory-scripts.sh`).
 - **Factory guards** (`.github/workflows/factory-guards.yml`): a PR that deletes, renames away or disables
   tests, removes assertions, adds a Maven plugin, repository or dependency, changes what verification runs
   (`.mvn/`, `mvnw`, skip properties, the coverage check's threshold, rule, goal, phase or includes), edits or deletes an applied Flyway migration, or marks a backlog item
   ready fails unless its author is the owner or the owner approved its current commit. The same workflow
-  validates the execution queue against the backlog (`scripts/factory/check-queue.sh`).
+  validates the execution queue against the backlog (`scripts/factory/check-queue.sh`) and fails when the
+  deny rules, the shell-write hook or CODEOWNERS stop covering an entry of the protected-path list
+  (`.github/scripts/check-protected-paths.sh`; it runs the hook against every entry rather than reading its
+  regex).
 - **The next item is chosen by code** (`scripts/factory/next-item.sh`), from the files on the run's base
   commit: only `ready` items, dependencies done, no open PR or branch, in the order of the owner-approved
-  queue. Follow-ups an agent proposes enter as `proposed` and run only after the owner's `/ready`.
+  queue. An item whose `**Touches:**` names a protected path (or a bare `ci`) never starts and cannot be
+  queued, whatever its Risk: the autopilot could only stop it at the implementer (#0-42's run, draft PR
+  #477; backlog #0-122). Follow-ups an agent proposes enter as `proposed` and run only after the owner's
+  `/ready`.
 - **Skipping verification is refused** in autopilot sessions (`guard-tests.sh`: `-DskipTests`, `--no-verify`,
   `-fn`, `exec:` goals, another `settings.xml`, …), the test gate tests the committed HEAD of a clean tree with
   its own Maven settings (`scripts/factory/maven-settings.xml`, no `~/.mavenrc`, no `MAVEN_OPTS`: nothing an

@@ -18,8 +18,9 @@ expect_jq() {
     if printf '%s' "$2" | jq -e "$3" >/dev/null 2>&1; then ok "$1"; else fail "$1: '$3' is false for: $(printf '%s' "$2" | head -c 600)"; fi
 }
 
-mkdir -p "$WORK/repo/scripts/factory" "$WORK/repo/.ai/plan" "$WORK/bin"
-cp "$SRC"/scripts/factory/_common.sh "$SRC"/scripts/factory/_backlog.sh "$SRC"/scripts/factory/check-queue.sh "$SRC"/scripts/factory/next-item.sh "$WORK/repo/scripts/factory/"
+mkdir -p "$WORK/repo/scripts/factory" "$WORK/repo/.ai/plan" "$WORK/repo/.ai/rules" "$WORK/bin"
+cp "$SRC"/scripts/factory/_common.sh "$SRC"/scripts/factory/_backlog.sh "$SRC"/scripts/factory/_protected.sh "$SRC"/scripts/factory/check-queue.sh "$SRC"/scripts/factory/next-item.sh "$WORK/repo/scripts/factory/"
+cp "$SRC"/.ai/rules/protected-paths.md "$WORK/repo/.ai/rules/"
 printf '#!/bin/sh\ncat "%s/open-prs" 2>/dev/null; [ ! -f "%s/gh-fails" ]\n' "$WORK" "$WORK" > "$WORK/bin/gh"
 chmod +x "$WORK/bin/gh"
 : > "$WORK/open-prs"
@@ -47,6 +48,12 @@ cat > BACKLOG.md <<EOF
 | [0-8](#0-8-h) | Eight | tech-debt | Low | Open |
 | [0-10](#0-10-j) | Ten | tech-debt | Low | Open |
 | [0-11](#0-11-k) | Eleven | tech-debt | Low | Open |
+| [0-12](#0-12-l) | Twelve | bug | Low | Open |
+| [0-13](#0-13-m) | Thirteen | bug | Low | Open |
+| [0-14](#0-14-n) | Fourteen | bug | Low | Open |
+| [0-15](#0-15-o) | Fifteen | bug | Low | Open |
+| [0-16](#0-16-p) | Sixteen | bug | Low | Open |
+| [0-17](#0-17-q) | Seventeen | bug | Low | Open |
 
 ---
 
@@ -106,6 +113,46 @@ cat > BACKLOG.md <<EOF
 
 **Type:** tech-debt · **Priority:** Low · **Status:** Open
 **Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+
+### 0-12. Twelve
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** k8s (overlays/dev), ci (.github/scripts, .github/workflows/ci.yml)
+
+### 0-13. Thirteen
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** incident-service (incident.api)
+
+**Acceptance criteria.**
+AC1. The endpoint answers 404 for another tenant.
+AC2. The existing check .github/scripts/check-tenant-status-config.sh still passes.
+
+### 0-14. Fourteen
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** root (CLAUDE.md "Commands")
+
+### 0-15. Fifteen
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** root (mvnw, .mvn/wrapper)
+
+### 0-16. Sixteen
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** k8s (overlays/dev), ci
+
+### 0-17. Seventeen
+
+**Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** root (scripts/factory)
 EOF
 }
 backlog proposed
@@ -138,6 +185,11 @@ queue 0-1 0-1;                             expect_jq "item twice"               
 queue 0-9 0-3;                             expect_jq "done item stays valid"         "$($CQ)" '.valid and .openRows == 1'
 queue 0-10;                                expect_jq "unknown module"                "$($CQ)" '(.valid | not) and (.errors | any(test("unknown module")))'
 queue 0-11;                                expect_jq "no Touches is a warning"       "$($CQ)" '.valid and (.warnings | any(test("not be measured")))'
+queue 0-12;                                expect_jq "protected path in Touches"     "$($CQ)" '(.valid | not) and (.errors | any(test("#0-12 names \\.github in Touches")))'
+queue 0-15;                                expect_jq "build config in Touches"       "$($CQ)" '(.valid | not) and (.errors | any(test("#0-15 names \\.mvn, mvnw ")))'
+queue 0-16;                                expect_jq "a bare ci in Touches"          "$($CQ)" '(.valid | not) and (.errors | any(test("#0-16 names ci \\(no path given\\)")))'
+queue 0-17;                                expect_jq "a directory without its slash" "$($CQ)" '(.valid | not) and (.errors | any(test("#0-17 names scripts/factory in")))'
+queue 0-13 0-14;                           expect_jq "a criterion may refer to .github/; CLAUDE.md blocks are the implementer's" "$($CQ)" '.valid'
 queue 0-4;                                 expect_jq "not-ready is a warning"        "$($CQ)" '.valid and (.warnings | any(test("queue stops at it")))'
 printf '| 1 | #0-1 | x |\n' > .ai/plan/queue.md; expect_jq "markers missing"     "$($CQ)" '(.valid | not) and (.errors | any(test("queue:start")))'
 printf '<!-- queue:start -->\n| # | Item | Why here |\n|---|---|---|\n| 1 | soon | x |\n<!-- queue:end -->\n' > .ai/plan/queue.md
@@ -151,6 +203,9 @@ expect_jq "no queue: priority order"            "$($NI "$base")" '.ok and .item 
 expect_jq "manual item with an open dependency" "$($NI "$base" 0-2)" '.ok and .item == null and (.reason | test("waits for #0-1"))'
 expect_jq "manual item that can start"          "$($NI "$base" 0-3)" '.ok and .item == "#0-3" and .source == "manual" and .modules == ["oncall-service"] and .risk == "low" and .complexity == "low"'
 expect_jq "manual item that is human-only"      "$($NI "$base" 0-5)" '.ok and .item == null and (.reason | test("not ready"))'
+expect_jq "protected path in Touches: no start" "$($NI "$base" 0-12)" '.ok and .item == null and (.reason | test("Touches names \\.github, a path the autopilot may not write"))'
+expect_jq "a criterion naming .github/: starts" "$($NI "$base" 0-13)" '.ok and .item == "#0-13"'
+expect_jq "CLAUDE.md agent-editable: starts"    "$($NI "$base" 0-14)" '.ok and .item == "#0-14"'
 queue 0-3 0-1; base=$(commit q)
 expect_jq "first queue row"                     "$($NI "$base")" '.ok and .item == "#0-3" and .source == "queue" and .position == 1'
 queue 0-9 0-3 0-1; base=$(commit q1b)
@@ -177,6 +232,9 @@ expect_jq "short sha refused"                   "$($NI "${base:0:12}")" '(.ok | 
 expect_jq "malformed item refused"              "$($NI "$base" '0-3;x')" '(.ok | not)'
 echo "#0-3 changed in the working tree" >> BACKLOG.md
 expect_jq "the working copy is ignored"         "$($NI "$base")" '.ok and .item == "#0-3"'
+git rm -q .ai/rules/protected-paths.md; base=$(commit noprotected)
+expect_jq "no protected-path list: fail closed"  "$($NI "$base" 0-3)" '(.ok | not) and (.reasons[0] | test("protected-paths.md"))'
+expect_jq "no list: the queue check fails closed" "$($CQ)" '(.valid | not) and (.errors[0] | test("protected-paths.md"))'
 
 if [ "$failures" -gt 0 ]; then echo "$failures queue test(s) failed"; exit 1; fi
 echo "All queue tests passed."

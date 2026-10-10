@@ -22,6 +22,12 @@ agents work, rates what it finds, and **recommends** changes; only the owner dec
 | `medium` | ≥3 cases from pipeline data only, no human confirmation |
 | `low` | 1–2 cases. **Never the basis of a recommendation** — report it as an observation |
 
+One exception: a **deterministic contradiction** between the rules, the agents' definitions and their
+permissions — an item the rules let through that the pipeline can by construction only stop (#0-42: a
+`ready` item whose criteria need `.github/`, which the implementer may not write) — is a hard fact. One
+such case is enough for a recommendation of the kind "a missing hard gate" (a check script or a draft
+backlog item), with confidence `high`. A change to prompt or rule text still needs ≥3 cases.
+
 A `high` severity with `low` confidence is listed separately as "serious if true — check yourself".
 
 ## Findings and recommendations are different things
@@ -94,6 +100,13 @@ it; predicting more than happened is not a miss.
 
 One case is noise; a pattern across items is a finding. `backlog-estimate-off` is also the exit
 criterion of the Touches experiment (`planning.md`).
+
+**Stop stage** — for a BLOCKED item, `.ai/runs/state.json` (`history[]`, in the audit data) records the
+phase that stopped it (`pick`, `plan`, `implement`, `review`, `acceptance`, `ship`) and its draft PR. That
+is where the problem was **detected**; where it was **introduced** is the auditor's finding, read from the
+draft PR, `handoff.md`, the item's text and the `/ready` PR that made it ready (its "Ready check" section;
+`git log -L` on the item in `BACKLOG.md` finds it). A wide gap between the two (introduced in `/ready`,
+detected at `implement`) points at the earlier stage, not at the one that stopped the item.
 
 **Rule selection** — the rules the architect listed for the implementer (`plannedRules`), the rule files
 the self-check added (`selfCheck`), and the blocking findings of the panel. A blocking finding whose

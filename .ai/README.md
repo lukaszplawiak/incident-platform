@@ -94,6 +94,7 @@ Directories are created when they provide real value. Current structure:
 │   ├── ready.md               ← when a backlog item may be marked `ready` for the autopilot
 │   ├── planning.md            ← order, Touches and follow-ups of the execution queue
 │   ├── implementation.md      ← how the implementer works (calibrated by audits)
+│   ├── protected-paths.md     ← the one list of paths no agent writes (scripts read it too)
 │   └── audit.md               ← how audits rate findings and when they may recommend a change
 ├── plan/                      ← HUMAN-OWNED: the approved order of work
 │   ├── README.md              ← what the queue is and who changes it
@@ -145,11 +146,12 @@ Existing decisions are respected unless a new ADR changes them.
 
 | Role | Read |
 |---|---|
-| implementer | `.ai/rules/implementation.md`, the item's acceptance criteria; `.ai/rules/review/general.md`, `architecture.md`, `security.md` in full and `_common.md` (blocking criteria); from the other review files, the rules the plan lists, or the whole file when the autopilot asks for a self-check |
-| reviewer of dimension D | `.ai/rules/review/_common.md`, `.ai/rules/review/<D>.md` |
+| implementer | `.ai/rules/implementation.md`, `.ai/rules/protected-paths.md`, the item's acceptance criteria; `.ai/rules/review/general.md`, `architecture.md`, `security.md` in full and `_common.md` (blocking criteria); from the other review files, the rules the plan lists, or the whole file when the autopilot asks for a self-check |
+| reviewer of dimension D | `.ai/rules/review/_common.md` (with `.ai/rules/protected-paths.md`), `.ai/rules/review/<D>.md` |
 | acceptance reviewer | `.ai/rules/acceptance.md` |
-| architect | `.ai/rules/ready.md`, all of `.ai/rules/review/` (it selects the rules the implementer gets), `.ai/rules/planning.md` ("Touches") |
-| planner | `.ai/rules/planning.md`, `.ai/rules/ready.md`, `.ai/plan/queue.md` |
+| architect | `.ai/rules/ready.md`, `.ai/rules/protected-paths.md`, all of `.ai/rules/review/` (it selects the rules the implementer gets), `.ai/rules/planning.md` ("Touches") |
+| planner | `.ai/rules/planning.md`, `.ai/rules/ready.md`, `.ai/rules/protected-paths.md`, `.ai/plan/queue.md` |
+| ready-checker (`/ready`) | `.ai/rules/ready.md`, `.ai/rules/protected-paths.md` |
 | auditor | `.ai/rules/audit.md`, `.ai/audit/decisions.md` |
 
 ---
@@ -171,6 +173,7 @@ Who writes and who reads each file. One writer per file per stage; `progress.md`
 | `.ai/context/*` | owner; implementer in the same PR when the change creates the knowledge (reviewed by `review-docs`) | per reading order |
 | `.ai/decisions/NNNN-*.md` | architect (`Proposed`, reversible decisions only), owner (`Accepted`) | implementer, reviewers |
 | `.ai/rules/**` | **owner only** (deny rules + CODEOWNERS); audits only recommend | reviewers, implementer, architect, auditors |
+| `.ai/rules/protected-paths.md` | **owner only** | the agents above; `changed-paths.sh` and `next-item.sh` (from the base commit), `check-queue.sh` (the base with `--ref`, the working tree in CI); `check-protected-paths.sh` (CI) compares the deny rules, the shell-write hook and CODEOWNERS with it |
 | `.ai/work/<item>/progress.md` | every stage, append-only | autopilot on resume, every stage |
 | `.ai/work/<item>/handoff.md` | implementer | reviewers, acceptance-reviewer |
 | `.ai/work/<item>/proofs.md` | implementer | acceptance-reviewer |

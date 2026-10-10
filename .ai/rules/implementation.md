@@ -49,9 +49,9 @@ the code, not after the review.
 - Never edit a Flyway migration that is on `main`; add a new one (MIG-02).
 - Never weaken a test to make it pass. If a test fails because the requirement changed, say so in
   `handoff.md` ("Tests changed and why"), naming the acceptance criterion that changed it (GEN-08).
-- Never add a Maven repository, plugin or dependency, or touch `.ai/rules/`, `.claude/`, `.github/`,
-  `architecture-tests/`, without the item asking for it; if the item needs it, stop and say so (it
-  should have been `Risk: high`).
+- Never add a Maven repository, plugin or dependency without the item asking for it (it should have been
+  `Risk: high`), and never touch a path of `.ai/rules/protected-paths.md`, whatever the item says
+  (an item that needs one is not autopilot work, `ready.md` point 3); if it is needed, stop and say so.
 - Never use `-DskipTests`, `-Dmaven.test.skip`, `--no-verify`, or a disabled check in a verification
   run (a hook refuses these in autopilot sessions).
 - Commit locally on the item's branch with Conventional Commits and a service scope. Never push and never

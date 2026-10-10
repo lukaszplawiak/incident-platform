@@ -2,7 +2,10 @@
 # ============================================================
 # Local autopilot state in .ai/runs/state.json (gitignored).
 #   state.sh get
-#   state.sh record <shipped|blocked> <item> [pr-url]   (also releases the lock)
+#   state.sh record <shipped|blocked> <item> [pr-url|-] [stage]   (also releases the lock)
+#     stage: the autopilot phase a blocked item stopped in (pick, plan, implement, review, acceptance, ship),
+#     so the audit can tell where a problem was detected from where it was introduced (backlog #0-122; #0-42's
+#     history said only "blocked", with no PR and no stage). "-" stands for "no PR".
 #   state.sh unlock
 # Resetting the breaker or the audit counter is the owner's: scripts/factory-admin/state-reset.sh, which
 # autopilot sessions may not run.
@@ -15,15 +18,16 @@ tmp=$(mktemp)
 case "${1:-get}" in
     get) cat "$STATE_FILE" ;;
     record)
-        outcome=${2:?shipped or blocked}; item=${3:?item id}; pr=${4:-}
+        outcome=${2:?shipped or blocked}; item=${3:?item id}; pr=${4:-}; stage=${5:-}
+        [ "$pr" = "-" ] && pr=""
         case "$outcome" in
             shipped) filter='.consecutiveBlocked=0 | .shippedSinceAudit+=1 | .history=(.history+[{t:$t,item:$i,outcome:"shipped",pr:$p}])[-200:]' ;;
-            blocked) filter='.consecutiveBlocked+=1 | .history=(.history+[{t:$t,item:$i,outcome:"blocked",pr:$p}])[-200:]' ;;
+            blocked) filter='.consecutiveBlocked+=1 | .history=(.history+[{t:$t,item:$i,outcome:"blocked",pr:$p} + (if $s == "" then {} else {stage:$s} end)])[-200:]' ;;
             *) echo "unknown outcome: $outcome" >&2; exit 2 ;;
         esac
         # Release the lock even if the state cannot be updated; never replace the state with a failed write.
         rm -f "$RUNS_DIR/LOCK"
-        jq --arg i "$item" --arg p "$pr" --arg t "$now" "$filter" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE" \
+        jq --arg i "$item" --arg p "$pr" --arg s "$stage" --arg t "$now" "$filter" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE" \
             || { echo '{"error":"state update failed; state file left unchanged"}'; exit 1; }
         cat "$STATE_FILE" ;;
     unlock) rm -f "$RUNS_DIR/LOCK"; echo '{"unlocked":true}' ;;

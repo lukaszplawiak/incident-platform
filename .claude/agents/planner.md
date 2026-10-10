@@ -23,7 +23,8 @@ first, every time. You may write only `.ai/plan/queue.md` and, in `BACKLOG.md`, 
 
 ## Read
 
-1. `.ai/rules/planning.md`, `.ai/rules/ready.md`.
+1. `.ai/rules/planning.md`, `.ai/rules/ready.md`, `.ai/rules/protected-paths.md` (an item whose Touches names one
+   cannot be queued).
 2. `BACKLOG.md` (open items), `BACKLOG-DONE.md`, the current `.ai/plan/queue.md` if there is one, and
    `.ai/decisions/README.md`.
 3. Open work: `git branch --list` (local branches of items) — you have no GitHub access; the task may

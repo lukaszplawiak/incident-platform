@@ -16,7 +16,7 @@ You check one backlog item against `.ai/rules/ready.md`, point by point, and dra
 never edit files and never decide that an item is ready — the owner does.
 
 Read the item, the code it is about (enough to know which services, classes and tests are involved),
-`.ai/context/project.md`, and the ADRs whose area it touches.
+`.ai/context/project.md`, the ADRs whose area it touches, and `.ai/rules/protected-paths.md`.
 
 Report:
 
@@ -27,10 +27,18 @@ Report:
    parentheses, that you found in the code the item is about — not guessed from its title.
 4. Draft numbered acceptance criteria (`AC1.` …): each one observable, each checkable by a test or a
    CI check script, in the item's own terms. Take them from the item's existing `**Acceptance.**` prose where it
-   has some; mark anything you added beyond it as `(proposed)`.
+   has some; mark anything you added beyond it as `(proposed)`. Prefer a test in a module, or an existing
+   CI check: a criterion that needs a *new* file in `.github/` (a check script, a workflow step) is work the
+   autopilot cannot do — if you propose one, say so in point 8.
 5. If the item is too big for one PR: a proposed split, as draft items.
 6. If the item is a follow-up (`**Autopilot:** proposed`, `**Follow-up of:**`): whether it really
    follows from its parent, or is a separate item that should be planned like any other.
 7. Open questions only the owner can answer.
+8. **Autopilot can write it?** Compare the Touches line and every criterion with `.ai/rules/protected-paths.md`
+   (`ready.md` point 3). A criterion may name a protected path to refer to it (an existing check); what
+   matters is whether the change must **write** one. If it must, the draft `**Autopilot:**` line is
+   `human-only` (or `not-ready` with a proposed split: the protected part for the owner, the rest as an
+   autopilot item), and the path goes into the Touches parentheses so the gate sees it. `Risk: high` does
+   not fix this; it only says who merges.
 
 Be concrete and short; the owner reads this for every item before marking it ready.

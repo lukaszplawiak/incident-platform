@@ -96,7 +96,8 @@ workflow in `.claude/workflows/`), in the order of the approved queue `.ai/plan/
 
 - `.ai/rules/` and `.ai/plan/` are human-owned: agents read them and never edit them (the planner only
   proposes, in a PR). Changes to them, to `.claude/` and to `.github/` go through the owner
-  (CODEOWNERS; `/apply-audit` for audit recommendations).
+  (CODEOWNERS; `/apply-audit` for audit recommendations). The full list of paths no agent writes is
+  `.ai/rules/protected-paths.md`; an item whose `**Touches:**` names one never reaches the autopilot.
 - The "Working style" below is for interactive sessions with the owner. An autopilot agent cannot ask:
   it follows its own definition in `.claude/agents/` (decide and record a reversible choice in an ADR,
   stop the item as BLOCKED on an irreversible or ambiguous one).

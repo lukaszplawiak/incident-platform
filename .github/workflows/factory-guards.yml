@@ -6,8 +6,9 @@
 # this check unless the PR's author is the repository owner or the owner approved the PR's head commit. The autopilot's machine account can do neither, so its PRs with such a
 # change wait for the owner; the owner's own PRs pass. Only an approval of the PR's current commit by the
 # owner (or an organisation member) counts. Detection: .github/scripts/check-factory-guards.sh.
-# Also runs the tests of the autopilot's hooks, of this check and of the queue scripts, and validates the
-# execution queue (.ai/plan/queue.md) against the backlog.
+# Also runs the tests of the autopilot's hooks, of this check and of the queue and state scripts, validates the
+# execution queue (.ai/plan/queue.md) against the backlog, and checks that the deny rules, the shell-write
+# hook and CODEOWNERS still cover .ai/rules/protected-paths.md.
 #
 # Required check: "Factory guards" (repository settings, backlog #0-113), once this has run green on main.
 # ============================================================
@@ -50,6 +51,18 @@ jobs:
 
       - name: Path gate tests
         run: .github/scripts/test-changed-paths.sh
+
+      - name: State script tests
+        run: .github/scripts/test-factory-state.sh
+
+      - name: Protected path check tests
+        run: .github/scripts/test-protected-paths.sh
+
+      # .ai/rules/protected-paths.md is the one list; the autopilot's deny rules, its shell-write hook and
+      # CODEOWNERS keep literal copies on purpose, and this fails when one stops covering an entry
+      # (backlog #0-122).
+      - name: Protected paths are covered
+        run: .github/scripts/check-protected-paths.sh
 
       # The approved order of work (.ai/plan/queue.md) must stay consistent with the backlog: a PR that
       # removes or changes an item the queue relies on fails here, not in the next autopilot run.

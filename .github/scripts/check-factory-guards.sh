@@ -7,9 +7,12 @@
 #   3. a POM that adds a <plugin>, <repository>, <pluginRepository> or <dependency>;
 #   4. a Flyway migration that exists in <base> and was modified or deleted;
 #   5. a backlog item whose `**Autopilot:** ready` line was added (only the owner marks items ready);
-#   6. build configuration that decides what verification runs: `.mvn/`, `mvnw`, a POM line that skips
-#      or excludes tests or coverage, or any added or removed line of the coverage check's configuration
-#      (<minimum>, <rule>, <limit>, the `check` goal, a <phase>, an <include>...; not the plugin's version).
+#   6. build configuration that decides what verification runs: a path of the build-config list of
+#      .ai/rules/protected-paths.md as it is on the merge base (`.mvn/`, `mvnw`, `mvnw.cmd`; read through
+#      scripts/factory/_protected.sh, not copied here — backlog #0-122; an unreadable list is a finding),
+#      a POM line that skips or excludes tests or coverage, or any added or removed line of the coverage
+#      check's configuration (<minimum>, <rule>, <limit>, the `check` goal, a <phase>, an <include>...;
+#      not the plugin's version).
 # Renames are not followed (--no-renames): a test renamed out of src/test/**/*.java counts as deleted.
 # Prints one ::error line per finding and exits 1 when there is any, 0 otherwise. Whether an approval
 # overrides the result is decided by .github/workflows/factory-guards.yml, not here.
@@ -67,10 +70,19 @@ if grep -qE '\*\*Autopilot:\*\*[[:space:]]*ready([^a-z-]|$)' <<<"$added_backlog"
     flag BACKLOG.md "an item was marked **Autopilot:** ready"
 fi
 
-# 6. build configuration
-while IFS= read -r f; do
-    [ -n "$f" ] && flag "$f" "build configuration changed (decides what verification runs)"
-done < <(git diff --no-renames --name-only "$mb" "$head" -- '.mvn' 'mvnw' 'mvnw.cmd')
+# 6. build configuration — the list as it is on the merge base, so editing the list does not narrow it for
+# the same PR. The parser (_protected.sh) is this checkout's, like this script itself: a PR that changes
+# either can weaken the rule, which is why both are owner paths (CODEOWNERS, protected-paths.md).
+. "$(dirname "$0")/../../scripts/factory/_protected.sh"
+build_paths=()
+while IFS= read -r p; do [ -n "$p" ] && build_paths+=("$p"); done < <(protected_paths build-config "$mb" || true)
+if [ "${#build_paths[@]}" -eq 0 ]; then
+    flag .ai/rules/protected-paths.md "the build-config list cannot be read on the merge base, so build configuration cannot be checked"
+else
+    while IFS= read -r f; do
+        [ -n "$f" ] && flag "$f" "build configuration changed (decides what verification runs)"
+    done < <(git diff --no-renames --name-only "$mb" "$head" -- "${build_paths[@]}")
+fi
 while IFS= read -r f; do
     [ -n "$f" ] || continue
     added_pom=$({ git diff "$mb" "$head" -- "$f" | grep -E '^\+' | grep -vE '^\+\+\+' || true; })
