@@ -123,6 +123,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-126](#0-126-the-audits-trust-human-labels-without-checking-who-added-them) | The audits trust `human:*` labels without checking who added them | security | Medium | Open |
+| [0-128](#0-128-a-malformed-escape-marker-fails-ci-instead-of-vanishing-from-the-audits) | A malformed escape marker fails CI instead of vanishing from the audits | improvement | Low | Open |
 
 ---
 
@@ -2158,6 +2159,25 @@ could plant a case; counting only markers from the owner's commits (or merged PR
 `human:*` label only when the owner added it, recording the actor; (2) the autopilot is denied adding `human:*`
 labels (`--add-label human:*` refused by the shell hook and a deny rule), with a test. (1) alone suffices for the
 audit; (2) keeps the PR history clean.
+
+---
+
+
+### 0-128. A malformed escape marker fails CI instead of vanishing from the audits
+
+**Type:** improvement · **Priority:** Low · **Status:** Open (found in the review of #0-127)
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** — (#0-127 is Done)
+**Touches:** ci (.github/scripts, .github/workflows/factory-guards.yml)
+
+**Problem.** Since #0-127, `audit-data.sh` counts only a marker in the form `**Fixes:** #0-N · **Escaped from:**
+<stage>`. A line with `**Escaped from:**` but no `**Fixes:** #0-<digits>` on it (written by hand or by an agent
+against the convention) is neither in the raw `escaped` list nor a case, so neither audit sees that escape. A stage
+the parser cannot read is already visible (`escaped:unparsed`); a missing `Fixes` part is not.
+
+**Approach.** A check in Factory guards: every line of `BACKLOG.md` and `BACKLOG-DONE.md` with `**Escaped from:**`
+followed by a stage either carries `**Fixes:** #0-<digits>` or is the convention's own prose (`#0-N`, no stage);
+otherwise it fails with the line number. With a test that a malformed line goes red. Reuse `MARKER` from
+`audit-data.sh` rather than a third copy of the pattern.
 
 ---
 
