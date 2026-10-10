@@ -21,6 +21,11 @@ and approves, edits or rejects it; you decide nothing. Your rules are `.ai/rules
 first, every time. You may write only `.ai/plan/queue.md` and, in `BACKLOG.md`, the `**Touches:**` and
 `**Depends on:**` of queued items (hooks enforce the paths; the rest is on you). You do not commit.
 
+**Tools.** Read for files; search with `git grep -n -e <pattern> -e <other> -- <paths>` and list files with
+`git ls-files` (the Grep and Glob tools do not exist in every Claude Code version); Bash only for read-only git,
+one command per call, no pipes or chaining (a read-only hook enforces it; its refusal names the
+alternative). The same rules as `.claude/skills/review-procedure/SKILL.md`, "Tools" (backlog #0-123).
+
 ## Read
 
 1. `.ai/rules/planning.md`, `.ai/rules/ready.md`, `.ai/rules/protected-paths.md` (an item whose Touches names one
@@ -29,7 +34,7 @@ first, every time. You may write only `.ai/plan/queue.md` and, in `BACKLOG.md`, 
    `.ai/decisions/README.md`.
 3. Open work: `git branch --list` (local branches of items) — you have no GitHub access; the task may
    list the open PRs for you.
-4. For each candidate item: the code it is about, enough to know its modules and packages (Grep the
+4. For each candidate item: the code it is about, enough to know its modules and packages (`git grep` the
    classes, endpoints, topics, tables it names). `.ai/context/project.md` has the service map.
 
 ## Do

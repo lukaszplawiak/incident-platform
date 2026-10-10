@@ -2130,6 +2130,41 @@ reworked items exist to measure.
 
 ---
 
+### 0-123. Reviewers are told which tool to use, and every hook refusal names it
+
+**Type:** bug · **Priority:** High · **Status:** Done, PR #479 (found in the manual `/review` of #0-42, 2026-10-10). Kept
+in full for the decision (tell, do not loosen) and the reverted first draft.
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** root (.claude/hooks/readonly-bash.sh, .claude/hooks/test-hooks.sh, .claude/skills/review-procedure, .claude/agents, README.md)
+
+**Problem.** The review agents (and `ready-checker`, `acceptance-reviewer`, the auditors) run Bash through
+`readonly-bash.sh`, an allow-list of one read-only git command per call. `review-procedure` told them only to read
+`git diff HEAD`, not how to read a file or search, so they reached for `cat`, chained commands, `git -C` and
+`git grep -E "a|b"`; each was refused with a message that said what was forbidden but not what to use. In one
+review the architecture reviewer was refused four times and ran for over 14 minutes; the performance reviewer
+stopped reading after a refusal and reviewed half the change; `git diff HEAD` also hides new, untracked files,
+which the owner had to list by hand for every round.
+
+**Decided (owner, 2026-10-10).** Tell, do not loosen (option A): a "Tools" section in `review-procedure` (Read for
+files, `git grep -n -e … -e … -- <paths>` to search and `git ls-files` to list, one command per call,
+`git status --short` for new files, never stop reading) and every refusal a reading agent can hit names the
+alternative, per hook mode. The first draft pointed agents at the Grep and Glob tools; the architecture review
+(arc-3c7e) showed it contradicted `_common.md` and `implementation.md` (those tools do not exist in every Claude
+Code version — that reviewer had only Read and Bash), so `git grep` stays the search, as decided there. The allow-list stays as it
+is: `cat` would bypass the Read deny rules that keep secrets out of reach, and parsing quotes in the hook to allow
+`|` inside them is a classic bypass (a parser that disagrees with the shell). Rejected: loosening the hook
+(option B), adding `git -C` (option C, no need once the working directory is stated).
+
+**Delivered.** `readonly-bash.sh` refusals (separators, git options, unsafe `git grep`, `git branch`, anything off
+the list) carry a hint naming Read and `git grep -e`, plus the mode's extra commands (`--k8s`, `--gh-read`,
+`--architect`); `test-hooks.sh` replays the forms reviewers tried (each refused with the hint; `git diff HEAD`,
+`git status --short` and `git grep` with several `-e` pass); `review-procedure` "Tools" and the manual-review step
+for untracked files; one line in `ready-checker`, `acceptance-reviewer`, `audit-reviewers`, `planner` and
+`architect`, which do not preload the procedure; README "Least privilege per agent". Measured on the first review
+with it: the architecture reviewer finished in 66 s, against more than 14 minutes and four refusals before.
+
+---
+
 ### 0-122. Protected paths: one list, a Touches gate and the stop stage
 
 **Type:** bug · **Priority:** High · **Status:** Done, PR #478 (found by #0-42's autopilot run, 2026-10-10). Kept in

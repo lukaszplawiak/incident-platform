@@ -89,6 +89,28 @@ expect 2 "gh without --gh-read"          "$R" -- "$(bash_call 'gh pr list --labe
 expect 0 "gh pr list with --gh-read"     "$R" --gh-read -- "$(bash_call 'gh pr list --label autopilot --state merged')"
 expect 2 "gh api is not allowed"         "$R" --gh-read -- "$(bash_call 'gh api repos/o/r/pulls')"
 expect 2 "gh pr merge"                   "$R" --gh-read -- "$(bash_call 'gh pr merge 1')"
+# Backlog #0-123: what reviewers actually tried in a manual /review. The working forms pass, and every
+# refusal carries the hint (Read for files, git grep -e for search, one git command).
+expect 0 "git diff HEAD (manual review)"  "$R" -- "$(bash_call 'git diff HEAD')"
+expect 0 "git status --short (new files)" "$R" -- "$(bash_call 'git status --short')"
+expect 0 "git grep with several -e"       "$R" -- "$(bash_call 'git grep -n -i -e mailpit -e MAIL_HOST -- docker')"
+expect_hint() {   # expect_hint <name> <command> [mode] [extra text] — refused (exit 2), message names the alternatives
+    local name=$1 command=$2 mode=${3:-} extra=${4:-} err rc
+    err=$(cd "$WORK/repo" && printf '%s' "$(bash_call "$command")" | "$R" $mode 2>&1 >/dev/null); rc=$?
+    if [ "$rc" -eq 2 ] && grep -q "Read tool" <<<"$err" && grep -qF -- "git grep -n -e" <<<"$err" \
+       && ! grep -q "Grep or Glob" <<<"$err" && { [ -z "$extra" ] || grep -qF -- "$extra" <<<"$err"; }; then echo "  ok: $name"
+    else echo "::error::$name: expected a refusal with the Read / git grep hint${extra:+ and '$extra'}, got exit $rc: $err"; failures=$((failures+1)); fi
+}
+expect_hint "cat a rule file: hint"            'cat .ai/rules/review/_common.md'
+expect_hint "git diff chained with cat: hint"  'git diff HEAD; cat k8s/overlays/dev/mailpit.yml'
+expect_hint "git -C: hint"                     'git -C /repo diff HEAD'
+expect_hint "alternation with a pipe: hint"    'git grep -n -E "mailpit|MAIL_HOST" -- docker'
+expect_hint "git diff --output: hint"          'git diff --output=/tmp/x'
+expect_hint "unsafe git grep option: hint"     'git grep --untracked secret'
+expect_hint "git branch delete: hint"          'git branch -D feat/x'
+expect_hint "k8s mode names kubectl"           'cat k8s/overlays/dev/mailpit.yml' --k8s 'kubectl kustomize'
+expect_hint "gh-read mode names gh reads"      'cat x' --gh-read 'gh pr list/view/diff'
+expect_hint "architect mode names git add"     'cat x' --architect 'git add of .ai/decisions/'
 
 W="$HOOKS/write-scope.sh"
 echo "write-scope"
