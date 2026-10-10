@@ -122,7 +122,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
-| [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
 | [0-126](#0-126-the-audits-trust-human-labels-without-checking-who-added-them) | The audits trust `human:*` labels without checking who added them | security | Medium | Open |
 
 ---
@@ -2091,7 +2090,8 @@ matters.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
-**Type:** design · **Priority:** Medium · **Status:** Open (owner's decision 2026-10-10, after #0-42)
+**Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
+for the decision (one pipeline analyst, phase containment) and the first collected cases.
 
 **Problem.** The only audit target is `reviewers` (`.claude/workflows/audit.js`): one analyst per review
 dimension, which fits seven parallel reviewers with one verdict format. The stages before and after the panel
