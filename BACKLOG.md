@@ -122,7 +122,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-120](#0-120-kubernetes-staging-and-prod-overlays-are-swapped) | Kubernetes staging and prod overlays are swapped | bug | Medium | Open |
 | [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
-| [0-122](#0-122-protected-paths-one-list-a-touches-gate-and-the-stop-stage) | Protected paths: one list, a Touches gate and the stop stage | bug | High | Open |
 
 ---
 
@@ -2133,7 +2132,8 @@ reworked items exist to measure.
 
 ### 0-122. Protected paths: one list, a Touches gate and the stop stage
 
-**Type:** bug · **Priority:** High · **Status:** Open (found by #0-42's autopilot run, 2026-10-10)
+**Type:** bug · **Priority:** High · **Status:** Done, PR #478 (found by #0-42's autopilot run, 2026-10-10). Kept in
+full as the record of why the protected paths have one list; code comments cite `backlog #0-122`.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** ci (scripts/factory, .github/scripts, .github/workflows/factory-guards.yml), root (README.md, CLAUDE.md, AGENTS.md, .ai/rules, .claude)
 
