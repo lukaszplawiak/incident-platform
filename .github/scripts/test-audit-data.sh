@@ -63,9 +63,13 @@ printf '### 0-9. old\n**Type:** bug · **Fixes:** #0-9 · **Escaped from:** revi
 git add BACKLOG.md BACKLOG-DONE.md .gitignore
 GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z git -c user.email=t@t -c user.name=t commit -q -m old
 printf '### 0-8. x\n**Type:** bug · **Fixes:** #0-8 · **Escaped from:** plan\n' >> BACKLOG.md
+# A marker whose stage the case parser cannot read (another form): still a case, marked unparsed, never dropped.
+printf '### 0-12. y\n**Type:** bug · **Fixes:** #0-12 · **Escaped from:** Review-General\n' >> BACKLOG.md
 # In the period too: the old item is closed, its line MOVES to BACKLOG-DONE.md — a move, not a new escape.
 grep 'Fixes:\*\* #0-9' BACKLOG.md >> BACKLOG-DONE.md
 grep -v -e '^### 0-9' -e 'Fixes:\*\* #0-9' BACKLOG.md > BACKLOG.tmp && mv BACKLOG.tmp BACKLOG.md
+# Prose that only describes the convention, as BACKLOG's conventions and an item's text do: not a marker.
+printf 'An item gets `**Fixes:** #0-N · **Escaped from:** <stage>` on the same line.\nThe audit counts `**Escaped from:**` markers.\n' >> BACKLOG.md
 git add BACKLOG.md BACKLOG-DONE.md && git -c user.email=t@t -c user.name=t commit -q -m new
 cat > .ai/runs/state.json <<'EOF'
 {"consecutiveBlocked":0,"shippedSinceAudit":3,"lastAudit":null,"history":[
@@ -78,7 +82,7 @@ EOF
 echo "audit-data: cases"
 summary=$(scripts/factory/audit-data.sh 2026-10-09)
 F=.ai/runs/audit/audit-data-2026-10-09.json
-if printf '%s' "$summary" | jq -e '.prs == 7 and .readyPrs == 2 and .cases == 9' >/dev/null; then ok "summary counts PRs, /ready PRs and cases"
+if printf '%s' "$summary" | jq -e '.prs == 7 and .readyPrs == 2 and .cases == 10' >/dev/null; then ok "summary counts PRs, /ready PRs and cases"
 else fail "summary: $summary"; fi
 expect_jq "a clean PR is not a case"                  "$F" '[.cases[].pr] | index(10) | not'
 expect_jq "two review rounds make a case"            "$F" '.cases[] | select(.pr == 11) | .signals == ["rounds:2"]'
@@ -94,7 +98,10 @@ expect_jq "a blocked 0-1 is not hidden by a case for 0-10" "$F" '.cases[] | sele
 expect_jq "unmerged /ready PRs are not in the data at all" "$F" '[.readyPrs[].number] == [20, 21]'
 expect_jq "a blocked run before the period is not"   "$F" '[.cases[].item] | index("0-11") | not'
 expect_jq "acceptance read whatever the field order" "$F" '.cases[] | select(.pr == 16) | .signals == ["acceptance:REJECT"]'
-expect_jq "the backlog convention line is not a case" "$F" '[.cases[] | select(.signals[0] | startswith("escaped"))] | length == 1'
+expect_jq "the backlog convention line is not a case" "$F" '[.cases[] | select(.signals[0] | startswith("escaped")) | .item] | sort == ["0-12", "0-8"]'
+expect_jq "a marker the case parser cannot read is a case, not dropped" "$F" '.cases[] | select(.item == "0-12") | .signals == ["escaped:unparsed"]'
+expect_jq "every new marker in the raw list is a case" "$F" '([.escaped[] | select(test("#0-(8|12) "))] | length) == ([.cases[] | select(.signals[0] | startswith("escaped"))] | length)'
+expect_jq "prose about the convention is not in the raw escaped list" "$F" '(.escaped | length) == 3 and all(.escaped[]; test("Fixes:\\*\\* #0-[0-9]"))'
 expect_jq "a blocked run with a PR is not counted twice" "$F" '[.cases[] | select(.item == "0-4")] | length == 1'
 expect_jq "a blocked run without a PR is a case, with its stage" "$F" '.cases[] | select(.item == "0-6") | .pr == null and .stage == "plan" and .readyPr == null'
 

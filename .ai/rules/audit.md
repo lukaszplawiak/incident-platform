@@ -136,7 +136,7 @@ more than one review round, had a scope category that points at a stage (`backlo
 `implementation-drift`, `unclear-item`, `diff-outside-plan`, `diff-outside-touches`; `consistent`, `within-*` and
 `not-measured` are clean), an acceptance other than ACCEPT, or an owner label `human:fp-*`, `human:missed-*` or
 `human:introduced-*`; a BLOCKED run without a PR; and an escaped defect (`**Fixes:** #0-N · **Escaped from:**
-<stage>`). Each carries the item's merged `/ready` PR.
+<stage>`; one whose stage cannot be read is an `escaped:unparsed` case). Each carries the item's merged `/ready` PR.
 
 **Stages**, in order, with the artifacts that show their output:
 
@@ -161,6 +161,22 @@ between exactly one **escape class**:
 
 A stage that is not meant to catch a class of problem is recorded as "not this stage's job", not as an escape.
 The **containment gap** is the number of stages a problem crossed; a wide gap points at the earliest stage.
+
+The introducing stage gets a **cause** too, with the **actor** that put the problem in — a stage can have more than
+one (`ready`: the ready-checker drafts, the owner decides; `queue`: the planner proposes, the owner merges). One cause
+class:
+
+- **no rule** — nothing told the actor to avoid it;
+- **rule pushed toward it** — a rule, template or draft steered the actor into it (e.g. a checker point asking
+  for criteria checkable by a CI script, which live in `.github/`);
+- **rule not applied** — a rule covered it and the actor did not follow it;
+- **judgment** — the rule left the call to the actor and the call was wrong;
+- **no data** — the record cannot tell which actor put it in, or why (e.g. a `/ready` PR without a "Ready check"
+  section); the analyst says so instead of guessing.
+
+Fixed (backlog #0-127, found by the first pipeline audit, 2026-10-10): it traced #0-42 to `ready` but did not say why `ready` put it in, nor
+whether the checker's draft or the owner's decision did; without that a recommendation cannot tell a rule to fix
+from a one-off call.
 
 **Where a recommendation goes**: to the cheapest stage that could have caught it — a deterministic check first
 (`next-item.sh`, `check-queue.sh`, a CI check: a draft backlog item), else one line in that stage's definition,

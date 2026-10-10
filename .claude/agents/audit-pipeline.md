@@ -55,7 +55,12 @@ labels are the record.
 ## For every case
 
 1. **Introduced at**: the earliest stage whose output already contained the problem (`ready`, `queue`, `pick`,
-   `plan`, `implement`, `review`, `acceptance`, `ship`), with the artifact that shows it.
+   `plan`, `implement`, `review`, `acceptance`, `ship`), with the artifact that shows it — and **why**: the actor
+   that put it in and one cause class from `audit.md` ("no rule", "rule pushed toward it", "rule not applied",
+   "judgment", "no data"). For `ready`, separate the ready-checker from the owner: what the checker drafted (its
+   report, as far as the `/ready` PR's "Ready check" records it, and the item's history) against what the owner
+   decided. For `queue`, the same between the planner's proposal (its PR) and what the owner merged.
+   When the record cannot tell them apart, the class is "no data" instead of a guess.
 2. **Detected at**: the stage that stopped or exposed it (the stop phase, the scope comparison, a review
    round, acceptance, the owner's label, an escape after merge).
 3. **Each stage in between**: what it had in front of it, and why it let the problem through — exactly one
@@ -79,6 +84,10 @@ containment gap (how many stages a problem crossed). Previous recommendations ag
 ```json
 { "target": "pipeline",
   "cases": [ { "pr": 477, "item": "0-42", "introducedAt": "ready", "detectedAt": "implement",
+               "introducedBecause": [ { "actor": "ready-checker", "class": "rule pushed toward it",
+                                        "evidence": "ready-checker.md point 4: criteria checkable by a CI check script" },
+                                      { "actor": "owner", "class": "judgment",
+                                        "evidence": "accepted Risk: high as enough for a .github/ criterion" } ],
                "evidence": "…", "ownerLabel": "human:introduced-ready",
                "passedThrough": [ { "stage": "plan", "class": "rule allowed it",
                                     "evidence": "architect.md: Risk: high items are allowed to proceed" } ],

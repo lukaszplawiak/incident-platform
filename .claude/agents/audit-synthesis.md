@@ -32,8 +32,8 @@ Write `.ai/audit/<date>-<target>.md` (date and target are in your task) with, in
 
 **Target `pipeline`** (backlog #0-121; one analyst result instead of per-dimension ones): the same file name
 and order, with two sections replaced — section 2 becomes **Cases**, a table with one row per case (PR, item,
-introduced at, detected at, the stages it passed through each with its escape class, the cheapest catch, and
-"fixed by" when a fix is already on `main`), and **Metrics per stage** (introduced, detected, passed through,
+introduced at, why — each actor with its cause class —, detected at, the stages it passed through each with its
+escape class, the cheapest catch, and "fixed by" when a fix is already on `main`), and **Metrics per stage** (introduced, detected, passed through,
 containment gap) against the previous pipeline report. An owner label `human:introduced-*` is shown next to the
 analyst's attribution; where they differ, the label wins and the report says so. A case already fixed is
 evidence for its fix's metric, not a new recommendation.

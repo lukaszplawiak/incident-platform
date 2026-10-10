@@ -28,13 +28,17 @@ if command -v gh >/dev/null 2>&1; then
     gh pr list --state all --search "head:docs/backlog-ready" --limit 200 \
        --json number,title,state,body,mergedAt,url,headRefName > "$ready_file" 2>/dev/null || echo '[]' > "$ready_file"
 fi
-escaped=$(grep -hE '\*\*Escaped from:\*\*' BACKLOG.md BACKLOG-DONE.md 2>/dev/null | jq -R . | jq -s .)
+# A real marker names the fixing item (`**Fixes:** #0-N · **Escaped from:** <stage>`); prose that only describes the
+# convention (BACKLOG's conventions, an item's text) does not, and is not counted (first pipeline audit, obs. 5).
+# The same definition as the jq capture of $escapedCases below: change both together.
+MARKER='\*\*Fixes:\*\* #0-[0-9]+.*\*\*Escaped from:\*\*'
+escaped=$(grep -hE "$MARKER" BACKLOG.md BACKLOG-DONE.md 2>/dev/null | jq -R . | jq -s .)
 # The escape markers ADDED since the date (the git history of the backlog files): only those are new cases, so an
 # old escape is not traced again in every audit. ($escaped above, all of them, stays for the reviewers' audit.)
 # A marker removed in the same period too was moved (an item closed: BACKLOG.md to BACKLOG-DONE.md), not added.
 backlog_log=$(git log --since="$since" --format= -p -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null)
-escaped_added=$(printf '%s\n' "$backlog_log" | grep -E '^\+[^+].*\*\*Escaped from:\*\*' | sed 's/^+//' | sort -u | jq -R . | jq -s .)
-escaped_removed=$(printf '%s\n' "$backlog_log" | grep -E '^-[^-].*\*\*Escaped from:\*\*' | sed 's/^-//' | sort -u | jq -R . | jq -s .)
+escaped_added=$(printf '%s\n' "$backlog_log" | grep -E "^\\+[^+].*$MARKER" | sed 's/^+//' | sort -u | jq -R . | jq -s .)
+escaped_removed=$(printf '%s\n' "$backlog_log" | grep -E "^-[^-].*$MARKER" | sed 's/^-//' | sort -u | jq -R . | jq -s .)
 escaped_new=$(jq -n --argjson a "$escaped_added" --argjson r "$escaped_removed" '$a - $r')
 seeded='[]'
 [ -f .ai/audit/benchmark/results.md ] && seeded=$(grep -E '^\|' .ai/audit/benchmark/results.md | jq -R . | jq -s .)
@@ -77,9 +81,13 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
      | map({pr: null, url: null, item, branch: null, draft: null, merged: false, labels: [], rounds: null,
             scope: null, acceptance: null, stage: (.stage // null), signals: ["blocked (run history, no PR)"],
             readyPr: ready_of(.item)})) as $stateCases
-  | ($escapedNew | map(capture("\\*\\*Fixes:\\*\\* #(?<item>0-[0-9]+).*\\*\\*Escaped from:\\*\\* *(?<from>[a-z][a-z0-9-]*)")? )
+  # The same marker definition as MARKER above: change both together. A line MARKER accepted but this capture cannot
+  # parse (a stage name in another form) is an "escaped:unparsed" case, not dropped: every marker counted is traced.
+  | ($escapedNew | map(capture("\\*\\*Fixes:\\*\\* #(?<item>0-[0-9]+).*\\*\\*Escaped from:\\*\\* *(?<from>[a-z][a-z0-9-]*)")?
+                       // {item: first_match("#(0-[0-9]+)"), from: null})
      | map({pr: null, url: null, item, branch: null, draft: null, merged: true, labels: [], rounds: null,
-            scope: null, acceptance: null, signals: ["escaped:\(.from)"], readyPr: ready_of(.item)})) as $escapedCases
+            scope: null, acceptance: null, signals: [if .from == null then "escaped:unparsed" else "escaped:\(.from)" end],
+            readyPr: ready_of(.item)})) as $escapedCases
   | {since: $since, prs: $prs[0], readyPrs: [$ready[0][] | select(.mergedAt != null)], escaped: $escaped, seeded: $seeded, state: $state,
      cases: ($prCases + $stateCases + $escapedCases), transcriptsDir: $transcripts}' > "$out"
 
