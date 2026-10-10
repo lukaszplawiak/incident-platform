@@ -697,6 +697,8 @@ lookup, not a leak.
 ### 0-42. Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist
 
 **Type:** bug · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-16 is Done)
+**Touches:** k8s (overlays/dev, base/infrastructure/app-config.yml), ci (.github/scripts, .github/workflows/ci.yml), notification-service (application.yml comments only), root (README.md "Infrastructure Hardening", .ai/context/infrastructure.md)
 
 **Problem.** `k8s/base/infrastructure/app-config.yml` sets `MAIL_HOST: "mailhog"` and the dev overlay's comment says
 the operator email is "caught by the same mailhog", but no manifest deploys a mail server. auth-service also requires
@@ -706,6 +708,40 @@ overrode those properties with `SPRING_MAIL_PROPERTIES_*` environment variables 
 
 **Work.** Deploy Mailpit in the dev overlay with the same overrides (or point `MAIL_HOST` at a real relay per
 overlay), so dev on Kubernetes delivers invites and operator emails.
+
+**Decided (owner, `/ready #0-42`, 2026-10-10).**
+- Mailpit runs in the dev overlay only, as a file in `k8s/overlays/dev/` listed in `resources`. Never in base,
+  because its unauthenticated UI shows invite and password-reset links.
+- The mail overrides are the compose ones (#0-16): `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH`, `..._STARTTLS_ENABLE`
+  and `..._STARTTLS_REQUIRED` set to `"false"`, added to the dev `app-config` patch (`op: add`). Mailpit is not
+  given a certificate or SMTP auth.
+- Staging and prod get no relay. Base `MAIL_HOST` becomes a clearly commented placeholder, "replace before a
+  real deployment", as #0-26 did for the operator address.
+- The dev overlay's blanket Deployment patches are narrowed to `labelSelector: app.kubernetes.io/component=backend`
+  (the 7 services carry it), so Mailpit and Redis stop receiving 768Mi and the 90/120 s probe delays.
+- The Mailpit pod gets `allowPrivilegeEscalation: false`, drops `ALL` capabilities, uses `seccompProfile:
+  RuntimeDefault`, and has resource requests and limits. `runAsNonRoot` and `readOnlyRootFilesystem` are set
+  only if the image is verified to run with them. Probes are `httpGet` or `tcpSocket`.
+
+**Acceptance criteria.**
+AC1. The rendered dev overlay has a `Deployment` and a `ClusterIP` `Service`, both named `mailpit`, in
+`incident-platform-dev`. The Service exposes 1025 (SMTP) and 8025 (HTTP), and its selector matches the pod labels.
+AC2. In the rendered dev `app-config`, `MAIL_HOST` is the Mailpit Service name and `MAIL_PORT` is its SMTP port.
+AC3. The rendered dev `app-config` sets `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH`,
+`SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE` and `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED` to `"false"`.
+AC4. The rendered base, staging and prod contain no `mailpit` resource and no `SPRING_MAIL_PROPERTIES_*` key, and
+base `MAIL_HOST` is a commented placeholder to replace before a real deployment.
+AC5. The Mailpit image has an explicit version tag (never `latest`), equal to the tag in `docker/docker-compose.yml`.
+AC6. The rendered dev contains no `mailhog`. The dev overlay comments and notification-service's `application.yml`
+comments name Mailpit.
+AC7. No Ingress and no Service other than `ClusterIP` exposes port 8025 in any overlay.
+AC8. The dev overlay's blanket Deployment patches target only `app.kubernetes.io/component=backend`, and the
+rendered Mailpit and Redis Deployments get neither the 768Mi memory nor the 90/120 s probe delays.
+AC9. `.github/scripts/check-k8s-mail.sh` checks AC1–AC8 in the `validate-k8s-manifests` job, and its test
+shows that a fixture breaking a rule fails it. `kubectl kustomize` and `kubeconform -strict` pass for base and
+all three overlays.
+AC10. README "Infrastructure Hardening" and `.ai/context/infrastructure.md` (the CI rules list) describe
+Mailpit in dev on Kubernetes, the missing relay in staging and prod, and the new check.
 
 ---
 
