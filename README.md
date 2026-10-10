@@ -418,6 +418,13 @@ where only the session-level hooks apply. Layers and their limits: docs/ai-facto
   `limit-connections`), in front of the application's own bucket4j limits.
 - **Resource limits and probes**: every Deployment sets CPU and memory requests and limits, and readiness and
   liveness probes on the management port.
+- **Mail catcher in dev only** (backlog #0-42, ADR-0026): `k8s/overlays/dev` runs Mailpit (non-root, read-only
+  root filesystem, no capabilities) behind a `ClusterIP` Service, read through `kubectl port-forward`, because its
+  UI has no authentication and shows invite and password-reset links; only dev turns SMTP auth and STARTTLS off.
+  Base, staging and prod have no catcher, no overrides and a placeholder relay host. CI fails when Mailpit or an
+  override reaches them, when anything exposes 8025 beyond the cluster, or when its image drifts from compose's
+  (`.github/scripts/check-k8s-mail.rb`, with a mutation test). Inside the cluster any pod can still reach 8025,
+  because there is no NetworkPolicy yet (backlog #0-65).
 - **No dev profile outside dev** (backlog #0-63): only `k8s/overlays/dev` sets `SPRING_PROFILES_ACTIVE`, and CI
   fails if the rendered staging or prod overlay sets any Spring profile. The base used to set `dev` for every
   overlay, which would have exposed incident-service's unauthenticated `/dev/token` in prod.
@@ -888,7 +895,7 @@ Build Docker image (dynamic matrix: only the changed services, up to all 7) → 
 
 ### Job 4 — Validate Kubernetes Manifests
 
-Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the real Kubernetes API schemas. It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base.
+Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the real Kubernetes API schemas. It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base, that staging and prod set no Spring profile (backlog #0-63), and that mail is caught by Mailpit in dev only (`check-k8s-mail.rb`, backlog #0-42).
 
 ### Job 5 — Docker Compose Smoke Test
 
@@ -1503,7 +1510,8 @@ The `k8s/` directory uses **Kustomize** with environment overlays:
 k8s/
 ├── base/               # Environment-agnostic manifests (Deployments, Services, HPA, Ingress)
 └── overlays/
-    ├── dev/            # Minikube: 1 replica, 768Mi memory limit, relaxed probe delays
+    ├── dev/            # Minikube: 1 replica, 768Mi memory limit, relaxed probe delays (services only);
+    │                   # Mailpit catches mail: kubectl -n incident-platform-dev port-forward svc/mailpit 8025
     ├── staging/
     └── prod/
 ```

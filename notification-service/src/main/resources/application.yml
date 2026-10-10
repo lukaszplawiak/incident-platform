@@ -63,12 +63,13 @@ spring:
           timeout: ${MAIL_SMTP_TIMEOUT_MS:5000}
           writetimeout: ${MAIL_SMTP_WRITE_TIMEOUT_MS:5000}
           # Note: unconditionally true, correct for the real default host
-          # (Mailtrap) but mismatched with docker-compose's mailhog
-          # override, which doesn't require auth — this is exactly what
-          # was breaking the /actuator/health check before
-          # management.health.mail.enabled: false was added below.
-          # Not changed here since making auth conditional per-environment
-          # isn't necessary once mail no longer gates reported health.
+          # (Mailtrap). The dev mail catchers (Mailpit in docker-compose,
+          # backlog #0-16, and in the Kubernetes dev overlay, #0-42) offer
+          # no auth, so those environments turn it off with
+          # SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH / ..._STARTTLS_ENABLE=false;
+          # a real relay keeps both. Before that override, the mismatch broke
+          # the /actuator/health check, hence management.health.mail.enabled:
+          # false below.
           auth: true
           starttls:
             enable: true
@@ -264,8 +265,8 @@ management:
     # response DOWN if any one contributing indicator is DOWN, so any
     # SMTP hiccup (or, in docker-compose specifically: mail.properties
     # .mail.smtp.auth=true below being unconditionally true even when
-    # MAIL_HOST is overridden to mailhog, a test server that doesn't
-    # require auth — surfaced as jakarta.mail.AuthenticationFailedException,
+    # MAIL_HOST pointed at a dev catcher (then mailhog, now Mailpit) that
+    # doesn't offer auth — surfaced as jakarta.mail.AuthenticationFailedException,
     # "no password specified") flipped this service's reported health to
     # DOWN and its container to "unhealthy", even though Kafka consumption,
     # the database, and Slack notification routing were all working fine.

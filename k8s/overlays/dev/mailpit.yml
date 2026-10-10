@@ -1,0 +1,105 @@
+# ============================================================
+# Mailpit — the dev cluster's mail catcher (backlog #0-42, ADR-0026)
+#
+# Catches every email the platform sends in dev on Kubernetes (invites, password
+# resets, the operator alert of backlog #0-26), as docker-compose's mailpit does
+# since backlog #0-16. Dev overlay only, never base: the web UI and API (8025) have
+# no authentication and show invite and password-reset links. The Service is
+# ClusterIP and nothing routes to 8025 from outside; to read the mail:
+#   kubectl -n incident-platform-dev port-forward svc/mailpit 8025
+# The app-config patch in kustomization.yml points MAIL_HOST at this Service and
+# turns off SMTP auth and STARTTLS, which Mailpit does not offer.
+#
+# The image tag equals docker/docker-compose.yml's; .github/scripts/check-k8s-mail.rb
+# fails CI when the two differ, so they are bumped together.
+# Runs as a non-root user with a read-only root filesystem: verified for this
+# image, which keeps its message database in /tmp (an emptyDir here, so mail is
+# lost on restart, as in compose).
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailpit
+  labels:
+    app: mailpit
+    app.kubernetes.io/component: mail
+    app.kubernetes.io/part-of: incident-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mailpit
+  template:
+    metadata:
+      labels:
+        app: mailpit
+        app.kubernetes.io/component: mail
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: mailpit
+          image: axllent/mailpit:v1.31.2
+          ports:
+            - name: smtp
+              containerPort: 1025
+            - name: http
+              containerPort: 8025
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailpit
+  labels:
+    app: mailpit
+    app.kubernetes.io/component: mail
+    app.kubernetes.io/part-of: incident-platform
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  type: ClusterIP
+  selector:
+    app: mailpit
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: smtp
+    - name: http
+      port: 8025
+      targetPort: http
