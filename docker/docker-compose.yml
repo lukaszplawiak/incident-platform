@@ -719,6 +719,7 @@ services:
       # Dev only (backlog #0-16, #0-42): see auth-service above.
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH: "false"
       SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE: "false"
+      SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED: "false"
       SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET:-placeholder-signing-secret-not-real}
       # Dev only: mailpit catches it. The service has no default (empty means no operator email),
       # and the k8s ConfigMap ships it empty; never point a shared environment at a placeholder.

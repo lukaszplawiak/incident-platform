@@ -120,7 +120,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
-| [0-124](#0-124-notification-service-does-not-require-starttls-before-sending-smtp-credentials) | notification-service does not require STARTTLS before sending SMTP credentials | bug | Medium | Open |
 
 ---
 
@@ -2148,42 +2147,6 @@ the list) carry a hint naming Read and `git grep -e`, plus the mode's extra comm
 for untracked files; one line in `ready-checker`, `acceptance-reviewer`, `audit-reviewers`, `planner` and
 `architect`, which do not preload the procedure; README "Least privilege per agent". Measured on the first review
 with it: the architecture reviewer finished in 66 s, against more than 14 minutes and four refusals before.
-
----
-
-### 0-124. notification-service does not require STARTTLS before sending SMTP credentials
-
-**Type:** bug · **Priority:** Medium · **Status:** Open (found by the security review of #0-42, 2026-10-10)
-**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** — (#0-42 is Done)
-**Touches:** notification-service (resources/application.yml, test/.../support, test/.../config), docker (docker-compose.yml), k8s (overlays/dev/kustomization.yml, comment only)
-
-**Problem.** notification-service's `application.yml` sets `mail.smtp.auth: true` and `starttls.enable: true` but not
-`starttls.required: true`, unlike auth-service. With `enable` alone JavaMail upgrades the connection only when the
-server offers STARTTLS; an attacker between the service and a real relay who strips the STARTTLS capability gets the
-connection in plain text, and with it `MAIL_USERNAME` / `MAIL_PASSWORD` (AUTH) and the email content. No environment
-has a real relay yet (#0-42 left staging and prod a placeholder), so nothing leaks today.
-
-**Approach.** Add `starttls.required: true` as auth-service has, and keep the dev catchers working: the Kubernetes dev
-overlay already gives every service `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED=false` (today ignored by
-notification-service, then honoured), but docker-compose sets it for auth-service only, so notification-service needs
-the same line there — without it, every email in the compose stack fails against Mailpit, which offers no TLS
-(corrected by `/ready #0-124`; the first version of this item said compose already set it). A test that binds the
-properties shows the default is `true` and the override reaches it. One service, comments in `application.yml` to update.
-
-**Acceptance criteria.**
-AC1. The shipped notification-service `application.yml`, loaded alone, binds `spring.mail.properties`
-`mail.smtp.starttls.required` to `true`, with `mail.smtp.starttls.enable` and `mail.smtp.auth` still `true` — a new test
-in the `config` test package (beside `NotificationChannelPropertiesTest`), using `ApplicationYml` and a `Binder` the way
-`NotificationSchedulerDefaultsTest` does.
-AC2. With the dev overrides in the environment (`SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED`, `..._STARTTLS_ENABLE`,
-`..._AUTH` = `false`, as a `SystemEnvironmentPropertySource`), the same three values bind to `false` — same test class.
-AC3. `docker/docker-compose.yml` sets `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED: "false"` for notification-service,
-as it does for auth-service (code + review evidence: a module test reading the compose file would be brittle).
-AC4. The Kubernetes dev overlay still renders all three overrides as `"false"` and staging/prod none — the existing
-`check-k8s-mail.rb` in `validate-k8s-manifests`, unchanged.
-AC5. The comments name the new behaviour: `application.yml`'s mail comment mentions `starttls.required` and its dev
-override, and `k8s/overlays/dev/kustomization.yml` no longer says notification-service has no `starttls.required`
-(code + review evidence).
 
 ---
 

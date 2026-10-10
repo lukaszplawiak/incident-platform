@@ -482,6 +482,9 @@ Summary; details in [Resilience & Security](#security).
   (fail-closed: 503 while Redis cannot be checked, unlike ingestion's fail-open limiter), and a provisioning
   spike (`PlatformTenantProvisioningSpike`) or a reached limit (`PlatformApiRateLimited`) alerts the operator
   by email; `PlatformApiRateLimitUnavailable` reports the Redis case.
+- **SMTP requires STARTTLS**: auth-service and notification-service send mail only over STARTTLS
+  (`mail.smtp.starttls.required`, backlog #0-124), so a relay that strips the capability gets no AUTH credentials and
+  no content. Only the dev mail catchers (docker-compose, the Kubernetes dev overlay) turn it off.
 - **MFA change notifications**: enabling or disabling MFA on any account emails the account's address (backlog
   #0-83), so an owner learns when someone else used their password to change the second factor. A password reset by
   email ends every session and unfinished login and revokes the personal API keys (backlog #0-89), but never
