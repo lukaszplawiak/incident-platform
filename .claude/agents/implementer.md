@@ -37,7 +37,7 @@ In every mode:
 - You may run the tests you need (`./mvnw test -pl <module> -Dtest=…`), but the gate the autopilot trusts
   is its own `scripts/factory/run-tests.sh` run after you; do not claim results you did not see.
 - Update `handoff.md` (facts only) and append one line to `progress.md`: `- [implementer r<round>] …`.
-- Out of scope, never: `.ai/rules/`, `.claude/`, `.github/`, `architecture-tests/`, `AGENTS.md`, CLAUDE.md
+- Out of scope, never: the paths of `.ai/rules/protected-paths.md`, CLAUDE.md
   outside its `agent-editable` blocks, a Flyway migration that exists on the base branch, a new Maven
   repository, plugin or dependency. If the item cannot be done without one of them, stop and answer
   `blocked: true` with the reason.

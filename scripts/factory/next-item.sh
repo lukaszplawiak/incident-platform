@@ -6,7 +6,8 @@
 #
 # Everything is read from the run's base commit (the sha in .ai/runs/LOCK), never from the working copy.
 # An item can start when, on the base: it is in BACKLOG.md with `**Autopilot:** ready`, it is not of type
-# design, every `**Depends on:**` is in BACKLOG-DONE.md, and no open PR or local branch holds it (a branch
+# design, its **Touches:** names no path of .ai/rules/protected-paths.md (such an item could only end
+# BLOCKED at the implementer, as #0-42 did; backlog #0-122), every `**Depends on:**` is in BACKLOG-DONE.md, and no open PR or local branch holds it (a branch
 # name containing "/<id>-" is a lock; a BLOCKED item keeps its draft PR open).
 #
 # Order of choice:
@@ -27,6 +28,7 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/_common.sh"
 . "$HERE/_backlog.sh"
+. "$HERE/_protected.sh"
 
 fail() { jq -n --arg r "$1" '{ok:false, reasons:[$r], item:null}'; exit 1; }
 
@@ -40,7 +42,9 @@ if [ -n "$want" ]; then
     case "${want#0-}" in *[!0-9]*) fail "item must look like 0-25" ;; esac
 fi
 
-backlog=$(git show "$base:BACKLOG.md" | backlog_json) || fail "cannot read BACKLOG.md on the base commit"
+item_re=$({ protected_paths protected "$base" && protected_paths build-config "$base"; } | paths_regex free) \
+    || fail "cannot read the lists of .ai/rules/protected-paths.md on the base commit"
+backlog=$(git show "$base:BACKLOG.md" | backlog_json "$item_re") || fail "cannot read BACKLOG.md on the base commit"
 done_ids=$(git show "$base:BACKLOG-DONE.md" 2>/dev/null | done_json) || done_ids='[]'
 
 check=$("$HERE/check-queue.sh" --ref "$base")
@@ -66,6 +70,8 @@ jq -n --argjson items "$backlog" --argjson done "$done_ids" --argjson q "$queue"
       | if $it == null then (if isDone($id) then "done" else "not in BACKLOG.md on main" end)
         elif $it.autopilot != "ready" then "not ready (Autopilot: \(if $it.autopilot == "" then "none" else $it.autopilot end))"
         elif $it.type == "design" then "a design item"
+        elif ($it.protected | length) > 0
+          then "Touches names \($it.protected | join(", ")), a path the autopilot may not write (.ai/rules/protected-paths.md): make it human-only or split it"
         elif ([$it.dependsOn[] | select(isDone(.) | not)] | length) > 0
           then "waits for \([$it.dependsOn[] | select(isDone(.) | not) | "#" + .] | join(", "))"
         elif lockedBy($id) != null then "in progress or blocked (branch \(lockedBy($id)))"

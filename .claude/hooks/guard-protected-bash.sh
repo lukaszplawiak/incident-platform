@@ -5,8 +5,10 @@
 # (`sed -i`, `cp`, a redirect) goes around them. This is a heuristic second line: the real gates are
 # CODEOWNERS on the PR and the autopilot's changed-paths check before review.
 #
-# Protected: .ai/rules/  .claude/  .github/  architecture-tests/  AGENTS.md  scripts/factory/ (and factory-admin/)
-#            .devcontainer/  .mvn/  .git/  mvnw
+# Protected: the paths of .ai/rules/protected-paths.md (their one list), plus the run's own state (.git/,
+#            .ai/runs/LOCK and state.json, .ai/STOP). This copy stays a literal regex, so the last line does not
+#            depend on parsing that file; .github/scripts/check-protected-paths.sh fails CI when it misses an
+#            entry. Fixed (backlog #0-122): .ai/audit/decisions.md was denied to Edit/Write but not covered here.
 # A command that only reads (git diff/log/show, cat, grep, ls, head, tail, wc) passes.
 # Also refused, whatever the verb: commands naming a secret (docker/.env, docker/secrets, application-local,
 # credentials files, gh/ssh config) and `git diff --no-index`, which reads any file around the Read denies.
@@ -34,11 +36,11 @@ if printf '%s' "$cmd" | grep -Eq -- '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi
 
-protected='(\.ai/rules|\.ai/plan/|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.git/|\.ai/runs/(LOCK|state\.json)|\.ai/STOP)'
+protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.git/|\.ai/runs/(LOCK|state\.json)|\.ai/STOP)'
 printf '%s' "$cmd" | grep -Eq -- "$protected" || exit 0
 
 writes='(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|perl[[:space:]]+-[a-zA-Z]*i|(^|[[:space:];&|])(cp|mv|rm|rmdir|ln|chmod|chown|truncate|install|touch|mkdir)[[:space:]]|git[[:space:]]+(checkout|restore|rm|mv|apply|am|stash|reset)|(python3?|ruby|node|perl)[[:space:]])'
 if printf '%s' "$cmd" | grep -Eq -- "$writes"; then
-    block "the command may write to a human-owned path (.ai/rules/, .ai/plan/, .claude/, .github/, architecture-tests/, AGENTS.md, scripts/factory*/, .devcontainer/, .mvn/, .git/). Agents never change these; if the item needs it, stop and report NEEDS_HUMAN."
+    block "the command may write to a human-owned path (.ai/rules/protected-paths.md lists them; also .git/ and the run state). Agents never change these; if the item needs it, stop and report NEEDS_HUMAN."
 fi
 exit 0

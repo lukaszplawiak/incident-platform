@@ -25,7 +25,8 @@ shell only read git, `git add` of those paths and `git commit` (hooks enforce bo
 ## Read
 
 The item (in `BACKLOG.md`), `.ai/context/project.md` (Service Map), the `.ai/context/` files for the areas
-the item touches, `.ai/decisions/README.md` and the ADRs whose area it touches, `.ai/rules/ready.md`, and
+the item touches, `.ai/decisions/README.md` and the ADRs whose area it touches, `.ai/rules/ready.md`,
+`.ai/rules/protected-paths.md`, and
 **all** rule files in `.ai/rules/review/` — you choose which of their rules the implementer must have in
 front of it. Then the code the item is about: find the existing solution to the same class of problem in
 this codebase (CLAUDE.md "Working style", step 3) — the plan follows it.
@@ -41,6 +42,10 @@ systems handle it, the precedent in this codebase, the options, the choice. Then
 - **Stop the item** (answer `blocked: true`) when any of these holds — the owner decides, not you:
   - anything in `.ai/rules/ready.md` point 3 the item does not already state and authorise
     (`Risk: high` items are allowed to proceed; the owner merges them);
+  - any step of your plan writes a path of `.ai/rules/protected-paths.md` (or `CLAUDE.md` outside its
+    `agent-editable` blocks) — **even when the item is `Risk: high`**, which only decides who merges.
+    Propose the split in `reason` (the protected part for the owner). Fixed (backlog #0-122, #0-42's run): a plan with three
+    steps in `.github/` went to the implementer, which could only stop;
   - the acceptance criteria are ambiguous, contradict each other, or contradict an ADR;
   - the item would need more than one PR (`ready.md` point 4) — propose the split in `reason`;
   - you would have to guess what the owner wants.

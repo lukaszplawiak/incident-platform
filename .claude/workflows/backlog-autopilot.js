@@ -183,16 +183,27 @@ async function notify(event, detail) {
   await ops('notify.sh', [event, detail ?? '-'], ANY_OBJECT, 'notify')
 }
 
+// The phase the run is in, recorded with a BLOCKED item so the audit sees where the pipeline stopped it
+// (.ai/rules/audit.md, "Stop stage"). Fixed (backlog #0-122): the state history held only "blocked", with no stage.
+let stage = 'preflight'
+function enterPhase(name) {
+  stage = name.toLowerCase()
+  phase(name)
+}
+// A PR URL as a state.sh argument: one q() would refuse becomes "-", so the record (lock release, breaker
+// count) is never lost to an odd URL (backlog #0-122, review round 1).
+const prArg = (url) => (url && SAFE.test(url) ? url : '-')
+
 async function stopItem(item, reason) {
   if (budgetExceeded) reason = `agent budget of ${MAX_AGENT_CALLS} calls exceeded — split the item (last step: ${reason})`
   log(`BLOCKED ${item?.itemId ?? ''}: ${reason}`)
   if (item?.branch) {
-    await as('shipper', [
+    const draft = await as('shipper', [
       `Mode: blocked. Item ${item.itemId} ("${item.title}"), branch ${item.branch}, run ${runId}.`,
       `Reason: ${reason}`,
       `Review record so far (JSON): ${JSON.stringify(record)}`,
     ].join('\n'), { schema: SHIP })
-    await ops('state.sh', ['record', 'blocked', item.id], ANY_OBJECT, 'state')
+    await ops('state.sh', ['record', 'blocked', item.id, prArg(draft?.prUrl), stage], ANY_OBJECT, 'state')
   } else {
     await ops('state.sh', ['unlock'], ANY_OBJECT, 'state')
     await ops('return-to-main.sh', [], ANY_OBJECT, 'back to main')
@@ -290,7 +301,7 @@ async function reviewRound(item, round, dimensions, mergeBase, previousSha, prev
 
 // ---------------------------------------------------------------- run
 
-phase('Preflight')
+enterPhase('Preflight')
 const pre = await ops('preflight.sh', [], PREFLIGHT, 'preflight')
 if (!pre) return { outcome: 'NOT_STARTED', reasons: ['preflight returned no result (is factory-ops loading? check AGENT_TYPE_OPTION)'] }
 if (!pre.ok) {
@@ -315,7 +326,7 @@ if (!iso || iso.definitionLoaded !== true || iso.tools.some((t) => /^(Edit|Write
 let item
 let next = null
 let plannedModules = null      // the architect's prediction of the modules the change reaches
-phase('Pick')
+enterPhase('Pick')
 if (!args?.branch) {
   // The choice is code: next-item.sh reads the queue, the backlog and the locks on the base commit.
   const wanted = args?.item ? String(args.item).replace(/^#/, '') : null
@@ -362,7 +373,7 @@ const IMPL_TYPE = (next ? isLow(next.complexity) && isLow(item.complexity) : isL
 record.implementer = IMPL_TYPE
 
 if (!args?.branch) {
-  phase('Plan')
+  enterPhase('Plan')
   const plan = await as('architect', [
     `Plan item ${item.itemId} ("${item.title}") on branch ${item.branch}. Work dir ${item.workDir}. Risk ${item.risk}, complexity ${item.complexity}.`,
     `Acceptance criteria:\n${(item.acceptanceCriteria ?? []).join('\n')}`,
@@ -373,7 +384,7 @@ if (!args?.branch) {
   record.plannedRules = (plan.rules ?? []).map((r) => r.id).filter(Boolean)
   plannedModules = plan.modules ?? null
 
-  phase('Implement')
+  enterPhase('Implement')
   const impl = await as(IMPL_TYPE, [
     `Mode: implement. Item ${item.itemId} ("${item.title}"), branch ${item.branch}, work dir ${item.workDir}.`,
     `Plan (also in progress.md): ${JSON.stringify(plan.plan)}`,
@@ -402,7 +413,7 @@ if (!args?.branch) {
   }
 }
 
-phase('Review')
+enterPhase('Review')
 let previousSha = null
 let lastHead = null           // HEAD the panel last reviewed
 let previous = {}            // dimension -> blocking findings of the previous round
@@ -468,7 +479,7 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
 }
 if (!approved) return stopItem(item, `review did not converge in ${MAX_ROUNDS} rounds`)
 
-phase('Acceptance')
+enterPhase('Acceptance')
 let acc = await as('acceptance-reviewer', [
   `Autopilot acceptance. Item ${item.itemId} ("${item.title}"), branch ${item.branch}, mergeBase ${mergeBase}, base ref ${base.ref}.`,
   `Risk: ${item.risk}. Answer with the acceptance JSON only.`,
@@ -503,7 +514,7 @@ record.scope = scopeOf(next?.modules, plannedModules, lastPaths?.areas)
 const riskHigh = !isLow(item.risk) || (next !== null && !isLow(next.risk))
 if (acc.verdict === 'NEEDS_HUMAN' && !riskHigh) return stopItem(item, `acceptance NEEDS_HUMAN: ${acc.reason}`)
 
-phase('Ship')
+enterPhase('Ship')
 const merge = !SHADOW && !riskHigh && acc.verdict === 'ACCEPT'
 const shipped = await as('shipper', [
   `Mode: ship. Item ${item.itemId} ("${item.title}"), branch ${item.branch}, run ${runId}.`,
@@ -513,12 +524,12 @@ const shipped = await as('shipper', [
 if (!shipped || !shipped.prUrl) return stopItem(item, `shipper failed: ${shipped?.error ?? 'no answer'}`)
 if (shipped.error) {
   // The PR exists; do not run blocked mode on a published PR. Record it and leave the decision to the owner.
-  await ops('state.sh', ['record', 'blocked', item.id, shipped.prUrl], ANY_OBJECT, 'state')
+  await ops('state.sh', ['record', 'blocked', item.id, prArg(shipped.prUrl), stage], ANY_OBJECT, 'state')
   await notify('ship-error', String(shipped.prNumber ?? item.id))
   return { outcome: 'SHIPPED_WITH_ERROR', item: item.itemId, pr: shipped.prUrl, error: shipped.error, agentCalls: calls }
 }
 
-await ops('state.sh', ['record', 'shipped', item.id, shipped.prUrl], ANY_OBJECT, 'state')
+await ops('state.sh', ['record', 'shipped', item.id, prArg(shipped.prUrl)], ANY_OBJECT, 'state')
 await notify(SHADOW || riskHigh ? 'pr-ready' : 'pr-auto-merge', String(shipped.prNumber ?? item.id))
 // Follow-ups wait for the owner's /ready; tell the owner they exist.
 const followUps = (shipped.followUpsCreated ?? []).map((f) => String(f).replace(/^#/, '')).filter((f) => /^0-\d+$/.test(f))

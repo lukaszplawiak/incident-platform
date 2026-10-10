@@ -7,6 +7,7 @@
 set -euo pipefail
 
 CHECKER=$(cd "$(dirname "$0")" && pwd)/check-factory-guards.sh
+SRC=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
@@ -24,6 +25,7 @@ case_() {
     printf 'create table a();\n' > svc/src/main/resources/db/migration/V1__a.sql
     printf '<project><dependencies></dependencies></project>\n' > pom.xml
     printf '### 0-1. Item\n**Type:** bug · **Priority:** Low · **Status:** Open\n' > BACKLOG.md
+    mkdir -p .ai/rules && cp "$SRC/.ai/rules/protected-paths.md" .ai/rules/
     eval "$setup"
     git add -A && $G commit -qm base
     local b; b=$(git rev-parse HEAD)
@@ -71,6 +73,10 @@ case_ fail "a test renamed out of the test pattern" ":" "git mv svc/src/test/jav
 case_ fail "an applied migration deleted" ":" "git rm -q svc/src/main/resources/db/migration/V1__a.sql"
 case_ fail "skipTests in a POM" ":" "printf '<project><properties><skipTests>true</skipTests></properties></project>\n' > pom.xml"
 case_ fail "maven config changed" ":" "mkdir -p .mvn && echo '-DskipTests' > .mvn/maven.config"
+case_ fail "Windows wrapper changed" "printf 'x\\n' > mvnw.cmd" "printf 'y\\n' > mvnw.cmd"
+case_ fail "no build-config list on the base: fail closed" "rm .ai/rules/protected-paths.md" "echo x > notes.txt"
+case_ fail "a PR cannot narrow the list for itself" ":" \
+    "sed -i.bak '/^- \`mvnw\`/d' .ai/rules/protected-paths.md && rm .ai/rules/protected-paths.md.bak && printf 'y\\n' > mvnw"
 J="printf '<project><build><plugins><plugin><executions><execution>\\n<goals>\\n<goal>check</goal>\\n</goals>\\n<minimum>0.60</minimum>\\n</execution></executions></plugin></plugins></build></project>\\n' > pom.xml"
 case_ fail "coverage minimum lowered" "$J" "sed -i.bak 's/0.60/0.10/' pom.xml && rm pom.xml.bak"
 case_ fail "coverage check goal removed" "$J" "sed -i.bak '/<goal>check<\\/goal>/d' pom.xml && rm pom.xml.bak"

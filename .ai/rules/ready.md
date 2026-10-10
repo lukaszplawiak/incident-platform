@@ -11,7 +11,9 @@ clarify in round 3 should have been clarified before the picker ever saw it.
 
 1. **Numbered acceptance criteria** (`AC1.`, `AC2.`, …), each checkable by a test or a CI check script
    (`.ai/rules/acceptance.md`) — not by a command someone runs by hand. "Works correctly", "is robust",
-   "is clean" are not criteria.
+   "is clean" are not criteria. A *new* CI check script or workflow step lives in `.github/`, which the
+   autopilot cannot write (point 3): such a criterion makes the item human-only, or the owner adds the
+   check first and the criterion then refers to it (a criterion may name an existing check).
 2. **No open decision.** The item's `design` questions are answered in the item or an ADR. An item of type
    `design` is never ready as such: the decision is taken first (by the owner, recorded in an ADR), then
    the implementation becomes a ready item.
@@ -23,7 +25,15 @@ clarify in round 3 should have been clarified before the picker ever saw it.
    - a change to authentication, the security filter chains, tenant isolation, the platform operator API
      or tenant status;
    - a new dependency, Maven plugin or repository, external service, or GitHub workflow;
-   - anything in `.ai/rules/`, `.claude/`, `.github/`, `architecture-tests/`.
+   - anything in a path of `.ai/rules/protected-paths.md`.
+
+   `Risk: high` only says who merges; it does not let the autopilot write anything. An item that must
+   **write** a path of `.ai/rules/protected-paths.md` (or `CLAUDE.md` outside its `agent-editable`
+   blocks) is not autopilot work: make it `human-only`, or split it so the owner does that part first. Name
+   such a path explicitly in `**Touches:**` (in the parentheses: `ci (.github/scripts)`, not only `ci`):
+   `next-item.sh` and `check-queue.sh` then refuse the item before any agent runs. Fixed (backlog #0-122; #0-42's run, draft PR
+   #477): an item marked ready with `Risk: high` and a new `.github/scripts` check in its criteria could only
+   end BLOCKED at the implementer.
 4. **Small enough for one PR**: one service plus `shared` at most, no more than about 400 changed
    production lines expected, at most 3 review rounds plausible. Bigger items are split first.
 5. **Dependencies named** (`**Depends on:**`) and all of them `Done`.

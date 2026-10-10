@@ -12,8 +12,9 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 failures=0
 
-mkdir -p "$WORK/repo/scripts/factory"
-cp "$SRC/scripts/factory/_common.sh" "$SRC/scripts/factory/changed-paths.sh" "$WORK/repo/scripts/factory/"
+mkdir -p "$WORK/repo/scripts/factory" "$WORK/repo/.ai/rules"
+cp "$SRC/scripts/factory/_common.sh" "$SRC/scripts/factory/_protected.sh" "$SRC/scripts/factory/changed-paths.sh" "$WORK/repo/scripts/factory/"
+cp "$SRC/.ai/rules/protected-paths.md" "$WORK/repo/.ai/rules/"
 cd "$WORK/repo" || exit 1
 git init -q -b main
 printf '.ai/runs/\n' > .gitignore
@@ -101,6 +102,16 @@ coverage_case "coverage check goal removed" true "$(jacoco_pom 0.8.12 verify 0.6
 coverage_case "coverage narrowed by an include" true "$(jacoco_pom 0.8.12 verify 0.60 | sed 's#</configuration>#\n<includes>\n<include>**/Easy*</include>\n</includes>\n</configuration>#')"
 coverage_case "inherited rule wiped by combine.self" true "$(jacoco_pom 0.8.12 verify 0.60 | sed 's#</configuration>#\n<rules combine.self="override"/>\n</configuration>#')"
 coverage_case "jacoco version bump only" false "$(jacoco_pom 0.8.13 verify 0.60)"
+
+echo "changed-paths: the protected-path list (.ai/rules/protected-paths.md)"
+case_ "audit decisions are human-owned" '.needsHuman and (.protectedTouched | index(".ai/audit/decisions.md"))' -- \
+      '.ai/audit/decisions.md=decided'
+case_ "the wrapper is build configuration" '.needsHuman and (.buildConfigChanged | index("mvnw"))' -- 'mvnw=#!/bin/sh'
+git checkout -q main && git rm -q .ai/rules/protected-paths.md && git -c user.email=t@t -c user.name=t commit -q -m "no list"
+git checkout -q -B feat/0-1-t main && echo x > notes.txt && git add notes.txt && git -c user.email=t@t -c user.name=t commit -q -m t
+out=$(scripts/factory/changed-paths.sh main)   # exits 1 here; under pipefail a pipe into jq would read as false
+if printf '%s' "$out" | jq -e '.error | test("protected-paths.md")' >/dev/null 2>&1; then echo "  ok: no list on the base: fail closed"
+else echo "::error::no list on the base: expected an error"; failures=$((failures+1)); fi
 
 if [ "$failures" -gt 0 ]; then echo "$failures changed-paths test(s) failed"; exit 1; fi
 echo "All changed-paths tests passed."

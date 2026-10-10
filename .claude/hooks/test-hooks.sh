@@ -69,6 +69,8 @@ expect 2 "redirect into settings"        "$P" -- "$(bash_call 'echo {} > .claude
 expect 2 "copy over an agent"            "$P" -- "$(bash_call 'cp /tmp/x .claude/agents/review-security.md')"
 expect 2 "git checkout a workflow"       "$P" -- "$(bash_call 'git checkout HEAD~1 -- .github/workflows/ci.yml')"
 expect 2 "python writes AGENTS.md"       "$P" -- "$(bash_call 'python3 -c "open(\"AGENTS.md\",\"w\")"')"
+expect 2 "redirect into audit decisions" "$P" -- "$(bash_call 'echo accept >> .ai/audit/decisions.md')"
+expect 0 "read audit decisions"          "$P" -- "$(bash_call 'cat .ai/audit/decisions.md')"
 expect 0 "unrelated write"               "$P" -- "$(bash_call 'echo x > /tmp/y')"
 
 R="$HOOKS/readonly-bash.sh"

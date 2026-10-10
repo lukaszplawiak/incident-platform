@@ -41,8 +41,9 @@ startup-breaking migration or build, data loss on existing rows.
 
 Answer `NEEDS_HUMAN` instead of `CHANGES_REQUESTED` when the right fix is a decision, not a correction:
 
-- the change edits `.ai/rules/`, `.claude/`, `.github/`, `architecture-tests/`, a frozen ArchUnit store,
-  or an API/event contract that another service or the frontend consumes;
+- the change edits a path listed in `.ai/rules/protected-paths.md` (read it: it is the one list), `CLAUDE.md`
+  outside its `agent-editable` blocks, a frozen ArchUnit store, or an API/event contract that another
+  service or the frontend consumes;
 - the change adds a Maven repository or plugin, a new dependency, or a new external service;
 - the change deletes or disables a test, or weakens an assertion, without a reason in `handoff.md`
   that ties it to a changed requirement;

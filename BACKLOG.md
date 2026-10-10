@@ -121,6 +121,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-120](#0-120-kubernetes-staging-and-prod-overlays-are-swapped) | Kubernetes staging and prod overlays are swapped | bug | Medium | Open |
+| [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
 
 ---
 
@@ -698,7 +699,7 @@ lookup, not a leak.
 ### 0-42. Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist
 
 **Type:** bug · **Priority:** Low · **Status:** Open
-**Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-16 is Done)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-16 is Done)
 **Touches:** k8s (overlays/dev, base/infrastructure/app-config.yml), ci (.github/scripts, .github/workflows/ci.yml), notification-service (application.yml comments only), root (README.md "Infrastructure Hardening", .ai/context/infrastructure.md)
 
 **Problem.** `k8s/base/infrastructure/app-config.yml` sets `MAIL_HOST: "mailhog"` and the dev overlay's comment says
@@ -709,6 +710,12 @@ overrode those properties with `SPRING_MAIL_PROPERTIES_*` environment variables 
 
 **Work.** Deploy Mailpit in the dev overlay with the same overrides (or point `MAIL_HOST` at a real relay per
 overlay), so dev on Kubernetes delivers invites and operator emails.
+
+**Autopilot run (2026-10-10): BLOCKED** at the implementer, draft PR #477. AC9 needs a new `.github/` check
+script and workflow step, which the autopilot may not write; the item was marked ready with `Risk: high` as if
+that were enough. Now `human-only` (the owner builds it, from the architect's plan and Proposed ADR 0026 on
+the branch of #477); the gap that let it through is closed by backlog #0-122 (the protected-path gate in
+`next-item.sh`, `.ai/rules/ready.md` point 3).
 
 **Decided (owner, `/ready #0-42`, 2026-10-10).**
 - Mailpit runs in the dev overlay only, as a file in `k8s/overlays/dev/` listed in `resources`. Never in base,
@@ -2090,6 +2097,68 @@ images and staging secrets, and "prod" runs the `staging` tag.
 `kustomization.yml` contents so each directory describes its own environment; the `secrets.yml` files are
 already right. A CI assertion that each overlay's rendered namespace ends in its directory name would keep it
 from coming back.
+
+---
+
+### 0-121. A pipeline audit traces problems to the stage that introduced them
+
+**Type:** design · **Priority:** Medium · **Status:** Open (owner's decision 2026-10-10, after #0-42)
+
+**Problem.** The only audit target is `reviewers` (`.claude/workflows/audit.js`): one analyst per review
+dimension, which fits seven parallel reviewers with one verdict format. The stages before and after the panel
+— `/ready` with `ready-checker`, the planner, the picker, the architect, the implementer, acceptance and the
+shipper — run in sequence, and a problem in one usually shows up in a later one. #0-42 was introduced in
+`/ready` (an AC needing `.github/`), passed the architect (`Risk: high` let it through) and was detected only
+by the implementer (draft PR #477). No analyst looks at that chain: the reviewers' audit sees nothing (no
+review ran), and an audit per agent would see each stage acting correctly on its own.
+
+**Decided (owner, 2026-10-10).** Not one auditor per agent: one analyst for the whole pipeline beside the
+`reviewers` audit. It measures phase containment — for each item that did not go through cleanly (BLOCKED,
+extra rounds, `backlog-estimate-off`, an escape) the stage where the problem was introduced and the stage where
+it was detected — pools cases across stages (so the ≥3-case rule of `.ai/rules/audit.md` is reachable) and
+addresses each recommendation to the stage that should have caught it. A stage gets its own analyst only when
+the data shows it produces most of the cases.
+
+**Data already recorded** (backlog #0-122): the stop stage and draft PR of a BLOCKED item in
+`.ai/runs/state.json`, the "Ready check" section of a `/ready` PR, and the hard-fact rule for deterministic
+contradictions in `audit.md`.
+
+**Work.** A target `pipeline` in `audit.js`, an `audit-pipeline` agent definition, its data in
+`scripts/factory/audit-data.sh` (the `/ready` PRs, `handoff.md` of BLOCKED items), and its section in
+`.ai/rules/audit.md`. Human-only: every file is a protected path. Worth starting once a few BLOCKED or
+reworked items exist to measure.
+
+---
+
+### 0-122. Protected paths: one list, a Touches gate and the stop stage
+
+**Type:** bug · **Priority:** High · **Status:** Done, PR #478 (found by #0-42's autopilot run, 2026-10-10). Kept in
+full as the record of why the protected paths have one list; code comments cite `backlog #0-122`.
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** ci (scripts/factory, .github/scripts, .github/workflows/factory-guards.yml), root (README.md, CLAUDE.md, AGENTS.md, .ai/rules, .claude)
+
+**Problem.** #0-42 was marked `ready` with `Risk: high` and an acceptance criterion needing a new
+`.github/` check. The architect let it through (`Risk: high` items proceed), and only the implementer, which
+may not write `.github/`, stopped it (draft PR #477) — one wasted run. Behind it: `ready.md` read "Risk: high
+or not ready" without saying when, `ready-checker` pushed criteria toward new CI scripts, no code checked an
+item against the paths the autopilot may not write, and that list existed in about ten places that had
+drifted apart (the shell hook did not cover `.ai/audit/decisions.md`; one copy treated all of `CLAUDE.md` as
+protected). The run state recorded the block with no PR and no stage, so an audit could not see where it
+was stopped.
+
+**Decided (owner, 2026-10-10).** One list, `.ai/rules/protected-paths.md`, read by the scripts (from the base
+commit, failing closed) and by every agent that needs it; the deny rules, the shell hook and CODEOWNERS keep
+literal copies, checked in CI. The gate reads **Touches only** (a criterion may name an existing check) and
+treats a bare `ci` as protected. `Risk: high` only says who merges. A deterministic contradiction of rules is
+a hard fact in `audit.md` (one case is enough for a missing-gate recommendation). One pipeline auditor
+later, #0-121.
+
+**Delivered.** `_protected.sh` reading the list; `next-item.sh` / `check-queue.sh` refuse such an item;
+`changed-paths.sh` and `check-factory-guards.sh` rule 6 read the same list (from the base);
+`check-protected-paths.sh` (deny rules, hook, CODEOWNERS by GitHub's last-match rule) with its test; the hook covers `.ai/audit/decisions.md`; `state.sh` records the stop stage and draft PR (`prArg`
+keeps the record when a URL is odd); `ready.md`, `ready-checker`, the architect, `/ready` (a "Ready check"
+section in its PR), the implementer, the reviewers' `_common.md`, `AGENTS.md`, `CLAUDE.md`, README and
+`docs/ai-factory.md` point at the list; #0-42 is `human-only`.
 
 ---
 

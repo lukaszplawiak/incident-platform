@@ -9,7 +9,8 @@
 #   check-queue.sh --ref <ref>   the files as they are on a commit (next-item.sh, on the run's base)
 #
 # Errors (exit 1): markers missing; a row without an item id; an item that is neither open nor done; an
-# item twice; a queued item that is human-only or of type design; a dependency that is neither done nor
+# item twice; a queued item that is human-only, of type design, or whose **Touches:** names a path of
+# .ai/rules/protected-paths.md; a dependency that is neither done nor
 # queued before its dependant; an unknown module in **Touches:**.
 # Warnings: a queued item that is not `ready` (the queue stops there until the owner marks it); a queued
 # item without **Touches:** (no scope measurement for it).
@@ -21,6 +22,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 cd "$(git rev-parse --show-toplevel 2>/dev/null)" || { echo '{"valid":false,"errors":["not inside the repository"]}'; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo '{"valid":false,"errors":["jq is not installed"]}'; exit 1; }
 . "$HERE/_backlog.sh"
+. "$HERE/_protected.sh"
 
 ref=""
 if [ "${1:-}" = "--ref" ]; then
@@ -38,7 +40,9 @@ if ! has_file .ai/plan/queue.md; then
     echo '{"valid":true,"present":false,"errors":[],"warnings":[],"rows":0,"openRows":0}'
     exit 0
 fi
-backlog=$(read_file BACKLOG.md | backlog_json) || { echo '{"valid":false,"errors":["cannot read BACKLOG.md"]}'; exit 1; }
+item_re=$({ protected_paths protected "$ref" && protected_paths build-config "$ref"; } | paths_regex free) \
+    || { echo '{"valid":false,"errors":["cannot read the lists of .ai/rules/protected-paths.md"]}'; exit 1; }
+backlog=$(read_file BACKLOG.md | backlog_json "$item_re") || { echo '{"valid":false,"errors":["cannot read BACKLOG.md"]}'; exit 1; }
 done_ids=$(read_file BACKLOG-DONE.md | done_json) || done_ids='[]'
 queue=$(read_file .ai/plan/queue.md | queue_json) || { echo '{"valid":false,"errors":["cannot parse .ai/plan/queue.md"]}'; exit 1; }
 
@@ -57,6 +61,8 @@ result=$(jq -n --argjson items "$backlog" --argjson done "$done_ids" --argjson q
                | "#\(.item) is neither an open item in BACKLOG.md nor done in BACKLOG-DONE.md"),
       ($open[] | select(.it.autopilot == "human-only") | "#\(.item) is human-only: the autopilot never runs it, so it cannot be queued"),
       ($open[] | select(.it.type == "design") | "#\(.item) is a design item: decide it (ADR) and queue its implementation item instead"),
+      ($open[] | select(.it.protected | length > 0)
+         | "#\(.item) names \(.it.protected | join(", ")) in Touches, a path the autopilot may not write (.ai/rules/protected-paths.md): make it human-only or split it"),
       ($open[] as $r | $r.it.dependsOn[] as $d
          | select(isDone($d) | not)
          | if $posOf[$d] == null then "#\($r.item) depends on #\($d), which is neither done nor queued"

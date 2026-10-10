@@ -109,6 +109,13 @@ asked. `/workflows` shows progress; `p` pauses, `x` stops.
    waits for your merge of the previous item, so every item is built on code you have reviewed;
 3. without a queue file, `ready` items by **priority**.
 
+An item whose `**Touches:**` names a path of `.ai/rules/protected-paths.md` (the one list of what no
+agent writes) never starts, whatever its Risk, and `check-queue.sh` refuses to queue it: it could only end
+BLOCKED at the implementer, as #0-42 did (backlog #0-122). Make it `human-only` or split it
+(`.ai/rules/ready.md` point 3). A bare `ci` in Touches counts as protected: name the path in the
+parentheses. The autopilot's deny rules, its shell-write hook and CODEOWNERS keep literal copies of that
+list; the "Factory guards" check fails when one stops covering it.
+
 `{"item": "#0-25"}` overrides the choice (the item still has to be ready, unblocked and unlocked). When
 nothing can start, the run ends with `NOTHING_TO_DO` and names the row and why.
 
@@ -160,7 +167,8 @@ The breaker and the audit counter are reset only by the owner, outside the autop
 not run `scripts/factory-admin/`): after resolving the BLOCKED items, delete `.ai/STOP` and run
 `scripts/factory-admin/state-reset.sh blocked`; after an audit, `/apply-audit` runs
 `scripts/factory-admin/state-reset.sh audit`. The run state lives in `.ai/runs/` (gitignored): `LOCK`
-holds the run id and the base commit every gate compares against, `state.json` the counters.
+holds the run id and the base commit every gate compares against, `state.json` the counters and the
+history (for a BLOCKED item also its draft PR and the phase that stopped it, which the audit reads).
 
 ## The owner's routine
 
@@ -234,6 +242,6 @@ moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs.
 | `mkdir: cannot create directory '/home/dev/.m2/wrapper': Permission denied` (or `gh` cannot store its login) | a volume created before the image made its mount point, so it is root's: remove it if it is empty (`docker volume rm incident-platform-m2` / `incident-platform-gh`) and start the container again; to keep its contents (a Maven cache, a login), give it to `dev` instead: `docker run --rm -v incident-platform-m2:/v alpine chown -R 1000:1000 /v` |
 | `FIREWALL SETUP FAILED: all traffic is blocked` at container start | a required domain did not resolve or GitHub's IP ranges could not be fetched; the message above it names the cause. Fix it and restart the container (an optional domain only warns) |
 | a reviewer "returned no valid verdict" | it answered prose instead of JSON; check its transcript; repeated → audit finding |
-| `NOTHING_TO_DO` | the reason names the next queue row and why it cannot start: not `ready` on main, a dependency not done, or an open PR/branch (a lock — usually the previous item waiting for your merge). "The approved queue is done" → `/plan-backlog` |
+| `NOTHING_TO_DO` | the reason names the next queue row and why it cannot start: not `ready` on main, a dependency not done, a path the autopilot may not write ("make it human-only or split it"), or an open PR/branch (a lock — usually the previous item waiting for your merge). "The approved queue is done" → `/plan-backlog` |
 | `NOT_STARTED: the queue on main is invalid` | a merged change broke `.ai/plan/queue.md` (e.g. an item it lists was removed); `scripts/factory/check-queue.sh` names the rows — fix them or re-plan |
 | a hook blocks a legitimate command | read the hook's message; the hooks are tested by `.claude/hooks/test-hooks.sh` — fix the hook and its test together |

@@ -13,6 +13,7 @@
 # ============================================================
 set -uo pipefail
 . "$(dirname "$0")/_common.sh"
+. "$(dirname "$0")/_protected.sh"
 
 base=${1:-$(base_ref)}
 since=${2:-}
@@ -26,8 +27,12 @@ fi
 json_list() { printf '%s\n' "$1" | sed '/^$/d' | jq -R . | jq -s .; }
 match() { printf '%s\n' "$files" | grep -E "$1" || true; }
 
-protected=$(match '^(\.ai/rules/|\.ai/plan/|\.ai/audit/decisions\.md$|\.claude/|\.github/|architecture-tests/|AGENTS\.md$|scripts/factory/|scripts/factory-admin/|\.devcontainer/)')
-build_config=$(match '^(\.mvn/|mvnw(\.cmd)?$)')
+# The protected paths come from their one definition, as it is on the base (.ai/rules/protected-paths.md).
+protected_re=$(protected_paths protected "$base" | paths_regex anchored) \
+    && build_re=$(protected_paths build-config "$base" | paths_regex anchored) \
+    || { jq -n --arg b "$base" '{error:("cannot read the lists of .ai/rules/protected-paths.md on " + $b)}'; exit 1; }
+protected=$(match "$protected_re")
+build_config=$(match "$build_re")
 skip_props=$(git diff --no-renames "$mb"...HEAD -- '*pom.xml' | grep -E '^\+' | grep -vE '^\+\+\+' | grep -E 'skipTests|maven\.test\.skip|testFailureIgnore|<skip>[[:space:]]*true|haltOnFailure|jacoco\.skip|<excludes>|<exclude>' | head -3 || true)
 [ -n "$skip_props" ] && build_config="$build_config"$'\n'"pom.xml: skip/exclude property added"
 # The coverage check itself: a lowered <minimum>, a removed <rule> or `check` goal, a moved <phase>, an

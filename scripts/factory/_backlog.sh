@@ -3,8 +3,15 @@
 # Parsing of BACKLOG.md, BACKLOG-DONE.md and .ai/plan/queue.md for the factory scripts. Sourced, not run.
 # Text in, JSON out (jq). Portable: awk + jq, no bash 4 features, so the owner can run the checks on macOS.
 #
-#   backlog_json   < BACKLOG.md        → [{id, title, type, priority, status, autopilot, risk, complexity,
-#                                           dependsOn:[ids], followUpOf, touches, modules:[...], order}]
+#   backlog_json <protected-re> < BACKLOG.md
+#                                      → [{id, title, type, priority, status, autopilot, risk, complexity,
+#                                           dependsOn:[ids], followUpOf, touches, modules:[...],
+#                                           protected:[paths], order}]
+#     protected: the paths of .ai/rules/protected-paths.md that the item's **Touches:** names
+#     (<protected-re> from _protected.sh: paths_regex free). Touches is what the change writes; a criterion
+#     may name a protected path only to refer to it (an existing check), so the criteria are not read.
+#     A bare `ci` (no parentheses) counts too: `ci` is .github/ and scripts/, and everything tracked under
+#     both is protected today — a Touches line must name the path for the gate to judge it.
 #   done_json      < BACKLOG-DONE.md   → ["0-1", "0-18", …]
 #   queue_json     < queue.md          → {markers: bool, rows: [{index, pos, item, why}]}
 #
@@ -20,6 +27,7 @@
 KNOWN_MODULES='["shared","service-parent","auth-service","ingestion-service","incident-service","notification-service","escalation-service","postmortem-service","oncall-service","root","docs","k8s","docker","ci"]'
 
 backlog_json() {
+    local protected_re=${1:?backlog_json needs the protected-path regex (_protected.sh)}
     LC_ALL=C awk '
         function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
         function field(line, name,    key, i, rest, j) {
@@ -47,7 +55,7 @@ backlog_json() {
         }
         id != "" && /^\*\*Touches:\*\*/ && touches == "" { touches = field($0, "Touches") }
         END { flush() }
-    ' | jq -R -s '
+    ' | jq -R -s --arg protected "$protected_re" '
         split("\n") | map(select(length > 0) | split("\t")) as $rows
         | ($rows | map(select(.[0] == "T")) | to_entries
             | map({key: .value[1], value: {order: .key, priority: .value[2]}}) | from_entries) as $table
@@ -58,7 +66,10 @@ backlog_json() {
             followUpOf: ([.[10] | scan("0-[0-9]+")] | first // null),
             touches: .[11],
             modules: (.[11] | gsub("\\([^)]*\\)"; "") | split(",") | map(gsub("^\\s+|\\s+$"; ""))
-                      | map(select(length > 0 and . != "—" and . != "-")) | unique)
+                      | map(select(length > 0 and . != "—" and . != "-")) | unique),
+            protected: ([.[11] | scan($protected)]
+                        + (if (.[11] | test("(^|,)\\s*ci\\s*(,|$)")) then ["ci (no path given)"] else [] end)
+                        | unique)
           } | . + {order: ($table[.id].order // 9999),
                    priority: (if .priority == "" then ($table[.id].priority // "") else .priority end)})'
 }
