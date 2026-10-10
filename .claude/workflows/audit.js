@@ -33,14 +33,22 @@ const dimensions = Array.isArray(args.dimensions) && args.dimensions.length ? ar
 
 phase('Collect')
 const data = await as('factory-ops', `Run exactly: scripts/factory/audit-data.sh '${args.since}'`, {
-  schema: { type: 'object', required: ['file', 'prs'], properties: { file: { type: 'string' }, prs: { type: 'number' }, prsWithHumanLabels: { type: 'number' }, readyPrs: { type: 'number' }, cases: { type: 'number' }, transcriptsDir: { type: 'string' } } },
+  schema: { type: 'object', required: ['file', 'prs'], properties: { file: { type: 'string' }, prs: { type: 'number' }, prsWithHumanLabels: { type: 'number' }, unverifiedHumanLabels: { type: 'number' }, ownerIsAutopilot: { type: 'boolean' }, owner: { type: ['string', 'null'] }, readyPrs: { type: 'number' }, cases: { type: 'number' }, transcriptsDir: { type: 'string' } } },
   label: 'audit data',
 })
 if (!data) return { outcome: 'FAILED', reason: 'audit-data.sh gave no result' }
 // A pipeline case can come from the run history or an escaped defect alone, with no autopilot PR in the period.
 if (data.prs === 0 && !data.cases) return { outcome: 'NOTHING_TO_AUDIT', reason: `no autopilot PR and no pipeline case since ${args.since}` }
 log(`${data.prs} autopilot PRs since ${args.since}, ${data.prsWithHumanLabels} with owner labels; ${data.cases ?? 0} pipeline cases, ${data.readyPrs ?? 0} /ready PRs`)
-if (data.prsWithHumanLabels === 0) log('No PR carries a human:* label: confidence cannot exceed medium, and no security/architecture relaxation is possible this cycle.')
+if (data.prsWithHumanLabels === 0) log('No PR carries a verified owner label (human:* added by the owner): confidence cannot exceed medium, and no security/architecture relaxation is possible this cycle.')
+// Owner labels count only when the owner added them (backlog #0-126); what did not count goes into every report.
+const labelWarnings = [
+  data.owner == null ? 'The repository owner could not be read: no human:* label counts as owner confirmation this cycle.' : '',
+  data.ownerIsAutopilot ? "Autopilot PRs are authored by the owner's own login, so the autopilot acts with the owner's token and who added a label proves nothing: no human:* label counts this cycle; the report must say so in its Summary." : '',
+  data.unverifiedHumanLabels > 0 ? `${data.unverifiedHumanLabels} human:* label(s) were not added by the owner (unverifiedLabels in the data file): they count for nothing; list them in the report's Evidence.` : '',
+].filter(Boolean)
+for (const w of labelWarnings) log(w)
+const labelNote = `Owner labels: ${labelWarnings.join(' ') || 'every human:* label in the data was added by the owner.'}`
 const reports = []
 const failures = []   // a target that failed: recorded, and the other target still runs (they are independent)
 
@@ -60,6 +68,7 @@ if ((target === 'all' || target === 'reviewers') && data.prs > 0) {
   const report = await as('audit-synthesis', [
     `Write the audit report for date ${args.date}, target reviewers, period ${args.since} to ${args.date}.`,
     `Dimensions without an analyst result: ${dimensions.filter((d, i) => !results[i]).join(', ') || 'none'}.`,
+    labelNote,
     `Per-dimension results (JSON): ${JSON.stringify(ok)}`,
   ].join('\n'), { schema: REPORT })
   if (report) reports.push({ target: 'reviewers', ...report })
@@ -83,6 +92,7 @@ if (target === 'all' || target === 'pipeline') {
       const pipelineReport = await as('audit-synthesis', [
         `Write the audit report for date ${args.date}, target pipeline, period ${args.since} to ${args.date}.`,
         `Pipeline analyst result (JSON): ${JSON.stringify(traced)}`,
+        labelNote,
       ].join('\n'), { schema: REPORT })
       if (pipelineReport) reports.push({ target: 'pipeline', ...pipelineReport })
       else failures.push({ target: 'pipeline', reason: 'synthesis gave no answer', traced })

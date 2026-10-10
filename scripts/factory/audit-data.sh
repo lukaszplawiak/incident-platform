@@ -2,8 +2,8 @@
 # ============================================================
 # Collects the audit's raw data into one JSON file and prints a short summary as JSON.
 #   audit-data.sh <since YYYY-MM-DD>
-# Data: autopilot PRs updated since the date (labels incl. human:*, body with the verdict JSON in
-# <details>), items with **Escaped from:**, seeded-defect results, the local run history, and the
+# Data: autopilot PRs updated since the date (labels, with human:* only as verifiedLabels / unverifiedLabels — see
+# "Owner labels" below; body with the verdict JSON in <details>), items with **Escaped from:**, seeded-defect results, the local run history, and the
 # transcript directory (Claude Code keeps transcripts for cleanupPeriodDays, 90 in settings.json).
 #
 # For the pipeline audit (backlog #0-121) it also collects the merged /ready PRs (branches docs/backlog-ready-<0-N>,
@@ -11,6 +11,15 @@
 # this script is their one implementation. Derived from what the pipeline already records, so no agent and no person
 # has to remember to log a case. Only MERGED /ready PRs are read at all: merging is the owner's, so a PR opened from
 # a fork on a docs/backlog-ready-* branch neither stands in for one nor puts its text in front of the analyst.
+#
+# Owner labels (backlog #0-126): a `human:*` label counts only when the repository owner added it, read from the PR's
+# label events (the last `labeled` event of a label still on the PR). The data keeps `verifiedLabels` and
+# `unverifiedLabels` apart and strips `human:*` from the raw `labels`, so no reader can count an unchecked one; a
+# label by another account, with no event data, or with the owner unknown is unverified; and while any autopilot PR
+# is authored by the owner's own login, every label is (the autopilot then acts with the owner's token, so the actor
+# proves nothing on any PR — review round 1, sec-4c1e). It fails closed.
+# The owner is the repository's owner login (`gh repo view`), which the autopilot cannot change; an organisation's
+# repository has an organisation there, so every label would be unverified until this reads its members.
 # ============================================================
 set -uo pipefail
 . "$(dirname "$0")/_common.sh"
@@ -20,13 +29,26 @@ out="$RUNS_DIR/audit/audit-data-$since.json"; mkdir -p "$(dirname "$out")"
 case "$since" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo '{"error":"since must be YYYY-MM-DD"}'; exit 1 ;; esac
 prs_file="$RUNS_DIR/audit/prs-$since.json"
 ready_file="$RUNS_DIR/audit/ready-prs-$since.json"
-echo '[]' > "$prs_file"; echo '[]' > "$ready_file"
+events_file="$RUNS_DIR/audit/label-events-$since.json"
+echo '[]' > "$prs_file"; echo '[]' > "$ready_file"; echo '{}' > "$events_file"
+owner=""
 if command -v gh >/dev/null 2>&1; then
     gh pr list --label autopilot --state all --search "updated:>=$since" --limit 200 \
-       --json number,title,state,labels,body,mergedAt,closedAt,url,headRefName,isDraft > "$prs_file" 2>/dev/null || echo '[]' > "$prs_file"
+       --json number,title,state,labels,body,mergedAt,closedAt,url,headRefName,isDraft,author > "$prs_file" 2>/dev/null || echo '[]' > "$prs_file"
     # No date filter: an item's /ready PR is normally merged before the period its autopilot run falls in.
     gh pr list --state all --search "head:docs/backlog-ready" --limit 200 \
        --json number,title,state,body,mergedAt,url,headRefName > "$ready_file" 2>/dev/null || echo '[]' > "$ready_file"
+    # Who added each label, only for the PRs that carry a human:* one. A failed call leaves that PR without events:
+    # its human labels stay unverified, never trusted.
+    repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || repo=""
+    case "$repo" in */*) owner=${repo%%/*} ;; *) repo="" ;; esac
+    if [ -n "$repo" ]; then
+        for n in $(jq -r '.[] | select(any(.labels[]?; .name | ascii_downcase | startswith("human:"))) | .number' "$prs_file"); do
+            ev=$(gh api "repos/$repo/issues/$n/events" --paginate 2>/dev/null \
+                 | jq -s '[.[][]? | select(.event == "labeled") | {label: .label.name, actor: .actor.login}]' 2>/dev/null) || continue
+            jq --arg n "$n" --argjson ev "$ev" '. + {($n): $ev}' "$events_file" > "$events_file.tmp" && mv "$events_file.tmp" "$events_file"
+        done
+    fi
 fi
 # A real marker names the fixing item (`**Fixes:** #0-N · **Escaped from:** <stage>`); prose that only describes the
 # convention (BACKLOG's conventions, an item's text) does not, and is not counted (first pipeline audit, obs. 5).
@@ -47,7 +69,7 @@ proj_dir="$HOME/.claude/projects/$(printf '%s' "$FACTORY_ROOT" | sed 's#[/.]#-#g
 
 # PR bodies go through a file (--slurpfile): 200 bodies on a command line can exceed ARG_MAX.
 jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready_file" --argjson escaped "$escaped" \
-      --argjson escapedNew "$escaped_new" \
+      --argjson escapedNew "$escaped_new" --slurpfile events "$events_file" --arg owner "$owner" \
       --argjson seeded "$seeded" --argjson state "$state" --arg transcripts "$proj_dir" '
   def first_match($re): [match($re).captures[0].string] | first;
   def item_of: (.headRefName // "") | first_match("/(0-[0-9]+)-");
@@ -56,11 +78,33 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
                      | sort_by(.number) | last
                      | if . == null then null
                        else {number, url, readyCheck: ((.body // "") | test("(?m)^## Ready check"))} end;
+  # When an autopilot PR is authored by the owner login, the autopilot runs with the owner token: every label event
+  # it makes, on any PR, names the owner, so no actor proves anything (review round 1, sec-4c1e).
+  ($owner != "" and any($prs[0][]; (.author.login // null) == $owner)) as $ownerIsAutopilot
+  # The human:* labels of one PR, each with who added it and, when it does not count, why (backlog #0-126).
+  | def checked_labels($ev):
+    [ .[] | select(ascii_downcase | startswith("human:")) | . as $l
+      | (if $ev == null then null else ([$ev[] | select(.label == $l)] | last | .actor // null) end) as $actor
+      | {label: $l, actor: $actor,
+         reason: (if $owner == "" then "the repository owner is unknown"
+                  elif $actor == null then "no label event in the data"
+                  elif $actor != $owner then "added by \($actor), not the owner"
+                  elif $ownerIsAutopilot then "autopilot PRs are authored by the owner login: no actor proves anything"
+                  else null end)} ];
   ($prs[0] | map(
+      (.labels | map(.name)) as $all
+      | $events[0][(.number | tostring)] as $ev
+      # Bound first: jq evaluates the arguments of a function on the input of the call ($all here), not on the PR.
+      | ($all | checked_labels($ev)) as $checked
+      # Any case: GitHub matches label names case-insensitively (review round 4).
+      | . + {labels: [.labels[] | select(.name | ascii_downcase | startswith("human:") | not)],
+             verifiedLabels: [$checked[] | select(.reason == null) | .label],
+             unverifiedLabels: [$checked[] | select(.reason != null)]})) as $prsV
+  | ($prsV | map(
       (.labels | map(.name)) as $labels
       | (.body // "") as $body
       | {pr: .number, url, item: (item_of), branch: .headRefName, draft: .isDraft,
-         merged: (.mergedAt != null), labels: $labels,
+         merged: (.mergedAt != null), labels: $labels, verifiedLabels, unverifiedLabels,
          rounds: ($body | first_match("(?m)^Rounds: ([0-9]+)") | if . == null then null else tonumber end),
          scope: ($body | first_match("(?m)^Scope: ([a-z-]+)")),
          acceptance: ($body | first_match("\"item\"\\s*:\\s*\"#0-[0-9]+\"[\\s\\S]*?\"verdict\"\\s*:\\s*\"([A-Z_]+)\""))}
@@ -70,7 +114,7 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
           (if .scope != null and (.scope | IN("consistent", "not-measured", "within-plan", "within-touches") | not)
              then "scope:\(.scope)" else empty end),
           (if .acceptance != null and .acceptance != "ACCEPT" then "acceptance:\(.acceptance)" else empty end),
-          (.labels[] | select(test("^human:(fp|missed|introduced)-")))
+          (.verifiedLabels[] | select(test("^human:(fp|missed|introduced)-"; "i")))
         ]}
       | select(.signals | length > 0)
       | . + {readyPr: (if .item == null then null else ready_of(.item) end)})) as $prCases
@@ -78,20 +122,28 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
   # Exact comparisons only: inside and contains match strings as substrings ("0-1" inside "0-12").
   | ($state.history // [] | map(select(.outcome == "blocked" and ((.pr // "") == "") and ((.t // "") >= $since)
                                         and ((.item as $i | $covered | index($i)) == null)))
-     | map({pr: null, url: null, item, branch: null, draft: null, merged: false, labels: [], rounds: null,
+     | map({pr: null, url: null, item, branch: null, draft: null, merged: false, labels: [], verifiedLabels: [],
+            unverifiedLabels: [], rounds: null,
             scope: null, acceptance: null, stage: (.stage // null), signals: ["blocked (run history, no PR)"],
             readyPr: ready_of(.item)})) as $stateCases
   # The same marker definition as MARKER above: change both together. A line MARKER accepted but this capture cannot
   # parse (a stage name in another form) is an "escaped:unparsed" case, not dropped: every marker counted is traced.
   | ($escapedNew | map(capture("\\*\\*Fixes:\\*\\* #(?<item>0-[0-9]+).*\\*\\*Escaped from:\\*\\* *(?<from>[a-z][a-z0-9-]*)")?
                        // {item: first_match("#(0-[0-9]+)"), from: null})
-     | map({pr: null, url: null, item, branch: null, draft: null, merged: true, labels: [], rounds: null,
+     | map({pr: null, url: null, item, branch: null, draft: null, merged: true, labels: [], verifiedLabels: [],
+            unverifiedLabels: [], rounds: null,
             scope: null, acceptance: null, signals: [if .from == null then "escaped:unparsed" else "escaped:\(.from)" end],
             readyPr: ready_of(.item)})) as $escapedCases
-  | {since: $since, prs: $prs[0], readyPrs: [$ready[0][] | select(.mergedAt != null)], escaped: $escaped, seeded: $seeded, state: $state,
+  | {since: $since, owner: (if $owner == "" then null else $owner end),
+     ownerIsAutopilot: $ownerIsAutopilot,
+     unverifiedLabels: [$prsV[] | .number as $n | .unverifiedLabels[] | {pr: $n} + .],
+     prs: $prsV, readyPrs: [$ready[0][] | select(.mergedAt != null)], escaped: $escaped, seeded: $seeded, state: $state,
      cases: ($prCases + $stateCases + $escapedCases), transcriptsDir: $transcripts}' > "$out"
 
 jq -n --arg file "$out" --argjson n "$(jq length "$prs_file")" --arg transcripts "$proj_dir" \
-      --argjson labelled "$(jq '[.[] | select(any(.labels[]; .name|startswith("human:")))] | length' "$prs_file")" \
+      --argjson labelled "$(jq '[.prs[] | select(.verifiedLabels | length > 0)] | length' "$out")" \
+      --argjson unverified "$(jq '.unverifiedLabels | length' "$out")" \
+      --argjson ownerIsAutopilot "$(jq '.ownerIsAutopilot' "$out")" --argjson owner "$(jq '.owner' "$out")" \
       --argjson cases "$(jq '.cases | length' "$out")" --argjson ready "$(jq '[.[] | select(.mergedAt != null)] | length' "$ready_file")" \
-      '{file:$file, prs:$n, prsWithHumanLabels:$labelled, readyPrs:$ready, cases:$cases, transcriptsDir:$transcripts}'
+      '{file:$file, prs:$n, prsWithHumanLabels:$labelled, unverifiedHumanLabels:$unverified, owner:$owner,
+        ownerIsAutopilot:$ownerIsAutopilot, readyPrs:$ready, cases:$cases, transcriptsDir:$transcripts}'

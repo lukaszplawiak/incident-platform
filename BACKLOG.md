@@ -125,6 +125,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-126](#0-126-the-audits-trust-human-labels-without-checking-who-added-them) | The audits trust `human:*` labels without checking who added them | security | Medium | Open |
 | [0-128](#0-128-a-malformed-escape-marker-fails-ci-instead-of-vanishing-from-the-audits) | A malformed escape marker fails CI instead of vanishing from the audits | improvement | Low | Open |
 | [0-129](#0-129-the-pipeline-audit-counts-only-escape-markers-the-owner-added) | The pipeline audit counts only escape markers the owner added | security | Medium | Open |
+| [0-130](#0-130-a-shell-guard-that-fails-refuses-the-command-instead-of-allowing-it) | A shell guard that fails refuses the command instead of allowing it | security | Low | Open |
 
 ---
 
@@ -2224,6 +2225,23 @@ own: the commit's author or committer (free, unsigned text; the owner and the bo
 the owner (in shadow mode the owner merges every autopilot PR, so a planted line in a long diff would pass). Report
 the others as unverified, never as cases. Same owner source as #0-126 (`gh repo view --json owner`). Do it together
 with #0-128, whose CI check reuses the same `MARKER` pattern from `audit-data.sh`.
+
+---
+
+### 0-130. A shell guard that fails refuses the command instead of allowing it
+
+**Type:** security · **Priority:** Low · **Status:** Open (found by the security review of #0-126, 2026-10-10)
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
+**Touches:** root (.claude/hooks/guard-protected-bash.sh, .claude/hooks/_lib.sh, .claude/hooks/test-hooks.sh)
+
+**Problem.** `guard-protected-bash.sh` runs `why=$(git_grep_unsafe "$cmd")` and `why=$(gh_label_unsafe "$cmd")` and
+lets the command through when `why` is empty. A runtime error inside either function (an unset variable, a failed
+`sed`) also leaves `why` empty, so the guard fails open. The impact is bounded — the audit's own actor check is the
+control for labels (#0-126), and the commit gates and PR checks for the rest — but a guard should fail closed.
+
+**Approach.** Both functions end every path with an explicit `return 0` (allowed) or print-and-return (refused), and
+the caller refuses when the function's exit status is non-zero (`why=$(…) || block "the … check failed"`), with a
+test that a forced error in each is refused.
 
 ---
 

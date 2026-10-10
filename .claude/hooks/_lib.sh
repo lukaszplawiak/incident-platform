@@ -117,7 +117,7 @@ shell_words() {
                     tok=""; have=0; glob=0 ;;
                 '$'|'`') echo "REFUSE expansion (\$ or a backtick)"; return 1 ;;
                 '{') echo "REFUSE an unquoted { (brace expansion)"; return 1 ;;
-                ';'|'&'|'|'|'('|')'|'<'|'>'|"$nl") echo "REFUSE a command separator or redirect: run git grep as a command of its own"; return 1 ;;
+                ';'|'&'|'|'|'('|')'|'<'|'>'|"$nl") echo "REFUSE a command separator or redirect: run it as a command of its own"; return 1 ;;
                 '*'|'?'|'[') tok="$tok$c"; glob=1; have=1 ;;
                 *) tok="$tok$c"; have=1 ;;
             esac
@@ -178,6 +178,83 @@ git_grep_unsafe() {
             -*) echo "git grep option not on the allow-list: $w (tracked files only; no -O, --no-index, --untracked, -f)"; return 0 ;;
         esac
     done <<<"$words"
+}
+
+# gh_label_unsafe <command> — prints why a `gh pr|issue create|new|edit` command is refused, or nothing when it
+# may run. The audits count a `human:*` label on a PR as the owner's word (.ai/rules/audit.md), so an autopilot
+# session may add or remove only the shipper's own labels (backlog #0-126). An allow-list of label values, not a
+# refusal of `human:`: the same reasoning as git_grep_unsafe — gh accepts --label, --label=, -l, -l attached, -l in a
+# short-flag cluster and comma lists, and bash joins quoted pieces (`"hu"man:x`). The command is split as bash
+# splits it (shell_words), which refuses any expansion: a label or a label flag from a variable cannot be checked.
+# `gh issue edit` sets labels on a PR too (a PR is an issue to GitHub) and is checked the same way.
+GH_LABELS_ALLOWED='autopilot shadow blocked risk-high'   # the labels .claude/agents/shipper.md sets (test-hooks.sh checks it)
+# Removing is narrower: the shipper only ever removes `blocked`. Removing `autopilot` would take a PR out of the audit's
+# data (it lists PRs by that label); removing a human:* label would erase the owner's word (review round 2).
+GH_LABELS_REMOVABLE='blocked'
+gh_label_unsafe() {
+    local cmd=$1 plain words w first second third value="" skip=0 rest
+    plain=$(printf '%s' "$cmd" | tr -d "'\"\\\\\n")
+    grep -Eq '(^|[^[:alnum:]_-])(create|new|edit)([^[:alnum:]_-]|$)' <<<"$plain" || return 0
+    grep -Eq '(^|[^[:alnum:]_-])(pr|issue)([^[:alnum:]_-]|$)' <<<"$plain" || return 0
+    # A glob before the `pr`/`issue` word (`g? pr edit`, `/opt/homebrew/bin/g[h] pr edit`) is gh to bash but no word
+    # `gh` to the checks below (review round 4).
+    case "$(printf '%s' "$plain" | sed -E 's/(^|[[:space:]])(pr|issue)([[:space:]]|$).*//')" in
+        *[\*\?\[]*) echo "a glob before the gh subcommand: run gh by its name"; return 0 ;;
+    esac
+    grep -Eq '(^|[^[:alnum:]_-])gh([^[:alnum:]_-]|$)' <<<"$plain" || return 0
+    words=$(shell_words "$cmd") || { echo "gh pr create/edit: ${words#REFUSE } (labels are checked; write the command plainly)"; return 0; }
+    first=$(printf '%s\n' "$words" | sed -n 1p)
+    second=$(printf '%s\n' "$words" | sed -n 2p)
+    third=$(printf '%s\n' "$words" | sed -n 3p)
+    case "$first" in
+        gh) ;;
+        */gh) echo "run gh by its name, not by a path"; return 0 ;;
+        # gh run by another program (`sh -c "gh pr edit …"`, `env gh`): the label it sets is not visible here.
+        sh|bash|zsh|dash|env|xargs|eval|exec|command|nohup|timeout|nice|sudo|time)
+            echo "run gh as the command itself, not through $first"; return 0 ;;
+        *)
+            # One command (shell_words refused separators). A word `gh` that is not the first one is gh run behind
+            # something (`GH_REPO=x gh`); `gh` inside a quoted message is part of one word, not this.
+            printf '%s\n' "$words" | grep -qxE '(.*/)?gh' && echo "run gh as the command itself (no prefix before it)"
+            return 0 ;;
+    esac
+    # gh finds the subcommand behind flags (`gh --repo x pr edit`, `gh pr -R x edit`, review round 1): any flag before
+    # it is refused, so the subcommand is always words 2-3.
+    case "$second" in -*) echo "put the subcommand first (gh pr edit …): no flag before it"; return 0 ;; esac
+    case "$second" in pr|issue) case "$third" in -*) echo "put the subcommand first (gh $second edit …): no flag before it"; return 0 ;; esac ;; esac
+    # `new` is gh's alias of `create` (gh pr new, gh issue new).
+    case "$second $third" in "pr create"|"pr new"|"pr edit"|"issue create"|"issue new"|"issue edit") ;; *) return 0 ;; esac
+    label_ok() {   # label_ok <allowed list> <comma-separated values>
+        local IFS=, x
+        for x in $2; do
+            case " $1 " in *" $x "*) ;; *) echo "label '$x' is not one an agent may set or remove here (allowed: $1; human:* labels are the owner's)"; return 1 ;; esac
+        done
+    }
+    while IFS= read -r w; do
+        # An unquoted glob: bash expands it into file names, which an agent can create (`./--remove-label`,
+        # `./human:x`), so what runs is not what is read here — refused, as git_grep_unsafe does (review round 3, sec-3a9c).
+        case "$w" in "$(printf '\t')"*) echo "an unquoted glob (${w#?}) in gh $second $third: quote it"; return 0 ;; esac
+        if [ -n "$value" ]; then label_ok "$value" "$w" || return 0; value=""; continue; fi
+        if [ "$skip" = 1 ]; then skip=0; continue; fi
+        case "$w" in
+            --label|--add-label|-l) value=$GH_LABELS_ALLOWED ;;
+            --remove-label) value=$GH_LABELS_REMOVABLE ;;
+            --label=*|--add-label=*) label_ok "$GH_LABELS_ALLOWED" "${w#*=}" || return 0 ;;
+            --remove-label=*) label_ok "$GH_LABELS_REMOVABLE" "${w#*=}" || return 0 ;;
+            # A recover file carries the PR's metadata, labels included, where no word here shows them.
+            --recover|--recover=*) echo "gh pr create --recover reads labels from a file: not allowed"; return 0 ;;
+            # A flag that takes a value: its value is text (a title may start with a dash), not a flag.
+            --title|-t|--body|-b|--body-file|-F|--base|-B|--head|-H|--assignee|-a|--add-assignee|--remove-assignee|--reviewer|-r|--add-reviewer|--remove-reviewer|--milestone|-m|--project|-p|--add-project|--remove-project|--template|-T|--repo|-R)
+                skip=1 ;;
+            --*) ;;
+            *)
+                # A short-flag cluster with l (`-dl x`, `-lx`): what follows l is its value, else the next word is.
+                if [[ "$w" =~ ^-[A-Za-z]*l(.*)$ ]]; then
+                    rest=${BASH_REMATCH[1]}
+                    if [ -n "$rest" ]; then label_ok "$GH_LABELS_ALLOWED" "$rest" || return 0; else value=$GH_LABELS_ALLOWED; fi
+                fi ;;
+        esac
+    done <<<"$(printf '%s\n' "$words" | sed 1,3d)"
 }
 
 # The base an autopilot run compares against is the commit the preflight recorded in .ai/runs/LOCK

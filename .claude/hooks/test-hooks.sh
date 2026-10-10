@@ -72,6 +72,67 @@ expect 2 "python writes AGENTS.md"       "$P" -- "$(bash_call 'python3 -c "open(
 expect 2 "redirect into audit decisions" "$P" -- "$(bash_call 'echo accept >> .ai/audit/decisions.md')"
 expect 0 "read audit decisions"          "$P" -- "$(bash_call 'cat .ai/audit/decisions.md')"
 expect 0 "unrelated write"               "$P" -- "$(bash_call 'echo x > /tmp/y')"
+# Labels (backlog #0-126): the audits count a `human:*` label as the owner's word, so an autopilot session may
+# add or remove only the shipper's own labels, on both commands that set them, in every form gh accepts.
+expect 0 "shipper creates a labelled PR"        "$P" -- "$(bash_call 'gh pr create --draft --base main --head fix/0-1-x --label autopilot --label blocked --body-file /tmp/b')"
+expect 0 "shipper relabels a PR"                "$P" -- "$(bash_call 'gh pr edit 12 --body-file /tmp/b --remove-label blocked --add-label autopilot,shadow,risk-high')"
+expect 0 "edit a PR body only"                  "$P" -- "$(bash_call 'gh pr edit 12 --body-file /tmp/b')"
+expect 0 "view a PR"                            "$P" -- "$(bash_call 'gh pr view 12 --json labels')"
+expect 0 "a commit message naming the command"  "$P" -- "$(bash_call 'git commit -m "docs: gh pr edit --add-label human:agree is refused"')"
+expect 2 "add-label human"                      "$P" -- "$(bash_call 'gh pr edit 12 --add-label human:fp-security')"
+expect 2 "add-label= human"                     "$P" -- "$(bash_call 'gh pr edit 12 --add-label=human:agree')"
+expect 2 "human in a comma list"                "$P" -- "$(bash_call 'gh pr edit 12 --add-label autopilot,human:agree')"
+expect 2 "human quoted and split"               "$P" -- "$(bash_call 'gh pr edit 12 --add-label "hu"man:agree')"
+expect 2 "remove an owner label"                "$P" -- "$(bash_call 'gh pr edit 12 --remove-label human:missed-general')"
+expect 2 "create with --label human"            "$P" -- "$(bash_call 'gh pr create --base main --label human:introduced-ready --body-file /tmp/b')"
+expect 2 "create with --label="                 "$P" -- "$(bash_call 'gh pr create --base main --label=human:agree --body-file /tmp/b')"
+expect 2 "create with -l"                       "$P" -- "$(bash_call 'gh pr create --base main -l human:agree --body-file /tmp/b')"
+expect 2 "create with -l attached"              "$P" -- "$(bash_call 'gh pr create --base main -lhuman:agree --body-file /tmp/b')"
+expect 2 "create with -l in a flag cluster"     "$P" -- "$(bash_call 'gh pr create --base main -dl human:agree --body-file /tmp/b')"
+expect 2 "a label from a variable"              "$P" -- "$(bash_call 'gh pr edit 12 --add-label $L')"
+expect 2 "a label flag from a variable"         "$P" -- "$(bash_call 'gh pr edit 12 $F human:agree')"
+expect 2 "an env prefix before gh"              "$P" -- "$(bash_call 'GH_REPO=o/r gh pr edit 12 --add-label human:agree')"
+expect 2 "chained after another command"        "$P" -- "$(bash_call 'true && gh pr edit 12 --add-label human:agree')"
+expect 2 "gh issue edit on a PR"                "$P" -- "$(bash_call 'gh issue edit 12 --add-label human:agree')"
+expect 2 "an unknown label"                     "$P" -- "$(bash_call 'gh pr edit 12 --add-label needs-owner')"
+# Review round 1 (#0-126): gh finds the subcommand behind flags, and gh can be run by path or by another program.
+expect 2 "a flag between pr and edit"           "$P" -- "$(bash_call 'gh pr -R o/r edit 12 --add-label human:agree')"
+expect 2 "a flag before pr"                     "$P" -- "$(bash_call 'gh --repo o/r pr edit 12 --add-label human:agree')"
+expect 2 "gh by its path"                       "$P" -- "$(bash_call '/usr/bin/gh pr edit 12 --add-label human:agree')"
+expect 2 "gh inside sh -c"                      "$P" -- "$(bash_call 'sh -c "gh pr edit 12 --add-label human:agree"')"
+expect 0 "a title that starts with a dash"      "$P" -- "$(bash_call 'gh pr create --base main --title "- list fixes" --label autopilot --body-file /tmp/b')"
+expect 0 "a short title flag with a dash value" "$P" -- "$(bash_call 'gh pr create --base main -t "-all done" -l autopilot --body-file /tmp/b')"
+# Review round 2 (#0-126): gh's aliases, labels from a recover file, gh by path behind a prefix, removing labels.
+expect 2 "gh pr new is gh pr create"            "$P" -- "$(bash_call 'gh pr new --base main --label human:agree --body-file /tmp/b')"
+expect 2 "gh issue new"                         "$P" -- "$(bash_call 'gh issue new --label human:agree')"
+expect 2 "labels from a recover file"           "$P" -- "$(bash_call 'gh pr create --recover .ai/work/x/r.json')"
+expect 2 "recover= form"                        "$P" -- "$(bash_call 'gh pr create --recover=.ai/work/x/r.json')"
+expect 2 "gh by path behind an env prefix"      "$P" -- "$(bash_call 'GH_REPO=o/r /usr/bin/gh pr edit 12 --add-label human:agree')"
+expect 2 "remove the autopilot label"           "$P" -- "$(bash_call 'gh pr edit 12 --remove-label autopilot')"
+expect 0 "remove the blocked label"             "$P" -- "$(bash_call 'gh pr edit 12 --remove-label blocked')"
+# Review round 3 (#0-126, sec-3a9c): bash expands an unquoted glob into file names an agent can create
+# (`./--remove-label`, `./human:x`), so a globbed word is refused, not read as text.
+expect 2 "a globbed label flag and value"       "$P" -- "$(bash_call 'gh pr edit 12 --add-labe? huma?:agree')"
+expect 2 "a globbed removal"                    "$P" -- "$(bash_call 'gh pr edit 12 --remove-labe? huma?:missed-security')"
+expect 2 "a globbed short flag"                 "$P" -- "$(bash_call 'gh pr create --base main -? x')"
+expect 0 "a quoted glob character in a title"   "$P" -- "$(bash_call 'gh pr create --base main --title "fix: why?" --label autopilot --body-file /tmp/b')"
+# Review round 4 (#0-126): a globbed command name (`g? pr edit`) is gh to bash and no word to the text checks.
+expect 2 "a globbed command name"               "$P" -- "$(bash_call 'g? pr edit 12 --add-label human:agree')"
+expect 2 "a bracket glob in the command name"   "$P" -- "$(bash_call '/opt/homebrew/bin/g[h] pr edit 12 --add-label human:agree')"
+expect 0 "a glob in an unrelated command"       "$P" -- "$(bash_call 'ls docs/*.md')"
+# The allow-lists are copies of the labels the shipper sets and removes: every label its definition names must be
+# allowed, and the preflight must check that each allowed one exists. Read as one line, as a value can wrap.
+. "$HOOKS/_lib.sh"
+shipper_text=$(tr '\n' ' ' < "$HOOKS/../agents/shipper.md")
+shipper_add=$(grep -oE -- '--(add-)?label +[a-z-]+' <<<"$shipper_text" | awk '{print $2}' | sort -u)
+shipper_remove=$(grep -oE -- '--remove-label +[a-z-]+' <<<"$shipper_text" | awk '{print $2}' | sort -u)
+preflight_labels=$(grep -E '^[[:space:]]*for l in ' "$HOOKS/../../scripts/factory/preflight.sh" | head -1)
+missing=""
+for l in $shipper_add; do case " $GH_LABELS_ALLOWED " in *" $l "*) ;; *) missing="$missing add:$l" ;; esac; done
+for l in $shipper_remove; do case " $GH_LABELS_REMOVABLE " in *" $l "*) ;; *) missing="$missing remove:$l" ;; esac; done
+for l in $GH_LABELS_ALLOWED; do case " $preflight_labels " in *" $l "*) ;; *) missing="$missing preflight:$l" ;; esac; done
+if [ -n "$shipper_add" ] && [ -n "$shipper_remove" ] && [ -z "$missing" ]; then echo "  ok: the hook's label lists match shipper.md and preflight.sh"
+else echo "::error::label lists out of step:${missing:- (no labels found in shipper.md)}"; failures=$((failures+1)); fi
 
 R="$HOOKS/readonly-bash.sh"
 echo "readonly-bash"
