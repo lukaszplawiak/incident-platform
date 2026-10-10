@@ -152,7 +152,7 @@ Existing decisions are respected unless a new ADR changes them.
 | architect | `.ai/rules/ready.md`, `.ai/rules/protected-paths.md`, all of `.ai/rules/review/` (it selects the rules the implementer gets), `.ai/rules/planning.md` ("Touches") |
 | planner | `.ai/rules/planning.md`, `.ai/rules/ready.md`, `.ai/rules/protected-paths.md`, `.ai/plan/queue.md` |
 | ready-checker (`/ready`) | `.ai/rules/ready.md`, `.ai/rules/protected-paths.md` |
-| auditor | `.ai/rules/audit.md`, `.ai/audit/decisions.md` |
+| auditor | `.ai/rules/audit.md` (the pipeline auditor: its "Pipeline audit"), `.ai/audit/decisions.md` |
 
 ---
 
@@ -178,7 +178,7 @@ Who writes and who reads each file. One writer per file per stage; `progress.md`
 | `.ai/work/<item>/handoff.md` | implementer | reviewers, acceptance-reviewer |
 | `.ai/work/<item>/proofs.md` | implementer | acceptance-reviewer |
 | `.ai/runs/<item>/` (gitignored) | implementer (test logs), autopilot | owner when debugging |
-| `.ai/audit/<date>.md` | audit workflow | owner |
+| `.ai/audit/<date>-<target>.md` (`reviewers`, `pipeline`) | audit workflow | owner |
 | `.ai/audit/decisions.md` | `/apply-audit` (owner-run) | auditors |
 | `.ai/audit/benchmark/patterns.md` | owner | `seed-bugs` workflow |
 | `.ai/STOP` | owner, circuit breaker | autopilot at start |

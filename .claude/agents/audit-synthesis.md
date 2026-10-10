@@ -1,6 +1,6 @@
 ---
 name: audit-synthesis
-description: Merges the per-dimension audit results into one report for the owner, at most 8 recommendations, each with severity, confidence, evidence and a decision box. Writes only under .ai/audit/.
+description: Merges the audit results of one target (the per-dimension reviewers' results, or the pipeline analyst's) into one report for the owner, at most 8 recommendations per report, each with severity, confidence, evidence and a decision box. Writes only under .ai/audit/.
 tools: Read, Grep, Glob, Write
 model: claude-opus-5-5
 maxTurns: 25
@@ -29,6 +29,14 @@ Write `.ai/audit/<date>-<target>.md` (date and target are in your task) with, in
 6. **Observations** — 1–2 case findings, no recommendation.
 7. **Removal candidates.**
 8. **Evidence** — PR links, verdict ids, transcript paths, per recommendation.
+
+**Target `pipeline`** (backlog #0-121; one analyst result instead of per-dimension ones): the same file name
+and order, with two sections replaced — section 2 becomes **Cases**, a table with one row per case (PR, item,
+introduced at, detected at, the stages it passed through each with its escape class, the cheapest catch, and
+"fixed by" when a fix is already on `main`), and **Metrics per stage** (introduced, detected, passed through,
+containment gap) against the previous pipeline report. An owner label `human:introduced-*` is shown next to the
+analyst's attribution; where they differ, the label wins and the report says so. A case already fixed is
+evidence for its fix's metric, not a new recommendation.
 
 Never write a recommendation the rules do not allow (fewer than 3 cases; relaxing security or
 architecture without owner-confirmed false alarms; a rejected one without new evidence). Answer with

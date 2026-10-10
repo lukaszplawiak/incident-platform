@@ -58,6 +58,9 @@ jobs:
       - name: Protected path check tests
         run: .github/scripts/test-protected-paths.sh
 
+      - name: Audit data tests
+        run: .github/scripts/test-audit-data.sh
+
       # .ai/rules/protected-paths.md is the one list; the autopilot's deny rules, its shell-write hook and
       # CODEOWNERS keep literal copies on purpose, and this fails when one stops covering an entry
       # (backlog #0-122).

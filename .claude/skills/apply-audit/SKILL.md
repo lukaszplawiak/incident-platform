@@ -15,7 +15,8 @@ settings deny writes to these paths.
 2. Show the owner a table: id, agent, severity, decision, the exact change that will be made (for
    `modify`: the change as the owner note describes it, shown as a diff). Ask for one confirmation for the
    whole table. If the owner changes anything, update the table and ask again.
-3. After confirmation, on a new branch `chore/audit-<report date>`:
+3. After confirmation, on a new branch `chore/audit-<report file name without .md>` (e.g.
+   `chore/audit-2026-11-03-pipeline`: one audit writes a report per target, so the date alone would collide):
    - apply each accepted or modified change exactly as shown, to the target file named in the
      recommendation (an agent definition, or the `## Calibration` section of a rule file), each line
      ending with ` (R-…)` so the next audit can find it;
