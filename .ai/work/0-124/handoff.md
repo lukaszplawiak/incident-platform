@@ -1,33 +1,24 @@
 # Handoff: 0-124
 
-Facts only. No reasoning about why the change is good: reviewers judge it themselves. Updated by the
-implementer after every round.
-
 ## Changed
-- <file / endpoint / topic / migration / config key>: <what changed>
+- notification-service application.yml: spring.mail.properties.mail.smtp.starttls.required: true; mail comment rewritten.
+- docker/docker-compose.yml: notification-service gets SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED "false".
+- k8s/overlays/dev/kustomization.yml: comment only (stale sentence removed).
+- README.md Infrastructure Hardening: one bullet.
+- New test SmtpTlsDefaultsTest (config package).
 
 ## How to verify
-- `./mvnw test -pl <module> -Dtest=<Class>` — <what it shows>
+- `./mvnw test -pl notification-service -am -Dtest=SmtpTlsDefaultsTest -Dsurefire.failIfNoSpecifiedTests=false` - default and dev-override bindings.
 
 ## Tests changed and why
-- (only if an existing test changed) <test>: <the acceptance criterion or requirement that changed it>
+- none
 
 ## Deliberately out of scope
-- <thing>: <backlog item or reason>
+- nothing
 
 ## Noticed, not touched
-- <defect elsewhere>: <file:line> — proposed backlog item: <one line>
+- none
 
 ## Follow-up needed
-<!-- Work this item showed is needed but is not part of it (.ai/rules/planning.md, "Follow-ups"); at most 3.
-     The shipper turns each entry into a backlog item with **Autopilot:** proposed. Delete this comment
-     and leave the section empty when there is none. -->
-### <title, as a backlog item title>
-- Why: <what is missing and what fails or stays incomplete without it, 1–2 lines>
-- Touches: <module (packages), …>
-- Risk: <low|high> · Complexity: <low|medium|high>
-- Draft criteria:
-  - AC1. <observable, checkable by a test>
 
 ## Disputed
-- <finding id>: <reason, citing code or a rule>

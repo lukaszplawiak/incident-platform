@@ -69,8 +69,7 @@ patches:
   # backlog #0-42 (ADR-0026): mail goes to the in-cluster Mailpit (mailpit.yml). It offers
   # neither SMTP auth nor STARTTLS, which auth-service and notification-service require, so
   # the dev overlay turns both off — the same overrides docker-compose uses (backlog #0-16).
-  # Spring binds each variable to the matching spring.mail.properties key; notification-
-  # service has no starttls.required yet (backlog #0-124) and ignores that one until it does.
+  # Spring binds each variable to the matching spring.mail.properties key.
   # Staging and prod set none of these.
   - target:
       kind: ConfigMap

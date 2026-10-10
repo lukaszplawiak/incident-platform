@@ -1,11 +1,7 @@
 # Proofs: 0-124
-
-Each acceptance criterion and the evidence that shows it (`.ai/rules/acceptance.md`). No pasted logs and
-no secrets: the full output is in `.ai/runs/0-124/` (gitignored), named here.
-
-| Criterion | Evidence | Kind |
-|---|---|---|
-| AC1 | `<Class>#<method>` asserts <outcome> | test |
-| AC2 | `.github/scripts/check-<x>.sh` fails without the change (its test case: `<name>`) | CI check |
-
-Test run: `./mvnw verify -pl <modules>` — PASS, <n> tests, log `.ai/runs/0-124/tests-r<round>.log`.
+- AC1 -> SmtpTlsDefaultsTest#shippedFileRequiresStartTls
+- AC2 -> SmtpTlsDefaultsTest#devOverridesTurnAllThreeOff
+- AC3 -> docker/docker-compose.yml notification-service environment
+- AC4 -> .github/scripts/check-k8s-mail.rb (unchanged; patch body untouched)
+- AC5 -> notification-service application.yml mail comment; k8s/overlays/dev/kustomization.yml comment
+- Test log: none saved under .ai/runs/0-124; the gate runs its own.

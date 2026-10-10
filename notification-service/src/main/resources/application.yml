@@ -63,16 +63,22 @@ spring:
           timeout: ${MAIL_SMTP_TIMEOUT_MS:5000}
           writetimeout: ${MAIL_SMTP_WRITE_TIMEOUT_MS:5000}
           # Note: unconditionally true, correct for the real default host
-          # (Mailtrap). The dev mail catchers (Mailpit in docker-compose,
-          # backlog #0-16, and in the Kubernetes dev overlay, #0-42) offer
-          # no auth, so those environments turn it off with
-          # SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH / ..._STARTTLS_ENABLE=false;
-          # a real relay keeps both. Before that override, the mismatch broke
+          # (Mailtrap). STARTTLS is also required (backlog #0-124): with only
+          # enable, a relay or attacker that strips the STARTTLS capability
+          # from the SMTP greeting would make JavaMail continue in plain text
+          # and send the AUTH credentials and the message unencrypted; required
+          # makes the send fail instead. The dev mail catchers (Mailpit in
+          # docker-compose, backlog #0-16, and in the Kubernetes dev overlay,
+          # #0-42) offer neither auth nor STARTTLS, so those environments turn
+          # them off with SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH /
+          # ..._STARTTLS_ENABLE / ..._STARTTLS_REQUIRED=false; a real relay
+          # keeps all three. Before that override, the mismatch broke
           # the /actuator/health check, hence management.health.mail.enabled:
           # false below.
           auth: true
           starttls:
             enable: true
+            required: true
 
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
