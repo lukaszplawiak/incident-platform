@@ -120,7 +120,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
-| [0-125](#0-125-ready-leaves-the-security-inventory-out-of-touches) | `/ready` leaves the security inventory out of Touches | bug | Medium | Open |
 
 ---
 
@@ -2122,25 +2121,6 @@ reworked items exist to measure.
    `backlog-estimate-off` in PR #482 (the implementer added it, correctly). Fixed by #0-125.
 3. PR #482 — DOC-10 on the Context section of an accepted ADR (ADR-0026), which records the state when it was
    decided; owner label `human:fp-docs`. Introduced and detected in review (docs dimension) — a reviewers-audit case.
-
----
-
-### 0-125. `/ready` leaves the security inventory out of Touches
-
-**Type:** bug · **Priority:** Medium · **Status:** Open (found reviewing PR #482, 2026-10-10)
-**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
-**Touches:** root (.ai/rules/ready.md, .claude/agents/ready-checker.md, .claude/skills/ready, BACKLOG.md)
-
-**Problem.** `/ready #0-124` (PR #481) set Touches without README, although the item adds a security control and
-CLAUDE.md "Security inventory" requires README "Infrastructure Hardening" to list it in the same PR. The
-ready-checker had asked; the answer ("the gap is not listed there, so no") dismissed the question without
-checking the rule. The implementer added the README bullet correctly, and the run recorded `backlog-estimate-off`
-(PR #482). Nothing in `ready.md` or the checker named the conventions that make a change write files beyond the
-code, and nothing made a dismissed checker question visible.
-
-**Approach.** `ready.md` point 8 and the checker's Touches step name the security inventory; the `/ready` skill
-asks for every checker question to be answered, with the reason in the PR's "Ready check" when the answer is no.
-The case is also recorded in #0-121's "Collected cases", so the pipeline audit counts it.
 
 ---
 
