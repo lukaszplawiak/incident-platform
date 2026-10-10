@@ -697,7 +697,7 @@ lookup, not a leak.
 
 ### 0-42. Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist
 
-**Type:** bug · **Priority:** Low · **Status:** In progress — autopilot run 20261010-052351
+**Type:** bug · **Priority:** Low · **Status:** Blocked — implementer: AC9 needs CI script and workflow files outside the autopilot permissions; owner writes that part (autopilot run 20261010-052351)
 **Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-16 is Done)
 **Touches:** k8s (overlays/dev, base/infrastructure/app-config.yml), ci (.github/scripts, .github/workflows/ci.yml), notification-service (application.yml comments only), root (README.md "Infrastructure Hardening", .ai/context/infrastructure.md)
 
