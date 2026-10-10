@@ -122,7 +122,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-120](#0-120-kubernetes-staging-and-prod-overlays-are-swapped) | Kubernetes staging and prod overlays are swapped | bug | Medium | Open |
 | [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
-| [0-123](#0-123-reviewers-are-told-which-tool-to-use-and-every-hook-refusal-names-it) | Reviewers are told which tool to use, and every hook refusal names it | bug | High | Open |
 
 ---
 
@@ -2133,7 +2132,8 @@ reworked items exist to measure.
 
 ### 0-123. Reviewers are told which tool to use, and every hook refusal names it
 
-**Type:** bug · **Priority:** High · **Status:** Open (found in the manual `/review` of #0-42, 2026-10-10)
+**Type:** bug · **Priority:** High · **Status:** Done, PR #479 (found in the manual `/review` of #0-42, 2026-10-10). Kept
+in full for the decision (tell, do not loosen) and the reverted first draft.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 **Touches:** root (.claude/hooks/readonly-bash.sh, .claude/hooks/test-hooks.sh, .claude/skills/review-procedure, .claude/agents, README.md)
 
