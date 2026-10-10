@@ -122,7 +122,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
-| [0-126](#0-126-the-audits-trust-human-labels-without-checking-who-added-them) | The audits trust `human:*` labels without checking who added them | security | Medium | Open |
 | [0-128](#0-128-a-malformed-escape-marker-fails-ci-instead-of-vanishing-from-the-audits) | A malformed escape marker fails CI instead of vanishing from the audits | improvement | Low | Open |
 | [0-129](#0-129-the-pipeline-audit-counts-only-escape-markers-the-owner-added) | The pipeline audit counts only escape markers the owner added | security | Medium | Open |
 | [0-130](#0-130-a-shell-guard-that-fails-refuses-the-command-instead-of-allowing-it) | A shell guard that fails refuses the command instead of allowing it | security | Low | Open |
@@ -2142,52 +2141,6 @@ history of the first cases; from now on they are derived, not written by hand.
 
 ---
 
-### 0-126. The audits trust `human:*` labels without checking who added them
-
-**Type:** security · **Priority:** Medium · **Status:** Open (found by the security review of #0-121, 2026-10-10)
-**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
-**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), root (.claude/settings.autopilot.json, .claude/hooks/guard-protected-bash.sh, .claude/hooks/test-hooks.sh, .ai/rules/audit.md, README.md "Infrastructure Hardening")
-
-**Problem.** Both audits treat a `human:*` label on a PR as the owner's ground truth: `human:fp-*` / `human:missed-*`
-for the reviewers, and `human:introduced-<stage>` (#0-121) even overrides the pipeline analyst's attribution. Nothing
-checks who added the label. The autopilot may run `gh pr edit *` (the shipper adds `autopilot`, `shadow`, `blocked`),
-so the machine account — or a shipper steered by text injected into a PR or item — could add a `human:*` label
-itself and push an audit toward a recommendation of its choosing. The damage is bounded (every recommendation still
-needs the owner's tick in `/apply-audit`), but the confidence the audit reports would be forged. The same holds
-for `**Escaped from:**` markers: the pipeline audit counts a marker added by any commit in its period, so a branch
-could plant a case; counting only markers from the owner's commits (or merged PRs the owner approved) closes it.
-
-**Approach.** Two layers, both cheap: (1) `audit-data.sh` reads each PR's `labeled` events (timeline) and counts a
-`human:*` label only when the owner added it, recording the actor; (2) the autopilot is denied adding `human:*`
-labels (`--add-label human:*` refused by the shell hook and a deny rule), with a test. (1) alone suffices for the
-audit; (2) keeps the PR history clean.
-
-**Acceptance criteria.**
-- AC1. `audit-data.sh` reads the `labeled` events of each PR's timeline and records, per `human:*` label, the
-  actor who added it. Test (`test-audit-data.sh`): a stubbed `gh` with events by two different actors.
-- AC2. A `human:fp-*`, `human:missed-*` or `human:introduced-*` label counts (toward `prsWithHumanLabels` and as
-  owner confirmation in a case) only when its actor is the repository owner, read from `gh repo view --json owner`
-  (never from a file the autopilot can edit). A label by another actor, or with no actor in the data, is listed
-  separately as unverified and never counted. Test with a fixture holding both kinds. When the autopilot's PRs are
-  authored by the owner's own login (shadow mode on the owner's account, `docs/ai-factory.md`), the actor proves
-  nothing: the data says so and the audit report warns, instead of counting those labels as confirmed. Test.
-- AC3. A `human:introduced-<stage>` label not added by the owner does not override the pipeline analyst's
-  attribution. Test.
-- AC4. `.claude/settings.autopilot.json` denies adding a `human:*` label with `gh pr edit` and with `gh pr create`
-  (the shipper labels a PR at creation, `shipper.md`); `gh api` is already denied.
-- AC5. The shell hook refuses a `human:*` label on both commands, in every form: `gh pr edit … --add-label human:x`
-  and `--add-label=human:x`, `gh pr create … --label human:x`, `--label=human:x` and `-l human:x`, and in a comma
-  list (`autopilot,human:x`); it still allows `autopilot`, `shadow`, `blocked` and `risk-high`. Cases in
-  `test-hooks.sh`, red before the change.
-- AC6. `.ai/rules/audit.md` says that a `human:*` label counts only with the owner as its actor, and that an
-  unattributable one is reported as unverified, not trusted.
-- AC7. README "Infrastructure Hardening" lists the control (owner labels trusted only from the owner; the autopilot
-  denied adding them) and closes the gap's entry if it has one.
-
-Out of scope, decided 2026-10-10: the provenance of `**Escaped from:**` markers is #0-129; owner comments do not count
-as confirmation (only labels; the audits never read PR comments); no ADR, the rule lives in `audit.md`.
-
----
 
 
 ### 0-128. A malformed escape marker fails CI instead of vanishing from the audits
@@ -2211,7 +2164,7 @@ otherwise it fails with the line number. With a test that a malformed line goes 
 ### 0-129. The pipeline audit counts only escape markers the owner added
 
 **Type:** security · **Priority:** Medium · **Status:** Open (split from #0-126 at its `/ready`, 2026-10-10)
-**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-126 (do with #0-128)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-126 is Done; do with #0-128)
 **Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), root (.ai/rules/audit.md)
 
 **Problem.** `audit-data.sh` makes a case of every `**Fixes:** #0-N · **Escaped from:** <stage>` marker added to
