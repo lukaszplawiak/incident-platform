@@ -19,9 +19,29 @@ Your task says where the change comes from:
   - Round ≥ 2: `git diff <previousRoundSha>..HEAD` for the delta, and `git diff <mergeBase>...HEAD` only to
     see the context of a finding. Judge per `_common.md` "Rounds".
 - **Manual `/review`**: the uncommitted changes — `git diff HEAD` (staged and unstaged) — or the range
-  the person names.
+  the person names. `git diff HEAD` does not show new, untracked files: run `git status --short` and read
+  every `??` file as part of the change.
 
 Also `git log --oneline <mergeBase>..HEAD` for the commit messages (GEN-23 needs them).
+
+## Tools
+
+Your Bash is limited by a read-only hook (`.claude/hooks/readonly-bash.sh`), and `_common.md` ("Your
+limits") is the rule; in practice:
+
+- **Read** a file (whole, or `offset`/`limit` for a part) — never `cat`, `head` or `sed -n`.
+- **Search with `git grep`**: `git grep -n -e <pattern> -e <other> -- <paths>`. Each alternative is its own
+  `-e`: a `|` counts as a pipe even inside quotes. List files with `git ls-files <pattern>`. `git grep`
+  searches tracked files only, so it never reaches a secret. The Grep and Glob tools your definition names do
+  not exist in every Claude Code version; use them only if you actually have them.
+- **One command per call** — no pipes, `;`, `&&`, redirects or `$(...)` — and no `git -C`: you already run
+  in the repository root.
+- If the hook refuses something, read its message: it names the alternative. Never give up on reading a
+  changed file — a review of half a change is worse than a slow one; say in `unverified` what you could
+  not read and why.
+
+Fixed (backlog #0-123): reviewers reached for `cat`, chained commands, `git -C` and `-E "a|b"`, were refused
+four times in one review, and one stopped reading after a refusal.
 
 ## 2. What to read, and only that
 

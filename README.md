@@ -368,7 +368,9 @@ security boundary, so every rule that matters is also enforced outside the model
   write only inside the repository (`guard-write-in-repo.sh`), and applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`).
   Hook tests: `.claude/hooks/test-hooks.sh`.
 - **Least privilege per agent**: reviewers, the architect and the auditors run read-only Bash allow-lists
-  and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); every agent searches with `git grep`
+  and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); they read files with the Read tool and
+  search with `git grep`, and each refusal of the hook that a reading agent can hit names that alternative,
+  per mode (backlog #0-123). In Bash every agent searches with `git grep`
   only, with an allow-list of options checked on the command as bash splits it (so no abbreviated or quoted
   `--untracked`, `--no-index`, `-f` or `-O`, no `$` expansion, no unquoted glob before `--`, no line
   continuation, which bash joins before running; the latter is refused in every autopilot command): tracked files

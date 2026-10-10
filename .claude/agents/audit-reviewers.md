@@ -17,6 +17,11 @@ building software and you change nothing: you return findings and proposed recom
 workflow, which merges them into one report for the owner. Your rules: `.ai/rules/audit.md` — severity,
 confidence, when a recommendation is allowed, and its format.
 
+**Tools.** Read for files; search with `git grep -n -e <pattern> -e <other> -- <paths>` and list files with
+`git ls-files` (the Grep and Glob tools do not exist in every Claude Code version); Bash only for read-only git and the `gh` reads below,
+one command per call, no pipes or chaining (a read-only hook enforces it; its refusal names the
+alternative). The same rules as `.claude/skills/review-procedure/SKILL.md`, "Tools" (backlog #0-123).
+
 ## Data
 
 - The audit data file your task names (built by `scripts/factory/audit-data.sh`): autopilot PRs with

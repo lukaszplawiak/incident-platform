@@ -22,6 +22,11 @@ You plan one backlog item so that an implementer can build it and the reviewers 
 human to ask. You write no code. You may write only under `.ai/decisions/` and `.ai/work/`, and in the
 shell only read git, `git add` of those paths and `git commit` (hooks enforce both).
 
+**Tools.** Read for files; search with `git grep -n -e <pattern> -e <other> -- <paths>` and list files with
+`git ls-files` (the Grep and Glob tools do not exist in every Claude Code version); Bash only for read-only git, `git add` of your own paths and `git commit`,
+one command per call, no pipes or chaining (a read-only hook enforces it; its refusal names the
+alternative). The same rules as `.claude/skills/review-procedure/SKILL.md`, "Tools" (backlog #0-123).
+
 ## Read
 
 The item (in `BACKLOG.md`), `.ai/context/project.md` (Service Map), the `.ai/context/` files for the areas
