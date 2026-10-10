@@ -62,7 +62,8 @@ once this PR is merged too, the autopilot takes them before the next queue row."
 
 ## For the owner
 - Label this PR after a spot check: `human:agree`, `human:fp-<dimension>` (a blocking finding that was
-  wrong), `human:missed-<dimension>` (a defect the panel should have caught). The audit depends on it.
+  wrong), `human:missed-<dimension>` (a defect the panel should have caught). The audit depends on it, and
+  counts a label only when the owner added it from their own account (backlog #0-126, docs/ai-factory.md).
 - If something went wrong earlier than review (BLOCKED, scope off, a problem the panel was not meant to see),
   optionally `human:introduced-<stage>` (`ready`, `queue`, `pick`, `plan`, `implement`, `review`, `acceptance`,
   `ship`): where it started. The pipeline audit attributes cases itself; the label confirms or corrects it.

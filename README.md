@@ -386,6 +386,15 @@ security boundary, so every rule that matters is also enforced outside the model
   only push a hook allows is `git push -u origin <type>/<branch>`, until #0-113's bot account and branch
   protection exist. A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
   the preflight honours.
+- **Owner labels are verified** (backlog #0-126): the audits count a `human:*` label only when the repository
+  owner added it (`scripts/factory/audit-data.sh` reads each PR's label events; a label by another account, with
+  no event, or while the owner cannot be read counts for nothing, and so does every label while the autopilot runs on
+  the owner's own login; the report names them), and agents take labels only from that data, never from
+  `gh pr view`. That check is the control. As a second line, the shell guard refuses an autopilot session's
+  `gh pr create`/`new`/`edit` and `gh issue create`/`new`/`edit` commands that set a label other than the shipper's
+  (`autopilot`, `shadow`, `blocked`, `risk-high`) or remove one other than `blocked`, in the flag forms gh accepts, behind
+  flags, by path, through another program, or from a `--recover` file (`guard-protected-bash.sh`, plus deny rules);
+  like the other shell guards it is a heuristic, and code the session runs is not seen by it (the known gap below).
 
 **Known gaps**: the GitHub settings themselves (#0-113); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
