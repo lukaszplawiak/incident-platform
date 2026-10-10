@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.24
 # ---- Build stage ----
-FROM eclipse-temurin:21.0.11_10-jdk-alpine AS builder
+FROM eclipse-temurin:25.0.4_7-jdk-alpine AS builder
 
 WORKDIR /build
 
@@ -29,7 +29,7 @@ RUN --mount=type=cache,target=/root/.m2,id=auth-service-m2 \
     -DskipTests --no-transfer-progress
 
 # ---- Runtime stage ----
-FROM eclipse-temurin:21.0.11_10-jre-alpine
+FROM eclipse-temurin:25.0.4_7-jre-alpine
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
