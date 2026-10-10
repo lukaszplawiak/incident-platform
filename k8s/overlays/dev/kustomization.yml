@@ -8,11 +8,17 @@ resources:
   - ../../base
   # Dev-specific secrets
   - secrets.yml
+  # Mail catcher, dev only (backlog #0-42, ADR-0026): see mailpit.yml
+  - mailpit.yml
 
-# Dev patches — 1 replica per service, increased memory for JVM
+# Dev patches — 1 replica per service, increased memory for JVM.
+# The Deployment patches target the seven services only (app.kubernetes.io/component=backend):
+# before backlog #0-42 they hit every Deployment, so Redis got a JVM's 768Mi and 90/120 s probe
+# delays, and Mailpit would have too. Infrastructure carries another component (cache, mail).
 patches:
   - target:
       kind: Deployment
+      labelSelector: app.kubernetes.io/component=backend
     patch: |-
       - op: replace
         path: /spec/replicas
@@ -26,6 +32,7 @@ patches:
   # Spring Boot JVM needs minimum 512Mi — 256Mi causes OOMKilled
   - target:
       kind: Deployment
+      labelSelector: app.kubernetes.io/component=backend
     patch: |-
       - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
@@ -41,7 +48,7 @@ patches:
         value: 120
   # backlog #0-26: base ships NOTIFICATION_OPERATOR_ALERT_EMAIL empty (no operator email sent).
   # Mirror docker-compose's default here so dev on Kubernetes exercises the same undeliverable-
-  # notification alert path as the compose smoke test, caught by the same mailhog.
+  # notification alert path as the compose smoke test, caught by Mailpit (mailpit.yml).
   - target:
       kind: ConfigMap
       name: app-config
@@ -59,6 +66,31 @@ patches:
       - op: add
         path: /data/SPRING_PROFILES_ACTIVE
         value: "dev"
+  # backlog #0-42 (ADR-0026): mail goes to the in-cluster Mailpit (mailpit.yml). It offers
+  # neither SMTP auth nor STARTTLS, which auth-service and notification-service require, so
+  # the dev overlay turns both off — the same overrides docker-compose uses (backlog #0-16).
+  # Spring binds each variable to the matching spring.mail.properties key; notification-
+  # service has no starttls.required yet (backlog #0-124) and ignores that one until it does.
+  # Staging and prod set none of these.
+  - target:
+      kind: ConfigMap
+      name: app-config
+    patch: |-
+      - op: replace
+        path: /data/MAIL_HOST
+        value: "mailpit"
+      - op: replace
+        path: /data/MAIL_PORT
+        value: "1025"
+      - op: add
+        path: /data/SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH
+        value: "false"
+      - op: add
+        path: /data/SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE
+        value: "false"
+      - op: add
+        path: /data/SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED
+        value: "false"
 
 images:
   - name: auth-service

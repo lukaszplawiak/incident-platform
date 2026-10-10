@@ -39,3 +39,4 @@ task touches; the area column is there so that nobody has to read all of them.
 | [0023](0023-logs-are-one-json-object-per-line-in-ecs.md) | Logs are one JSON object per line, in ECS (backlog #0-94, step 1) | logging, ECS, `shared`, startup guard | #0-94 |
 | [0024](0024-logs-are-collected-by-alloy-into-loki-in-docker-compose-only.md) | Logs are collected by Alloy into Loki, in docker-compose only (backlog #0-94, step 2) | log collection, Loki, Alloy, Grafana, docker-compose | #0-94, #0-72 |
 | [0025](0025-a-resilience4j-annotation-works-only-on-a-call-from-another.md) | A Resilience4j annotation works only on a call from another bean (backlog #0-21, #0-103) | Resilience4j, Spring proxies, retry, Slack | #0-21, #0-103 |
+| [0026](0026-mailpit-runs-in-the-dev-overlay-only.md) | Mailpit runs in the Kubernetes dev overlay only; staging and prod have no mail relay (backlog #0-42) | k8s overlays, mail, Mailpit, CI checks | #0-42 |

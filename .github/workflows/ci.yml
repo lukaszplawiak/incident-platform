@@ -463,6 +463,19 @@ jobs:
           [ "$failed" -eq 0 ] && echo "Neither staging nor prod sets a Spring profile."
           exit "$failed"
 
+      # Backlog #0-42 (ADR-0026): dev on Kubernetes catches mail in its own Mailpit
+      # (ClusterIP only: its UI shows invite and reset links), with the SMTP auth and
+      # STARTTLS overrides compose uses; base, staging and prod have neither, and the
+      # dev JVM patches reach the seven services only. check-k8s-mail.rb parses the
+      # renders above (structure, not grep); its mutation test runs first, so a broken
+      # checker cannot pass.
+      - name: Mail manifests (Mailpit in dev only)
+        run: |
+          set -euo pipefail
+          ruby --version
+          .github/scripts/test-k8s-mail.sh
+          ruby .github/scripts/check-k8s-mail.rb /tmp
+
   # ──────────────────────────────────────────────────────────
   # PostgreSQL roles (backlog #0-78), and the database password config (#0-66)
   #

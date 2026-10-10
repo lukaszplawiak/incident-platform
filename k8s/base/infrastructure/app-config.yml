@@ -42,8 +42,13 @@ data:
   # (the ERROR log and the notification.undeliverable metric remain), so set it per environment
   # in the overlay (backlog #0-18).
   NOTIFICATION_OPERATOR_ALERT_EMAIL: ""
-  MAIL_HOST: "mailhog"
-  MAIL_PORT: "1025"
+  # Placeholder: no environment has a mail relay yet. Replace MAIL_HOST (and set MAIL_USERNAME /
+  # MAIL_PASSWORD in the overlay's Secret) before a real deployment; until then mail to it fails
+  # and is retried (auth-service outbox, ADR-0015). 587 is SMTP submission with STARTTLS and auth,
+  # what both services expect. The dev overlay points it at its own Mailpit instead (backlog #0-42,
+  # ADR-0026); this used to be "mailhog", which nothing deployed.
+  MAIL_HOST: "smtp.incident-platform.local"
+  MAIL_PORT: "587"
 
   # WebSocket
   WEBSOCKET_ALLOWED_ORIGINS: "http://localhost:4200,http://incident-platform-frontend"

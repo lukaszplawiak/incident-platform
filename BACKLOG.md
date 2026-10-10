@@ -122,6 +122,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-120](#0-120-kubernetes-staging-and-prod-overlays-are-swapped) | Kubernetes staging and prod overlays are swapped | bug | Medium | Open |
 | [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
+| [0-124](#0-124-notification-service-does-not-require-starttls-before-sending-smtp-credentials) | notification-service does not require STARTTLS before sending SMTP credentials | bug | Medium | Open |
 
 ---
 
@@ -1115,13 +1116,16 @@ build artifact.
   under the same tag.
 - Third-party images in `k8s/` are not tracked by Renovate, whose `kubernetes` manager needs file patterns that
   `renovate.json` does not set: `apache/kafka:3.7.0` (compose runs 3.9.2), `redis:7-alpine`, `postgres:16-alpine`,
-  `busybox:1.36`.
+  `busybox:1.36`, and since #0-42 `axllent/mailpit` in `k8s/overlays/dev/mailpit.yml`, whose tag
+  `check-k8s-mail.rb` requires to equal compose's: a compose-only Renovate PR fails that check until the manifest is
+  bumped by hand (ADR-0026).
 - `docker/docker-compose.yml` uses `:latest` for `provectuslabs/kafka-ui`, `danielqsj/kafka-exporter` and
   `dpage/pgadmin4` (`grafana/grafana` was pinned to `13.2.3` in #0-94 step 2, as it reads every tenant's logs).
 
 **Approach.** Pin every third-party image to a version tag (and a digest where Renovate can keep it current), enable
 Renovate's `kubernetes` manager for `k8s/**/*.yml`, and deploy service images by immutable tag (the commit SHA) or
-digest once a registry exists.
+digest once a registry exists. Group an image that compose and k8s both run (`axllent/mailpit`, and Kafka once its
+versions agree) across the two managers in one `packageRules` entry, so both files move in one PR.
 
 ---
 
@@ -2162,6 +2166,23 @@ the list) carry a hint naming Read and `git grep -e`, plus the mode's extra comm
 for untracked files; one line in `ready-checker`, `acceptance-reviewer`, `audit-reviewers`, `planner` and
 `architect`, which do not preload the procedure; README "Least privilege per agent". Measured on the first review
 with it: the architecture reviewer finished in 66 s, against more than 14 minutes and four refusals before.
+
+---
+
+### 0-124. notification-service does not require STARTTLS before sending SMTP credentials
+
+**Type:** bug · **Priority:** Medium · **Status:** Open (found by the security review of #0-42, 2026-10-10)
+
+**Problem.** notification-service's `application.yml` sets `mail.smtp.auth: true` and `starttls.enable: true` but not
+`starttls.required: true`, unlike auth-service. With `enable` alone JavaMail upgrades the connection only when the
+server offers STARTTLS; an attacker between the service and a real relay who strips the STARTTLS capability gets the
+connection in plain text, and with it `MAIL_USERNAME` / `MAIL_PASSWORD` (AUTH) and the email content. No environment
+has a real relay yet (#0-42 left staging and prod a placeholder), so nothing leaks today.
+
+**Approach.** Add `starttls.required: true` as auth-service has, and check the dev catchers still work: docker-compose
+and the Kubernetes dev overlay already set `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED=false` for Mailpit
+(today ignored by notification-service, then honoured). A test that binds the properties would show the default is
+`true` and the override reaches it. One service, comments in `application.yml` to update.
 
 ---
 
