@@ -120,7 +120,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
-| [0-120](#0-120-kubernetes-staging-and-prod-overlays-are-swapped) | Kubernetes staging and prod overlays are swapped | bug | Medium | Open |
 | [0-121](#0-121-a-pipeline-audit-traces-problems-to-the-stage-that-introduced-them) | A pipeline audit traces problems to the stage that introduced them | design | Medium | Open |
 | [0-124](#0-124-notification-service-does-not-require-starttls-before-sending-smtp-credentials) | notification-service does not require STARTTLS before sending SMTP credentials | bug | Medium | Open |
 
@@ -428,7 +427,8 @@ believes they're targeting, not only the namespace label.
 **Decide / do.** Confirm this is unintended (not, for example, a deliberate historical rename the directory names
 never caught up to), then swap the two file bodies (or move the files) wholesale — editing only the `namespace:`
 line in each, as a narrower read of this bug might suggest, would leave the replica counts, resource limits, HPA
-target and image tags mismatched.
+target and image tags mismatched. A CI assertion that each overlay's rendered namespace ends in its directory name would keep
+it from coming back (suggested by #0-120, a duplicate of this item).
 
 ---
 
@@ -2083,24 +2083,6 @@ duration is harmful there (a postmortem stating the incident lasted no time) is 
 
 **Approach.** Verify the effect, then validate as #0-7 does (dead-letter through the existing path) if it
 matters.
-
----
-
-### 0-120. Kubernetes staging and prod overlays are swapped
-
-**Type:** bug · **Priority:** Medium · **Status:** Open (found by `/ready #0-42`, 2026-10-10)
-
-**Problem.** `k8s/overlays/staging/kustomization.yml` sets `namespace: incident-platform-prod`, 2–3 replicas
-and image tag `1.0.0`, and `k8s/overlays/prod/kustomization.yml` sets `namespace: incident-platform-staging`
-and tag `staging`. Each directory's `secrets.yml` names its own namespace (`metadata.namespace` and comments), but
-the overlay's `namespace:` overrides it, so the staging Secret renders into `incident-platform-prod` and the prod
-Secret into `incident-platform-staging`. Deploying "staging" therefore writes into the prod namespace with release
-images and staging secrets, and "prod" runs the `staging` tag.
-
-**Approach.** Check the whole of each overlay (namespace, replicas, tags, patches), then swap the
-`kustomization.yml` contents so each directory describes its own environment; the `secrets.yml` files are
-already right. A CI assertion that each overlay's rendered namespace ends in its directory name would keep it
-from coming back.
 
 ---
 
