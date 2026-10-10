@@ -70,7 +70,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-38](#0-38-integration-key-format-has-no-checksum-and-a-separator-inside-its-alphabet) | Integration key format has no checksum and a separator inside its alphabet | tech-debt | Low | Open |
 | [0-40](#0-40-dead-letter-topics-have-no-consumer-or-replay-tooling) | Dead-letter topics have no consumer or replay tooling | design | Medium | Open |
 | [0-41](#0-41-teamid-from-event-payloads-is-not-validated-against-the-tenants-teams) | `teamId` from event payloads is not validated against the tenant's teams | design | Low | Open |
-| [0-42](#0-42-kubernetes-mail_host-points-at-a-mailhog-that-does-not-exist) | Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist | bug | Low | Open |
 | [0-43](#0-43-api-key-introspection-can-be-amplified-from-many-ips) | API key introspection can be amplified from many IPs | design | Low | Open |
 | [0-44](#0-44-concurrent-cache-misses-for-one-api-key-each-call-auth-service) | Concurrent cache misses for one API key each call auth-service | tech-debt | Low | Open |
 | [0-45](#0-45-api-key-usage-write-holds-a-second-auth-service-db-connection) | API key usage write holds a second auth-service DB connection | tech-debt | Low | Open |
@@ -699,7 +698,8 @@ lookup, not a leak.
 
 ### 0-42. Kubernetes `MAIL_HOST` points at a `mailhog` that does not exist
 
-**Type:** bug · **Priority:** Low · **Status:** Open
+**Type:** bug · **Priority:** Low · **Status:** Done, PR #480 (built by hand after the autopilot blocked it, draft PR #477). Kept in
+full for the decision history; ADR-0026 records the result.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-16 is Done)
 **Touches:** k8s (overlays/dev, base/infrastructure/app-config.yml), ci (.github/scripts, .github/workflows/ci.yml), notification-service (application.yml comments only), root (README.md "Infrastructure Hardening", .ai/context/infrastructure.md)
 
