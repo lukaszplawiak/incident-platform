@@ -123,7 +123,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-126](#0-126-the-audits-trust-human-labels-without-checking-who-added-them) | The audits trust `human:*` labels without checking who added them | security | Medium | Open |
-| [0-127](#0-127-the-pipeline-audit-says-why-a-problem-was-introduced-and-counts-only-real-escape-markers) | The pipeline audit says why a problem was introduced, and counts only real escape markers | bug | Medium | Open |
 | [0-128](#0-128-a-malformed-escape-marker-fails-ci-instead-of-vanishing-from-the-audits) | A malformed escape marker fails CI instead of vanishing from the audits | improvement | Low | Open |
 
 ---
@@ -2163,29 +2162,11 @@ audit; (2) keeps the PR history clean.
 
 ---
 
-### 0-127. The pipeline audit says why a problem was introduced, and counts only real escape markers
-
-**Type:** bug · **Priority:** Medium · **Status:** Open (found in the first pipeline audit, `.ai/audit/2026-10-10-pipeline.md`)
-**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
-**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts), root (.ai/rules/audit.md, .claude/agents)
-
-**Problem.** The first report traced #0-42 to `ready` and every stage after it, but not why `ready` put the problem
-in, nor whether the ready-checker's draft (its point 4 asked for criteria checkable by a CI script, which live in
-`.github/`) or the owner's decision (accepting `Risk: high` as enough) did — so a recommendation could not tell a
-rule to fix from a one-off call. Its observation 5: the raw `escaped` list grepped every line mentioning
-`**Escaped from:**`, so prose that only describes the convention counted as markers for the reviewers' audit.
-
-**Approach.** The introducing stage gets a cause with its actor (`audit.md`: no rule, rule pushed toward it, rule
-not applied, judgment, no data; `ready` split into the ready-checker and the owner, `queue` into the planner and the
-owner); the report shows it per case. `audit-data.sh` counts only real markers (`**Fixes:** #0-N · **Escaped
-from:**`), and a marker whose stage it cannot parse becomes an `escaped:unparsed` case instead of vanishing, with tests.
-
----
 
 ### 0-128. A malformed escape marker fails CI instead of vanishing from the audits
 
 **Type:** improvement · **Priority:** Low · **Status:** Open (found in the review of #0-127)
-**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** #0-127
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** — (#0-127 is Done)
 **Touches:** ci (.github/scripts, .github/workflows/factory-guards.yml)
 
 **Problem.** Since #0-127, `audit-data.sh` counts only a marker in the form `**Fixes:** #0-N · **Escaped from:**
