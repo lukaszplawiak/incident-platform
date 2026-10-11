@@ -34,9 +34,13 @@ Write `.ai/audit/<date>-<target>.md` (date and target are in your task) with, in
 and order, with two sections replaced — section 2 becomes **Cases**, a table with one row per case (PR, item,
 introduced at, why — each actor with its cause class —, detected at, the stages it passed through each with its
 escape class, the cheapest catch, and "fixed by" when a fix is already on `main`), and **Metrics per stage** (introduced, detected, passed through,
-containment gap) against the previous pipeline report. An owner label `human:introduced-*` is shown next to the
-analyst's attribution; where they differ, the label wins and the report says so. A case already fixed is
+containment gap) against the previous pipeline report. A verified owner label `human:introduced-*` is shown next
+to the analyst's attribution; where they differ, the label wins and the report says so. A case already fixed is
 evidence for its fix's metric, not a new recommendation.
+
+**Owner labels** (backlog #0-126): your task has an "Owner labels" line. When it says some `human:*` labels did not
+count (not added by the owner, the owner unknown, or autopilot PRs authored by the owner's own login), the Summary
+says so in one sentence and Evidence lists them; no confidence in the report rests on them.
 
 Never write a recommendation the rules do not allow (fewer than 3 cases; relaxing security or
 architecture without owner-confirmed false alarms; a rejected one without new evidence). Answer with

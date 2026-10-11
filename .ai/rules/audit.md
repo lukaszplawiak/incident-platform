@@ -22,6 +22,19 @@ agents work, rates what it finds, and **recommends** changes; only the owner dec
 | `medium` | ≥3 cases from pipeline data only, no human confirmation |
 | `low` | 1–2 cases. **Never the basis of a recommendation** — report it as an observation |
 
+**A `human:*` label counts only when the owner added it** (backlog #0-126) — every rule here that says "owner label"
+or "confirmed by the owner" means that. `audit-data.sh` reads who added each label from the PR's label events and
+keeps `verifiedLabels` apart from `unverifiedLabels`. Unverified, and worth nothing: a label added by another
+account (the autopilot's machine account included), one with no event in the data, any label while the owner
+cannot be read, and every label on every PR while an autopilot PR is authored by the owner's own login (shadow mode
+on the owner's account: the autopilot then acts with the owner's token, so the actor proves nothing). The report
+names what did not count. An organisation-owned repository has no owner login, so every label is unverified there.
+A known limit: `ownerIsAutopilot` is read from the autopilot PRs of the audited period, so a session on the owner's
+login that opened none in it, yet labelled the bot's PRs through code it ran, would leave labels with the owner as
+actor; it needs the "code the session runs" gap (README, AI factory) and a period mixing both accounts.
+The shell guard (`guard-protected-bash.sh`) refuses an autopilot session's commands that set or remove a `human:*`
+label; it is a heuristic, and the check here does not rely on it.
+
 One exception: a **deterministic contradiction** between the rules, the agents' definitions and their
 permissions — an item the rules let through that the pipeline can by construction only stop (#0-42: a
 `ready` item whose criteria need `.github/`, which the implementer may not write) — is a hard fact. One
@@ -183,8 +196,8 @@ from a one-off call.
 skill or rule file, by the table in "Where a recommendation goes" above. A case whose fix is already on `main`
 measures that fix (its metric), and is not a new recommendation.
 
-**Owner labels**: `human:introduced-<stage>` on the PR confirms the analyst's attribution or corrects it (the label
-wins). It counts as owner confirmation for confidence, as `human:fp-*` does for the reviewers.
+**Owner labels**: a verified `human:introduced-<stage>` on the PR confirms the analyst's attribution or corrects it
+(the label wins). It counts as owner confirmation for confidence, as `human:fp-*` does for the reviewers.
 
 ## Seeded defects
 

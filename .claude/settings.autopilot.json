@@ -1,5 +1,5 @@
 {
-  "$comment": "Added on top of .claude/settings.json for unattended autopilot sessions only: claude --settings .claude/settings.autopilot.json, then /backlog-autopilot. dontAsk: anything not allowed below is denied, nobody is there to approve it. Deny wins over allow. Paths use ./ (relative to the session's working directory, the repository root): a leading / would be relative to this file's directory. Human-owned paths cannot be written, and nothing outside the repository can be written with the file tools (hook guard-write-in-repo.sh); the network tools are off (an agent that reads untrusted text must not be able to send data out); verification cannot be skipped (hooks). `gh pr merge` stays denied until backlog #0-113 (bot account, branch protection) is done: that is what makes shadow mode structural rather than a prompt. Phase 3 (docs/ai-factory.md): remove `Bash(gh pr merge *)` from deny, keep the `--admin` deny, and add `Bash(gh pr merge * --squash --auto)` to allow.",
+  "$comment": "Added on top of .claude/settings.json for unattended autopilot sessions only: claude --settings .claude/settings.autopilot.json, then /backlog-autopilot. dontAsk: anything not allowed below is denied, nobody is there to approve it. Deny wins over allow. Paths use ./ (relative to the session's working directory, the repository root): a leading / would be relative to this file's directory. Human-owned paths cannot be written, and nothing outside the repository can be written with the file tools (hook guard-write-in-repo.sh); the network tools are off (an agent that reads untrusted text must not be able to send data out); verification cannot be skipped (hooks). `gh pr merge` stays denied until backlog #0-113 (bot account, branch protection) is done: that is what makes shadow mode structural rather than a prompt. A `human:*` label is the owner's word to the audits (backlog #0-126): its deny rules here are a plain-text second line, the hook guard-protected-bash.sh (gh_label_unsafe) is the check that parses every form. They match `human:` anywhere in the command, a title included: an item whose PR title would name a human:* label is refused at ship and stops BLOCKED, for the owner to ship. Phase 3 (docs/ai-factory.md): remove `Bash(gh pr merge *)` from deny, keep the `--admin` deny, and add `Bash(gh pr merge * --squash --auto)` to allow.",
   "permissions": {
     "defaultMode": "dontAsk",
     "allow": [
@@ -110,6 +110,9 @@
       "Bash(git config *)",
       "Bash(gh pr merge * --admin *)",
       "Bash(gh api *)",
+      "Bash(gh pr edit *human:*)",
+      "Bash(gh pr create *human:*)",
+      "Bash(gh issue edit *)",
       "Bash(gh repo *)",
       "Bash(gh secret *)",
       "Bash(gh auth *)",

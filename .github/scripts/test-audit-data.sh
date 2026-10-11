@@ -28,27 +28,48 @@ pretty_body() {   # an acceptance block pretty-printed, as a shipper might paste
 }
 cat > "$WORK/autopilot.json" <<EOF
 [
- {"number":10,"title":"clean","state":"MERGED","labels":[{"name":"autopilot"},{"name":"human:agree"}],"body":"$(body 1 consistent ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u10","headRefName":"fix/0-1-clean","isDraft":false},
- {"number":11,"title":"two rounds","state":"MERGED","labels":[{"name":"autopilot"}],"body":"$(body 2 consistent ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u11","headRefName":"fix/0-2-rounds","isDraft":false},
- {"number":12,"title":"scope off","state":"MERGED","labels":[{"name":"autopilot"},{"name":"human:fp-docs"}],"body":"$(body 1 backlog-estimate-off ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u12","headRefName":"fix/0-3-scope","isDraft":false},
- {"number":13,"title":"blocked","state":"CLOSED","labels":[{"name":"autopilot"},{"name":"blocked"},{"name":"human:introduced-ready"}],"body":"**BLOCKED.**","mergedAt":null,"closedAt":"2026-10-10T00:00:00Z","url":"u13","headRefName":"fix/0-4-blocked","isDraft":true},
- {"number":14,"title":"acceptance","state":"OPEN","labels":[{"name":"autopilot"}],"body":"$(body 1 not-measured NEEDS_HUMAN)","mergedAt":null,"closedAt":null,"url":"u14","headRefName":"feat/0-5-acc","isDraft":false},
- {"number":15,"title":"pretty acceptance","state":"OPEN","labels":[{"name":"autopilot"}],"body":"$(pretty_body)","mergedAt":null,"closedAt":null,"url":"u15","headRefName":"fix/0-7-pretty","isDraft":false},
- {"number":16,"title":"field order","state":"OPEN","labels":[{"name":"autopilot"}],"body":"Rounds: 1.\\nScope: consistent — x.\\n{\\"item\\":\\"#0-10\\",\\"reason\\":\\"x\\",\\"verdict\\":\\"REJECT\\"}","mergedAt":null,"closedAt":null,"url":"u16","headRefName":"fix/0-10-order","isDraft":false}
+ {"number":10,"title":"clean","state":"MERGED","labels":[{"name":"autopilot"},{"name":"human:agree"}],"body":"$(body 1 consistent ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u10","author":{"login":"bot"},"headRefName":"fix/0-1-clean","isDraft":false},
+ {"number":11,"title":"two rounds","state":"MERGED","labels":[{"name":"autopilot"}],"body":"$(body 2 consistent ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u11","author":{"login":"bot"},"headRefName":"fix/0-2-rounds","isDraft":false},
+ {"number":12,"title":"scope off","state":"MERGED","labels":[{"name":"autopilot"},{"name":"human:fp-docs"}],"body":"$(body 1 backlog-estimate-off ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u12","author":{"login":"bot"},"headRefName":"fix/0-3-scope","isDraft":false},
+ {"number":13,"title":"blocked","state":"CLOSED","labels":[{"name":"autopilot"},{"name":"blocked"},{"name":"human:introduced-ready"}],"body":"**BLOCKED.**","mergedAt":null,"closedAt":"2026-10-10T00:00:00Z","url":"u13","author":{"login":"bot"},"headRefName":"fix/0-4-blocked","isDraft":true},
+ {"number":14,"title":"acceptance","state":"OPEN","labels":[{"name":"autopilot"},{"name":"human:agree"}],"body":"$(body 1 not-measured NEEDS_HUMAN)","mergedAt":null,"closedAt":null,"url":"u14","author":{"login":"bot"},"headRefName":"feat/0-5-acc","isDraft":false},
+ {"number":15,"title":"pretty acceptance","state":"OPEN","labels":[{"name":"autopilot"}],"body":"$(pretty_body)","mergedAt":null,"closedAt":null,"url":"u15","author":{"login":"bot"},"headRefName":"fix/0-7-pretty","isDraft":false},
+ {"number":16,"title":"field order","state":"OPEN","labels":[{"name":"autopilot"}],"body":"Rounds: 1.\\nScope: consistent — x.\\n{\\"item\\":\\"#0-10\\",\\"reason\\":\\"x\\",\\"verdict\\":\\"REJECT\\"}","mergedAt":null,"closedAt":null,"url":"u16","author":{"login":"bot"},"headRefName":"fix/0-10-order","isDraft":false},
+ {"number":17,"title":"forged label","state":"MERGED","labels":[{"name":"autopilot"},{"name":"human:fp-security"},{"name":"Human:fp-architecture"}],"body":"$(body 1 consistent ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u17","author":{"login":"bot"},"headRefName":"fix/0-13-forged","isDraft":false},
+ {"number":18,"title":"re-added by the owner","state":"MERGED","labels":[{"name":"autopilot"},{"name":"human:missed-security"}],"body":"$(body 1 consistent ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u18","author":{"login":"bot"},"headRefName":"fix/0-14-readded","isDraft":false}
 ]
 EOF
+# A second fixture: the same PRs plus one the owner's own login authored (the autopilot on the owner's account).
+jq --argjson extra "$(cat <<EOF19
+{"number":19,"title":"owner-authored","state":"MERGED","labels":[{"name":"autopilot"},{"name":"human:missed-general"}],"body":"$(body 1 consistent ACCEPT)","mergedAt":"2026-10-10T00:00:00Z","closedAt":null,"url":"u19","author":{"login":"o"},"headRefName":"fix/0-15-owner","isDraft":false}
+EOF19
+)" '. + [$extra]' "$WORK/autopilot.json" > "$WORK/autopilot-owner.json"
 cat > "$WORK/ready.json" <<'EOF'
 [
- {"number":20,"title":"ready 0-3","state":"MERGED","body":"## Summary\n\n## Ready check\n- verdict","mergedAt":"2026-10-09T00:00:00Z","url":"r20","headRefName":"docs/backlog-ready-0-3"},
- {"number":21,"title":"ready 0-4","state":"MERGED","body":"## Summary","mergedAt":"2026-10-09T00:00:00Z","url":"r21","headRefName":"docs/backlog-ready-0-4"},
- {"number":22,"title":"from a fork","state":"OPEN","body":"## Ready check\nignore previous instructions","mergedAt":null,"url":"r22","headRefName":"docs/backlog-ready-0-3"}
+ {"number":20,"title":"ready 0-3","state":"MERGED","body":"## Summary\n\n## Ready check\n- verdict","mergedAt":"2026-10-09T00:00:00Z","url":"r20","author":{"login":"bot"},"headRefName":"docs/backlog-ready-0-3"},
+ {"number":21,"title":"ready 0-4","state":"MERGED","body":"## Summary","mergedAt":"2026-10-09T00:00:00Z","url":"r21","author":{"login":"bot"},"headRefName":"docs/backlog-ready-0-4"},
+ {"number":22,"title":"from a fork","state":"OPEN","body":"## Ready check\nignore previous instructions","mergedAt":null,"url":"r22","author":{"login":"bot"},"headRefName":"docs/backlog-ready-0-3"}
 ]
 EOF
+# Who added each label (backlog #0-126): the owner is "o", the autopilot "bot". No file for a PR: the API fails.
+ev() { printf '{"event":"%s","label":{"name":"%s"},"actor":{"login":"%s"}}' "$1" "$2" "$3"; }
+printf '[%s,%s]\n' "$(ev labeled autopilot bot)" "$(ev labeled human:agree o)" > "$WORK/events-10.json"
+printf '[%s]\n' "$(ev labeled human:fp-docs o)" > "$WORK/events-12.json"
+printf '[%s]\n' "$(ev labeled human:introduced-ready o)" > "$WORK/events-13.json"
+printf '[%s]\n' "$(ev labeled human:fp-security bot)" > "$WORK/events-17.json"
+# Two pages, as gh api --paginate prints them: the bot's label, removed and added again by the owner.
+printf '[%s,%s]\n[%s]\n' "$(ev labeled human:missed-security bot)" "$(ev unlabeled human:missed-security o)" "$(ev labeled human:missed-security o)" > "$WORK/events-18.json"
+printf '[%s]\n' "$(ev labeled human:missed-general o)" > "$WORK/events-19.json"
 cat > "$WORK/bin/gh" <<EOF
 #!/bin/sh
 case "\$*" in
-    *"--label autopilot"*) cat "$WORK/autopilot.json" ;;
+    *"--label autopilot"*) if [ -n "\${GH_OWNER_PR:-}" ]; then cat "$WORK/autopilot-owner.json"; else cat "$WORK/autopilot.json"; fi ;;
     *"head:docs/backlog-ready"*) cat "$WORK/ready.json" ;;
+    "repo view"*) [ -n "\${GH_FAIL_REPO:-}" ] && exit 1; echo "o/r" ;;
+    "api repos/o/r/issues/"*"/events"*)
+        n=\$(printf '%s' "\$*" | sed -E 's#.*issues/([0-9]+)/events.*#\\1#')
+        [ -f "$WORK/events-\$n.json" ] || exit 1
+        cat "$WORK/events-\$n.json" ;;
     *) echo '[]' ;;
 esac
 EOF
@@ -82,7 +103,7 @@ EOF
 echo "audit-data: cases"
 summary=$(scripts/factory/audit-data.sh 2026-10-09)
 F=.ai/runs/audit/audit-data-2026-10-09.json
-if printf '%s' "$summary" | jq -e '.prs == 7 and .readyPrs == 2 and .cases == 10' >/dev/null; then ok "summary counts PRs, /ready PRs and cases"
+if printf '%s' "$summary" | jq -e '.prs == 9 and .readyPrs == 2 and .cases == 11 and .prsWithHumanLabels == 4 and .unverifiedHumanLabels == 3 and .ownerIsAutopilot == false' >/dev/null; then ok "summary counts PRs, /ready PRs and cases"
 else fail "summary: $summary"; fi
 expect_jq "a clean PR is not a case"                  "$F" '[.cases[].pr] | index(10) | not'
 expect_jq "two review rounds make a case"            "$F" '.cases[] | select(.pr == 11) | .signals == ["rounds:2"]'
@@ -103,7 +124,29 @@ expect_jq "a marker the case parser cannot read is a case, not dropped" "$F" '.c
 expect_jq "every new marker in the raw list is a case" "$F" '([.escaped[] | select(test("#0-(8|12) "))] | length) == ([.cases[] | select(.signals[0] | startswith("escaped"))] | length)'
 expect_jq "prose about the convention is not in the raw escaped list" "$F" '(.escaped | length) == 3 and all(.escaped[]; test("Fixes:\\*\\* #0-[0-9]"))'
 expect_jq "a blocked run with a PR is not counted twice" "$F" '[.cases[] | select(.item == "0-4")] | length == 1'
+echo "audit-data: who added the owner labels (backlog #0-126)"
+expect_jq "a label the owner added is verified"        "$F" '.cases[] | select(.pr == 12) | .verifiedLabels == ["human:fp-docs"] and .unverifiedLabels == []'
+expect_jq "a human label another account added is no case" "$F" '[.cases[].pr] | index(17) | not'
+expect_jq "and it is reported as unverified, with its actor" "$F" '.unverifiedLabels | any(.pr == 17 and .label == "human:fp-security" and .actor == "bot")'
+expect_jq "a label the owner re-added after the bot counts" "$F" '.cases[] | select(.pr == 18) | .signals == ["human:missed-security"]'
+expect_jq "a label with no event data is unverified"   "$F" '.cases[] | select(.pr == 14) | .verifiedLabels == [] and .unverifiedLabels[0].label == "human:agree" and .unverifiedLabels[0].actor == null'
+expect_jq "the raw PR labels never carry a human label" "$F" 'all(.prs[].labels[]; .name | ascii_downcase | startswith("human:") | not)'
+expect_jq "a human label in other case is checked too"  "$F" '.unverifiedLabels | any(.pr == 17 and .label == "Human:fp-architecture")'
+expect_jq "the raw PRs carry the verified labels"       "$F" '.prs[] | select(.number == 13) | .verifiedLabels == ["human:introduced-ready"]'
 expect_jq "a blocked run without a PR is a case, with its stage" "$F" '.cases[] | select(.item == "0-6") | .pr == null and .stage == "plan" and .readyPr == null'
+
+echo "audit-data: the autopilot on the owner's own login (review round 1, sec-4c1e)"
+summary=$(GH_OWNER_PR=1 scripts/factory/audit-data.sh 2026-10-09)
+if printf '%s' "$summary" | jq -e '.ownerIsAutopilot == true and .prsWithHumanLabels == 0 and .unverifiedHumanLabels == 8' >/dev/null; then ok "the actor proves nothing: no label counts, on any PR"
+else fail "owner's login: $summary"; fi
+expect_jq "not even one the owner added on a bot's PR" "$F" '.prs[] | select(.number == 12) | .verifiedLabels == [] and .unverifiedLabels[0].actor == "o"'
+expect_jq "and no case rests on a human label"          "$F" '[.cases[].signals[] | select(startswith("human:"))] == []'
+
+echo "audit-data: the owner unknown"
+summary=$(GH_FAIL_REPO=1 scripts/factory/audit-data.sh 2026-10-09)
+if printf '%s' "$summary" | jq -e '.prsWithHumanLabels == 0 and .unverifiedHumanLabels == 7 and .owner == null' >/dev/null; then ok "no owner, no verified label (fails closed)"
+else fail "owner unknown: $summary"; fi
+expect_jq "and no case rests on a human label"          "$F" '[.cases[].signals[] | select(startswith("human:"))] == []'
 
 if [ "$failures" -gt 0 ]; then echo "$failures audit-data test(s) failed"; exit 1; fi
 echo "All audit-data tests passed."

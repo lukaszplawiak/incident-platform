@@ -31,7 +31,9 @@ labels are the record.
 ## Data
 
 - The audit data file your task names (built by `scripts/factory/audit-data.sh`): autopilot PRs with
-  their labels (`human:agree`, `human:fp-<dimension>`, `human:missed-<dimension>`) and bodies (the verdict
+  their owner labels in `verifiedLabels` (`human:agree`, `human:fp-<dimension>`, `human:missed-<dimension>`, only
+  those the owner added; `unverifiedLabels` count for nothing, and owner labels are never taken from `gh pr view`,
+  which shows every label whoever added it: backlog #0-126) and bodies (the verdict
   JSON of every round is in a `<details>` block), backlog items with `**Escaped from:**`, seeded-defect
   results, the run history.
 - The reviewer's criteria `.ai/rules/review/<dimension>.md` and `_common.md`, its definition

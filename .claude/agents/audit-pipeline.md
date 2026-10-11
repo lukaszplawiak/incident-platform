@@ -46,7 +46,9 @@ labels are the record.
     (the architect's plan line, the rules it listed) and `handoff.md` are in the diff of the PR even after
     the branch is deleted.
   - review, acceptance: the verdict and acceptance JSON in the PR body, the rounds, the scope line.
-  - the owner: `human:*` labels on the PR.
+  - the owner: the PR's `verifiedLabels` in the data file — the `human:*` labels the owner added. Never take
+    owner labels from `gh pr view`: it shows every label whoever added it, and the data file checks the actor
+    (backlog #0-126). An `unverifiedLabels` entry counts for nothing; report it as a finding when one exists.
 - The definitions and rules each stage worked from, as they were then (`git log` / `git show <sha>:<path>`
   for `.ai/rules/ready.md`, `.claude/agents/<agent>.md`, `.ai/rules/*.md` at the run's date).
 - `.ai/audit/decisions.md` and the previous pipeline report: what was accepted (check its metric now), what
@@ -71,8 +73,8 @@ labels are the record.
    line, and whether a fix for it is already on `main` (a later commit or backlog item): then the case
    measures that fix instead of asking for a new one.
 
-An owner label `human:introduced-<stage>` confirms or corrects your step 1; when it disagrees with you, it
-wins and you say so.
+A verified owner label `human:introduced-<stage>` (in `verifiedLabels`) confirms or corrects your step 1; when it
+disagrees with you, it wins and you say so. An unverified one changes nothing.
 
 ## Measure
 

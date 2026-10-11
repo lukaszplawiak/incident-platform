@@ -34,7 +34,7 @@ from it.
 | 0 | Prepare items: `/ready #0-N` per item (numbered acceptance criteria, risk, complexity, `ready`) | ~10 items `ready` on `main` |
 | 1 | Use the panel by hand: `/review` (same agents and rules as the autopilot) | you trust its findings on your own changes |
 | 1b | Plan the order: `/plan-backlog` proposes `.ai/plan/queue.md` (order, Touches, why); you edit and merge it | a queue you agree with is on `main` |
-| 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label each PR (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`; optionally `human:introduced-<stage>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
+| 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label the bot's PRs from your own account (#0-126) (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`; optionally `human:introduced-<stage>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
 | 3 | Auto-merge, after #0-113 (bot account, branch protection) and #0-116 (code an agent runs must not be able to drop the devcontainer's firewall): in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
 | 4 | Audits every 10 items (the preflight stops with "audit due"): `/audit` runs both targets — `reviewers` (one analyst per dimension) and `pipeline` (backlog #0-121: every case traced from the stage that introduced it to the one that detected it, with why each stage between let it through) — one report each | acceptance of recommendations stays in 40–80% |
 | 5 | Later: cloud runs; a stage of the pipeline audit gets its own analyst only when the data shows it produces most of the cases. Never: two items at once (#0-114, decided against) | — |
@@ -177,13 +177,17 @@ history (for a BLOCKED item also its draft PR and the phase that stopped it, whi
 | per new item | `/ready #0-N`: confirm criteria, risk, complexity, Touches; merge the backlog change | 5 min |
 | per follow-up | a PR created `proposed` items: `/ready` the ones you want next, delete or re-plan the others | 5 min |
 | when the queue is done, or every ~10 items | `/plan-backlog`, edit, merge | 15–20 min |
-| daily, in shadow mode | review and merge the autopilot's PRs; **label each one** `human:*` | 10–20 min |
+| daily, in shadow mode | review and merge the autopilot's PRs; **label each one** `human:*` from your own account (see below) | 10–20 min |
 | when it happens | BLOCKED draft PRs: decide, fix or split, then resume with `branch` | 5–20 min |
 | every 10 items | `/audit` (args `since`, `date`), tick decisions in the report, `/apply-audit <report>`, merge its PR | 20–30 min |
 | every 10–15 items | `/docs-audit`; look at the architecture as a whole (what no single review sees) | ~1 h |
 | sometimes | do an item yourself, then `/review` and `/ship` — the knowledge should end up in you, not only in the repository | — |
 
 Spot checks must be real (read the diff, run the tests), or the `human:*` labels measure nothing.
+Add the labels from your own GitHub account: the audits count a `human:*` label only when the repository owner
+added it (backlog #0-126) — one added by the bot counts for nothing, and while the autopilot runs on your own login
+(shadow mode before the bot account) no label counts at all, since the autopilot then acts with your token. To
+confirm a label someone else added, remove it and add it again yourself.
 
 ## What isolates what
 
@@ -199,7 +203,8 @@ The agents' instructions are not a boundary; these are, each with its limit:
 
 ## Measuring the reviewers and the pipeline
 
-- **Owner labels** on PRs are the ground truth the audit needs; without them confidence stays `medium`
+- **Owner labels** on PRs are the ground truth the audit needs, counted only when the owner added them (#0-126,
+  above); without them confidence stays `medium`
   and security/architecture rules can never be relaxed. `human:introduced-<stage>` (optional) confirms or
   corrects where the pipeline audit says a case started.
 - **Pipeline cases** are derived by `scripts/factory/audit-data.sh` from what the pipeline records (BLOCKED,
