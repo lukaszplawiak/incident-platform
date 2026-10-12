@@ -2164,8 +2164,8 @@ otherwise it fails with the line number. With a test that a malformed line goes 
 ### 0-129. The pipeline audit counts only escape markers the owner added
 
 **Type:** security · **Priority:** Medium · **Status:** Open (split from #0-126 at its `/ready`, 2026-10-10)
-**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-126 is Done; do with #0-128)
-**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), root (.ai/rules/audit.md)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-126 is Done; do in one PR with #0-128)
+**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), root (.ai/rules/audit.md, README.md "Infrastructure Hardening")
 
 **Problem.** `audit-data.sh` makes a case of every `**Fixes:** #0-N · **Escaped from:** <stage>` marker added to
 `BACKLOG.md`/`BACKLOG-DONE.md` in the period, whoever's commit added it: a branch, or an agent steered by injected
@@ -2178,6 +2178,28 @@ own: the commit's author or committer (free, unsigned text; the owner and the bo
 the owner (in shadow mode the owner merges every autopilot PR, so a planted line in a long diff would pass). Report
 the others as unverified, never as cases. Same owner source as #0-126 (`gh repo view --json owner`). Do it together
 with #0-128, whose CI check reuses the same `MARKER` pattern from `audit-data.sh`.
+
+**Acceptance criteria.**
+AC1. A marker whose adding commit belongs to a PR merged into `main` and opened by the owner's login is a case in
+the audit data.
+AC2. A marker whose commit names the owner only as author or committer (name or email), e.g. pushed straight to
+`main` with no PR, is reported `unverified` and is not a case; a GitHub signature does not vouch for it either (this
+narrows the Approach's "or a verified signature": the owner signs nothing, and the web-flow signature on merge
+commits is GitHub's, not the owner's).
+AC3. A marker in a PR opened by anyone other than the owner (the bot included) is `unverified`, even if the owner
+merged that PR.
+AC4. The PR is looked up with `gh api repos/<repo>/commits/<sha>/pulls`; when it returns several PRs the marker counts
+only if one of them is merged into `main` and opened by the owner; a failed call makes the marker `unverified`.
+AC5. `unverified` markers are listed in the output (count and lines), so the auditor sees what was dropped.
+AC6. The owner login comes from `gh repo view --json owner`, as in #0-126; a failed lookup makes every marker
+`unverified` (fail closed).
+AC7. The raw `escaped` list read by the reviewers audit is filtered by the same rule (its adding commit found with
+`git log -S`), its unverified markers reported separately.
+AC8. README "Infrastructure Hardening" lists the control.
+AC9. `.ai/rules/audit.md` states that a marker counts only when vouched for, and its confidence table no longer
+treats an unverified marker as a hard fact.
+AC10. `MARKER` is defined once in `audit-data.sh`, and the vouching applies to the same pattern #0-128's check reuses.
+AC1–AC7 and AC10 are checked by `.github/scripts/test-audit-data.sh`; AC8–AC9 are judged by review-docs.
 
 ---
 
