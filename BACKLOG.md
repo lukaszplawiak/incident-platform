@@ -123,8 +123,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
-| [0-128](#0-128-a-malformed-escape-marker-fails-ci-instead-of-vanishing-from-the-audits) | A malformed escape marker fails CI instead of vanishing from the audits | improvement | Low | Open |
-| [0-129](#0-129-the-pipeline-audit-counts-only-escape-markers-the-owner-added) | The pipeline audit counts only escape markers the owner added | security | Medium | Open |
 | [0-130](#0-130-a-shell-guard-that-fails-refuses-the-command-instead-of-allowing-it) | A shell guard that fails refuses the command instead of allowing it | security | Low | Open |
 | [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
 
@@ -2145,27 +2143,10 @@ history of the first cases; from now on they are derived, not written by hand.
 
 
 
-### 0-128. A malformed escape marker fails CI instead of vanishing from the audits
-
-**Type:** improvement · **Priority:** Low · **Status:** Open (found in the review of #0-127)
-**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** — (#0-127 is Done)
-**Touches:** ci (.github/scripts, .github/workflows/factory-guards.yml, scripts/factory/_marker.sh)
-
-**Problem.** Since #0-127, `audit-data.sh` counts only a marker in the form `**Fixes:** #0-N · **Escaped from:**
-<stage>`. A line with `**Escaped from:**` but no `**Fixes:** #0-<digits>` on it (written by hand or by an agent
-against the convention) is neither in the raw `escaped` list nor a case, so neither audit sees that escape. A stage
-the parser cannot read is already visible (`escaped:unparsed`); a missing `Fixes` part is not.
-
-**Approach.** A check in Factory guards: every line of `BACKLOG.md` and `BACKLOG-DONE.md` with `**Escaped from:**`
-followed by a stage either carries `**Fixes:** #0-<digits>` or is the convention's own prose (`#0-N`, no stage);
-otherwise it fails with the line number. With a test that a malformed line goes red. One definition of `MARKER`
-for both, rather than a third copy of the pattern: `scripts/factory/_marker.sh` (#0-129, AC10).
-
----
-
 ### 0-129. The pipeline audit counts only escape markers the owner added
 
-**Type:** security · **Priority:** Medium · **Status:** Open (split from #0-126 at its `/ready`, 2026-10-10)
+**Type:** security · **Priority:** Medium · **Status:** Done, PR #491 (split from #0-126 at its `/ready`, 2026-10-10).
+Kept in full for the decisions (the PR opener vouches, nothing else does) and what three review rounds changed.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-126 is Done; do in one PR with #0-128)
 **Touches:** ci (scripts/factory/audit-data.sh, scripts/factory/_marker.sh, .github/scripts/test-audit-data.sh, .claude/workflows/audit.js, .claude/agents/audit-pipeline.md, .claude/agents/audit-reviewers.md), root (.ai/rules/audit.md, README.md "Infrastructure Hardening", docs/ai-factory.md)
 
