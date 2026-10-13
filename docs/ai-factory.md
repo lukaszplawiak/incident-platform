@@ -214,7 +214,10 @@ The agents' instructions are not a boundary; these are, each with its limit:
   records who caught it in `.ai/audit/benchmark/results.md`. Rotate patterns; delete the branch after.
 - **Escaped defects**: an item that fixes a defect an earlier item introduced carries
   `**Fixes:** #0-N · **Escaped from:** <stage>` — `review-<dimension>` when the panel missed it, or the pipeline
-  stage that let it in (BACKLOG.md conventions); the pipeline audit counts the markers added in its period.
+  stage that let it in (BACKLOG.md conventions); the pipeline audit counts the markers added in its period. A
+  marker counts only when it reached `main` in a PR the owner opened (#0-129; the others are listed as
+  `unverifiedEscapes`), so add it on your own branch, not through an autopilot PR; Factory guards fails a marker
+  without its `**Fixes:** #0-<digits>` part (#0-128).
 
 ## Pinned versions
 

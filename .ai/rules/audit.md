@@ -18,7 +18,7 @@ agents work, rates what it finds, and **recommends** changes; only the owner dec
 
 | Confidence | When |
 |---|---|
-| `high` | ≥3 cases, at least one confirmed by the owner (`human:*` label) or by a hard fact (revert, `**Escaped from:**`, a seeded defect missed) |
+| `high` | ≥3 cases, at least one confirmed by the owner (`human:*` label) or by a hard fact (revert, a vouched `**Escaped from:**` marker, a seeded defect missed) |
 | `medium` | ≥3 cases from pipeline data only, no human confirmation |
 | `low` | 1–2 cases. **Never the basis of a recommendation** — report it as an observation |
 
@@ -32,6 +32,25 @@ names what did not count. An organisation-owned repository has no owner login, s
 A known limit: `ownerIsAutopilot` is read from the autopilot PRs of the audited period, so a session on the owner's
 login that opened none in it, yet labelled the bot's PRs through code it ran, would leave labels with the owner as
 actor; it needs the "code the session runs" gap (README, AI factory) and a period mixing both accounts.
+
+**An escape marker counts only when it is vouched for** (backlog #0-129) — every rule here that says `**Escaped
+from:**`, "escaped defect" or "hard fact" about a marker means that. `audit-data.sh` finds the commit that first
+added the marker itself (from `**Fixes:**` to the stage; moving its line or changing the rest of it, such as the
+status, does not change who wrote it) and counts it only when GitHub lists that commit in a pull request merged into
+`main` and opened by the owner's login; it is a new case of a period only when that commit is in the period, so a
+moved, edited or copied old marker is not. The data's `escaped` list and the escape cases hold vouched markers only;
+`unverifiedEscapes` names the rest with a reason, and they are worth nothing: a marker pushed without a PR, one from
+a PR another account opened (the autopilot's included, even when the owner merged it), one whose lookup failed or
+whose commit is not in the local history, every marker in a shallow clone, every marker while the owner cannot be
+read, and every marker while an autopilot PR is authored by the owner's own login (the same rule as for labels). The
+commit's author or committer and a GitHub signature vouch for nothing. The report names what did not count. A marker
+that is not well-formed (`**Escaped from:** <stage>` without `**Fixes:** #0-<digits>` before it) does not reach the
+data at all: Factory guards refuses it (backlog #0-128). A known limit: a commit another account pushed onto a
+branch of the owner's PR is in the owner's PR too; the autopilot may push to any feature branch until backlog
+#0-131. The `ownerIsAutopilot` limit above holds for markers too, and more widely: it is read from the PRs of the
+period, while a marker may come from any earlier one, so a marker from an autopilot PR opened on the owner's login
+in an earlier period would count. None exists: the autopilot has run as its own account (`lukaszplawiakbot`) since
+its first run (PR #472, 2026-10-09).
 The shell guard (`guard-protected-bash.sh`) refuses an autopilot session's commands that set or remove a `human:*`
 label; it is a heuristic, and the check here does not rely on it.
 
@@ -149,7 +168,7 @@ more than one review round, had a scope category that points at a stage (`backlo
 `implementation-drift`, `unclear-item`, `diff-outside-plan`, `diff-outside-touches`; `consistent`, `within-*` and
 `not-measured` are clean), an acceptance other than ACCEPT, or an owner label `human:fp-*`, `human:missed-*` or
 `human:introduced-*`; a BLOCKED run without a PR; and an escaped defect (`**Fixes:** #0-N · **Escaped from:**
-<stage>`; one whose stage cannot be read is an `escaped:unparsed` case). Each carries the item's merged `/ready` PR.
+<stage>`, vouched for as above; one whose stage cannot be read is an `escaped:unparsed` case). Each carries the item's merged `/ready` PR.
 
 **Stages**, in order, with the artifacts that show their output:
 

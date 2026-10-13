@@ -49,6 +49,9 @@ labels are the record.
   - the owner: the PR's `verifiedLabels` in the data file — the `human:*` labels the owner added. Never take
     owner labels from `gh pr view`: it shows every label whoever added it, and the data file checks the actor
     (backlog #0-126). An `unverifiedLabels` entry counts for nothing; report it as a finding when one exists.
+  - escaped defects: only the escape cases and the `escaped` list of the data file — the markers whose adding
+    commit reached `main` in a PR the owner opened. Never take a marker from `BACKLOG.md` itself: anyone's branch
+    can write one (backlog #0-129). An `unverifiedEscapes` entry counts for nothing; report it as a finding.
 - The definitions and rules each stage worked from, as they were then (`git log` / `git show <sha>:<path>`
   for `.ai/rules/ready.md`, `.claude/agents/<agent>.md`, `.ai/rules/*.md` at the run's date).
 - `.ai/audit/decisions.md` and the previous pipeline report: what was accepted (check its metric now), what

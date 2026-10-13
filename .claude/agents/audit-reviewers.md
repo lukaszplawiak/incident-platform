@@ -34,7 +34,9 @@ labels are the record.
   their owner labels in `verifiedLabels` (`human:agree`, `human:fp-<dimension>`, `human:missed-<dimension>`, only
   those the owner added; `unverifiedLabels` count for nothing, and owner labels are never taken from `gh pr view`,
   which shows every label whoever added it: backlog #0-126) and bodies (the verdict
-  JSON of every round is in a `<details>` block), backlog items with `**Escaped from:**`, seeded-defect
+  JSON of every round is in a `<details>` block), backlog items with `**Escaped from:**` in `escaped` (only those
+  the owner vouched for; `unverifiedEscapes` count for nothing and are never read from the backlog files
+  directly: backlog #0-129), seeded-defect
   results, the run history.
 - The reviewer's criteria `.ai/rules/review/<dimension>.md` and `_common.md`, its definition
   `.claude/agents/review-<dimension>.md`.
