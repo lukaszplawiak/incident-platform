@@ -34,7 +34,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
     `**Fixes:** #0-N · **Escaped from:** <stage>` on the same line, where `<stage>` is `review-<dimension>` when
     the panel missed it, or the pipeline stage that let it in (`ready`, `queue`, `pick`, `plan`, `implement`,
     `acceptance`, `ship`); the audits count these (the pipeline audit, backlog #0-121, by the date the marker
-    was added).
+    was added), but only a marker that reached `main` in a PR the owner opened (backlog #0-129). Factory guards
+    fails a line with `**Escaped from:** <stage>` and no `**Fixes:** #0-<digits>` before it (backlog #0-128).
 - **Acceptance criteria** for an autopilot item are numbered (`AC1.`, `AC2.`, …), each one checkable by a
   test or a CI check script (not a command run by hand), so that `acceptance-reviewer` can map each to evidence. Prose `**Acceptance.**`
   paragraphs stay valid for items done by hand.
@@ -125,6 +126,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-128](#0-128-a-malformed-escape-marker-fails-ci-instead-of-vanishing-from-the-audits) | A malformed escape marker fails CI instead of vanishing from the audits | improvement | Low | Open |
 | [0-129](#0-129-the-pipeline-audit-counts-only-escape-markers-the-owner-added) | The pipeline audit counts only escape markers the owner added | security | Medium | Open |
 | [0-130](#0-130-a-shell-guard-that-fails-refuses-the-command-instead-of-allowing-it) | A shell guard that fails refuses the command instead of allowing it | security | Low | Open |
+| [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
 
 ---
 
@@ -2147,7 +2149,7 @@ history of the first cases; from now on they are derived, not written by hand.
 
 **Type:** improvement · **Priority:** Low · **Status:** Open (found in the review of #0-127)
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** — (#0-127 is Done)
-**Touches:** ci (.github/scripts, .github/workflows/factory-guards.yml)
+**Touches:** ci (.github/scripts, .github/workflows/factory-guards.yml, scripts/factory/_marker.sh)
 
 **Problem.** Since #0-127, `audit-data.sh` counts only a marker in the form `**Fixes:** #0-N · **Escaped from:**
 <stage>`. A line with `**Escaped from:**` but no `**Fixes:** #0-<digits>` on it (written by hand or by an agent
@@ -2156,8 +2158,8 @@ the parser cannot read is already visible (`escaped:unparsed`); a missing `Fixes
 
 **Approach.** A check in Factory guards: every line of `BACKLOG.md` and `BACKLOG-DONE.md` with `**Escaped from:**`
 followed by a stage either carries `**Fixes:** #0-<digits>` or is the convention's own prose (`#0-N`, no stage);
-otherwise it fails with the line number. With a test that a malformed line goes red. Reuse `MARKER` from
-`audit-data.sh` rather than a third copy of the pattern.
+otherwise it fails with the line number. With a test that a malformed line goes red. One definition of `MARKER`
+for both, rather than a third copy of the pattern: `scripts/factory/_marker.sh` (#0-129, AC10).
 
 ---
 
@@ -2165,7 +2167,7 @@ otherwise it fails with the line number. With a test that a malformed line goes 
 
 **Type:** security · **Priority:** Medium · **Status:** Open (split from #0-126 at its `/ready`, 2026-10-10)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (#0-126 is Done; do in one PR with #0-128)
-**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), root (.ai/rules/audit.md, README.md "Infrastructure Hardening")
+**Touches:** ci (scripts/factory/audit-data.sh, scripts/factory/_marker.sh, .github/scripts/test-audit-data.sh, .claude/workflows/audit.js, .claude/agents/audit-pipeline.md, .claude/agents/audit-reviewers.md), root (.ai/rules/audit.md, README.md "Infrastructure Hardening", docs/ai-factory.md)
 
 **Problem.** `audit-data.sh` makes a case of every `**Fixes:** #0-N · **Escaped from:** <stage>` marker added to
 `BACKLOG.md`/`BACKLOG-DONE.md` in the period, whoever's commit added it: a branch, or an agent steered by injected
@@ -2173,11 +2175,11 @@ text, could plant a case or a "hard fact" that raises an audit's confidence (`au
 closes the same hole for `human:*` labels; markers are a different source (commit history, not PR timelines).
 
 **Approach.** Count a marker only when GitHub vouches for who wrote it: the commit that added it reached `main`
-through a PR opened by the owner's login, or carries a signature GitHub verifies as the owner's. Not enough on their
+through a PR opened by the owner's login (a signature does not vouch, see AC2). Not enough on their
 own: the commit's author or committer (free, unsigned text; the owner and the bot share the container) and a merge by
 the owner (in shadow mode the owner merges every autopilot PR, so a planted line in a long diff would pass). Report
 the others as unverified, never as cases. Same owner source as #0-126 (`gh repo view --json owner`). Do it together
-with #0-128, whose CI check reuses the same `MARKER` pattern from `audit-data.sh`.
+with #0-128, whose CI check reads the same `MARKER` (`scripts/factory/_marker.sh`, AC10).
 
 **Acceptance criteria.**
 AC1. A marker whose adding commit belongs to a PR merged into `main` and opened by the owner's login is a case in
@@ -2198,8 +2200,34 @@ AC7. The raw `escaped` list read by the reviewers audit is filtered by the same 
 AC8. README "Infrastructure Hardening" lists the control.
 AC9. `.ai/rules/audit.md` states that a marker counts only when vouched for, and its confidence table no longer
 treats an unverified marker as a hard fact.
-AC10. `MARKER` is defined once in `audit-data.sh`, and the vouching applies to the same pattern #0-128's check reuses.
-AC1–AC7 and AC10 are checked by `.github/scripts/test-audit-data.sh`; AC8–AC9 are judged by review-docs.
+AC10. `MARKER` is defined once, in `scripts/factory/_marker.sh`, which `audit-data.sh` and #0-128's check both
+source (decided when building it, 2026-10-12: a shared definition like `_protected.sh`, rather than a check mode in
+`audit-data.sh` or a check that parses the line out of it), and the vouching applies to that pattern.
+AC11. While any autopilot PR of the period is authored by the owner's login, every marker is `unverified` — the
+`ownerIsAutopilot` rule of #0-126: the autopilot then opens its PRs with the owner's token, so the opener proves
+nothing (added when building it, 2026-10-12).
+AC1–AC7, AC10 and AC11 are checked by `.github/scripts/test-audit-data.sh`; AC8–AC9 are judged by review-docs.
+
+**Review round 1 (2026-10-13).** A marker sits on its item's `**Type:** … · **Status:** …` line, and the first build
+traced and dated it by that whole line: a status change made the changer its author (the owner's edit vouched for
+the bot's marker, the bot's close unvouched the owner's) and a new marker of the period. It is now traced by the
+marker itself (`marker_span` in `_marker.sh`, which also reads the item and stage, so `audit-data.sh` has no second
+pattern), and the found commit must add exactly that marker (`git log -S` matches substrings). Also: the history is
+read without replace refs or grafts, `pulls_verdict` vouches with an explicit `OK`, and #0-128's check catches the
+marker in any case, bold or not. Kept as a known limit, its own item: a commit pushed onto the owner's PR branch by
+another account is in the owner's PR (#0-131).
+
+**Review round 2 (2026-10-13).** A marker was new in a period when its lines there were added more often than
+removed, but vouched by its first commit: the bot copying an old owner-vouched line, the original left in place,
+made it a vouched case again. It is now new only when its origin commit is in the period. And the history is read
+without textconv or external diff drivers (`.git/config` could rewrite what `-S`, `-p` and `show` see), and a
+shallow clone vouches for no marker (its boundary commits show their whole files as added).
+
+**Review round 3 (2026-10-13).** The period's history is read with `--since-as-filter`: `--since` stops at the
+first older commit, so one back-dated commit hid every marker behind it. Each marker line reaches jq as its own
+value (a tab in a marker split the old tab-separated records), and the commands in the vouching loop read
+`/dev/null`, not the loop's input. `audit.md` states that the `ownerIsAutopilot` limit is wider for markers (any
+earlier period); no such marker exists, the autopilot has always run as its own account.
 
 ---
 
@@ -2217,6 +2245,26 @@ control for labels (#0-126), and the commit gates and PR checks for the rest —
 **Approach.** Both functions end every path with an explicit `return 0` (allowed) or print-and-return (refused), and
 the caller refuses when the function's exit status is non-zero (`why=$(…) || block "the … check failed"`), with a
 test that a forced error in each is refused.
+
+---
+
+### 0-131. The autopilot pushes only the branch of its own item
+
+**Type:** security · **Priority:** Medium · **Status:** Open (found by the security review of #0-128/#0-129, 2026-10-13)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** root (.claude/hooks/guard-git-push.sh, .claude/hooks/test-hooks.sh, README.md "Infrastructure Hardening", .ai/rules/audit.md)
+
+**Problem.** `guard-git-push.sh` lets an autopilot session run `git push -u origin <type>/<name>` for any feature
+branch, so it can fast-forward a branch of the owner's open PR. #0-129 counts an escape marker when its commit is in
+a PR the owner opened and merged into `main`; a marker the bot pushed onto that branch is in the owner's PR, and
+counts once the owner merges it without noticing the extra commit. The same push could slip any change into a PR
+the owner believes is only theirs.
+
+**Approach.** The push guard allows only the branch the picker created for the item of the current run (recorded
+in the run's working files), and refuses every other branch, with a test per form (another item's branch, the
+owner's branch, a branch that does not exist yet). Branch protection (#0-113) cannot express "this account only
+its own branches" on a personal repository, so the hook is the control; the owner still reads the commits of
+their own PR before merging. Remove the known limit from README and `audit.md` when done.
 
 ---
 

@@ -20,6 +20,18 @@
 # proves nothing on any PR — review round 1, sec-4c1e). It fails closed.
 # The owner is the repository's owner login (`gh repo view`), which the autopilot cannot change; an organisation's
 # repository has an organisation there, so every label would be unverified until this reads its members.
+#
+# Escape markers (backlog #0-129): a `**Fixes:** #0-N · **Escaped from:** <stage>` line counts only when GitHub
+# vouches for who wrote it: the commit that first added the marker itself (from `**Fixes:**` to the stage, found with
+# `git log -S` and checked in the commit's diff, so moving the line to BACKLOG-DONE.md or changing the rest of it,
+# the status, keeps its origin) belongs to a PR merged into main and opened by the owner
+# (`gh api repos/<repo>/commits/<sha>/pulls`). A known limit: a commit someone else pushed onto the owner's PR
+# branch is in the owner's PR too (backlog #0-131).
+# Not enough: the commit's author or committer (free text; the owner and the bot share the container), a GitHub
+# signature (the owner signs nothing; the web-flow one on merge commits is GitHub's), the owner's merge of someone
+# else's PR (in shadow mode the owner merges every autopilot PR). A marker pushed with no PR, from another account's
+# PR, with the lookup failing, with the owner unknown, or while the autopilot runs on the owner's login (the same
+# rule as for labels) is listed in `unverifiedEscapes` with its reason, and is neither a case nor in `escaped`.
 # ============================================================
 set -uo pipefail
 . "$(dirname "$0")/_common.sh"
@@ -30,8 +42,9 @@ case "$since" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo '{"error
 prs_file="$RUNS_DIR/audit/prs-$since.json"
 ready_file="$RUNS_DIR/audit/ready-prs-$since.json"
 events_file="$RUNS_DIR/audit/label-events-$since.json"
-echo '[]' > "$prs_file"; echo '[]' > "$ready_file"; echo '{}' > "$events_file"
-owner=""
+vouch_file="$RUNS_DIR/audit/escape-vouch-$since.json"
+echo '[]' > "$prs_file"; echo '[]' > "$ready_file"; echo '{}' > "$events_file"; echo '{}' > "$vouch_file"
+owner="" repo=""
 if command -v gh >/dev/null 2>&1; then
     gh pr list --label autopilot --state all --search "updated:>=$since" --limit 200 \
        --json number,title,state,labels,body,mergedAt,closedAt,url,headRefName,isDraft,author > "$prs_file" 2>/dev/null || echo '[]' > "$prs_file"
@@ -50,18 +63,104 @@ if command -v gh >/dev/null 2>&1; then
         done
     fi
 fi
+# When an autopilot PR is authored by the owner login, the autopilot runs with the owner token: every label event
+# and every PR it makes names the owner, so neither proves anything (review round 1 of #0-126, sec-4c1e; backlog
+# #0-129 for the markers).
+owner_is_autopilot=false
+if [ -n "$owner" ] && jq -e --arg o "$owner" 'any(.[]; (.author.login // null) == $o)' "$prs_file" >/dev/null 2>&1; then
+    owner_is_autopilot=true
+fi
 # A real marker names the fixing item (`**Fixes:** #0-N · **Escaped from:** <stage>`); prose that only describes the
 # convention (BACKLOG's conventions, an item's text) does not, and is not counted (first pipeline audit, obs. 5).
-# The same definition as the jq capture of $escapedCases below: change both together.
-MARKER='\*\*Fixes:\*\* #0-[0-9]+.*\*\*Escaped from:\*\*'
-escaped=$(grep -hE "$MARKER" BACKLOG.md BACKLOG-DONE.md 2>/dev/null | jq -R . | jq -s .)
+# MARKER, and how to read the marker, its item and its stage out of a line, are defined once, in _marker.sh
+# (backlog #0-128).
+. "$(dirname "$0")/_marker.sh"
+# The history below is the local one: no replace refs and no grafts, which would let code with write access to .git
+# show an owner's commit adding a marker it never added (review round 1 of #0-129; the rest of that trust is the
+# "code the session runs" gap, README).
+# Every git call that reads a diff also ignores textconv and external diff drivers, which .git/config could set to
+# rewrite what -S, -p and show see; a shallow clone is refused below (its boundary commits show their whole files as
+# added) (review round 2).
+export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
+NODIFF="--no-textconv --no-ext-diff"
+shallow=$(git rev-parse --is-shallow-repository 2>/dev/null) || shallow=unknown
+# Unique: a copied line is one marker, not two, in the reviewers audit too.
+escaped=$(grep -hE "$MARKER" BACKLOG.md BACKLOG-DONE.md 2>/dev/null | jq -R . | jq -s 'unique')
 # The escape markers ADDED since the date (the git history of the backlog files): only those are new cases, so an
 # old escape is not traced again in every audit. ($escaped above, all of them, stays for the reviewers' audit.)
-# A marker removed in the same period too was moved (an item closed: BACKLOG.md to BACKLOG-DONE.md), not added.
-backlog_log=$(git log --since="$since" --format= -p -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null)
-escaped_added=$(printf '%s\n' "$backlog_log" | grep -E "^\\+[^+].*$MARKER" | sed 's/^+//' | sort -u | jq -R . | jq -s .)
-escaped_removed=$(printf '%s\n' "$backlog_log" | grep -E "^-[^-].*$MARKER" | sed 's/^-//' | sort -u | jq -R . | jq -s .)
-escaped_new=$(jq -n --argjson a "$escaped_added" --argjson r "$escaped_removed" '$a - $r')
+# Per marker (marker_span), not per line: every marker on a line added in the period is a candidate, its newest
+# line kept; it is NEW only when the commit that first added it (its origin, below) is in the period. So a move (an
+# item closed: BACKLOG.md to BACKLOG-DONE.md), a change to the rest of its line (the status) or a copy of an old
+# marker is not a new escape, while a marker added and then moved or edited in the same period is. Not a +/- count:
+# a copy of an old owner's line, left beside the original, was +1/-0 and made a vouched case again (review round 2).
+# --since-as-filter, not --since: --since stops walking at the first older commit, so one back-dated commit would
+# hide every marker behind it (review round 3). Each line goes to jq as its own JSON value, no separator to split
+# on: a marker may hold a tab (review round 3).
+backlog_log=$(git log $NODIFF --since-as-filter="$since" --format= -p -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null)
+escaped_new=$(printf '%s\n' "$backlog_log" | grep -E "^\+[^+].*$MARKER" | sed 's/^+//' | while IFS= read -r l; do
+                  jq -n --arg s "$(marker_span "$l")" --arg l "$l" '{span: $s, line: $l}'
+              done | jq -s 'group_by(.span) | map(.[0].line)')
+# Who wrote each marker (backlog #0-129, see the header): one entry per line, {commit, added (its committer date),
+# verified, reason, item, stage}. A line the loop leaves without an entry is unverified too (the jq below), so a failure here never counts a
+# marker.
+# pulls_verdict <sha>: OK when a PR merged into main and opened by the owner contains the commit, else the reason.
+# An explicit OK, not an empty answer: nothing printed (a later edit gone wrong) is a reason, never a vouch.
+pulls_verdict() {
+    local pulls
+    pulls=$(gh api "repos/$repo/commits/$1/pulls" --paginate 2>/dev/null </dev/null | jq -s 'add // []' 2>/dev/null) \
+        || { echo "the PR lookup for $1 failed or returned no JSON"; return; }
+    printf '%s' "$pulls" | jq -r --arg o "$owner" '
+        if type != "array" then "the PR lookup returned no list"
+        elif any(.[]; .merged_at != null and .base.ref == "main" and .user.login == $o) then "OK"
+        elif length == 0 then "no pull request: pushed straight to a branch"
+        else "no PR merged into main and opened by the owner: "
+             + ([.[] | "#\(.number) by \(.user.login // "?"), "
+                       + (if .merged_at == null then "not merged" else "merged into \(.base.ref)" end)] | join("; "))
+        end' 2>/dev/null || echo "the PR lookup for $1 could not be read"
+}
+# adds_marker <sha> <span>: the commit adds a line whose marker is exactly <span>. `git log -S` matches a substring,
+# so an owner's commit with a longer line around the same text (`…plan` in backticks, a sentence) is listed too;
+# only a commit that adds the marker itself is its origin (review round 1 of #0-129).
+adds_marker() {
+    local a
+    while IFS= read -r a; do
+        [ "$(marker_span "$a")" = "$2" ] && return 0
+    done < <(git show $NODIFF --format= "$1" -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null | grep -E '^\+[^+]' | grep -F -- "$2" | sed 's/^+//')
+    return 1
+}
+# Every command in the loop below reads /dev/null, not the loop's input (the marker lines) (review round 3).
+verdicts=""   # "<sha> <verdict>" lines: one lookup per commit (bash 3.2 has no associative arrays)
+while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    span=$(marker_span "$line")
+    sha=""
+    # The origin is the oldest commit, in the history's order, that adds this marker, wherever the line went and
+    # whatever else on it changed. Commit dates can be set by anyone, but a forged one can only make a marker
+    # unverified (the bot's commit found first) or not new: the vouching itself is GitHub's.
+    for c in $(git log $NODIFF -S"$span" --reverse --format=%H -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null); do
+        if adds_marker "$c" "$span"; then sha=$c; break; fi
+    done
+    if [ -z "$owner" ] || [ -z "$repo" ]; then reason="the repository owner is unknown"
+    elif [ "$owner_is_autopilot" = true ]; then reason="autopilot PRs are authored by the owner login: a PR's opener proves nothing"
+    elif [ "$shallow" != false ]; then reason="the repository is a shallow clone (or unreadable): its history cannot say who added it"
+    elif [ -z "$sha" ]; then reason="no commit in the local history adds it (a shallow clone?)"
+    else
+        cached=$(printf '%s\n' "$verdicts" | grep -m 1 "^$sha ")
+        if [ -n "$cached" ]; then verdict=${cached#"$sha "}
+        else verdict=$(pulls_verdict "$sha"); verdicts="$verdicts$sha $verdict"$'\n'
+        fi
+        case "$verdict" in
+            OK) reason="" ;;
+            "") reason="the PR lookup for $sha printed nothing" ;;
+            *) reason=$verdict ;;
+        esac
+    fi
+    added=""; [ -n "$sha" ] && added=$(git show -s --format=%cs "$sha" 2>/dev/null </dev/null)
+    jq --arg l "$line" --arg c "$sha" --arg a "$added" --arg r "$reason" --arg i "$(marker_item "$line")" --arg s "$(marker_stage "$line")" \
+       '. + {($l): {commit: (if $c == "" then null else $c end), added: (if $a == "" then null else $a end), verified: ($r == ""), reason: (if $r == "" then null else $r end),
+                    item: (if $i == "" then null else $i end), stage: $s}}' \
+       "$vouch_file" > "$vouch_file.tmp" && mv "$vouch_file.tmp" "$vouch_file"
+done < <(jq -rn --argjson a "$escaped" --argjson b "$escaped_new" '$a + $b | unique[]')
 seeded='[]'
 [ -f .ai/audit/benchmark/results.md ] && seeded=$(grep -E '^\|' .ai/audit/benchmark/results.md | jq -R . | jq -s .)
 state=$(state_init; cat "$STATE_FILE")
@@ -70,6 +169,7 @@ proj_dir="$HOME/.claude/projects/$(printf '%s' "$FACTORY_ROOT" | sed 's#[/.]#-#g
 # PR bodies go through a file (--slurpfile): 200 bodies on a command line can exceed ARG_MAX.
 jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready_file" --argjson escaped "$escaped" \
       --argjson escapedNew "$escaped_new" --slurpfile events "$events_file" --arg owner "$owner" \
+      --argjson ownerIsAutopilot "$owner_is_autopilot" --slurpfile vouch "$vouch_file" \
       --argjson seeded "$seeded" --argjson state "$state" --arg transcripts "$proj_dir" '
   def first_match($re): [match($re).captures[0].string] | first;
   def item_of: (.headRefName // "") | first_match("/(0-[0-9]+)-");
@@ -78,11 +178,11 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
                      | sort_by(.number) | last
                      | if . == null then null
                        else {number, url, readyCheck: ((.body // "") | test("(?m)^## Ready check"))} end;
-  # When an autopilot PR is authored by the owner login, the autopilot runs with the owner token: every label event
-  # it makes, on any PR, names the owner, so no actor proves anything (review round 1, sec-4c1e).
-  ($owner != "" and any($prs[0][]; (.author.login // null) == $owner)) as $ownerIsAutopilot
+  # A marker counts only when its entry in the vouch file says so (backlog #0-129); no entry is no vouching.
+  def vouched: . as $l | ($vouch[0][$l].verified // false) == true;
   # The human:* labels of one PR, each with who added it and, when it does not count, why (backlog #0-126).
-  | def checked_labels($ev):
+  # $ownerIsAutopilot comes from the shell, which needs it for the markers too.
+  def checked_labels($ev):
     [ .[] | select(ascii_downcase | startswith("human:")) | . as $l
       | (if $ev == null then null else ([$ev[] | select(.label == $l)] | last | .actor // null) end) as $actor
       | {label: $l, actor: $actor,
@@ -126,10 +226,10 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
             unverifiedLabels: [], rounds: null,
             scope: null, acceptance: null, stage: (.stage // null), signals: ["blocked (run history, no PR)"],
             readyPr: ready_of(.item)})) as $stateCases
-  # The same marker definition as MARKER above: change both together. A line MARKER accepted but this capture cannot
-  # parse (a stage name in another form) is an "escaped:unparsed" case, not dropped: every marker counted is traced.
-  | ($escapedNew | map(capture("\\*\\*Fixes:\\*\\* #(?<item>0-[0-9]+).*\\*\\*Escaped from:\\*\\* *(?<from>[a-z][a-z0-9-]*)")?
-                       // {item: first_match("#(0-[0-9]+)"), from: null})
+  # The item and stage come from _marker.sh (the vouch entry), so no second pattern lives here. A stage in another
+  # form (`Review-General`) is an "escaped:unparsed" case, not dropped: every marker counted is traced. Only vouched
+  # markers are cases (backlog #0-129), and only those first added in the period (review round 2).
+  | ($escapedNew | map(select(vouched and (($vouch[0][.].added // "") >= $since))) | map($vouch[0][.] | {item, from: (.stage | if test("^[a-z][a-z0-9-]*$") then . else null end)})
      | map({pr: null, url: null, item, branch: null, draft: null, merged: true, labels: [], verifiedLabels: [],
             unverifiedLabels: [], rounds: null,
             scope: null, acceptance: null, signals: [if .from == null then "escaped:unparsed" else "escaped:\(.from)" end],
@@ -137,13 +237,20 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
   | {since: $since, owner: (if $owner == "" then null else $owner end),
      ownerIsAutopilot: $ownerIsAutopilot,
      unverifiedLabels: [$prsV[] | .number as $n | .unverifiedLabels[] | {pr: $n} + .],
-     prs: $prsV, readyPrs: [$ready[0][] | select(.mergedAt != null)], escaped: $escaped, seeded: $seeded, state: $state,
+     # The raw list for the reviewers audit holds vouched markers only; the others are named, never counted.
+     unverifiedEscapes: [$escaped + $escapedNew | unique | .[] | . as $l
+                         | ($vouch[0][$l] // {commit: null, verified: false, reason: "not checked"})
+                         | select(.verified != true) | {line: $l, commit, reason}],
+     prs: $prsV, readyPrs: [$ready[0][] | select(.mergedAt != null)], escaped: [$escaped[] | select(vouched)],
+     seeded: $seeded, state: $state,
      cases: ($prCases + $stateCases + $escapedCases), transcriptsDir: $transcripts}' > "$out"
 
 jq -n --arg file "$out" --argjson n "$(jq length "$prs_file")" --arg transcripts "$proj_dir" \
       --argjson labelled "$(jq '[.prs[] | select(.verifiedLabels | length > 0)] | length' "$out")" \
       --argjson unverified "$(jq '.unverifiedLabels | length' "$out")" \
       --argjson ownerIsAutopilot "$(jq '.ownerIsAutopilot' "$out")" --argjson owner "$(jq '.owner' "$out")" \
+      --argjson unverifiedEscapes "$(jq '.unverifiedEscapes | length' "$out")" \
       --argjson cases "$(jq '.cases | length' "$out")" --argjson ready "$(jq '[.[] | select(.mergedAt != null)] | length' "$ready_file")" \
       '{file:$file, prs:$n, prsWithHumanLabels:$labelled, unverifiedHumanLabels:$unverified, owner:$owner,
-        ownerIsAutopilot:$ownerIsAutopilot, readyPrs:$ready, cases:$cases, transcriptsDir:$transcripts}'
+        ownerIsAutopilot:$ownerIsAutopilot, unverifiedEscapes:$unverifiedEscapes, readyPrs:$ready, cases:$cases,
+        transcriptsDir:$transcripts}'

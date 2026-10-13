@@ -395,8 +395,21 @@ security boundary, so every rule that matters is also enforced outside the model
   (`autopilot`, `shadow`, `blocked`, `risk-high`) or remove one other than `blocked`, in the flag forms gh accepts, behind
   flags, by path, through another program, or from a `--recover` file (`guard-protected-bash.sh`, plus deny rules);
   like the other shell guards it is a heuristic, and code the session runs is not seen by it (the known gap below).
+- **Escape markers are verified** (backlog #0-129): the audits count a `**Fixes:** #0-N · **Escaped from:**
+  <stage>` marker (a case, and a "hard fact" for confidence) only when the commit that first added the marker itself
+  (not its line, which a status change rewrites) reached `main` in a pull request the repository owner opened
+  (`audit-data.sh`, `gh api .../commits/<sha>/pulls`; the history read without replace refs, grafts, textconv or
+  external diff drivers, and a shallow clone vouches for nothing), and it is a new case only when that commit is in
+  the audited period (a copy of an old marker is not). A marker pushed
+  without a PR, from another account's PR (the autopilot's, even merged by the owner), with the lookup failing, while
+  the owner cannot be read, or while the autopilot runs on the owner's login counts for nothing and is listed as
+  unverified; the commit's author, committer or signature proves nothing. Factory guards also fails a malformed
+  marker, one the audits could not read, in any spelling (`check-escape-markers.sh`, backlog #0-128), with the
+  pattern defined once in `scripts/factory/_marker.sh`. Its limit: a commit the autopilot pushes onto a branch of
+  the owner's open PR is in the owner's PR too (#0-131).
 
-**Known gaps**: the GitHub settings themselves (#0-113); the devcontainer's firewall binds the agents' own
+**Known gaps**: the GitHub settings themselves (#0-113); the autopilot may push to any feature branch, the
+owner's included (#0-131); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
 (#0-116, accepted for shadow mode, required before auto-merge); no secret scanning (#0-109); no Maven Enforcer
 (#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines;

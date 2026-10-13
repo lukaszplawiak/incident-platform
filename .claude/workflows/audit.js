@@ -33,7 +33,7 @@ const dimensions = Array.isArray(args.dimensions) && args.dimensions.length ? ar
 
 phase('Collect')
 const data = await as('factory-ops', `Run exactly: scripts/factory/audit-data.sh '${args.since}'`, {
-  schema: { type: 'object', required: ['file', 'prs'], properties: { file: { type: 'string' }, prs: { type: 'number' }, prsWithHumanLabels: { type: 'number' }, unverifiedHumanLabels: { type: 'number' }, ownerIsAutopilot: { type: 'boolean' }, owner: { type: ['string', 'null'] }, readyPrs: { type: 'number' }, cases: { type: 'number' }, transcriptsDir: { type: 'string' } } },
+  schema: { type: 'object', required: ['file', 'prs'], properties: { file: { type: 'string' }, prs: { type: 'number' }, prsWithHumanLabels: { type: 'number' }, unverifiedHumanLabels: { type: 'number' }, ownerIsAutopilot: { type: 'boolean' }, unverifiedEscapes: { type: 'number' }, owner: { type: ['string', 'null'] }, readyPrs: { type: 'number' }, cases: { type: 'number' }, transcriptsDir: { type: 'string' } } },
   label: 'audit data',
 })
 if (!data) return { outcome: 'FAILED', reason: 'audit-data.sh gave no result' }
@@ -41,14 +41,16 @@ if (!data) return { outcome: 'FAILED', reason: 'audit-data.sh gave no result' }
 if (data.prs === 0 && !data.cases) return { outcome: 'NOTHING_TO_AUDIT', reason: `no autopilot PR and no pipeline case since ${args.since}` }
 log(`${data.prs} autopilot PRs since ${args.since}, ${data.prsWithHumanLabels} with owner labels; ${data.cases ?? 0} pipeline cases, ${data.readyPrs ?? 0} /ready PRs`)
 if (data.prsWithHumanLabels === 0) log('No PR carries a verified owner label (human:* added by the owner): confidence cannot exceed medium, and no security/architecture relaxation is possible this cycle.')
-// Owner labels count only when the owner added them (backlog #0-126); what did not count goes into every report.
+// Owner labels count only when the owner added them (backlog #0-126), escape markers only when the owner's PR brought
+// them to main (backlog #0-129); what did not count goes into every report.
 const labelWarnings = [
-  data.owner == null ? 'The repository owner could not be read: no human:* label counts as owner confirmation this cycle.' : '',
-  data.ownerIsAutopilot ? "Autopilot PRs are authored by the owner's own login, so the autopilot acts with the owner's token and who added a label proves nothing: no human:* label counts this cycle; the report must say so in its Summary." : '',
+  data.owner == null ? 'The repository owner could not be read: no human:* label and no escape marker counts as owner confirmation this cycle.' : '',
+  data.ownerIsAutopilot ? "Autopilot PRs are authored by the owner's own login, so the autopilot acts with the owner's token and who added a label or opened a PR proves nothing: no human:* label and no escape marker counts this cycle; the report must say so in its Summary." : '',
   data.unverifiedHumanLabels > 0 ? `${data.unverifiedHumanLabels} human:* label(s) were not added by the owner (unverifiedLabels in the data file): they count for nothing; list them in the report's Evidence.` : '',
+  data.unverifiedEscapes > 0 ? `${data.unverifiedEscapes} escape marker(s) did not reach main in a PR the owner opened (unverifiedEscapes in the data file): they are no case and no hard fact; list them in the report's Evidence.` : '',
 ].filter(Boolean)
 for (const w of labelWarnings) log(w)
-const labelNote = `Owner labels: ${labelWarnings.join(' ') || 'every human:* label in the data was added by the owner.'}`
+const labelNote = `Owner labels and escape markers: ${labelWarnings.join(' ') || 'every human:* label and escape marker in the data is vouched for by the owner.'}`
 const reports = []
 const failures = []   // a target that failed: recorded, and the other target still runs (they are independent)
 
