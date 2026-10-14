@@ -43,7 +43,9 @@ case "$cmd" in
     *--output*|*--ext-diff*|*--textconv*|*--no-index*) block "git option not allowed here (it can write files, run programs or read outside the repository). $HINT" ;;
 esac
 
-why=$(git_grep_unsafe "$cmd"); [ -z "$why" ] || block "$why. $HINT"
+# A check that fails (exit status not 0) refuses: its empty output does not mean "may run" (backlog #0-130).
+why=$(git_grep_unsafe "$cmd") || block "the git grep check failed, so the command is refused${why:+: $why}. $HINT"
+[ -z "$why" ] || block "$why. $HINT"
 
 set -f  # no glob expansion while splitting the command into words
 # shellcheck disable=SC2086

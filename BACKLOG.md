@@ -125,6 +125,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-130](#0-130-a-shell-guard-that-fails-refuses-the-command-instead-of-allowing-it) | A shell guard that fails refuses the command instead of allowing it | security | Low | Open |
 | [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
+| [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
 
 ---
 
@@ -2216,16 +2217,35 @@ earlier period); no such marker exists, the autopilot has always run as its own 
 
 **Type:** security · **Priority:** Low · **Status:** Open (found by the security review of #0-126, 2026-10-10)
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
-**Touches:** root (.claude/hooks/guard-protected-bash.sh, .claude/hooks/_lib.sh, .claude/hooks/test-hooks.sh)
+**Touches:** root (.claude/hooks/guard-protected-bash.sh, .claude/hooks/readonly-bash.sh, .claude/hooks/_lib.sh, .claude/hooks/test-hooks.sh, README.md "Infrastructure Hardening")
 
 **Problem.** `guard-protected-bash.sh` runs `why=$(git_grep_unsafe "$cmd")` and `why=$(gh_label_unsafe "$cmd")` and
 lets the command through when `why` is empty. A runtime error inside either function (an unset variable, a failed
 `sed`) also leaves `why` empty, so the guard fails open. The impact is bounded — the audit's own actor check is the
 control for labels (#0-126), and the commit gates and PR checks for the rest — but a guard should fail closed.
+`readonly-bash.sh` (the reviewers' allow-list) calls `git_grep_unsafe` the same way.
 
 **Approach.** Both functions end every path with an explicit `return 0` (allowed) or print-and-return (refused), and
 the caller refuses when the function's exit status is non-zero (`why=$(…) || block "the … check failed"`), with a
 test that a forced error in each is refused.
+
+**Decided (owner, 2026-10-14).** Every failure refuses, not only one that aborts the function (option B): a step that
+fails without aborting — `grep -q … || return 0` taking grep's error (2) for "no match", a `sed`/`tr` that fails and
+leaves an empty word list — returns 2 too. Matching moved from grep on a here-string to bash's own `[[ =~ ]]` and
+`case`, which have no such failure (a here-string bash cannot write fails with exit 1, grep's "no match"); the
+`sed`/`tr` substitutions keep the tools and end in `|| return 2`. `readonly-bash.sh` is in scope (the same pattern).
+Left out, for its own item: `guard-protected-bash.sh`'s own grep checks (secrets, mvnw, protected paths, writes)
+and `json_get` (a failing jq leaves an empty command, which exits 0) fail open the same way.
+Review round 1 (2026-10-14), fixed here: a newline inside a quoted word split one argument into two words for both
+checks, which read `shell_words`' output one word per line (`git grep 'x<newline>--' --untracked …` passed, also on
+`main`: sec-4e1a) — a `git grep` or `gh` command with a newline in it is now refused (multi-line commit messages still
+pass; a multi-line PR body goes in `--body-file`); and `matches` runs in the C locale, where a byte that is not valid
+UTF-8 cannot turn a match into "no match" (sec-9c27). Review round 2, fixed here: `git grep` run behind something passed
+the check, which starts at word 1 (`env`/`command`/`sh -c git grep`, `GIT_DIR=x git grep`, `/usr/bin/git grep`, a glob
+such as `/usr/bin/gi[t]`; also on `main`, stopped in practice by the autopilot's allow-list) — refused now, as
+`gh_label_unsafe` does for gh. Review round 4, fixed here: a glob where the subcommand goes (`git gr?p`, `git g[r]ep`,
+`git *`, also behind git options) became grep once a file of that name existed — refused; the first filter also lets
+through a glob made only of grep's letters, so an ordinary `git add src/*.java` is not touched.
 
 ---
 
@@ -2246,6 +2266,38 @@ in the run's working files), and refuses every other branch, with a test per for
 owner's branch, a branch that does not exist yet). Branch protection (#0-113) cannot express "this account only
 its own branches" on a personal repository, so the hook is the control; the owner still reads the commits of
 their own PR before merging. Remove the known limit from README and `audit.md` when done.
+
+---
+
+### 0-132. The shell guards' own checks refuse when they fail
+
+**Type:** security · **Priority:** Low · **Status:** Open (found while fixing #0-130, 2026-10-14)
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** #0-130
+**Touches:** root (.claude/hooks/guard-protected-bash.sh, .claude/hooks/readonly-bash.sh, .claude/hooks/guard-git-push.sh, .claude/hooks/guard-factory-scripts.sh, .claude/hooks/factory-ops-bash.sh, .claude/hooks/_lib.sh, .claude/hooks/test-hooks.sh, README.md "Infrastructure Hardening")
+
+**Problem.** #0-130 made `git_grep_unsafe` and `gh_label_unsafe` refuse when they fail. The guard's own checks
+still read a failure as "nothing found": `printf … | grep -Eq "$secrets"` (a secret file), the `mvnw` write check,
+`grep -Eq "$protected" || exit 0` (no protected path, so allowed) and the `writes` check take grep's error (2) for
+"no match", and `json_get` returns an empty command when jq fails on the input, which the hooks answer with
+`exit 0`. Other hooks (`readonly-bash.sh`, `guard-git-push.sh`, `guard-factory-scripts.sh`, `factory-ops-bash.sh`)
+read the command the same way. Bounded like #0-130: the deny rules, the commit gates and the PR checks stay.
+
+**Approach.** The same contract as #0-130: matching with bash's own `[[ =~ ]]` / `case` where it can, a tool's
+failure is a refusal, and `json_get` tells "no such field" from "could not parse" (a parse error blocks). A test
+per check with the tool broken, as in #0-130's. `shell_words` moves to the same three-way contract (refused = exit 0
+and a reason, failed = non-zero), which removes `shell_words_refusal`, the shim that tells the two apart by the text
+`REFUSE` (architecture review of #0-130), and refuses a newline inside a quoted word itself, as both its callers now
+do separately because they read its output one word per line (architecture review round 2 of #0-130).
+Also from #0-130's review round 3: the program list that `git_grep_unsafe` and `gh_label_unsafe` refuse a command
+behind (`sh|bash|…|time`) is one copy each — one shared definition; and two forms neither check sees, an interpreter
+run by its path or off the list (`/bin/sh -c "git grep --untracked …"`, `ksh -c`, `perl -e`) and a git alias
+(`git -c alias.g='grep --untracked' g`). Both are stopped today by the autopilot's `dontAsk` allow-list and by
+`readonly-bash.sh`'s first-two-words check; decide here whether the guard should refuse them too (e.g. any first word
+that is a path, with a standalone `-c`/`-e`) or keep naming the allow-list as the control.
+A known side effect to keep or narrow here: since #0-130 the first filter of `git_grep_unsafe` also lets through a
+command with a glob and the word grep, so `./mvnw test -Dtest='Foo*' | grep FAIL` is refused ("a command with grep and
+a glob") in every session the guard covers (architecture review round 4 of #0-130; grep is not on the autopilot's
+allow-list, so it changes little there).
 
 ---
 

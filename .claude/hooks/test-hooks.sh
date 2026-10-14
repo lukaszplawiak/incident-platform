@@ -306,6 +306,31 @@ expect 2 "git grep after ;"                        "$P" -- "$(bash_call 'ls; git
 expect 2 "grep behind a backslash"                 "$P" -- "$(bash_call 'git gr\ep --untr secret')"
 expect 2 "grep in quotes"                          "$P" -- "$(bash_call 'git "grep" --untr secret')"
 expect 2 "git options before grep"                 "$P" -- "$(bash_call 'git -C . grep --untr secret')"
+expect 2 "git grep through env"                    "$P" -- "$(bash_call 'env git grep --untracked -e PASSWORD')"
+expect 2 "git grep through command"                "$P" -- "$(bash_call 'command git grep --untracked -e PASSWORD')"
+expect 2 "git grep through sh -c"                  "$P" -- "$(bash_call 'sh -c "git grep --untracked -e PASSWORD"')"
+expect 2 "git grep behind an assignment"           "$P" -- "$(bash_call 'GIT_DIR=.git git grep --untracked -e PASSWORD')"
+expect 2 "git grep by a path"                      "$P" -- "$(bash_call '/usr/bin/git grep --untracked -e PASSWORD')"
+expect 2 "git grep by a glob"                      "$P" -- "$(bash_call '/usr/bin/gi[t] grep --untracked -e PASSWORD')"
+expect 0 "git grep with a quoted glob pattern"     "$P" -- "$(bash_call 'git grep -n "foo*" -- "*.java"')"
+expect 0 "a glob without grep"                     "$P" -- "$(bash_call 'ls *.md')"
+# A glob where the subcommand goes may become grep (a file named grep in the working directory; review round 4).
+expect 2 "git gr?p"                                "$P" -- "$(bash_call 'git gr?p --untracked -e PASSWORD')"
+expect 2 "git g[r]ep"                              "$P" -- "$(bash_call 'git g[r]ep --untracked -e PASSWORD')"
+expect 2 "git * as the subcommand"                 "$P" -- "$(bash_call 'git * --untracked -e PASSWORD')"
+expect 2 "git options before gr?p"                 "$P" -- "$(bash_call 'git -C . gr?p --untracked -e PASSWORD')"
+expect 2 "reviewer: git gr?p"                      "$R" -- "$(bash_call 'git gr?p --untracked -e PASSWORD')"
+expect 0 "git add with a glob"                     "$P" -- "$(bash_call 'git add src/*.java')"
+expect 0 "git add with a glob of grep letters"     "$P" -- "$(bash_call 'git add g*')"
+expect 0 "git add with a glob, then commit"        "$P" -- "$(bash_call 'git add src/*.java && git commit -m x')"
+# The refusal names what it saw: a glob with grep and no git is not "git grep" (review round 3 of #0-130).
+refusal_says() {
+    local name=$1 want=$2 err
+    err=$(cd "$WORK/repo" && printf '%s' "$(bash_call "$3")" | "$P" 2>&1 >/dev/null)
+    case "$err" in *"$want"*) echo "  ok: $name" ;; *) echo "::error::$name: refusal '$err' does not say '$want'"; failures=$((failures+1)) ;; esac
+}
+refusal_says "a glob and grep, no git: not called git grep" "a command with grep and a glob:" "./mvnw test -Dtest='Foo*' | grep FAIL"
+refusal_says "git grep with a pipe: called git grep"       "git grep:" 'git grep foo | head'
 expect 2 "reviewer: git options before grep"       "$R" -- "$(bash_call 'git -c core.quotepath=off grep foo')"
 
 echo "line continuation (review round 2, sec-b7d2)"
@@ -322,6 +347,76 @@ lib_refuses() {
 }
 lib_refuses "git_grep_unsafe: grep split by a continuation" $'git gr\\\nep --untr secret'
 lib_refuses "git_grep_unsafe: git split by a continuation"  $'g\\\nit grep --untr secret'
+
+echo "a check that fails refuses the command (backlog #0-130)"
+# The commands below pass with the real hooks (the first three cases); every other case breaks one thing.
+GG='git grep -n foo -- .'
+GL='gh pr edit 12 --add-label shadow'
+expect 0 "control: git grep passes"                 "$P" -- "$(bash_call "$GG")"
+expect 0 "control: an allowed label passes"         "$P" -- "$(bash_call "$GL")"
+expect 0 "control: reviewer git grep passes"        "$R" -- "$(bash_call "$GG")"
+# A check that aborts (an unset variable under set -u) prints nothing and exits non-zero. One copy per check:
+# with both broken, either caller's refusal would hide the other's.
+for fn in git_grep_unsafe gh_label_unsafe; do
+    mkdir -p "$WORK/abort-$fn"
+    cp "$HOOKS/_lib.sh" "$HOOKS/guard-protected-bash.sh" "$HOOKS/readonly-bash.sh" "$WORK/abort-$fn/"
+    printf '%s() { local x=$no_such_variable_0_130; }\n' "$fn" >>"$WORK/abort-$fn/_lib.sh"
+done
+expect 2 "git grep check aborts"                    "$WORK/abort-git_grep_unsafe/guard-protected-bash.sh" -- "$(bash_call "$GG")"
+expect 2 "gh label check aborts"                    "$WORK/abort-gh_label_unsafe/guard-protected-bash.sh" -- "$(bash_call "$GL")"
+expect 2 "reviewer: git grep check aborts"          "$WORK/abort-git_grep_unsafe/readonly-bash.sh" -- "$(bash_call "$GG")"
+# A tool inside a check fails without aborting it: before #0-130 its empty output read as "nothing to refuse".
+# The sed stub fails only when its arguments start with $FAIL_SED (empty: every call), so each sed call of a check
+# is broken alone below; tr is called once per check.
+STUBS="$WORK/stubs"
+mkdir -p "$STUBS/tr" "$STUBS/sed"
+printf '#!/bin/sh\nexit 1\n' >"$STUBS/tr/tr"
+printf '#!/bin/sh\ncase "$*" in "${FAIL_SED:-}"*) exit 1 ;; esac\nexec %s "$@"\n' "$(command -v sed)" >"$STUBS/sed/sed"
+chmod +x "$STUBS/tr/tr" "$STUBS/sed/sed"
+expect 2 "tr fails in the git grep check"           env PATH="$STUBS/tr:$PATH" "$P" -- "$(bash_call "$GG")"
+expect 2 "sed fails in the git grep check"          env PATH="$STUBS/sed:$PATH" "$P" -- "$(bash_call "$GG")"
+# (tr failing in the gh label check is shown one layer down: at this level git_grep_unsafe's own tr refuses first.)
+expect 2 "sed fails in the gh label check"          env PATH="$STUBS/sed:$PATH" "$P" -- "$(bash_call "$GL")"
+expect 2 "reviewer: sed fails in the git grep check" env PATH="$STUBS/sed:$PATH" "$R" -- "$(bash_call "$GG")"
+# One layer down, each failing step alone: the check itself must exit non-zero (a reason printed would hide it).
+# lib_fails <name> <check> <command> <setup run before it, in the same shell>
+lib_fails() {
+    local name=$1 fn=$2 out rc
+    out=$(bash -c 'set -uo pipefail; . "$1"/_lib.sh; eval "$4"; "$2" "$3"' _ "$HOOKS" "$fn" "$3" "$4"); rc=$?
+    if [ "$rc" -ne 0 ]; then echo "  ok: $name"; else echo "::error::$name: $fn exited 0 (output: '$out')"; failures=$((failures+1)); fi
+}
+lib_fails "git_grep_unsafe: tr fails"           git_grep_unsafe "$GG" "PATH=$STUBS/tr:\$PATH"
+lib_fails "gh_label_unsafe: tr fails"           gh_label_unsafe "$GL" "PATH=$STUBS/tr:\$PATH"
+for args in '-n 1p' '-n 2p' '1,2d'; do
+    lib_fails "git_grep_unsafe: sed $args fails" git_grep_unsafe "$GG" "PATH=$STUBS/sed:\$PATH; export FAIL_SED='$args'"
+done
+for args in '-E' '-n 1p' '-n 2p' '-n 3p' '1,3d'; do
+    lib_fails "gh_label_unsafe: sed $args fails" gh_label_unsafe "$GL" "PATH=$STUBS/sed:\$PATH; export FAIL_SED='$args'"
+done
+# shell_words exits non-zero without a reason: it failed, it did not refuse.
+lib_fails "git_grep_unsafe: shell_words fails" git_grep_unsafe "$GG" 'shell_words() { return 1; }'
+lib_fails "gh_label_unsafe: shell_words fails" gh_label_unsafe "$GL" 'shell_words() { return 1; }'
+# matches: an invalid expression is 2, not "no match"; a byte that is not valid UTF-8 still matches (C locale, sec-9c27).
+# The UTF-8 case needs a UTF-8 locale in which bash's own match fails on that byte (it does on macOS); without one it
+# would pass while showing nothing, so it reports a skip instead (review round 2 of #0-130).
+UTF8=""
+for loc in C.UTF-8 en_US.UTF-8; do
+    if ! LC_ALL=$loc bash -c 're="(^|[[:space:]])git[[:space:]]"; [[ $(printf "\xff git grep") =~ $re ]]' 2>/dev/null; then UTF8=$loc; break; fi
+done
+m_rc() { LC_ALL=${UTF8:-C} bash -c '. "$1"/_lib.sh; matches "$2" "$3"' _ "$HOOKS" "$1" "$2"; echo $?; }
+[ "$(m_rc x '(a')" = 2 ] && echo "  ok: matches: invalid expression is 2" || { echo "::error::matches: invalid expression is not 2"; failures=$((failures+1)); }
+if [ -n "$UTF8" ]; then
+    [ "$(m_rc "$(printf '\xff git grep')" '(^|[[:space:]])git[[:space:]]')" = 0 ] && echo "  ok: matches: invalid UTF-8 still matches ($UTF8)" || { echo "::error::matches: invalid UTF-8 read as no match"; failures=$((failures+1)); }
+else
+    echo "  skip: matches: invalid UTF-8 (no UTF-8 locale here in which bash fails that match)"
+fi
+
+echo "a newline inside a quoted word (review of #0-130, sec-4e1a)"
+expect 2 "git grep: newline makes a fake --"         "$P" -- "$(bash_call $'git grep \'x\n--\' --untracked --no-exclude-standard -e PASSWORD')"
+expect 2 "gh: newline makes a fake --title"          "$P" -- "$(bash_call $'gh pr edit 1 \'a\n--title\' --add-label human:x')"
+expect 2 "gh: a multi-line --body"                   "$P" -- "$(bash_call $'gh pr create --title t --body "line one\nline two"')"
+expect 0 "multi-line commit message naming git grep" "$P" -- "$(bash_call $'git commit -m "docs: x\n\nsearch with git grep"')"
+expect 0 "multi-line commit message naming gh pr edit" "$P" -- "$(bash_call $'git commit -m "docs: x\n\ngh pr edit adds labels"')"
 
 echo "write guards: one helper (review of the factory hardening, arc-5e1d)"
 expect 2 "migration via nonexistent dir and .." "$M" -- "$(file_call Edit nosuchdir/../svc/src/main/resources/db/migration/V1__a.sql)"
