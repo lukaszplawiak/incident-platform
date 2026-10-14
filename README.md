@@ -346,7 +346,9 @@ security boundary, so every rule that matters is also enforced outside the model
   for the shell (`.claude/hooks/guard-protected-bash.sh`), stop an item before review when committed
   (`scripts/factory/changed-paths.sh`, which reads the list from the base commit and refuses to run without
   it), and need the owner's review on a PR (`.github/CODEOWNERS`, effective once the protection rule
-  requires it). Factory scripts run only while identical to `main` (`guard-factory-scripts.sh`).
+  requires it). Factory scripts run only while identical to `main` (`guard-factory-scripts.sh`). The shell
+  guard's `git grep` and label checks, and the reviewers' `git grep` check in `readonly-bash.sh`, refuse the
+  command when the check itself fails (backlog #0-130); the guard's other checks do not yet (#0-132).
 - **Factory guards** (`.github/workflows/factory-guards.yml`): a PR that deletes, renames away or disables
   tests, removes assertions, adds a Maven plugin, repository or dependency, changes what verification runs
   (`.mvn/`, `mvnw`, skip properties, the coverage check's threshold, rule, goal, phase or includes), edits or deletes an applied Flyway migration, or marks a backlog item
@@ -374,7 +376,10 @@ security boundary, so every rule that matters is also enforced outside the model
   only, with an allow-list of options checked on the command as bash splits it (so no abbreviated or quoted
   `--untracked`, `--no-index`, `-f` or `-O`, no `$` expansion, no unquoted glob before `--`, no line
   continuation, which bash joins before running; the latter is refused in every autopilot command): tracked files
-  only, so a gitignored secret is never read and no program is run; the
+  only, so a gitignored secret is never read and no program is run. Also refused (backlog #0-130): a newline inside
+  a quoted word, git run by a path, a glob, an assignment or a program on a fixed list (`env`, `sh -c`,
+  `command`, ...), and a glob where the subcommand goes (`git gr?p`, which a file named `grep` turns into grep). An interpreter run by its path or off that list (`/bin/sh -c "git grep …"`) and a git alias are
+  not seen by the check (#0-132): there the allow-list below is the control. The
   autopilot session is `dontAsk`
   with an explicit allow-list; `WebFetch`/`WebSearch` are denied (an agent that reads untrusted text must not
   be able to send data out).
@@ -393,8 +398,9 @@ security boundary, so every rule that matters is also enforced outside the model
   `gh pr view`. That check is the control. As a second line, the shell guard refuses an autopilot session's
   `gh pr create`/`new`/`edit` and `gh issue create`/`new`/`edit` commands that set a label other than the shipper's
   (`autopilot`, `shadow`, `blocked`, `risk-high`) or remove one other than `blocked`, in the flag forms gh accepts, behind
-  flags, by path, through another program, or from a `--recover` file (`guard-protected-bash.sh`, plus deny rules);
-  like the other shell guards it is a heuristic, and code the session runs is not seen by it (the known gap below).
+  flags, by path, through another program, from a `--recover` file, or split by a newline inside a quoted word
+  (`guard-protected-bash.sh`, plus deny rules); like the other shell guards it is a heuristic, and code the session
+  runs is not seen by it (the known gap below).
 - **Escape markers are verified** (backlog #0-129): the audits count a `**Fixes:** #0-N · **Escaped from:**
   <stage>` marker (a case, and a "hard fact" for confidence) only when the commit that first added the marker itself
   (not its line, which a status change rewrites) reached `main` in a pull request the repository owner opened
@@ -412,7 +418,8 @@ security boundary, so every rule that matters is also enforced outside the model
 owner's included (#0-131); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
 (#0-116, accepted for shadow mode, required before auto-merge); no secret scanning (#0-109); no Maven Enforcer
-(#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines;
+(#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines, and most of
+their checks still let a command through when the check itself fails (a grep or jq error, #0-132);
 subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
 where only the session-level hooks apply. Layers and their limits: docs/ai-factory.md, "What isolates what".
 

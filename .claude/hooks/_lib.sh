@@ -130,6 +130,34 @@ shell_words() {
     fi
 }
 
+# The command checks below (git_grep_unsafe, gh_label_unsafe) answer in three ways: exit 0 and no output — the
+# command may run; exit 0 and a reason — refused; any other exit status — the check itself failed, and the caller
+# refuses (`why=$(check "$cmd") || block …`).
+# Fixed (backlog #0-130): a caller used to look only at the output, and a check run in `$(…)` reports a failure
+# only by its exit status: an unset variable under `set -u` aborts it with nothing printed, which read as "may
+# run". A failure that does not abort was the same: `grep -q … || return 0` took grep's error (2) for "no match",
+# and a `sed` or `tr` that failed left an empty word list that matched nothing. Every such step now returns 2.
+# Matching is bash's own (`matches`, `case`), not grep on a here-string: a here-string bash cannot write (bash 3.2
+# puts it in a file in $TMPDIR) fails the command with exit 1, which is grep's "no match" again.
+# The checks rely on the caller's `set -o pipefail` (both hooks set it) for a pipeline's failure to show.
+
+# matches <text> <ERE> — 0 the text matches, 1 it does not, 2 the expression is invalid. In the C locale: bash returns
+# 1 for an error while matching too, and in UTF-8 a byte that is not valid UTF-8 is one (`printf '\xff git grep'`
+# did not match `git[[:space:]]`); in C every byte is a character (review of #0-130, sec-9c27). The expressions
+# are ASCII, and a non-ASCII letter next to `grep` is then not [[:alnum:]], which only refuses more.
+matches() {
+    local LC_ALL=C
+    [[ $1 =~ $2 ]]
+    case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
+
+# shell_words_refusal <output of a shell_words that exited non-zero> — prints the reason it refused (the last line,
+# after the words it had already printed), or returns 1 when there is none: then it did not refuse, it failed.
+shell_words_refusal() {
+    local last=${1##*$'\n'}
+    case "$last" in "REFUSE "*) printf '%s\n' "${last#REFUSE }" ;; *) return 1 ;; esac
+}
+
 # git_grep_unsafe <command> — prints why a `git grep` command is refused, or nothing when it may run.
 # `git grep` is the agents' only search (Claude Code has no Grep or Glob tool in this version, and plain
 # `grep -r` would read gitignored secrets such as docker/.env). It searches tracked files only, and an
@@ -140,23 +168,65 @@ shell_words() {
 # splits it (shell_words), so quoting (`'-Osh'`) cannot hide an option, and an unquoted glob before `--` is
 # refused: bash would expand it into file names, and a file named `--untracked` would become an option.
 git_grep_unsafe() {
-    local cmd=$1 words w value=0 paths=0 glob
+    local cmd=$1 plain words w value=0 paths=0 glob first second why what nl=$'\n'
     # Detected on the text without quotes, backslashes and newlines: bash removes them, so `git gr\ep`,
     # `git "grep"` and a line continuation (`git gr\<newline>ep`, review round 2, sec-b7d2) are git grep too.
-    grep -Eq '(^|[[:space:];&|(])git[[:space:]]' <<<"$(printf '%s' "$cmd" | tr -d "'\"\\\\\n")" || return 0
-    grep -Eq '(^|[^[:alnum:]_-])grep([^[:alnum:]_-]|$)' <<<"$(printf '%s' "$cmd" | tr -d "'\"\\\\\n")" || return 0
+    plain=$(printf '%s' "$cmd" | tr -d "'\"\\\\\n") || return 2
+    # git by its name or a path (`/usr/bin/git`), or a glob that bash may expand into it (`/usr/bin/gi[t]`).
+    matches "$plain" '(^|[[:space:];&|(/])git[[:space:]]|[][*?]' || { [ $? -eq 1 ] && return 0; return 2; }
+    # The word grep, or a glob made only of grep's letters that bash may expand into it (`gr?p`, `g[r]ep`, `*`) when a
+    # file of that name exists (review round 4 of #0-130). A glob with other letters (`src/*.java`) cannot become grep.
+    matches "$plain" '(^|[^[:alnum:]_-])grep([^[:alnum:]_-]|$)' || {
+        [ $? -eq 1 ] || return 2
+        matches "$plain" '(^|[[:space:]])[]grep*?!^[]*[][*?][]grep*?!^[]*([[:space:]]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
+    }
     # The words "git" and "grep" appear somewhere. Split as bash would: with no unquoted separator this is one
     # command, and unless its first two words are `git grep` the words were text (a commit message saying
     # "use git grep"), which runs nothing. A real git grep after `&&` or `;` is refused with the separator.
-    words=$(shell_words "$cmd") || { echo "git grep: ${words#REFUSE }"; return 0; }
-    [ "$(printf '%s\n' "$words" | sed -n 1p)" = git ] || return 0
-    if [ "$(printf '%s\n' "$words" | sed -n 2p)" != grep ]; then
+    words=$(shell_words "$cmd") || {
+        why=$(shell_words_refusal "$words") || return 2
+        # Only a glob let the command this far (no word git in it): say so, not "git grep" (review round 3 of #0-130).
+        what="git grep"
+        matches "$plain" '(^|[[:space:];&|(/])git[[:space:]]' || { [ $? -eq 1 ] || return 2; what="a command with grep and a glob"; }
+        echo "$what: $why"; return 0
+    }
+    first=$(printf '%s\n' "$words" | sed -n 1p) || return 2
+    second=$(printf '%s\n' "$words" | sed -n 2p) || return 2
+    case "$first" in
+        git) ;;
+        # git grep run by another program (`env git grep …`, `sh -c "git grep …"`): its options are not visible here.
+        sh|bash|zsh|dash|env|xargs|eval|exec|command|nohup|timeout|nice|sudo|time)
+            echo "run git grep as the command itself, not through $first"; return 0 ;;
+        *)
+            # A word `grep` with git behind something (`/usr/bin/git grep`, `GIT_DIR=x git grep`) or a glob that bash may
+            # expand into git (`/usr/bin/gi[t] grep`) is git grep to bash, but not to the checks below, which start at
+            # word 1 (review round 2 of #0-130, as gh_label_unsafe does for gh). `--grep=…` is one word, not this.
+            case "$nl$words$nl" in
+                *"${nl}grep$nl"*)
+                    case "$nl$words$nl" in
+                        *"${nl}git$nl"*|*"/git$nl"*|*"$nl$(printf '\t')"*)
+                            echo "run git grep as the command itself (no path, program, assignment or glob before it)" ;;
+                    esac ;;
+            esac
+            return 0 ;;
+    esac
+    # A glob where the subcommand goes (`git gr?p`): bash may expand it into grep, which the checks below would not see.
+    case "$second" in "$(printf '\t')"*) echo "git: a glob where the subcommand goes (${second#?}): write the subcommand"; return 0 ;; esac
+    if [ "$second" != grep ]; then
+        # Git options before the subcommand and a glob that may become grep (`git -C . gr?p`): refused like `git -C . grep`.
+        case "$second" in
+            -*) case "$nl$words$nl" in *"$nl$(printf '\t')"*) echo "git options before a glob that may expand to a subcommand: write the subcommand first"; return 0 ;; esac ;;
+        esac
         # A git command with a word `grep` elsewhere (`git -C . grep`, `git -c x=y grep`) is git grep with
         # git options before it: refused. `--grep=…` or a message containing "grep" is one word, not this.
-        printf '%s\n' "$words" | grep -qx grep && echo "only 'git grep' itself (no git options before it)"
+        case "$nl$words$nl" in *"${nl}grep$nl"*) echo "only 'git grep' itself (no git options before it)" ;; esac
         return 0
     fi
-    words=$(printf '%s\n' "$words" | sed 1,2d)
+    # The words are read one per line below, so a newline inside a quoted word would make one argument two words
+    # here: `'x<newline>--'` read as `--`, every option after it as a path (review of #0-130, sec-4e1a). An unquoted
+    # newline is already refused (shell_words), so any newline left is inside a word.
+    case "$cmd" in *"$nl"*) echo "git grep: a newline inside a quoted word: write the command on one line (one -e per pattern)"; return 0 ;; esac
+    words=$(printf '%s\n' "$words" | sed 1,2d) || return 2
     [ -n "$words" ] || return 0
     while IFS= read -r w; do
         glob=0
@@ -177,7 +247,9 @@ git_grep_unsafe() {
                 case "${w#-}" in *[!niwlLchHEGFPvoqzpW]*) echo "git grep option not allowed: $w"; return 0 ;; esac ;;
             -*) echo "git grep option not on the allow-list: $w (tracked files only; no -O, --no-index, --untracked, -f)"; return 0 ;;
         esac
-    done <<<"$words"
+        :   # a pass ends in status 0, whatever the branch above, so the status below is only the here-string's
+    done <<<"$words" || return 2   # a here-string bash could not write
+    return 0
 }
 
 # gh_label_unsafe <command> — prints why a `gh pr|issue create|new|edit` command is refused, or nothing when it
@@ -192,22 +264,30 @@ GH_LABELS_ALLOWED='autopilot shadow blocked risk-high'   # the labels .claude/ag
 # data (it lists PRs by that label); removing a human:* label would erase the owner's word (review round 2).
 GH_LABELS_REMOVABLE='blocked'
 gh_label_unsafe() {
-    local cmd=$1 plain words w first second third value="" skip=0 rest
-    plain=$(printf '%s' "$cmd" | tr -d "'\"\\\\\n")
-    grep -Eq '(^|[^[:alnum:]_-])(create|new|edit)([^[:alnum:]_-]|$)' <<<"$plain" || return 0
-    grep -Eq '(^|[^[:alnum:]_-])(pr|issue)([^[:alnum:]_-]|$)' <<<"$plain" || return 0
+    local cmd=$1 plain head words w first second third value="" skip=0 rest why nl=$'\n'
+    plain=$(printf '%s' "$cmd" | tr -d "'\"\\\\\n") || return 2
+    matches "$plain" '(^|[^[:alnum:]_-])(create|new|edit)([^[:alnum:]_-]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
+    matches "$plain" '(^|[^[:alnum:]_-])(pr|issue)([^[:alnum:]_-]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
     # A glob before the `pr`/`issue` word (`g? pr edit`, `/opt/homebrew/bin/g[h] pr edit`) is gh to bash but no word
     # `gh` to the checks below (review round 4).
-    case "$(printf '%s' "$plain" | sed -E 's/(^|[[:space:]])(pr|issue)([[:space:]]|$).*//')" in
+    head=$(printf '%s' "$plain" | sed -E 's/(^|[[:space:]])(pr|issue)([[:space:]]|$).*//') || return 2
+    case "$head" in
         *[\*\?\[]*) echo "a glob before the gh subcommand: run gh by its name"; return 0 ;;
     esac
-    grep -Eq '(^|[^[:alnum:]_-])gh([^[:alnum:]_-]|$)' <<<"$plain" || return 0
-    words=$(shell_words "$cmd") || { echo "gh pr create/edit: ${words#REFUSE } (labels are checked; write the command plainly)"; return 0; }
-    first=$(printf '%s\n' "$words" | sed -n 1p)
-    second=$(printf '%s\n' "$words" | sed -n 2p)
-    third=$(printf '%s\n' "$words" | sed -n 3p)
+    matches "$plain" '(^|[^[:alnum:]_-])gh([^[:alnum:]_-]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
+    words=$(shell_words "$cmd") || {
+        why=$(shell_words_refusal "$words") || return 2
+        echo "gh pr create/edit: $why (labels are checked; write the command plainly)"; return 0
+    }
+    first=$(printf '%s\n' "$words" | sed -n 1p) || return 2
+    second=$(printf '%s\n' "$words" | sed -n 2p) || return 2
+    third=$(printf '%s\n' "$words" | sed -n 3p) || return 2
     case "$first" in
-        gh) ;;
+        gh)
+            # Read one word per line below, as in git_grep_unsafe: a newline inside a quoted word (`'a<newline>--title'`)
+            # would turn one argument into two words here (review of #0-130, sec-4e1a). A multi-line body goes in a file.
+            case "$cmd" in *"$nl"*) echo "gh: a newline inside a quoted word (a multi-line --title or --body): write the body to a file and use --body-file"; return 0 ;; esac
+            ;;
         */gh) echo "run gh by its name, not by a path"; return 0 ;;
         # gh run by another program (`sh -c "gh pr edit …"`, `env gh`): the label it sets is not visible here.
         sh|bash|zsh|dash|env|xargs|eval|exec|command|nohup|timeout|nice|sudo|time)
@@ -215,7 +295,7 @@ gh_label_unsafe() {
         *)
             # One command (shell_words refused separators). A word `gh` that is not the first one is gh run behind
             # something (`GH_REPO=x gh`); `gh` inside a quoted message is part of one word, not this.
-            printf '%s\n' "$words" | grep -qxE '(.*/)?gh' && echo "run gh as the command itself (no prefix before it)"
+            case "$nl$words$nl" in *"${nl}gh$nl"*|*"/gh$nl"*) echo "run gh as the command itself (no prefix before it)" ;; esac
             return 0 ;;
     esac
     # gh finds the subcommand behind flags (`gh --repo x pr edit`, `gh pr -R x edit`, review round 1): any flag before
@@ -230,6 +310,7 @@ gh_label_unsafe() {
             case " $1 " in *" $x "*) ;; *) echo "label '$x' is not one an agent may set or remove here (allowed: $1; human:* labels are the owner's)"; return 1 ;; esac
         done
     }
+    words=$(printf '%s\n' "$words" | sed 1,3d) || return 2
     while IFS= read -r w; do
         # An unquoted glob: bash expands it into file names, which an agent can create (`./--remove-label`,
         # `./human:x`), so what runs is not what is read here — refused, as git_grep_unsafe does (review round 3, sec-3a9c).
@@ -254,7 +335,9 @@ gh_label_unsafe() {
                     if [ -n "$rest" ]; then label_ok "$GH_LABELS_ALLOWED" "$rest" || return 0; else value=$GH_LABELS_ALLOWED; fi
                 fi ;;
         esac
-    done <<<"$(printf '%s\n' "$words" | sed 1,3d)"
+        :   # a pass ends in status 0, whatever the branch above, so the status below is only the here-string's
+    done <<<"$words" || return 2   # a here-string bash could not write
+    return 0
 }
 
 # The base an autopilot run compares against is the commit the preflight recorded in .ai/runs/LOCK

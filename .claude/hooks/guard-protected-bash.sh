@@ -15,7 +15,7 @@
 # `git grep` options that run a program or read files git does not track (the secrets) are refused too.
 # A label an agent may not set on a PR (`human:*`, the owner's; anything off the shipper's list) is refused on
 # `gh pr|issue create|new|edit` in the forms gh accepts (gh_label_unsafe, backlog #0-126).
-# Fails closed without jq or python3.
+# Fails closed without jq or python3, and when the git grep or gh label check itself fails (backlog #0-130).
 # ============================================================
 set -uo pipefail
 . "$(dirname "$0")/_lib.sh"
@@ -33,8 +33,11 @@ fi
 # split across it (`git gr\<newline>ep`, `doc\<newline>ker/.env`) is seen by bash and not by these checks.
 # No command an agent needs is written that way (review round 2, sec-b7d2).
 case "$cmd" in *\\$'\n'*) block "a line continuation (backslash-newline) is not allowed: write the command on one line" ;; esac
-why=$(git_grep_unsafe "$cmd"); [ -z "$why" ] || block "$why"
-why=$(gh_label_unsafe "$cmd"); [ -z "$why" ] || block "$why"
+# A check that fails (exit status not 0) refuses: its empty output does not mean "may run" (backlog #0-130).
+why=$(git_grep_unsafe "$cmd") || block "the git grep check failed, so the command is refused${why:+: $why}"
+[ -z "$why" ] || block "$why"
+why=$(gh_label_unsafe "$cmd") || block "the gh label check failed, so the command is refused${why:+: $why}"
+[ -z "$why" ] || block "$why"
 if printf '%s' "$cmd" | grep -Eq -- '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|(^|[[:space:];&|])(cp|mv|rm|chmod|ln)[[:space:]])[^;&|]*[[:space:]](\./)?mvnw(\.cmd)?([[:space:]]|$)'; then
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi
