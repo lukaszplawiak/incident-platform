@@ -125,6 +125,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
 | [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
+| [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
+| [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
+| [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
 
 ---
 
@@ -2092,6 +2095,71 @@ time `IncidentEventPublisher` built the event, not the incident's `resolvedAt`. 
 it in `publishResolved`; postmortem-service keeps the derived value as the fallback for events already
 in the topic or the outbox. A change to `shared` changes all seven services (CLAUDE.md); check every
 consumer of the record (none of them should need more than recompiling).
+
+---
+
+### 0-134. `diff-cover` is installed by version, without hashes
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found while fixing #0-76, 2026-10-15)
+
+**Problem.** "Build, Test & Coverage" in `ci.yml` runs `pip install 'diff-cover==10.6.0'`: the version is
+pinned, but neither the wheel nor its dependencies are checked, and the dependencies (`Jinja2`, `pluggy`,
+`chardet`, `Pygments`) are resolved from PyPI at install time, so a new release of any of them changes
+what runs with no change in this repository. README cites it as pinned beside the Snyk CLI (#0-61), which
+is checked against a SHA-256, and kubeconform now is too (#0-76); `diff-cover` is the one tool CI installs
+at a weaker level. The job runs a PR's own code with a read-only token and no secrets, so the reach is a
+coverage gate that could be made to pass, not a credential.
+
+**Approach.** A lock file with every package's hashes (`pip-compile --generate-hashes`, or `uv pip
+compile`) committed under `.github/`, installed with `pip install --require-hashes --no-deps -r`; Renovate
+can update a pip-compile file and its hashes together (`pip-compile` manager), so unlike the Snyk CLI the
+bump need not be by hand. Decide whether that manager is turned on for `.github/`.
+
+---
+
+### 0-135. kubectl in CI is downloaded unverified
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-76, 2026-10-15)
+
+**Problem.** The k8s job (`validate-k8s-manifests` in `ci.yml`) installs kubectl with
+`azure/setup-kubectl` (v4.0.1, pinned by SHA), which downloads `dl.k8s.io/release/v<version>/bin/linux/amd64/kubectl`
+with `toolCache.downloadTool` and caches it without checking a checksum or a signature (`src/run.ts` at that
+SHA). Since #0-76 its version is pinned, but nothing checks that the binary is the one Kubernetes released.
+kubectl renders the manifests into `/tmp/*-rendered.yml`, and the checks after it read those files: #0-63's
+"staging and prod set no Spring profile", #0-42's mail check and kubeconform itself, so a replaced kubectl could
+make them all pass, the vector #0-76 closed for kubeconform. Same reach as #0-76: a read-only token and no
+secrets in that job.
+
+**Approach.** Kubernetes signs its release binaries with Sigstore: `kubectl.sig` and `kubectl.cert` sit next
+to the binary on `dl.k8s.io` (checked for v1.36.5: the certificate is issued by `sigstore.dev` to
+`krel-staging@k8s-releng-prod.iam.gserviceaccount.com`, OIDC issuer `https://accounts.google.com`). Download
+kubectl directly instead of through the action, and verify it with `cosign verify-blob --certificate
+--signature --certificate-identity --certificate-oidc-issuer` before it runs. cosign itself then has to be
+installed pinned and checked (`sigstore/cosign-installer` by SHA, or the binary with its published checksum),
+and the expected identity checked against the Kubernetes release documentation rather than taken from one
+certificate. The `.sha256` next to the binary is from the same host, so on its own it is the weaker check
+ADR-0021 refused for Snyk.
+
+---
+
+### 0-136. The security review rules have no rule for the CI supply chain
+
+**Type:** docs · **Priority:** Low · **Status:** Open (found in the review of #0-76, 2026-10-15)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** `.ai/rules/review/security.md`
+
+**Problem.** ADR-0021 (Snyk CLI) and ADR-0027 (the k8s job's inputs) decide that a tool CI downloads is
+pinned and checked before it runs, and ADR-0027 says how a reviewer recognises a violation (a tool fetched
+from `latest` or without a checked checksum or signature, an unpinned validation input). No rule in
+`.ai/rules/review/security.md` says so: SEC-50 is about the project's dependencies and their CVE suppressions
+(`owasp-suppressions.xml`, `.snyk`), not about tools a workflow downloads. The security reviewer of
+#0-76 reported it as a rule gap, so a change that reintroduced `releases/latest` could be found but not
+cited as blocking.
+
+**Approach.** The owner adds one rule (`.ai/rules/` is human-owned), written as #0-115 asks, e.g. "A tool or
+data file a workflow downloads is pinned (version, commit or digest) and checked (checksum from two
+channels, or a signature) before it runs; ADR-0021, ADR-0027. Check: every new `curl`/`wget`/install in
+`.github/` names a version and verifies it." Open gaps it would flag today: #0-134, #0-135.
 
 ---
 
