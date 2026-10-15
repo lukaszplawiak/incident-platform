@@ -21,6 +21,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -31,6 +33,7 @@ import org.springframework.kafka.support.SendResult;
 import org.springframework.transaction.CannotCreateTransactionException;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -559,6 +562,157 @@ class IncidentEventConsumerTest {
                     anyString(), eq(acknowledgment));
             then(acknowledgment).should().acknowledge();
             then(persistenceService).shouldHaveNoInteractions();
+        }
+    }
+
+    /**
+     * A resolved event shaped like the one incident-service sends: no
+     * {@code openedAt} ({@code IncidentResolvedEvent} has none, backlog
+     * #0-133), and {@code durationMinutes} given as raw JSON so a test can
+     * omit it ({@code null}) or send it malformed.
+     */
+    private String producerShapedResolvedEvent(String rawDuration, Instant occurredAt) {
+        final String duration = rawDuration == null
+                ? ""
+                : "\"durationMinutes\": " + rawDuration + ",\n";
+        return String.format("""
+                {
+                  "incidentId": "%s",
+                  "tenantId": "%s",
+                  "title": "High CPU on prod-server-1",
+                  "severity": "CRITICAL",
+                  "resolvedBy": "%s",
+                  %s"occurredAt": "%s"
+                }""", INCIDENT_ID, TENANT_ID, UUID.randomUUID(), duration, occurredAt);
+    }
+
+    private void assertDurationDeadLettered(ConsumerRecord<String, String> record) {
+        then(persistenceService).shouldHaveNoInteractions();
+        then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                anyString(), eq(acknowledgment));
+        then(acknowledgment).should().acknowledge();
+    }
+
+    @Nested
+    @DisplayName("durationMinutes and timestamps (backlog #0-119)")
+    class DurationValidation {
+
+        private static final Instant RESOLVED_AT = Instant.parse("2026-10-01T10:00:00Z");
+
+        @Test
+        @DisplayName("dead-letters a resolved event without durationMinutes")
+        void deadLettersMissingDuration() {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    producerShapedResolvedEvent(null, RESOLVED_AT), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_RESOLVED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            assertDurationDeadLettered(record);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"null", "\"45\"", "\"x\"", "1.5", "-1", "4294967341"})
+        @DisplayName("dead-letters a null, text, fractional, negative or out-of-int durationMinutes")
+        void deadLettersMalformedDuration(String raw) {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    producerShapedResolvedEvent(raw, RESOLVED_AT), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_RESOLVED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            assertDurationDeadLettered(record);
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"\"duration-secret-value\"", "-987654321"})
+        @DisplayName("the reason of an invalid duration never quotes the record's value")
+        void invalidDurationReasonDoesNotQuoteValue(String raw) {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    producerShapedResolvedEvent(raw, RESOLVED_AT), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_RESOLVED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                    argThat(reason -> reason.startsWith("IllegalArgumentException at ")
+                            && !reason.contains("duration-secret-value")
+                            && !reason.contains("987654321")),
+                    eq(acknowledgment));
+        }
+
+        @ParameterizedTest
+        @ValueSource(ints = {0, 45})
+        @DisplayName("records a valid durationMinutes (0 included: resolved within a minute), "
+                + "and counts openedAt back from occurredAt, not from now")
+        void recordsValidDurationAndOpenedAtFromResolution(int minutes) {
+            final ConsumerRecord<String, String> record = buildRecord(
+                    producerShapedResolvedEvent(String.valueOf(minutes), RESOLVED_AT), TENANT_ID,
+                    IncidentEventTypes.INCIDENT_RESOLVED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            // RESOLVED_AT lies in the past: an opening counted from now would
+            // be days later than RESOLVED_AT - duration.
+            then(persistenceService).should().createGeneratingRecord(
+                    eq(INCIDENT_ID), eq(TENANT_ID), any(), eq(Severity.CRITICAL),
+                    eq(RESOLVED_AT.minus(Duration.ofMinutes(minutes))), eq(RESOLVED_AT),
+                    eq(minutes));
+            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).shouldHaveNoInteractions();
+        }
+
+        @ParameterizedTest
+        @ValueSource(strings = {"occurredAt", "openedAt"})
+        @DisplayName("dead-letters a malformed timestamp as a poison pill whose reason never quotes it")
+        void deadLettersMalformedTimestamp(String field) {
+            final String payload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU on prod-server-1",
+                      "severity": "CRITICAL",
+                      "durationMinutes": 45,
+                      "openedAt": "%s",
+                      "occurredAt": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, RESOLVED_AT.minus(Duration.ofMinutes(45)), RESOLVED_AT)
+                    .replaceFirst("\"" + field + "\": \"[^\"]*\"",
+                            "\"" + field + "\": \"timestamp-secret-value\"");
+            final ConsumerRecord<String, String> record = buildRecord(payload, TENANT_ID,
+                    IncidentEventTypes.INCIDENT_RESOLVED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(persistenceService).shouldHaveNoInteractions();
+            then(deadLetterPublisher).should().deadLetterThenAcknowledge(eq(record), eq(TENANT_ID),
+                    argThat(reason -> reason.startsWith("IllegalArgumentException at ")
+                            && !reason.contains("timestamp-secret-value")),
+                    eq(acknowledgment));
+            then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("uses an openedAt the event carries as given")
+        void usesOpenedAtFromEvent() {
+            final Instant openedAt = Instant.parse("2026-10-01T09:12:34Z");
+            final String payload = String.format("""
+                    {
+                      "incidentId": "%s",
+                      "tenantId": "%s",
+                      "title": "High CPU on prod-server-1",
+                      "severity": "CRITICAL",
+                      "durationMinutes": 47,
+                      "openedAt": "%s",
+                      "occurredAt": "%s"
+                    }""", INCIDENT_ID, TENANT_ID, openedAt, RESOLVED_AT);
+            final ConsumerRecord<String, String> record = buildRecord(payload, TENANT_ID,
+                    IncidentEventTypes.INCIDENT_RESOLVED);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(persistenceService).should().createGeneratingRecord(
+                    eq(INCIDENT_ID), eq(TENANT_ID), any(), eq(Severity.CRITICAL),
+                    eq(openedAt), eq(RESOLVED_AT), eq(47));
         }
     }
 }
