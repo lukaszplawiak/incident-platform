@@ -14,19 +14,16 @@ resources:
   - secrets.yml
 
 patches:
+  # Replica counts (backlog #0-137): the HPAs own them, so staging raises the floor of the two services
+  # on the alert path to 2 and keeps base's ceilings (3); the other five run base's HPAs (1 to 3 for
+  # auth-service, 1 to 2 for the rest). Until #0-137 these were spec.replicas patches, which the HPAs
+  # scaled down to 1 and every `kubectl apply` reset.
   - target:
-      kind: Deployment
-      name: incident-service
+      kind: HorizontalPodAutoscaler
+      name: (incident|ingestion)-service-hpa
     patch: |-
       - op: replace
-        path: /spec/replicas
-        value: 2
-  - target:
-      kind: Deployment
-      name: ingestion-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
+        path: /spec/minReplicas
         value: 2
   # backlog #0-26: base ships NOTIFICATION_OPERATOR_ALERT_EMAIL empty, so no overlay emailed the
   # operator about an undeliverable notification. Placeholder address, in the same .local

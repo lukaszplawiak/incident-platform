@@ -19,6 +19,8 @@ spec:
 # HorizontalPodAutoscaler — automatically scales replicas based on CPU/memory.
 # When CPU > 70% → add replica (up to maxReplicas).
 # When CPU < 70% → remove replica (down to minReplicas).
+# These are base's limits; each overlay patches minReplicas/maxReplicas, and no Deployment sets
+# spec.replicas, so the HPA alone owns the count (backlog #0-137).
 #
 # Correction: an earlier version of this file capped maxReplicas at 1,
 # on the assumption that AuthEmailScheduler's two @Scheduled jobs had no

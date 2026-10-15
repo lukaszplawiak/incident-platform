@@ -20,56 +20,65 @@ patches:
       name: incident-service
     patch: |-
       - op: replace
-        path: /spec/replicas
-        value: 3
-      - op: replace
         path: /spec/template/spec/containers/0/resources/limits/memory
         value: "1Gi"
       - op: replace
         path: /spec/template/spec/containers/0/resources/requests/memory
         value: "512Mi"
-  - target:
-      kind: Deployment
-      name: ingestion-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 3
-  - target:
-      kind: Deployment
-      name: notification-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
-  - target:
-      kind: Deployment
-      name: escalation-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
-  - target:
-      kind: Deployment
-      name: postmortem-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
-  - target:
-      kind: Deployment
-      name: oncall-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
+  # Replica counts (backlog #0-137): the HPAs own them, so prod sets each service's floor and ceiling
+  # here, never spec.replicas (check-k8s-environments.rb fails on that, and on a prod floor below 2).
+  # Until #0-137 these were spec.replicas patches, which the HPAs (minReplicas 1) scaled down to 1
+  # and every `kubectl apply` reset; auth-service had no patch at all and ran a single replica.
+  # The floor is for availability (one pod can fail or be moved), the ceiling bounds the
+  # connections to Postgres (docs/database-roles.md, backlog #0-79).
   - target:
       kind: HorizontalPodAutoscaler
       name: incident-service-hpa
     patch: |-
       - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
         path: /spec/maxReplicas
         value: 5
+  # ingestion-service has no database, so its ceiling costs no Postgres connections.
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: ingestion-service-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 3
+      - op: replace
+        path: /spec/maxReplicas
+        value: 5
+  # Every service asks auth-service for its tenant's status (backlog #0-82): never a single replica.
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: auth-service-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+      - op: replace
+        path: /spec/maxReplicas
+        value: 3
+  # 2 to 2 on purpose (ADR-0028): a second pod is for availability, not throughput. For notification,
+  # escalation and postmortem one pod already consumes all three partitions of incidents.lifecycle
+  # (listener concurrency 3), their @Scheduled jobs run on one pod at a time under ShedLock, and Slack,
+  # mail, SMS and Gemini set their pace rather than CPU. oncall-service serves HTTP only, to escalation
+  # and notification, so its load follows theirs. A third pod would only cost 5 more Postgres
+  # connections; scaling the consumers is more partitions, not pods.
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: (notification|escalation|postmortem|oncall)-service-hpa
+    patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 2
+      - op: replace
+        path: /spec/maxReplicas
+        value: 2
   # backlog #0-26: base ships NOTIFICATION_OPERATOR_ALERT_EMAIL empty, so no overlay emailed the
   # operator about an undeliverable notification. Placeholder address, in the same .local
   # convention as APP_BASE_URL/INVITE_EMAIL_FROM in the base ConfigMap (no real domain exists

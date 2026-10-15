@@ -7,7 +7,10 @@ metadata:
     app.kubernetes.io/component: backend
     app.kubernetes.io/part-of: incident-platform
 spec:
-  replicas: 1
+  # No spec.replicas (backlog #0-137): the HorizontalPodAutoscaler in service-hpa.yml owns the count, and
+  # each overlay sets its floor and ceiling there. A replicas field here would be reapplied by every
+  # `kubectl apply`, resetting what the HPA scaled to (Kubernetes docs: "Migrating Deployments and
+  # StatefulSets to horizontal autoscaling").
   selector:
     matchLabels:
       app: oncall-service
