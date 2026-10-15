@@ -276,7 +276,7 @@ by default and let each service opt routes in, rather than each service exceptin
 
 ### 0-15. `IncidentAckClient` is not authorized on the status endpoint
 
-**Type:** bug · **Priority:** Medium · **Status:** Open (found by code reading, not run)
+**Type:** bug · **Priority:** Medium · **Status:** Open, deferred to be done together with #0-35 (found by code reading, not run)
 
 **Problem.** notification-service's `IncidentAckClient` calls `PATCH /api/v1/incidents/{id}/status`
 with a service token (ACK via Slack). That endpoint has `@PreAuthorize("hasRole('RESPONDER') or
@@ -287,6 +287,23 @@ authenticates, but as a `ServicePrincipal` with `ROLE_SERVICE`, so the call is a
 **Decision needed.** How a service acts on behalf of a user: a dedicated service endpoint that takes
 `acknowledgedBy` from the request, or propagating the user's identity. Then add a test that sends a
 real service token to this endpoint.
+
+**Found in the analysis of 2026-10-15** (`/research`, not run):
+- The path is unreachable today: no message carries the Acknowledge button since #0-21, and #0-35 brings it back.
+  So this is a precondition of #0-35, deferred to be done with it (the owner's decision): the OAuth install may
+  change how a Slack user maps to a platform user, which decides the answer for an unmapped one.
+- `UpdateStatusCommand` has only `status` and `comment`: the `acknowledgedBy` the client sends is dropped
+  silently, and the actor would be the principal; `principal.userId()` would also be a 500 (NPE) for a service
+  caller, past the 403.
+- `SlackActionService` invents the actor for a Slack user with no on-call mapping
+  (`UUID.nameUUIDFromBytes(slackUserId)`), so history and audit would name a user who does not exist.
+- Recommended direction: a trusted subsystem, not identity propagation (a click carries no platform token, and a
+  token minted for the user would be an impersonation capability). An internal `ROLE_SERVICE` endpoint in
+  incident-service for the acknowledgement only, the pattern of auth-service's `/api/v1/internal/...` endpoints
+  (tenant from the token's claim, `hidden = true`), with a required `acknowledgedBy`, the source recorded as Slack
+  and the relay in the audit; an unmapped Slack user is refused and counted, not given an invented id; tests with a
+  real service token (accepted), a user token and another audience (refused). Widening `PATCH /status` to services
+  was rejected: it would give a service token every transition and put an on-behalf-of field on a user endpoint.
 
 ---
 
@@ -612,7 +629,16 @@ the #0-21 security review, where the DTO Javadoc (tenant's own App) and #0-21's 
 - Socket Mode was considered: with one App per tenant it means one WebSocket and app-level token per tenant held
   by notification-service. Rejected.
 
-**Approach.** (B) when Slack is actually used by tenants. Until then incidents are acknowledged in the app.
+**Approach.** (B), together with #0-15.
+
+**Requires #0-15.** The button's path ends in `IncidentAckClient`, which incident-service refuses today (403, and
+its `acknowledgedBy` is dropped): with the button back and #0-15 open, every click would fail silently. The two
+are done together; #0-15 records the analysis and the recommended endpoint.
+
+**When.** Before the first production tenant uses Slack (the owner's decision, 2026-10-15): acknowledging from Slack
+is part of the offer from the start, so this and #0-15 are done before anyone connects Slack in production. It used
+to read "when Slack is actually used by tenants", a moment nothing in the platform would signal. Until then
+incidents are acknowledged in the app.
 
 ---
 
