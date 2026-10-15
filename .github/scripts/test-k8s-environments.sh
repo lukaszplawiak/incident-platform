@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Tests .github/scripts/check-k8s-environments.rb (backlog #0-29): the real k8s tree passes, and one mutated
+# Tests .github/scripts/check-k8s-environments.rb (backlog #0-29, #0-137): the real k8s tree passes, and one mutated
 # copy per rule fails, citing the backlog item. Each case copies k8s/ into a temporary directory, applies one
 # edit, renders the three overlays with kubectl kustomize, and runs the check from there. The pattern of
 # test-k8s-mail.sh (backlog #0-42).
@@ -34,7 +34,7 @@ case_() {
     done
     local out rc
     out=$(cd "$dir" && ruby "$CHECK" "$dir/render" 2>&1); rc=$?
-    if { [ "$expect" = pass ] && [ "$rc" -eq 0 ]; } || { [ "$expect" = fail ] && [ "$rc" -eq 1 ] && grep -q "backlog #0-29" <<<"$out" && [ -n "$want" ] && grep -qF -- "$want" <<<"$out"; }; then
+    if { [ "$expect" = pass ] && [ "$rc" -eq 0 ]; } || { [ "$expect" = fail ] && [ "$rc" -eq 1 ] && grep -q "(backlog #0-" <<<"$out" && [ -n "$want" ] && grep -qF -- "$want" <<<"$out"; }; then
         echo "  ok: $expect - $name"
     else
         echo "::error::expected $expect - $name (exit $rc): $out"
@@ -81,6 +81,20 @@ case_ fail "prod service tagged prod"         "edit $PROD 's/(  - name: ingestio
     "runs ingestion-service:prod, tagged with an environment's name"
 case_ fail "no service labelled backend"      "for f in k8s/base/*/deployment.yml; do edit \$f 's/app.kubernetes.io\/component: backend/app.kubernetes.io\/component: api/g' || exit 1; done" \
     "prod has no Deployment labelled app.kubernetes.io/component=backend"
+# 4. the HPAs own the services' replica counts (backlog #0-137)
+case_ fail "base Deployment sets replicas again" "edit k8s/base/incident-service/deployment.yml 's/^spec:\n/spec:\n  replicas: 1\n/m'" \
+    "dev Deployment incident-service sets spec.replicas (1) although HorizontalPodAutoscaler incident-service-hpa owns its count (backlog #0-137)"
+case_ fail "an overlay patches spec.replicas" "edit $PROD 's/^patches:\n/patches:\n  - target:\n      kind: Deployment\n      name: oncall-service\n    patch: |-\n      - op: add\n        path: \/spec\/replicas\n        value: 2\n/m'" \
+    "prod Deployment oncall-service sets spec.replicas (2) although HorizontalPodAutoscaler oncall-service-hpa owns its count (backlog #0-137)"
+case_ fail "a service without an HPA"         "edit k8s/base/oncall-service/service-hpa.yml 's/\n---\n.*\\z/\n/s'" \
+    "staging Deployment oncall-service has no HorizontalPodAutoscaler, so it runs one pod (backlog #0-137)"
+case_ fail "an HPA targets another name"      "edit k8s/base/postmortem-service/service-hpa.yml 's/(scaleTargetRef:\n(?:.*\n)*?    name: )postmortem-service/\${1}postmortem/'" \
+    "staging HorizontalPodAutoscaler postmortem-service-hpa targets Deployment postmortem, which the render does not have (backlog #0-137)"
+case_ fail "a floor above its ceiling"        "edit $STAGING 's/(path: \/spec\/minReplicas\n        value: )2/\${1}4/'" \
+    "staging HorizontalPodAutoscaler incident-service-hpa has minReplicas 4 above maxReplicas 3 (backlog #0-137)"
+# 5. prod's floor is 2
+case_ fail "prod auth-service on one pod"     "edit $PROD 's/(name: auth-service-hpa\n    patch: \|-\n      - op: replace\n        path: \/spec\/minReplicas\n        value: )2/\${1}1/'" \
+    "prod HorizontalPodAutoscaler auth-service-hpa has minReplicas 1; prod's floor is 2 (backlog #0-137)"
 
 if [ "$failures" -gt 0 ]; then echo "$failures check-k8s-environments case(s) failed"; exit 1; fi
 echo "All check-k8s-environments cases passed."

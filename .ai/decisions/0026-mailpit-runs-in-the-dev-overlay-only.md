@@ -30,7 +30,8 @@ delays, Redis included, so any infrastructure Deployment added there inherits JV
 - Base `MAIL_HOST` is a commented placeholder, `smtp.incident-platform.local` ("replace before a real deployment",
   as #0-26 did for the operator address), with `MAIL_PORT: "587"` (submission, STARTTLS + auth, what the services' defaults expect).
   Staging and prod get no relay and no `SPRING_MAIL_PROPERTIES_*` key.
-- The dev overlay's blanket Deployment patches (replicas, memory, probe delays) target
+- The dev overlay's blanket Deployment patches (replicas, memory, probe delays; replicas moved to the HPAs in
+  #0-137, ADR-0028) target
   `labelSelector: app.kubernetes.io/component=backend`. A new Deployment in dev that is not one of the services
   carries another `app.kubernetes.io/component` value (Redis: `cache`, Mailpit: `mail`).
 - `.github/scripts/check-k8s-mail.rb` enforces the above in `validate-k8s-manifests`: it reads the renders of base

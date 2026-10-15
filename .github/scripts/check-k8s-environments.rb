@@ -1,5 +1,6 @@
 # ============================================================
-# Each Kubernetes overlay deploys its own environment (backlog #0-29).
+# Each Kubernetes overlay deploys its own environment (backlog #0-29), and the HPAs own the services'
+# replica counts (backlog #0-137).
 #
 # From the first commit of the manifests until #0-29, k8s/overlays/staging/kustomization.yml held the
 # prod overlay's body and k8s/overlays/prod/ the staging one's: "deploying prod" rendered every resource
@@ -12,7 +13,16 @@
 #   2. an image in the prod render has no tag (or digest), or the tag `latest`;
 #   3. an image of a service (a Deployment labelled app.kubernetes.io/component=backend) in the prod
 #      render is tagged with an environment's name (dev, staging, prod) rather than a release, or the
-#      render has no such Deployment.
+#      render has no such Deployment;
+#   4. in any render, a service Deployment has no HorizontalPodAutoscaler, an HPA targets a Deployment the
+#      render does not have, the targeted Deployment sets spec.replicas, or minReplicas exceeds maxReplicas;
+#   5. an HPA in the prod render has a floor (minReplicas, default 1) below 2.
+# Rules 4 and 5 (backlog #0-137): until #0-137 the overlays sized the services with spec.replicas patches
+# while each HPA ran from minReplicas 1, so the HPA scaled prod's "3 replicas" down to 1 and every
+# `kubectl apply` reset what it had scaled to (Kubernetes docs, "Migrating Deployments and StatefulSets to
+# horizontal autoscaling": remove spec.replicas once an HPA is enabled); auth-service ran one replica in
+# prod. With spec.replicas gone, a service without an HPA would silently run one pod, hence the first
+# clause of rule 4.
 # Parsing is structural (YAML), not grep, as check-k8s-mail.rb (backlog #0-42): a namespace field and an
 # image name cannot be told from their surroundings in text.
 #
@@ -29,8 +39,8 @@ ENVIRONMENT_NAMES = OVERLAYS
 NAMESPACE_PREFIX = "incident-platform-".freeze
 
 $errors = []
-def fail!(msg)
-  $errors << msg
+def fail!(msg, item = "#0-29")
+  $errors << "#{msg} (backlog #{item})"
 end
 
 # kustomize separates documents with "---" lines; each is parsed on its own with
@@ -116,13 +126,49 @@ prod.each do |d|
   end
 end
 
+# 4. the HPAs own the services' replica counts, in every render
+OVERLAYS.each do |env|
+  docs = rendered[env]
+  hpas = docs.select { |d| d["kind"] == "HorizontalPodAutoscaler" }
+  # Deployments an HPA aims at, by kind and name (two documents never share both in one render)
+  targeted = {}
+  hpas.each do |h|
+    ref = h.dig("spec", "scaleTargetRef") || {}
+    target = docs.find { |d| d["kind"] == ref["kind"] && d.dig("metadata", "name") == ref["name"] }
+    if target.nil?
+      fail!("#{env} #{label(h)} targets #{ref['kind']} #{ref['name']}, which the render does not have", "#0-137")
+      next
+    end
+    targeted["#{target['kind']}/#{target.dig('metadata', 'name')}"] = h
+    unless target.dig("spec", "replicas").nil?
+      fail!("#{env} #{label(target)} sets spec.replicas (#{target.dig('spec', 'replicas')}) although #{label(h)} owns its count", "#0-137")
+    end
+    min = h.dig("spec", "minReplicas") || 1
+    max = h.dig("spec", "maxReplicas")
+    fail!("#{env} #{label(h)} has minReplicas #{min} above maxReplicas #{max}", "#0-137") if max && min > max
+  end
+  docs.each do |d|
+    next unless d["kind"] == "Deployment" && d.dig("metadata", "labels", "app.kubernetes.io/component") == "backend"
+    fail!("#{env} #{label(d)} has no HorizontalPodAutoscaler, so it runs one pod", "#0-137") unless targeted.key?("#{d['kind']}/#{d.dig('metadata', 'name')}")
+  end
+end
+
+# 5. prod never runs a service on a single pod
+prod.select { |d| d["kind"] == "HorizontalPodAutoscaler" }.each do |h|
+  min = h.dig("spec", "minReplicas") || 1
+  fail!("prod #{label(h)} has minReplicas #{min}; prod's floor is 2", "#0-137") if min < 2
+end
+
 if $errors.empty?
   # The services' own containers, not their init containers (busybox), for the summary.
   tags = services.flat_map { |d| d.dig("spec", "template", "spec", "containers") || [] }
                  .map { |c| tag_of(c["image"].to_s) }.uniq
+  floors = prod.select { |d| d["kind"] == "HorizontalPodAutoscaler" }
+               .map { |h| "#{h.dig('spec', 'scaleTargetRef', 'name')} #{h.dig('spec', 'minReplicas')}-#{h.dig('spec', 'maxReplicas')}" }
   puts "Environments: dev, staging and prod each render into incident-platform-<overlay>; prod's #{services.size} services run #{tags.join(', ')}."
+  puts "Replicas: the HPAs own every service's count in all three renders; prod: #{floors.join(', ')}."
   exit 0
 end
-$errors.each { |e| puts "::error::#{e} (backlog #0-29)" }
+$errors.each { |e| puts "::error::#{e}" }
 puts "#{$errors.size} environment problem(s)."
 exit 1

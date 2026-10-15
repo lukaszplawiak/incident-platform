@@ -1564,7 +1564,7 @@ The `k8s/` directory uses **Kustomize** with environment overlays:
 k8s/
 ├── base/               # Environment-agnostic manifests (Deployments, Services, HPA, Ingress)
 └── overlays/
-    ├── dev/            # Minikube: 1 replica, 768Mi memory limit, relaxed probe delays (services only);
+    ├── dev/            # Minikube: 1 replica (HPAs at 1–1), 768Mi memory limit, relaxed probe delays (services only);
     │                   # Mailpit catches mail: kubectl -n incident-platform-dev port-forward svc/mailpit 8025
     ├── staging/
     └── prod/
@@ -1575,7 +1575,15 @@ Key features of the base configuration:
 - **Rolling updates** — `maxUnavailable: 0`, `maxSurge: 1` — zero downtime deployments
 - **Init containers** — each service waits for PostgreSQL and Kafka before starting
 - **Health probes** — readiness and liveness on the management port (never the API port)
-- **HorizontalPodAutoscaler** — CPU 70% and memory 80% targets; 1–3 replicas for auth, ingestion and incident-service, 1–2 for notification, escalation, postmortem and oncall-service
+- **HorizontalPodAutoscaler** — CPU 70% and memory 80% targets; 1–3 replicas for auth, ingestion and incident-service, 1–2 for notification, escalation, postmortem and oncall-service. The HPAs own the replica counts: no Deployment sets `spec.replicas` (every `kubectl apply` would reset what the HPA scaled to), and each overlay patches `minReplicas`/`maxReplicas` instead (backlog #0-137, checked in CI by `check-k8s-environments.rb`):
+
+  | Overlay | auth | incident | ingestion | notification, escalation, postmortem, oncall |
+  |---|---|---|---|---|
+  | dev | 1 | 1 | 1 | 1 |
+  | staging | 1–3 | 2–3 | 2–3 | 1–2 |
+  | prod | 2–3 | 3–5 | 3–5 | 2–2 |
+
+  Prod never runs a service on one pod. The four at 2–2 gain availability, not throughput, from a second pod: for notification, escalation and postmortem one pod already consumes all three partitions of `incidents.lifecycle`, their `@Scheduled` jobs run on one pod at a time under ShedLock, and Slack, mail, SMS and Gemini set their pace; oncall-service serves HTTP only, to escalation and notification, so its load follows theirs. The ceilings bound the Postgres connections (backlog #0-79, `docs/database-roles.md`). The decision and the options it was chosen over: ADR-0028.
 - **ShedLock** — prevents duplicate scheduled job execution across replicas
 
 ---

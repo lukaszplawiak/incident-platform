@@ -59,19 +59,21 @@ Every service that uses the database keeps a Hikari pool:
 - the other five: 5 each (auth-service hard-codes it, the others default to it);
 - in Kubernetes, `app-config` sets `DB_POOL_SIZE: 5`, which incident-service reads too.
 
-That makes 35 connections with one pod per service locally, and 30 in Kubernetes. The counts at the
-HPAs' maximum replicas, and during a rolling update in which every Deployment adds its one surge
+That makes 35 connections with one pod per service locally, and 30 in Kubernetes. The HPAs own the
+replica counts and each overlay sets their `maxReplicas` (backlog #0-137), so these are the counts at
+the overlays' HPA ceilings, and during a rolling update in which every Deployment adds its one surge
 pod at the same time (the worst case):
 
-| Overlay directory (namespace it deploys to) | HPA maximum | Rolling update |
-|---|---|---|
-| `k8s/overlays/staging` (`incident-platform-staging`), base HPAs | 70 | 100 |
-| `k8s/overlays/prod` (`incident-platform-prod`), incident-service up to 5 | 80 | 110 |
-| `k8s/overlays/dev` (`incident-platform-dev`), every HPA at 1 | 30 | 60 |
+| Overlay directory (namespace it deploys to) | HPA ceilings of the six services with a database | HPA maximum | Rolling update |
+|---|---|---|---|
+| `k8s/overlays/staging` (`incident-platform-staging`) | auth and incident 3, the other four 2 | 70 | 100 |
+| `k8s/overlays/prod` (`incident-platform-prod`) | auth 3, incident 5, the other four 2 | 80 | 110 |
+| `k8s/overlays/dev` (`incident-platform-dev`) | every one 1 | 30 | 60 |
 
-Until backlog #0-29 the staging and prod directories held each other's configuration, so this table
-used to name prod's directory for the first row. Both can exceed the 97 that the services' role gets,
-prod the most. Sizing this is backlog #0-79.
+ingestion-service has no database, so its ceiling (5 in prod) adds no connections. Until backlog #0-29
+the staging and prod directories held each other's configuration, so this table used to name prod's
+directory for the first row. Both can exceed the 97 that the services' role gets, prod the most.
+Sizing this is backlog #0-79.
 
 ### Working as the admin
 
@@ -430,7 +432,9 @@ Fix the cause and run step 5 again.
 
 ### Kubernetes
 
-The order differs, because `kubectl apply` also restores the Deployments' replica counts:
+The order differs, because the services are stopped and started through their replica counts, which
+the HPAs own (backlog #0-137: no Deployment sets `spec.replicas`, so `kubectl apply` leaves the counts
+as they are):
 
 1. Back up (`kubectl exec -n <ns> postgresql-0 -- pg_dump -U incident_app -d incidentdb -Fc > ...`).
 2. In the overlay's `secrets.yml`:
@@ -440,8 +444,9 @@ The order differs, because `kubectl apply` also restores the Deployments' replic
 3. `kubectl apply -k k8s/overlays/<env>`. The StatefulSet restarts with the new environment, and the
    init script does not run on the existing PVC. The services keep working as before: they still
    reach the bootstrap `incident_app` with the same password.
-4. Stop the six services that use the database (not ingestion-service). An HPA does not scale a
-   Deployment up from 0:
+4. Stop the six services that use the database (not ingestion-service). At 0 replicas their HPAs
+   stop acting (Kubernetes' "implicit maintenance-mode deactivation"), so nothing scales them back up
+   while you work:
 
    ```bash
    kubectl scale -n <ns> --replicas=0 \
@@ -452,8 +457,16 @@ The order differs, because `kubectl apply` also restores the Deployments' replic
 5. Steps 4–7 of the docker-compose list, with `kubectl exec -i -n <ns> postgresql-0 --` in place of
    `docker exec -i incident-postgres`. For example:
    `kubectl exec -i -n <ns> postgresql-0 -- psql -U migration_admin -d incidentdb < docs/database-roles-migrate.sql`.
-6. `kubectl apply -k k8s/overlays/<env>` again. It restores the overlay's replica counts, and the
-   HPAs take over from there.
+6. Start the six services with one replica each. An HPA does not scale a Deployment up from 0, and
+   `kubectl apply` would not either, since the manifests carry no replica count; from 1 the HPAs are
+   active again and raise each service to its overlay's `minReplicas` within a sync period (15 s by
+   default):
+
+   ```bash
+   kubectl scale -n <ns> --replicas=1 \
+     deployment/auth-service deployment/incident-service deployment/notification-service \
+     deployment/escalation-service deployment/postmortem-service deployment/oncall-service
+   ```
 
 ## Changing a password later
 

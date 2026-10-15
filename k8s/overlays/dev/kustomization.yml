@@ -16,16 +16,14 @@ resources:
 # before backlog #0-42 they hit every Deployment, so Redis got a JVM's 768Mi and 90/120 s probe
 # delays, and Mailpit would have too. Infrastructure carries another component (cache, mail).
 patches:
-  - target:
-      kind: Deployment
-      labelSelector: app.kubernetes.io/component=backend
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 1
+  # One replica per service, set on the HPAs (backlog #0-137: they own the count, so no overlay sets
+  # spec.replicas; until #0-137 dev patched both).
   - target:
       kind: HorizontalPodAutoscaler
     patch: |-
+      - op: replace
+        path: /spec/minReplicas
+        value: 1
       - op: replace
         path: /spec/maxReplicas
         value: 1

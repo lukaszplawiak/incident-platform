@@ -127,6 +127,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
 | [0-137](#0-137-the-overlays-set-replicas-that-the-hpas-own) | The overlays set replicas that the HPAs own | design | Medium | Open |
+| [0-138](#0-138-no-poddisruptionbudget-or-topology-spread-protects-the-replica-floors) | No PodDisruptionBudget or topology spread protects the replica floors | design | Medium | Open |
+| [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 
 ---
 
@@ -1215,9 +1217,10 @@ enough. Decide before implementing.
 **Type:** design · **Priority:** Medium · **Status:** Open (found in the review of #0-78)
 
 **Problem.** In Kubernetes every service that uses the database keeps a Hikari pool of 5 connections
-(`DB_POOL_SIZE` in `app-config`; auth-service hard-codes 5). The base HPAs allow up to 3 replicas of auth-service and
-incident-service and 2 of each of the other four, which is 70 connections (staging); the prod overlay raises
-incident-service to 5 (80), dev caps every HPA at 1 (30). If every Deployment rolls at the same time, each adds one
+(`DB_POOL_SIZE` in `app-config`; auth-service hard-codes 5). The HPAs own the replica counts and each overlay sets
+their ceilings (since #0-137, which kept the ceilings as they were): staging keeps base's 3 for auth-service and
+incident-service and 2 for each of the other four, which is 70 connections; prod raises incident-service to 5 (80;
+ingestion-service's 5 adds none, it has no database); dev caps every HPA at 1 (30). If every Deployment rolls at the same time, each adds one
 surge pod (`maxSurge: 1`): 100 in staging, 110 in prod. (Written while #0-29 had swapped the two overlays, as
 "staging 110"; corrected when #0-29 was fixed: prod is the one with the most.) Postgres runs with the default `max_connections` of 100. Since #0-78 the services' role is not a
 superuser, so it cannot use the 3 connections reserved for superusers (`superuser_reserved_connections`), and gets 97.
@@ -2173,6 +2176,41 @@ check of the renders (like `check-k8s-environments.rb`, #0-29) that no Deploymen
 
 ---
 
+### 0-138. No PodDisruptionBudget or topology spread protects the replica floors
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the analysis of #0-137, 2026-10-15)
+
+**Problem.** Since #0-137 every service in prod has an HPA floor of at least 2 (auth-service 2, incident-service and
+ingestion-service 3, the other four 2), so one pod can fail and the service stays up. Nothing protects that floor from
+the cluster itself: `k8s/` has no PodDisruptionBudget, so a node drain or a cluster upgrade may evict every replica of a
+service at once, and no `topologySpreadConstraints` or anti-affinity, so the scheduler may place all replicas on one
+node, whose failure then takes the service down. The floor guards against a pod failing, not against the node or zone
+it runs on.
+
+**Approach.** A PodDisruptionBudget per service in the overlays that have a floor of 2 or more (`maxUnavailable: 1`,
+which stays satisfiable at any replica count, rather than a `minAvailable` that can block a drain at the floor), and
+`topologySpreadConstraints` on `kubernetes.io/hostname` (and `topology.kubernetes.io/zone` once the cluster's zones are
+known) with `whenUnsatisfiable: ScheduleAnyway` so a small cluster still schedules. Decide whether dev, with one replica,
+gets none. A check of the renders, in `check-k8s-environments.rb`, that every prod service with a floor of 2 has one.
+
+---
+
+### 0-139. The HPAs scale the JVM services on memory
+
+**Type:** design · **Priority:** Low · **Status:** Open (found in the analysis of #0-137, 2026-10-15)
+
+**Problem.** Every HPA in `k8s/base/*/service-hpa.yml` scales on CPU (70%) and on memory (80%), and an HPA scales up when
+either metric is above its target. The services are JVMs: the heap grows to what the JVM is allowed and is rarely given
+back to the operating system, so memory utilisation stays high after the load is gone. The memory metric can then hold a
+service at its ceiling, or scale it up on heap growth that is not load; and the ceilings are what #0-79's connection
+arithmetic counts. Not measured: no cluster runs these manifests yet.
+
+**Approach.** Measure first, on a cluster under load: whether memory utilisation follows the load at all. If it does
+not, scale on CPU only, or on a metric that follows the work (requests per pod, or the Kafka consumer lag through KEDA
+for the consumers), and keep memory as a limit (OOM protection), not a scaling signal.
+
+---
+
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
 **Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
@@ -2474,6 +2512,12 @@ need no one to remember them.
    ("Enforced by: ArchUnit rule …"), so reviewers skip it.
 5. Aim at 10–15 rules per file; the core files (`general`, `architecture`, `security`) are read for every
    item, so every line there costs on every run.
+
+**Gap to add to `architecture.md` (found in the review of #0-137, 2026-10-15).** No rule says that a platform-wide
+infrastructure decision enforced by a CI check needs an ADR. #0-42 and #0-76 got one (ADR-0026, ADR-0027), #0-29 did
+not, and #0-137 got ADR-0028 only because the architecture reviewer asked; the reviewer could report it as a rule gap,
+not cite it. E.g. "A decision that CI enforces across the platform (a structural check in `.github/scripts/`) is
+recorded in an ADR in the same PR. Check: a new rule in a check script points to an ADR, or the PR adds one."
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
