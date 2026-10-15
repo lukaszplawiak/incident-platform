@@ -63,7 +63,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
-| [0-29](#0-29-staging-and-prod-k8s-overlays-are-wholesale-swapped-not-just-their-namespace) | staging and prod k8s overlays are wholesale swapped, not just their `namespace:` | bug | Medium | Open |
 | [0-31](#0-31-auth-service-identityconfig-split-evaluated-and-deferred) | auth-service identity/config split — evaluated and deferred | design | Low | Open |
 | [0-32](#0-32-no-notification-channel-is-retried-after-a-failed-send) | No notification channel is retried after a failed send | design | Medium | Open |
 | [0-33](#0-33-unify-caching-on-caffeine-once-a-third-cache-appears) | Unify caching on Caffeine once a third cache appears | tech-debt | Low | Open |
@@ -418,40 +417,6 @@ keeps the scheduler fast, but the table only grows, and an operator browsing UND
 **Approach.** A ShedLock-protected retention job (delete terminal rows older than a configurable age, keeping UNDELIVERABLE
 longer), like `NotificationScheduler`'s existing `slack_message_ts` cleanup. Decide retention with the audit requirements in
 mind: the audit events are the compliance record, the queue is a work queue.
-
----
-
-### 0-29. staging and prod k8s overlays are wholesale swapped, not just their `namespace:`
-
-**Type:** bug · **Priority:** Medium · **Status:** Open
-
-**Priority raised from Low (2026-09-30 audit):** together with #0-63 it decided what a prod deployment would
-really run; #0-63 is fixed, this one still sends "prod" to the staging namespace with staging images.
-
-**Problem.** `k8s/overlays/staging/kustomization.yml` and `k8s/overlays/prod/kustomization.yml` each contain the
-*other* environment's whole configuration, not just a swapped `namespace:` field. The file in `staging/` sets
-`namespace: incident-platform-prod`, its resources comment reads "Prod-specific secrets", and its patches give
-prod-shaped sizing: `incident-service` 3 replicas with 1Gi/512Mi memory limits, `ingestion-service` 3 replicas,
-`notification-service`/`escalation-service`/`postmortem-service`/`oncall-service` 2 replicas each, an
-`incident-service-hpa` patch (`maxReplicas: 5`), and every image pinned to `newTag: "1.0.0"` (a release version, not
-an environment name). The file in `prod/` is the mirror image: `namespace: incident-platform-staging`, "Staging-specific
-secrets", only `incident-service`/`ingestion-service` bumped to 2 replicas each (no HPA patch, no bump for the other
-four services), and every image at `newTag: staging`. Kustomize's top-level `namespace:` field overrides every
-resource's namespace regardless of what each overlay's own `secrets.yml` declares, so the namespace mismatch is real,
-not just cosmetic. Found while investigating backlog #0-26; unrelated to it. (An earlier version of this entry
-described only the `namespace:` field as swapped — a review of the full diff showed the whole file bodies are
-swapped between directories.)
-
-**Effect.** "Deploying prod" today would land `staging`-tagged images, at staging-level replica counts and no HPA
-bump, into the `incident-platform-staging` namespace — and "deploying staging" would land `1.0.0`-tagged images at
-prod-level scale into `incident-platform-prod`. Image tag and scale are wrong for whichever environment someone
-believes they're targeting, not only the namespace label.
-
-**Decide / do.** Confirm this is unintended (not, for example, a deliberate historical rename the directory names
-never caught up to), then swap the two file bodies (or move the files) wholesale — editing only the `namespace:`
-line in each, as a narrower read of this bug might suggest, would leave the replica counts, resource limits, HPA
-target and image tags mismatched. A CI assertion that each overlay's rendered namespace ends in its directory name would keep
-it from coming back (suggested by #0-120, a duplicate of this item).
 
 ---
 
