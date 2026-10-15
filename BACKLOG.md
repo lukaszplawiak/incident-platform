@@ -122,7 +122,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
-| [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
 | [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -2075,19 +2074,6 @@ by the incident id, one partition) needs checking first.
 
 **Approach (to analyse).** Keep the higher level (never lower it from this consumer), with a test; or decide
 that ordering by key makes it impossible and close this item with that reasoning.
-
----
-
-### 0-119. postmortem-service coerces `durationMinutes` with `asInt(0)`
-
-**Type:** bug · **Priority:** Low · **Status:** Open (noticed by `/ready #0-7`, 2026-10-09; effect not verified)
-
-**Problem.** postmortem-service's `IncidentEventConsumer` reads `event.path("durationMinutes").asInt(0)`, the
-pattern #0-7 removes from incident-service: a missing or malformed duration becomes `0` silently. Whether a 0
-duration is harmful there (a postmortem stating the incident lasted no time) is not checked.
-
-**Approach.** Verify the effect, then validate as #0-7 does (dead-letter through the existing path) if it
-matters.
 
 ---
 
