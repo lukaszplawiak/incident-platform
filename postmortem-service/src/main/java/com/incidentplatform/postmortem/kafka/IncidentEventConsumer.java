@@ -19,7 +19,9 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.UUID;
 
 /**
@@ -91,6 +93,29 @@ import java.util.UUID;
  * committed the offset past the unacknowledged one — so a transient failure
  * is {@code nack}ed, and a poison pill is acknowledged only once Kafka has
  * its dead-letter copy.
+ *
+ * <h2>Fixed (backlog #0-119): the duration is validated, and the opening is
+ * counted back from the resolution</h2>
+ * {@code durationMinutes} used to be read with {@code asInt(0)}, which turned
+ * a missing or malformed duration (absent, {@code null}, text, a fraction)
+ * into {@code 0}: a postmortem stating the incident lasted no time. It must
+ * now be a JSON integer {@code >= 0} that fits an {@code int}, and anything
+ * else is a poison pill that goes to the dead-letter topic through the
+ * {@code IllegalArgumentException} catch below (the #0-7 pattern). {@code 0}
+ * stays valid: incident-service sends whole minutes, so an incident resolved
+ * within a minute has a duration of 0.
+ *
+ * <p>{@code IncidentResolvedEvent} carries no {@code openedAt}, so the
+ * opening is always derived. It used to be {@code Instant.now() - duration},
+ * anchored to when this consumer read the record: outbox relay delay,
+ * consumer lag or a dead-letter replay moved the opening forward, and the
+ * timeline handed to Gemini disagreed with the duration. It is now
+ * {@code resolvedAt - duration}, still in whole minutes (up to 59 s early
+ * or late); the exact time in the event is backlog #0-133.
+ *
+ * <p>A malformed {@code occurredAt} or {@code openedAt} is a named poison
+ * pill too: it used to reach the generic catch below, which dead-letters
+ * it as an "unexpected error".
  */
 @Component
 public class IncidentEventConsumer {
@@ -211,18 +236,21 @@ public class IncidentEventConsumer {
         final UUID incidentId = UUID.fromString(
                 event.get("incidentId").asText());
         final String title = event.path("title").asText("Unknown incident");
-        final int durationMinutes = event.path("durationMinutes").asInt(0);
+        // Backlog #0-119: validated, not coerced; an invalid duration is a poison pill.
+        final int durationMinutes = extractDurationMinutes(event);
 
         final Severity severity = parseSeverity(
                 event.path("severity").asText(), incidentId);
 
-        final Instant openedAt = event.has("openedAt")
-                ? Instant.parse(event.get("openedAt").asText())
-                : Instant.now().minusSeconds(durationMinutes * 60L);
-
         final Instant resolvedAt = event.has("occurredAt")
-                ? Instant.parse(event.get("occurredAt").asText())
+                ? parseInstant(event, "occurredAt")
                 : Instant.now();
+
+        // Backlog #0-119: counted back from the resolution, not from now. The
+        // producer sends no openedAt today (#0-133); the branch is for when it does.
+        final Instant openedAt = event.has("openedAt")
+                ? parseInstant(event, "openedAt")
+                : resolvedAt.minus(Duration.ofMinutes(durationMinutes));
 
         log.info("Writing postmortem outbox entry for resolved incident: " +
                         "incidentId={}, tenant={}, severity={}, durationMinutes={}",
@@ -231,6 +259,32 @@ public class IncidentEventConsumer {
         persistenceService.createGeneratingRecord(
                 incidentId, tenantId, title, severity,
                 openedAt, resolvedAt, durationMinutes);
+    }
+
+    private int extractDurationMinutes(JsonNode event) {
+        final JsonNode node = event.path("durationMinutes");
+        // isIntegralNumber() is false for missing, null, text and fractions;
+        // canConvertToInt() refuses a long outside int. The message names the
+        // field and the rule only, never the record's value.
+        if (!node.isIntegralNumber() || !node.canConvertToInt() || node.intValue() < 0) {
+            throw new IllegalArgumentException(
+                    "durationMinutes must be a non-negative integer");
+        }
+        return node.intValue();
+    }
+
+    /**
+     * Backlog #0-119: a malformed timestamp is a poison pill of the same kind
+     * as a malformed duration. {@code DateTimeParseException} used to reach the
+     * generic catch, which dead-letters it too, but as an "unexpected error".
+     * The cause is not chained: its message quotes the record's text.
+     */
+    private static Instant parseInstant(JsonNode event, String field) {
+        try {
+            return Instant.parse(event.get(field).asText());
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException(field + " must be an ISO-8601 instant");
+        }
     }
 
     private Severity parseSeverity(String rawSeverity, UUID incidentId) {

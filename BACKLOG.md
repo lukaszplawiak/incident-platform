@@ -122,9 +122,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
-| [0-119](#0-119-postmortem-service-coerces-durationminutes-with-asint0) | postmortem-service coerces `durationMinutes` with `asInt(0)` | bug | Low | Open |
 | [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
 | [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
+| [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 
 ---
 
@@ -2077,16 +2077,21 @@ that ordering by key makes it impossible and close this item with that reasoning
 
 ---
 
-### 0-119. postmortem-service coerces `durationMinutes` with `asInt(0)`
+### 0-133. `IncidentResolvedEvent` carries no `openedAt`
 
-**Type:** bug · **Priority:** Low · **Status:** Open (noticed by `/ready #0-7`, 2026-10-09; effect not verified)
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found while fixing #0-119, 2026-10-15)
 
-**Problem.** postmortem-service's `IncidentEventConsumer` reads `event.path("durationMinutes").asInt(0)`, the
-pattern #0-7 removes from incident-service: a missing or malformed duration becomes `0` silently. Whether a 0
-duration is harmful there (a postmortem stating the incident lasted no time) is not checked.
+**Problem.** postmortem-service needs when the incident opened (the `postmortems` row, the Gemini prompt),
+but the event has only `durationMinutes` (whole minutes, `Duration.toMinutes()` of `createdAt` to
+`resolvedAt` in incident-service) and `occurredAt`. Since #0-119 the consumer derives
+`openedAt = occurredAt - durationMinutes`, so the opening is off by up to 59 s, and `occurredAt` is the
+time `IncidentEventPublisher` built the event, not the incident's `resolvedAt`. The consumer's
+`openedAt` branch exists, but no producer fills it.
 
-**Approach.** Verify the effect, then validate as #0-7 does (dead-letter through the existing path) if it
-matters.
+**Approach.** Add `openedAt` (the incident's `createdAt`) to `IncidentResolvedEvent` in `shared` and set
+it in `publishResolved`; postmortem-service keeps the derived value as the fallback for events already
+in the topic or the outbox. A change to `shared` changes all seven services (CLAUDE.md); check every
+consumer of the record (none of them should need more than recompiling).
 
 ---
 
