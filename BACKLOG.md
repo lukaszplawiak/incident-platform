@@ -126,7 +126,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
-| [0-137](#0-137-the-overlays-set-replicas-that-the-hpas-own) | The overlays set replicas that the HPAs own | design | Medium | Open |
 | [0-138](#0-138-no-poddisruptionbudget-or-topology-spread-protects-the-replica-floors) | No PodDisruptionBudget or topology spread protects the replica floors | design | Medium | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 
@@ -2152,27 +2151,6 @@ CI, but a reviewer cannot cite a rule for a change that weakens it. The check al
 ClusterRole or ClusterRoleBinding added to one environment would act across the whole cluster unchecked. When the
 rule is written, decide whether the check should also refuse every cluster-scoped kind other than Namespace in an
 overlay's render; that part touches `.github/scripts/check-k8s-environments.rb` and its test as well.
-
----
-
-### 0-137. The overlays set replicas that the HPAs own
-
-**Type:** design · **Priority:** Medium · **Status:** Open (found in the analysis of #0-29, 2026-10-15)
-
-**Problem.** Every service has a HorizontalPodAutoscaler in `k8s/base` with `minReplicas: 1`, and the staging and
-prod overlays size the services by patching each Deployment's `spec.replicas` (prod: incident-service and
-ingestion-service 3, the other four 2; staging: 2 and 2). Once the HPA runs, it owns the replica count and may scale
-down to 1, so prod's sizing is no floor at all; and every `kubectl apply` of a manifest that still carries
-`spec.replicas` resets the count to it, which Kubernetes' documentation ("Migrating Deployments and StatefulSets to
-horizontal autoscaling") calls troublesome, "resulting in thrashing or flapping behavior". In prod four services get
-`spec.replicas: 2` with `maxReplicas: 2`, so their HPA has no room to act. The connection arithmetic of #0-79 rests
-on the same numbers.
-
-**Approach.** Decide each environment's floor and ceiling and put them in the HPA (`minReplicas`/`maxReplicas`
-patches per overlay), and remove `spec.replicas` from the manifests and the overlay patches. The documentation warns
-that removing the field can scale a running Deployment to 1 Pod once; with no cluster deployed yet that costs nothing,
-otherwise follow its Client-Side or Server-Side Apply steps. Revisit #0-79's numbers with the result, and consider a
-check of the renders (like `check-k8s-environments.rb`, #0-29) that no Deployment with an HPA sets `spec.replicas`.
 
 ---
 
