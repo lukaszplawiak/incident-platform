@@ -482,6 +482,12 @@ where only the session-level hooks apply. Layers and their limits: docs/ai-facto
 - **Schema validation**: CI renders base and all three overlays and validates them with `kubeconform -strict`
   against the API schemas of the Kubernetes version pinned in `ci.yml`, binary and schemas pinned (backlog #0-76;
   "GitHub and CI" above).
+- **Each overlay deploys its own environment** (backlog #0-29): CI fails when an overlay's render puts any resource
+  in a namespace other than `incident-platform-<overlay>`, or when prod runs an untagged or `latest` image or a
+  service tagged with an environment's name instead of a release (`.github/scripts/check-k8s-environments.rb`,
+  with its mutation test). From the first commit of the manifests until #0-29, the staging and prod overlays held
+  each other's `kustomization.yml`, so "deploying prod" put staging-tagged images, at staging's size, into
+  `incident-platform-staging`.
 
 ### Data stores
 
@@ -752,7 +758,6 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Kubernetes**
   - Pods run without a `securityContext` and the namespace has no Pod Security Admission label: backlog #0-64.
   - No NetworkPolicy, so every pod reaches every data store and management port: backlog #0-65.
-  - The staging and prod overlays are swapped, so "prod" deploys to the staging namespace: backlog #0-29.
   - The Ingress has no TLS: backlog #0-75.
 - **Data stores**
   - Redis has no password, Kafka no SASL/ACLs, and nothing uses TLS: backlog #0-66. Until then anyone who
@@ -944,7 +949,7 @@ Build Docker image (dynamic matrix: only the changed services, up to all 7) → 
 
 ### Job 4 — Validate Kubernetes Manifests
 
-Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the API schemas of the Kubernetes version pinned in the job (`KUBERNETES_VERSION`, also the kubectl that renders), from a pinned commit of the schema repository; kubeconform itself is a pinned release, checked against its SHA-256 before it runs (backlog #0-76). It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base, that staging and prod set no Spring profile (backlog #0-63), and that mail is caught by Mailpit in dev only (`check-k8s-mail.rb`, backlog #0-42).
+Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the API schemas of the Kubernetes version pinned in the job (`KUBERNETES_VERSION`, also the kubectl that renders), from a pinned commit of the schema repository; kubeconform itself is a pinned release, checked against its SHA-256 before it runs (backlog #0-76). It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base, that staging and prod set no Spring profile (backlog #0-63), that mail is caught by Mailpit in dev only (`check-k8s-mail.rb`, backlog #0-42), and that each overlay renders into its own namespace, with no prod image untagged or `latest`, and prod's services on a release tag rather than an environment's name (`check-k8s-environments.rb`, backlog #0-29; tags stay mutable until #0-71).
 
 ### Job 5 — Docker Compose Smoke Test
 

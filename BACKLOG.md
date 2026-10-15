@@ -127,6 +127,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
+| [0-137](#0-137-the-overlays-set-replicas-that-the-hpas-own) | The overlays set replicas that the HPAs own | design | Medium | Open |
 
 ---
 
@@ -1132,6 +1133,10 @@ build artifact.
 Renovate's `kubernetes` manager for `k8s/**/*.yml`, and deploy service images by immutable tag (the commit SHA) or
 digest once a registry exists. Group an image that compose and k8s both run (`axllent/mailpit`, and Kafka once its
 versions agree) across the two managers in one `packageRules` entry, so both files move in one PR.
+Since #0-29, `.github/scripts/check-k8s-environments.rb` refuses an untagged or `latest` image in the prod render
+and a service tagged with an environment's name, but accepts any other tag (`1.0.0` included), so it does not
+make prod immutable; once services deploy by digest, tighten its rule 3 to require a digest for them (its
+mutation test already has a digest case).
 
 ---
 
@@ -1220,9 +1225,10 @@ enough. Decide before implementing.
 
 **Problem.** In Kubernetes every service that uses the database keeps a Hikari pool of 5 connections
 (`DB_POOL_SIZE` in `app-config`; auth-service hard-codes 5). The base HPAs allow up to 3 replicas of auth-service and
-incident-service and 2 of each of the other four, which is 70 connections; the staging overlay raises incident-service
-to 5 (80), dev caps every HPA at 1 (30). If every Deployment rolls at the same time, each adds one surge pod
-(`maxSurge: 1`): 100 in prod, 110 in staging. Postgres runs with the default `max_connections` of 100. Since #0-78 the services' role is not a
+incident-service and 2 of each of the other four, which is 70 connections (staging); the prod overlay raises
+incident-service to 5 (80), dev caps every HPA at 1 (30). If every Deployment rolls at the same time, each adds one
+surge pod (`maxSurge: 1`): 100 in staging, 110 in prod. (Written while #0-29 had swapped the two overlays, as
+"staging 110"; corrected when #0-29 was fixed: prod is the one with the most.) Postgres runs with the default `max_connections` of 100. Since #0-78 the services' role is not a
 superuser, so it cannot use the 3 connections reserved for superusers (`superuser_reserved_connections`), and gets 97.
 A deploy at peak load can then fail new pods with "too many connections". Before #0-78 the margin was zero. The
 Postgres pod's 512Mi memory limit also caps how far `max_connections` can simply be raised. The admin can still log in
@@ -2144,6 +2150,35 @@ cited as blocking.
 data file a workflow downloads is pinned (version, commit or digest) and checked (checksum from two
 channels, or a signature) before it runs; ADR-0021, ADR-0027. Check: every new `curl`/`wget`/install in
 `.github/` names a version and verifies it." Open gaps it would flag today: #0-134, #0-135.
+
+**Also (found in the review of #0-29, 2026-10-15).** No rule covers the separation of deployment environments
+either: which namespace an overlay deploys into and what prod runs. `check-k8s-environments.rb` enforces both in
+CI, but a reviewer cannot cite a rule for a change that weakens it. The check also skips resources without
+`metadata.namespace`, the cluster-scoped ones: no overlay renders one other than its Namespace today, but a
+ClusterRole or ClusterRoleBinding added to one environment would act across the whole cluster unchecked. When the
+rule is written, decide whether the check should also refuse every cluster-scoped kind other than Namespace in an
+overlay's render; that part touches `.github/scripts/check-k8s-environments.rb` and its test as well.
+
+---
+
+### 0-137. The overlays set replicas that the HPAs own
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the analysis of #0-29, 2026-10-15)
+
+**Problem.** Every service has a HorizontalPodAutoscaler in `k8s/base` with `minReplicas: 1`, and the staging and
+prod overlays size the services by patching each Deployment's `spec.replicas` (prod: incident-service and
+ingestion-service 3, the other four 2; staging: 2 and 2). Once the HPA runs, it owns the replica count and may scale
+down to 1, so prod's sizing is no floor at all; and every `kubectl apply` of a manifest that still carries
+`spec.replicas` resets the count to it, which Kubernetes' documentation ("Migrating Deployments and StatefulSets to
+horizontal autoscaling") calls troublesome, "resulting in thrashing or flapping behavior". In prod four services get
+`spec.replicas: 2` with `maxReplicas: 2`, so their HPA has no room to act. The connection arithmetic of #0-79 rests
+on the same numbers.
+
+**Approach.** Decide each environment's floor and ceiling and put them in the HPA (`minReplicas`/`maxReplicas`
+patches per overlay), and remove `spec.replicas` from the manifests and the overlay patches. The documentation warns
+that removing the field can scale a running Deployment to 1 Pod once; with no cluster deployed yet that costs nothing,
+otherwise follow its Client-Side or Server-Side Apply steps. Revisit #0-79's numbers with the result, and consider a
+check of the renders (like `check-k8s-environments.rb`, #0-29) that no Deployment with an HPA sets `spec.replicas`.
 
 ---
 

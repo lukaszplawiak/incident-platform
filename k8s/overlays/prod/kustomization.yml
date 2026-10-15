@@ -1,12 +1,17 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: incident-platform-staging
+# Backlog #0-29: from the first commit of these manifests until this fix, this file held the staging
+# overlay's body and k8s/overlays/staging/ held this one (namespace, image tags, replicas, HPA), while
+# each directory's secrets.yml was already its own. check-k8s-environments.rb (CI) now fails when an
+# overlay renders into another environment's namespace, or when prod's images carry an environment
+# name or `latest` instead of a release tag.
+namespace: incident-platform-prod
 
 resources:
   # Extend base configuration
   - ../../base
-  # Staging-specific secrets
+  # Prod-specific secrets
   - secrets.yml
 
 patches:
@@ -16,14 +21,55 @@ patches:
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 2
+        value: 3
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "1Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "512Mi"
   - target:
       kind: Deployment
       name: ingestion-service
     patch: |-
       - op: replace
         path: /spec/replicas
+        value: 3
+  - target:
+      kind: Deployment
+      name: notification-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
         value: 2
+  - target:
+      kind: Deployment
+      name: escalation-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target:
+      kind: Deployment
+      name: postmortem-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target:
+      kind: Deployment
+      name: oncall-service
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 2
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: incident-service-hpa
+    patch: |-
+      - op: replace
+        path: /spec/maxReplicas
+        value: 5
   # backlog #0-26: base ships NOTIFICATION_OPERATOR_ALERT_EMAIL empty, so no overlay emailed the
   # operator about an undeliverable notification. Placeholder address, in the same .local
   # convention as APP_BASE_URL/INVITE_EMAIL_FROM in the base ConfigMap (no real domain exists
@@ -38,16 +84,16 @@ patches:
 
 images:
   - name: auth-service
-    newTag: staging
+    newTag: "1.0.0"
   - name: incident-service
-    newTag: staging
+    newTag: "1.0.0"
   - name: ingestion-service
-    newTag: staging
+    newTag: "1.0.0"
   - name: notification-service
-    newTag: staging
+    newTag: "1.0.0"
   - name: escalation-service
-    newTag: staging
+    newTag: "1.0.0"
   - name: postmortem-service
-    newTag: staging
+    newTag: "1.0.0"
   - name: oncall-service
-    newTag: staging
+    newTag: "1.0.0"
