@@ -63,7 +63,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-24](#0-24-on-call-contacts-are-not-verified-against-tenant-membership) | On-call contacts are not verified against tenant membership | design | Medium | Open |
 | [0-25](#0-25-notificationqueueentry-has-no-version) | `NotificationQueueEntry` has no `@Version` | tech-debt | Medium | Open |
 | [0-28](#0-28-notification_queue-rows-are-never-purged) | `notification_queue` rows are never purged | tech-debt | Low | Open |
-| [0-29](#0-29-staging-and-prod-k8s-overlays-are-wholesale-swapped-not-just-their-namespace) | staging and prod k8s overlays are wholesale swapped, not just their `namespace:` | bug | Medium | Open |
 | [0-31](#0-31-auth-service-identityconfig-split-evaluated-and-deferred) | auth-service identity/config split — evaluated and deferred | design | Low | Open |
 | [0-32](#0-32-no-notification-channel-is-retried-after-a-failed-send) | No notification channel is retried after a failed send | design | Medium | Open |
 | [0-33](#0-33-unify-caching-on-caffeine-once-a-third-cache-appears) | Unify caching on Caffeine once a third cache appears | tech-debt | Low | Open |
@@ -127,6 +126,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
+| [0-137](#0-137-the-overlays-set-replicas-that-the-hpas-own) | The overlays set replicas that the HPAs own | design | Medium | Open |
 
 ---
 
@@ -275,7 +275,7 @@ by default and let each service opt routes in, rather than each service exceptin
 
 ### 0-15. `IncidentAckClient` is not authorized on the status endpoint
 
-**Type:** bug · **Priority:** Medium · **Status:** Open (found by code reading, not run)
+**Type:** bug · **Priority:** Medium · **Status:** Open, deferred to be done together with #0-35 (found by code reading, not run)
 
 **Problem.** notification-service's `IncidentAckClient` calls `PATCH /api/v1/incidents/{id}/status`
 with a service token (ACK via Slack). That endpoint has `@PreAuthorize("hasRole('RESPONDER') or
@@ -286,6 +286,23 @@ authenticates, but as a `ServicePrincipal` with `ROLE_SERVICE`, so the call is a
 **Decision needed.** How a service acts on behalf of a user: a dedicated service endpoint that takes
 `acknowledgedBy` from the request, or propagating the user's identity. Then add a test that sends a
 real service token to this endpoint.
+
+**Found in the analysis of 2026-10-15** (`/research`, not run):
+- The path is unreachable today: no message carries the Acknowledge button since #0-21, and #0-35 brings it back.
+  So this is a precondition of #0-35, deferred to be done with it (the owner's decision): the OAuth install may
+  change how a Slack user maps to a platform user, which decides the answer for an unmapped one.
+- `UpdateStatusCommand` has only `status` and `comment`: the `acknowledgedBy` the client sends is dropped
+  silently, and the actor would be the principal; `principal.userId()` would also be a 500 (NPE) for a service
+  caller, past the 403.
+- `SlackActionService` invents the actor for a Slack user with no on-call mapping
+  (`UUID.nameUUIDFromBytes(slackUserId)`), so history and audit would name a user who does not exist.
+- Recommended direction: a trusted subsystem, not identity propagation (a click carries no platform token, and a
+  token minted for the user would be an impersonation capability). An internal `ROLE_SERVICE` endpoint in
+  incident-service for the acknowledgement only, the pattern of auth-service's `/api/v1/internal/...` endpoints
+  (tenant from the token's claim, `hidden = true`), with a required `acknowledgedBy`, the source recorded as Slack
+  and the relay in the audit; an unmapped Slack user is refused and counted, not given an invented id; tests with a
+  real service token (accepted), a user token and another audience (refused). Widening `PATCH /status` to services
+  was rejected: it would give a service token every transition and put an on-behalf-of field on a user endpoint.
 
 ---
 
@@ -400,40 +417,6 @@ keeps the scheduler fast, but the table only grows, and an operator browsing UND
 **Approach.** A ShedLock-protected retention job (delete terminal rows older than a configurable age, keeping UNDELIVERABLE
 longer), like `NotificationScheduler`'s existing `slack_message_ts` cleanup. Decide retention with the audit requirements in
 mind: the audit events are the compliance record, the queue is a work queue.
-
----
-
-### 0-29. staging and prod k8s overlays are wholesale swapped, not just their `namespace:`
-
-**Type:** bug · **Priority:** Medium · **Status:** Open
-
-**Priority raised from Low (2026-09-30 audit):** together with #0-63 it decided what a prod deployment would
-really run; #0-63 is fixed, this one still sends "prod" to the staging namespace with staging images.
-
-**Problem.** `k8s/overlays/staging/kustomization.yml` and `k8s/overlays/prod/kustomization.yml` each contain the
-*other* environment's whole configuration, not just a swapped `namespace:` field. The file in `staging/` sets
-`namespace: incident-platform-prod`, its resources comment reads "Prod-specific secrets", and its patches give
-prod-shaped sizing: `incident-service` 3 replicas with 1Gi/512Mi memory limits, `ingestion-service` 3 replicas,
-`notification-service`/`escalation-service`/`postmortem-service`/`oncall-service` 2 replicas each, an
-`incident-service-hpa` patch (`maxReplicas: 5`), and every image pinned to `newTag: "1.0.0"` (a release version, not
-an environment name). The file in `prod/` is the mirror image: `namespace: incident-platform-staging`, "Staging-specific
-secrets", only `incident-service`/`ingestion-service` bumped to 2 replicas each (no HPA patch, no bump for the other
-four services), and every image at `newTag: staging`. Kustomize's top-level `namespace:` field overrides every
-resource's namespace regardless of what each overlay's own `secrets.yml` declares, so the namespace mismatch is real,
-not just cosmetic. Found while investigating backlog #0-26; unrelated to it. (An earlier version of this entry
-described only the `namespace:` field as swapped — a review of the full diff showed the whole file bodies are
-swapped between directories.)
-
-**Effect.** "Deploying prod" today would land `staging`-tagged images, at staging-level replica counts and no HPA
-bump, into the `incident-platform-staging` namespace — and "deploying staging" would land `1.0.0`-tagged images at
-prod-level scale into `incident-platform-prod`. Image tag and scale are wrong for whichever environment someone
-believes they're targeting, not only the namespace label.
-
-**Decide / do.** Confirm this is unintended (not, for example, a deliberate historical rename the directory names
-never caught up to), then swap the two file bodies (or move the files) wholesale — editing only the `namespace:`
-line in each, as a narrower read of this bug might suggest, would leave the replica counts, resource limits, HPA
-target and image tags mismatched. A CI assertion that each overlay's rendered namespace ends in its directory name would keep
-it from coming back (suggested by #0-120, a duplicate of this item).
 
 ---
 
@@ -611,7 +594,16 @@ the #0-21 security review, where the DTO Javadoc (tenant's own App) and #0-21's 
 - Socket Mode was considered: with one App per tenant it means one WebSocket and app-level token per tenant held
   by notification-service. Rejected.
 
-**Approach.** (B) when Slack is actually used by tenants. Until then incidents are acknowledged in the app.
+**Approach.** (B), together with #0-15.
+
+**Requires #0-15.** The button's path ends in `IncidentAckClient`, which incident-service refuses today (403, and
+its `acknowledgedBy` is dropped): with the button back and #0-15 open, every click would fail silently. The two
+are done together; #0-15 records the analysis and the recommended endpoint.
+
+**When.** Before the first production tenant uses Slack (the owner's decision, 2026-10-15): acknowledging from Slack
+is part of the offer from the start, so this and #0-15 are done before anyone connects Slack in production. It used
+to read "when Slack is actually used by tenants", a moment nothing in the platform would signal. Until then
+incidents are acknowledged in the app.
 
 ---
 
@@ -1132,6 +1124,10 @@ build artifact.
 Renovate's `kubernetes` manager for `k8s/**/*.yml`, and deploy service images by immutable tag (the commit SHA) or
 digest once a registry exists. Group an image that compose and k8s both run (`axllent/mailpit`, and Kafka once its
 versions agree) across the two managers in one `packageRules` entry, so both files move in one PR.
+Since #0-29, `.github/scripts/check-k8s-environments.rb` refuses an untagged or `latest` image in the prod render
+and a service tagged with an environment's name, but accepts any other tag (`1.0.0` included), so it does not
+make prod immutable; once services deploy by digest, tighten its rule 3 to require a digest for them (its
+mutation test already has a digest case).
 
 ---
 
@@ -1220,9 +1216,10 @@ enough. Decide before implementing.
 
 **Problem.** In Kubernetes every service that uses the database keeps a Hikari pool of 5 connections
 (`DB_POOL_SIZE` in `app-config`; auth-service hard-codes 5). The base HPAs allow up to 3 replicas of auth-service and
-incident-service and 2 of each of the other four, which is 70 connections; the staging overlay raises incident-service
-to 5 (80), dev caps every HPA at 1 (30). If every Deployment rolls at the same time, each adds one surge pod
-(`maxSurge: 1`): 100 in prod, 110 in staging. Postgres runs with the default `max_connections` of 100. Since #0-78 the services' role is not a
+incident-service and 2 of each of the other four, which is 70 connections (staging); the prod overlay raises
+incident-service to 5 (80), dev caps every HPA at 1 (30). If every Deployment rolls at the same time, each adds one
+surge pod (`maxSurge: 1`): 100 in staging, 110 in prod. (Written while #0-29 had swapped the two overlays, as
+"staging 110"; corrected when #0-29 was fixed: prod is the one with the most.) Postgres runs with the default `max_connections` of 100. Since #0-78 the services' role is not a
 superuser, so it cannot use the 3 connections reserved for superusers (`superuser_reserved_connections`), and gets 97.
 A deploy at peak load can then fail new pods with "too many connections". Before #0-78 the margin was zero. The
 Postgres pod's 512Mi memory limit also caps how far `max_connections` can simply be raised. The admin can still log in
@@ -2144,6 +2141,35 @@ cited as blocking.
 data file a workflow downloads is pinned (version, commit or digest) and checked (checksum from two
 channels, or a signature) before it runs; ADR-0021, ADR-0027. Check: every new `curl`/`wget`/install in
 `.github/` names a version and verifies it." Open gaps it would flag today: #0-134, #0-135.
+
+**Also (found in the review of #0-29, 2026-10-15).** No rule covers the separation of deployment environments
+either: which namespace an overlay deploys into and what prod runs. `check-k8s-environments.rb` enforces both in
+CI, but a reviewer cannot cite a rule for a change that weakens it. The check also skips resources without
+`metadata.namespace`, the cluster-scoped ones: no overlay renders one other than its Namespace today, but a
+ClusterRole or ClusterRoleBinding added to one environment would act across the whole cluster unchecked. When the
+rule is written, decide whether the check should also refuse every cluster-scoped kind other than Namespace in an
+overlay's render; that part touches `.github/scripts/check-k8s-environments.rb` and its test as well.
+
+---
+
+### 0-137. The overlays set replicas that the HPAs own
+
+**Type:** design · **Priority:** Medium · **Status:** Open (found in the analysis of #0-29, 2026-10-15)
+
+**Problem.** Every service has a HorizontalPodAutoscaler in `k8s/base` with `minReplicas: 1`, and the staging and
+prod overlays size the services by patching each Deployment's `spec.replicas` (prod: incident-service and
+ingestion-service 3, the other four 2; staging: 2 and 2). Once the HPA runs, it owns the replica count and may scale
+down to 1, so prod's sizing is no floor at all; and every `kubectl apply` of a manifest that still carries
+`spec.replicas` resets the count to it, which Kubernetes' documentation ("Migrating Deployments and StatefulSets to
+horizontal autoscaling") calls troublesome, "resulting in thrashing or flapping behavior". In prod four services get
+`spec.replicas: 2` with `maxReplicas: 2`, so their HPA has no room to act. The connection arithmetic of #0-79 rests
+on the same numbers.
+
+**Approach.** Decide each environment's floor and ceiling and put them in the HPA (`minReplicas`/`maxReplicas`
+patches per overlay), and remove `spec.replicas` from the manifests and the overlay patches. The documentation warns
+that removing the field can scale a running Deployment to 1 Pod once; with no cluster deployed yet that costs nothing,
+otherwise follow its Client-Side or Server-Side Apply steps. Revisit #0-79's numbers with the result, and consider a
+check of the renders (like `check-k8s-environments.rb`, #0-29) that no Deployment with an HPA sets `spec.replicas`.
 
 ---
 

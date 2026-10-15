@@ -1,12 +1,16 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: incident-platform-prod
+# Backlog #0-29: from the first commit of these manifests until this fix, this file held the prod
+# overlay's body and k8s/overlays/prod/ held this one (namespace, image tags, replicas, HPA), while
+# each directory's secrets.yml was already its own. check-k8s-environments.rb (CI) now fails when an
+# overlay renders into another environment's namespace.
+namespace: incident-platform-staging
 
 resources:
   # Extend base configuration
   - ../../base
-  # Prod-specific secrets
+  # Staging-specific secrets
   - secrets.yml
 
 patches:
@@ -16,55 +20,14 @@ patches:
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 3
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/limits/memory
-        value: "1Gi"
-      - op: replace
-        path: /spec/template/spec/containers/0/resources/requests/memory
-        value: "512Mi"
+        value: 2
   - target:
       kind: Deployment
       name: ingestion-service
     patch: |-
       - op: replace
         path: /spec/replicas
-        value: 3
-  - target:
-      kind: Deployment
-      name: notification-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
         value: 2
-  - target:
-      kind: Deployment
-      name: escalation-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
-  - target:
-      kind: Deployment
-      name: postmortem-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
-  - target:
-      kind: Deployment
-      name: oncall-service
-    patch: |-
-      - op: replace
-        path: /spec/replicas
-        value: 2
-  - target:
-      kind: HorizontalPodAutoscaler
-      name: incident-service-hpa
-    patch: |-
-      - op: replace
-        path: /spec/maxReplicas
-        value: 5
   # backlog #0-26: base ships NOTIFICATION_OPERATOR_ALERT_EMAIL empty, so no overlay emailed the
   # operator about an undeliverable notification. Placeholder address, in the same .local
   # convention as APP_BASE_URL/INVITE_EMAIL_FROM in the base ConfigMap (no real domain exists
@@ -79,16 +42,16 @@ patches:
 
 images:
   - name: auth-service
-    newTag: "1.0.0"
+    newTag: staging
   - name: incident-service
-    newTag: "1.0.0"
+    newTag: staging
   - name: ingestion-service
-    newTag: "1.0.0"
+    newTag: staging
   - name: notification-service
-    newTag: "1.0.0"
+    newTag: staging
   - name: escalation-service
-    newTag: "1.0.0"
+    newTag: staging
   - name: postmortem-service
-    newTag: "1.0.0"
+    newTag: staging
   - name: oncall-service
-    newTag: "1.0.0"
+    newTag: staging

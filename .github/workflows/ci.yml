@@ -526,6 +526,17 @@ jobs:
           .github/scripts/test-k8s-mail.sh
           ruby .github/scripts/check-k8s-mail.rb /tmp
 
+      # Backlog #0-29: from the first commit of the manifests the staging and prod overlays held each
+      # other's kustomization.yml, so "prod" rendered into incident-platform-staging with images tagged
+      # `staging`. check-k8s-environments.rb parses the renders above and fails when an overlay renders
+      # into another environment's namespace, or prod runs an untagged or `latest` image or a service
+      # tagged with an environment's name; its mutation test runs first, so a broken checker cannot pass.
+      - name: Each overlay deploys its own environment
+        run: |
+          set -euo pipefail
+          .github/scripts/test-k8s-environments.sh
+          ruby .github/scripts/check-k8s-environments.rb /tmp
+
   # ──────────────────────────────────────────────────────────
   # PostgreSQL roles (backlog #0-78), and the database password config (#0-66)
   #

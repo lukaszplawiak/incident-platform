@@ -65,12 +65,13 @@ pod at the same time (the worst case):
 
 | Overlay directory (namespace it deploys to) | HPA maximum | Rolling update |
 |---|---|---|
-| `k8s/overlays/prod` (`incident-platform-staging`), base HPAs | 70 | 100 |
-| `k8s/overlays/staging` (`incident-platform-prod`), incident-service up to 5 | 80 | 110 |
+| `k8s/overlays/staging` (`incident-platform-staging`), base HPAs | 70 | 100 |
+| `k8s/overlays/prod` (`incident-platform-prod`), incident-service up to 5 | 80 | 110 |
 | `k8s/overlays/dev` (`incident-platform-dev`), every HPA at 1 | 30 | 60 |
 
-The staging and prod directories deploy to each other's namespaces (backlog #0-29). Either way,
-both can exceed the 97 that the services' role gets. Sizing this is backlog #0-79.
+Until backlog #0-29 the staging and prod directories held each other's configuration, so this table
+used to name prod's directory for the first row. Both can exceed the 97 that the services' role gets,
+prod the most. Sizing this is backlog #0-79.
 
 ### Working as the admin
 
