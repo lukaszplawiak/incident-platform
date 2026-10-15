@@ -25,8 +25,12 @@ make dev-reset              # stop + wipe volumes (clean DB)
 make run-incident           # same thing; run-ingestion / run-escalation / run-notification / run-postmortem also exist
                             # (no run-auth or run-oncall target — use ./mvnw spring-boot:run -pl <service> ...)
 
-# Validate k8s manifests the way CI does
-kubectl kustomize k8s/overlays/dev | kubeconform -strict -summary -
+# Validate k8s manifests the way CI does: the Kubernetes version and the schemas' commit are read from the
+# validate-k8s-manifests job's `env` in ci.yml (backlog #0-76; without them kubeconform validates against
+# the newest Kubernetes, from a moving branch); CI renders with kubectl at that same version
+kubectl kustomize k8s/overlays/dev | kubeconform -strict -summary \
+  -kubernetes-version "$(sed -n 's/^ *KUBERNETES_VERSION: *//p' .github/workflows/ci.yml)" \
+  -schema-location "$(sed -n 's/^ *KUBECONFORM_SCHEMA_LOCATION: *//p' .github/workflows/ci.yml)" -
 ```
 
 `make test-unit` (`-Dgroups="unit"`) is in the Makefile but no test carries a JUnit `unit` tag — it runs nothing. Use `./mvnw test`.

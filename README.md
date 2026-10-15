@@ -313,10 +313,23 @@ in Settings).
   `snyk auth`, which put the token in the process arguments and in a config file every later step
   could read. This replaced `npm install -g snyk`: whatever version npm served at that moment, a Node
   wrapper whose unbundled `@sentry/node ^7` dependency was resolved at install time. Version and
-  checksum are bumped together by hand (Renovate cannot compute the checksum), as `diff-cover` is
-  pinned in `ci.yml`; the checksum is committed only when Snyk's download server and the npm package
-  of the same version agree on it, since the server alone also serves the binary. The CLI is
-  installed without `sudo`, into the runner's temp directory.
+  checksum are bumped together by hand (Renovate cannot compute the checksum), as `diff-cover`'s
+  version is pinned in `ci.yml` (that one without a checksum: backlog #0-134); the checksum is
+  committed only when Snyk's download server and the npm package of the same version agree on it,
+  since the server alone also serves the binary. The CLI is installed without `sudo`, into the
+  runner's temp directory.
+- **Manifest validation pinned, binary and schemas** (backlog #0-76): kubeconform is the release
+  pinned in `ci.yml`, checked against the SHA-256 kept next to it before it is unpacked, and it
+  validates against the schemas of one Kubernetes version (`KUBERNETES_VERSION` in the job's `env`,
+  also the version of the kubectl that renders; ADR-0027) taken from a pinned commit of `yannh/kubernetes-json-schema`, so the result changes only
+  with a change in this repository. It used to be whatever `releases/latest` served, piped into
+  `tar` unchecked, validating against the newest Kubernetes from that repository's moving `master`;
+  a replaced binary also runs before the checks that read the same renders (the Spring profile of
+  #0-63, the mail of #0-42) and could have made them pass. The checksum is committed when the
+  release's `CHECKSUMS` file and GitHub's own digest of the asset agree; both come from GitHub and
+  kubeconform publishes no signature or attestation, so this catches a swapped file, not a
+  malicious release, which only a deliberate bump would bring in. kubectl, which writes the renders,
+  is pinned by version only: `azure/setup-kubectl` checks nothing it downloads (backlog #0-135).
 
 **In repository settings**
 
@@ -466,7 +479,9 @@ where only the session-level hooks apply. Layers and their limits: docs/ai-facto
   placeholder default for it). The `test` profiles, with a hard-coded JWT secret and MFA
   key, used to ship in three services' jars and images; a run with that profile outside the manifests would have
   used them, which the check above cannot see.
-- **Schema validation**: CI renders base and all three overlays and validates them with `kubeconform -strict`.
+- **Schema validation**: CI renders base and all three overlays and validates them with `kubeconform -strict`
+  against the API schemas of the Kubernetes version pinned in `ci.yml`, binary and schemas pinned (backlog #0-76;
+  "GitHub and CI" above).
 
 ### Data stores
 
@@ -758,7 +773,9 @@ Open items from the audit and earlier, most important first within each area. Ea
     rest on a false "all endpoints require JWT" claim: backlog #0-69.
   - No status check is required before merging to `main`: backlog #0-2.
   - Any Marketplace action is allowed to run (`allowed_actions: all`): backlog #0-62.
-  - kubeconform is installed unpinned from `releases/latest`: backlog #0-76.
+  - `diff-cover` is installed by version only, its package and dependencies unchecked: backlog #0-134.
+  - kubectl, which renders the manifests that the k8s job's checks read, is downloaded by `azure/setup-kubectl`
+    unverified, although Kubernetes signs it: backlog #0-135.
 - **Container images**
   - Built images are not scanned and no SBOM is produced: backlog #0-70.
   - Mutable image tags in k8s and compose, and k8s third-party images not tracked by Renovate: backlog #0-71.
@@ -927,7 +944,7 @@ Build Docker image (dynamic matrix: only the changed services, up to all 7) → 
 
 ### Job 4 — Validate Kubernetes Manifests
 
-Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the real Kubernetes API schemas. It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base, that staging and prod set no Spring profile (backlog #0-63), and that mail is caught by Mailpit in dev only (`check-k8s-mail.rb`, backlog #0-42).
+Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the API schemas of the Kubernetes version pinned in the job (`KUBERNETES_VERSION`, also the kubectl that renders), from a pinned commit of the schema repository; kubeconform itself is a pinned release, checked against its SHA-256 before it runs (backlog #0-76). It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base, that staging and prod set no Spring profile (backlog #0-63), and that mail is caught by Mailpit in dev only (`check-k8s-mail.rb`, backlog #0-42).
 
 ### Job 5 — Docker Compose Smoke Test
 
