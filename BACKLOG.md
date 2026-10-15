@@ -95,7 +95,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-73](#0-73-swagger-ui-and-the-openapi-document-are-public-in-every-profile) | Swagger UI and the OpenAPI document are public in every profile | tech-debt | Low | Open |
 | [0-74](#0-74-no-way-to-report-a-vulnerability-privately) | No way to report a vulnerability privately | docs | Low | Open |
 | [0-75](#0-75-the-ingress-has-no-tls) | The Ingress has no TLS | design | Low | Open |
-| [0-76](#0-76-kubeconform-is-installed-from-releaseslatest-unpinned-and-unchecked) | kubeconform is installed from `releases/latest`, unpinned and unchecked | ci | Low | Open |
 | [0-77](#0-77-should-devtoken-require-an-explicit-switch-as-well-as-the-dev-profile) | Should `/dev/token` require an explicit switch as well as the dev profile? | design | Low | Open |
 | [0-79](#0-79-at-hpa-maxima-during-a-rolling-update-the-connection-pools-exceed-what-postgres-allows) | At HPA maxima during a rolling update, the connection pools exceed what Postgres allows | design | Medium | Open |
 | [0-85](#0-85-a-tenant-id-with-data-in-other-services-but-no-user-can-be-provisioned) | A tenant id with data in other services but no user can be provisioned | design | Low | Open |
@@ -1194,21 +1193,6 @@ keys cross the network in plain text, and the HSTS header every service sends is
 
 **Approach.** A `tls:` block per overlay with a certificate from cert-manager (or the cloud provider's), and
 `nginx.ingress.kubernetes.io/ssl-redirect: "true"`. The dev overlay can keep plain HTTP on Minikube.
-
----
-
-### 0-76. kubeconform is installed from `releases/latest`, unpinned and unchecked
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found while fixing #0-63)
-
-**Problem.** The `validate-k8s-manifests` job in `ci.yml` downloads
-`https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz` and pipes it into
-`tar`: whatever release is latest at that moment, with no checksum. The same class of problem as #0-61, with less at
-stake (that job has no secrets and a read-only token), but a new release can still change results with no change in
-this repository.
-
-**Approach.** Pin the version and verify the archive's SHA-256 (published in the release's `CHECKSUMS` file), as
-`snyk.yml` does for the Snyk CLI.
 
 ---
 
