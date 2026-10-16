@@ -104,7 +104,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-97](#0-97-kafka-consumers-on-defaulterrorhandler-and-a-dead-letter-replay) | Kafka consumers on `DefaultErrorHandler`, and a dead-letter replay | design | Low | Open |
 | [0-98](#0-98-mfa-recovery-verifies-the-person-by-procedure-only) | MFA recovery verifies the person by procedure only | design | Low | Open |
 | [0-99](#0-99-public-token-endpoints-have-no-request-limit) | Public token endpoints have no request limit | security | Low | Open |
-| [0-100](#0-100-a-locally-built-jar-contains-the-developers-application-localyml) | A locally built jar contains the developer's `application-local.yml` | tech-debt | Low | Open |
 | [0-101](#0-101-offboard-a-tenant) | Offboard a tenant | design | Medium | Open |
 | [0-102](#0-102-the-pause-of-suspended-tenants-background-work-at-scale) | The pause of suspended tenants' background work at scale | performance | Low | Open |
 | [0-105](#0-105-the-email-channels-worst-case-send-is-not-checked-against-the-scheduler-lock) | The email channel's worst-case send is not checked against the scheduler lock | performance | Low | Open |
@@ -128,10 +127,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
-| [0-141](#0-141-one-502-from-maven-central-fails-the-image-builds) | One 502 from Maven Central fails the image builds | bug | Medium | Open |
 | [0-142](#0-142-the-maven-distribution-the-wrapper-downloads-is-not-checked) | The Maven distribution the wrapper downloads is not checked | ci | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-144](#0-144-gitignore-ignores-the-tracked-dockerenvexample-template) | `.gitignore` ignores the tracked `docker/.env.example` template | tech-debt | Low | Open |
 
 ---
 
@@ -1735,29 +1732,6 @@ through); 429 with Retry-After; the WARN for an invalid token sampled or counted
 
 ---
 
-### 0-100. A locally built jar contains the developer's `application-local.yml`
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open (found while closing #0-81)
-
-**Problem.** Each service reads a developer's `application-local.yml` from `src/main/resources`
-(`make run-*`, `spring-boot:run -Dspring-boot.run.profiles=local`). It is gitignored and
-`.dockerignore`d, so it is never committed and never reaches an image or a CI-built jar. But
-`./mvnw package` on a developer's machine puts it into `target/*.jar` as
-`BOOT-INF/classes/application-local.yml`, with that developer's real local secrets (JWT secret,
-MFA and Slack encryption keys, database password, Gemini API key). A jar copied off the machine,
-or run elsewhere with the `local` profile, carries them.
-
-**Approach.** Exclude `application-local.*` from the jar in `service-parent` (`maven-jar-plugin`
-`excludes`), so `spring-boot:run`, which reads `target/classes`, keeps working; a test (or a CI
-step on a freshly packaged jar) that the jar has no `application-local`. Alternatively move the
-local file out of the source tree (`./config/application-local.yml` next to the module, which
-Spring Boot also loads from the working directory), which needs the README "Step 2" templates and
-the Makefile changed.
-
-**When.** Whenever `service-parent` is next touched, or before anyone hands a locally built jar on.
-
----
-
 ### 0-101. Offboard a tenant
 
 **Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-82)
@@ -2192,7 +2166,9 @@ decide whether the cluster runs a descheduler (`RemovePodsViolatingTopologySprea
 
 ### 0-141. One 502 from Maven Central fails the image builds
 
-**Type:** bug · **Priority:** Medium · **Status:** Open (found 2026-10-16 in the smoke tests of 2026-10-15)
+**Type:** bug · **Priority:** Medium · **Status:** Done, PR #498 (found 2026-10-16 in the smoke tests of 2026-10-15; with
+#0-100 and #0-144). Kept in full as the record of the decision and the design it replaced, which ADR-0030 and the code
+refer to.
 
 **Problem.** On 2026-10-15 around 19:16 UTC the Docker Compose smoke test failed on three Renovate PRs (#402
 oncall-service, #165 auth-service, #194 ingestion-service) and on `main` after #496, each in a Dockerfile's
@@ -2289,30 +2265,6 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
-
----
-
-### 0-144. `.gitignore` ignores the tracked `docker/.env.example` template
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-141, 2026-10-16)
-
-**Problem.** `.gitignore:37` lists `docker/.env.example`, the template README "Step 1" and CLAUDE.md tell
-everyone to copy (`cp docker/.env.example docker/.env`). The file is tracked: the line came in with it in
-eba5d19 (2026-07-19), presumably meant for `docker/.env`, which `*.env` (line 39) already ignores. Git keeps
-tracking an ignored file, so its edits still reach commits. But the line has three effects:
-- **Search tools that honour `.gitignore` skip the template.** That includes ripgrep, and with it Claude Code's
-  Grep and the review agents. `rg -l --hidden GRAFANA_ADMIN_PASSWORD docker/` finds the compose file and
-  `grafana-password-check.sh`, not the template; only `--no-ignore` finds it. A change to a variable can
-  therefore miss the template unnoticed (the README and three backlog items describe its values).
-- **A recreated or renamed template is silently left out by `git add`** ("paths are ignored", unless `-f`).
-- **It reads as if the template held secrets.** It holds dev placeholders and empty values only.
-
-**Approach.** Delete line 37. Check with `git check-ignore --no-index -v docker/.env.example` (no output) and
-`git check-ignore -v docker/.env` (still `*.env`). Look for other tracked files that `.gitignore` matches:
-`git ls-files -ci --exclude-standard` lists them, and on 2026-10-16 it listed this template alone;
-`docker/secrets/*` and the rest are untracked and stay ignored.
-
-**Touches:** root (`.gitignore`)
 
 ---
 
