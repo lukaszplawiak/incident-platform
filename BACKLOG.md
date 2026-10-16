@@ -128,6 +128,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
 | [0-138](#0-138-no-poddisruptionbudget-or-topology-spread-protects-the-replica-floors) | No PodDisruptionBudget or topology spread protects the replica floors | design | Medium | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
+| [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 
 ---
 
@@ -2171,6 +2172,11 @@ which stays satisfiable at any replica count, rather than a `minAvailable` that 
 known) with `whenUnsatisfiable: ScheduleAnyway` so a small cluster still schedules. Decide whether dev, with one replica,
 gets none. A check of the renders, in `check-k8s-environments.rb`, that every prod service with a floor of 2 has one.
 
+**Decided (owner, 2026-10-16; ADR-0029, Accepted).** The budgets live in base, one per service (`maxUnavailable: 1` cannot block a
+drain at any count, so dev and staging's floors of 1 need no exception), with `unhealthyPodEvictionPolicy: AlwaysAllow`;
+the spread is on `kubernetes.io/hostname` only, `ScheduleAnyway`, `matchLabelKeys: [pod-template-hash]`; zones and
+rebalancing go to #0-140. The check covers every render, not only prod (`check-k8s-environments.rb` rule 6).
+
 ---
 
 ### 0-139. The HPAs scale the JVM services on memory
@@ -2186,6 +2192,22 @@ arithmetic counts. Not measured: no cluster runs these manifests yet.
 **Approach.** Measure first, on a cluster under load: whether memory utilisation follows the load at all. If it does
 not, scale on CPU only, or on a metric that follows the work (requests per pod, or the Kafka consumer lag through KEDA
 for the consumers), and keep memory as a limit (OOM protection), not a scaling signal.
+
+---
+
+### 0-140. The services' pods are not spread over zones, nor rebalanced after scale-down
+
+**Type:** design · **Priority:** Low · **Status:** Open (left open by #0-138, ADR-0029, 2026-10-16)
+
+**Problem.** Since #0-138 each service's pods spread over nodes (`topologySpreadConstraints` on
+`kubernetes.io/hostname`, `ScheduleAnyway`), but not over zones: on a cluster with several zones, every pod of a
+service may run in one zone, whose outage takes the service down. And the spread is applied only when a pod is
+scheduled: an HPA scale-down removes pods without regard to it, and a drain's evicted pods land wherever there is
+room, so the placement can drift until the pods are rescheduled. Not observable yet: no cluster runs these manifests.
+
+**Approach.** Once the target cluster and its zones are known: a second constraint on `topology.kubernetes.io/zone`
+(`ScheduleAnyway` unless every zone is sure to have capacity), extended in `check-k8s-environments.rb` rule 6; and
+decide whether the cluster runs a descheduler (`RemovePodsViolatingTopologySpreadConstraint`) or accepts the drift.
 
 ---
 

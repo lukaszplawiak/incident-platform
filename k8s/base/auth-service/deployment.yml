@@ -27,6 +27,22 @@ spec:
       labels:
         app: auth-service
     spec:
+      # Spread over nodes (backlog #0-138, ADR-0029): the scheduler places this service's pods on
+      # different nodes where it can, so one node's failure takes at most part of the HPA's floor.
+      # ScheduleAnyway, not DoNotSchedule: a cluster with fewer nodes than pods (minikube, one node)
+      # still schedules them all. matchLabelKeys pod-template-hash counts the skew per ReplicaSet, so
+      # the old pods of a rolling update do not skew where the new ones go. Zones
+      # (topology.kubernetes.io/zone) wait for a cluster whose zones are known (backlog #0-140). The
+      # spread is applied when a pod is scheduled only: an HPA scale-down or a drain does not restore it.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: auth-service
+          matchLabelKeys:
+            - pod-template-hash
       # Wait for dependencies before starting — prevents startup failures.
       # No wait-for-kafka, but not because auth-service ignores Kafka.
       # Corrected (backlog #0-16): it does PRODUCE to audit.events, through

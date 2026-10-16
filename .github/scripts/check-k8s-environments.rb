@@ -1,6 +1,6 @@
 # ============================================================
-# Each Kubernetes overlay deploys its own environment (backlog #0-29), and the HPAs own the services'
-# replica counts (backlog #0-137).
+# Each Kubernetes overlay deploys its own environment (backlog #0-29), the HPAs own the services'
+# replica counts (backlog #0-137), and a budget and a spread over nodes protect their floors (backlog #0-138).
 #
 # From the first commit of the manifests until #0-29, k8s/overlays/staging/kustomization.yml held the
 # prod overlay's body and k8s/overlays/prod/ the staging one's: "deploying prod" rendered every resource
@@ -16,13 +16,22 @@
 #      render has no such Deployment;
 #   4. in any render, a service Deployment has no HorizontalPodAutoscaler, an HPA targets a Deployment the
 #      render does not have, the targeted Deployment sets spec.replicas, or minReplicas exceeds maxReplicas;
-#   5. an HPA in the prod render has a floor (minReplicas, default 1) below 2.
+#   5. an HPA in the prod render has a floor (minReplicas, default 1) below 2;
+#   6. in any render, a service Deployment is not covered by exactly one PodDisruptionBudget, that budget
+#      sets minAvailable or a maxUnavailable other than 1, or no unhealthyPodEvictionPolicy AlwaysAllow, a
+#      PodDisruptionBudget covers no service Deployment, or a service's pod template has no
+#      topologySpreadConstraint on kubernetes.io/hostname with whenUnsatisfiable ScheduleAnyway and a
+#      labelSelector that selects its own pods.
 # Rules 4 and 5 (backlog #0-137): until #0-137 the overlays sized the services with spec.replicas patches
 # while each HPA ran from minReplicas 1, so the HPA scaled prod's "3 replicas" down to 1 and every
 # `kubectl apply` reset what it had scaled to (Kubernetes docs, "Migrating Deployments and StatefulSets to
 # horizontal autoscaling": remove spec.replicas once an HPA is enabled); auth-service ran one replica in
 # prod. With spec.replicas gone, a service without an HPA would silently run one pod, hence the first
 # clause of rule 4.
+# Rule 6 (backlog #0-138, ADR-0029): a floor of 2 survives one pod failing, not a node drain that evicts both
+# pods at once (no budget) nor one node failing with both pods on it (no spread). maxUnavailable 1 is the
+# only budget allowed because a minAvailable at the floor refuses every eviction and blocks the drain;
+# ScheduleAnyway because DoNotSchedule leaves pods Pending on a cluster with fewer nodes than pods.
 # Parsing is structural (YAML), not grep, as check-k8s-mail.rb (backlog #0-42): a namespace field and an
 # image name cannot be told from their surroundings in text.
 #
@@ -159,6 +168,50 @@ prod.select { |d| d["kind"] == "HorizontalPodAutoscaler" }.each do |h|
   fail!("prod #{label(h)} has minReplicas #{min}; prod's floor is 2", "#0-137") if min < 2
 end
 
+# 6. a budget and a spread over nodes for every service, in every render
+# matchLabels only: the base manifests select by label equality, and a matchExpressions selector would need
+# its own evaluator here, so a selector carrying one matches nothing and is reported (a budget covering no
+# service, a service without a budget or spread) rather than guessed at.
+def selects?(selector, labels)
+  return false unless selector.is_a?(Hash) && selector["matchExpressions"].nil?
+  wanted = selector["matchLabels"] || {}
+  !wanted.empty? && wanted.all? { |k, v| labels[k] == v }
+end
+
+OVERLAYS.each do |env|
+  docs = rendered[env]
+  backends = docs.select { |d| d["kind"] == "Deployment" && d.dig("metadata", "labels", "app.kubernetes.io/component") == "backend" }
+  pdbs = docs.select { |d| d["kind"] == "PodDisruptionBudget" }
+  pdbs.each do |p|
+    spec = p["spec"] || {}
+    unless spec["minAvailable"].nil?
+      fail!("#{env} #{label(p)} sets minAvailable (#{spec['minAvailable']}), which at the floor refuses every eviction; use maxUnavailable: 1", "#0-138")
+    end
+    unless spec["maxUnavailable"] == 1
+      fail!("#{env} #{label(p)} has maxUnavailable #{spec['maxUnavailable'].inspect}, not 1", "#0-138")
+    end
+    unless spec["unhealthyPodEvictionPolicy"] == "AlwaysAllow"
+      fail!("#{env} #{label(p)} has unhealthyPodEvictionPolicy #{spec['unhealthyPodEvictionPolicy'].inspect}, not AlwaysAllow, so a pod that is not Ready can hold a drain", "#0-138")
+    end
+    if backends.none? { |d| selects?(spec["selector"], d.dig("spec", "template", "metadata", "labels") || {}) }
+      fail!("#{env} #{label(p)} covers no service Deployment", "#0-138")
+    end
+  end
+  backends.each do |d|
+    labels = d.dig("spec", "template", "metadata", "labels") || {}
+    covering = pdbs.select { |p| selects?(p.dig("spec", "selector"), labels) }
+    if covering.size != 1
+      fail!("#{env} #{label(d)} is covered by #{covering.size} PodDisruptionBudgets, not 1", "#0-138")
+    end
+    spread = (d.dig("spec", "template", "spec", "topologySpreadConstraints") || []).any? do |c|
+      c["topologyKey"] == "kubernetes.io/hostname" && c["whenUnsatisfiable"] == "ScheduleAnyway" && selects?(c["labelSelector"], labels)
+    end
+    unless spread
+      fail!("#{env} #{label(d)} has no topologySpreadConstraint on kubernetes.io/hostname, ScheduleAnyway, selecting its own pods", "#0-138")
+    end
+  end
+end
+
 if $errors.empty?
   # The services' own containers, not their init containers (busybox), for the summary.
   tags = services.flat_map { |d| d.dig("spec", "template", "spec", "containers") || [] }
@@ -167,6 +220,7 @@ if $errors.empty?
                .map { |h| "#{h.dig('spec', 'scaleTargetRef', 'name')} #{h.dig('spec', 'minReplicas')}-#{h.dig('spec', 'maxReplicas')}" }
   puts "Environments: dev, staging and prod each render into incident-platform-<overlay>; prod's #{services.size} services run #{tags.join(', ')}."
   puts "Replicas: the HPAs own every service's count in all three renders; prod: #{floors.join(', ')}."
+  puts "Disruptions: every service has one PodDisruptionBudget (maxUnavailable 1) and spreads over nodes, in all three renders."
   exit 0
 end
 $errors.each { |e| puts "::error::#{e}" }

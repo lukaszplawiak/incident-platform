@@ -17,18 +17,25 @@ resources:
   # Application services
   - auth-service/deployment.yml
   - auth-service/service-hpa.yml
+  - auth-service/pdb.yml
   - ingestion-service/deployment.yml
   - ingestion-service/service-hpa.yml
+  - ingestion-service/pdb.yml
   - incident-service/deployment.yml
   - incident-service/service-hpa.yml
+  - incident-service/pdb.yml
   - notification-service/deployment.yml
   - notification-service/service-hpa.yml
+  - notification-service/pdb.yml
   - escalation-service/deployment.yml
   - escalation-service/service-hpa.yml
+  - escalation-service/pdb.yml
   - postmortem-service/deployment.yml
   - postmortem-service/service-hpa.yml
+  - postmortem-service/pdb.yml
   - oncall-service/deployment.yml
   - oncall-service/service-hpa.yml
+  - oncall-service/pdb.yml
 
 # Backlog #0-78: first-start script that creates the services' DB role
 # without superuser rights. docker-compose mounts the same file.
