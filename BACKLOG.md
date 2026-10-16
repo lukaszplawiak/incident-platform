@@ -131,6 +131,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-141](#0-141-one-502-from-maven-central-fails-the-image-builds) | One 502 from Maven Central fails the image builds | bug | Medium | Open |
 | [0-142](#0-142-the-maven-distribution-the-wrapper-downloads-is-not-checked) | The Maven distribution the wrapper downloads is not checked | ci | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
+| [0-144](#0-144-gitignore-ignores-the-tracked-dockerenvexample-template) | `.gitignore` ignores the tracked `docker/.env.example` template | tech-debt | Low | Open |
 
 ---
 
@@ -2288,6 +2289,30 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
+
+---
+
+### 0-144. `.gitignore` ignores the tracked `docker/.env.example` template
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open (found in the review of #0-141, 2026-10-16)
+
+**Problem.** `.gitignore:37` lists `docker/.env.example`, the template README "Step 1" and CLAUDE.md tell
+everyone to copy (`cp docker/.env.example docker/.env`). The file is tracked: the line came in with it in
+eba5d19 (2026-07-19), presumably meant for `docker/.env`, which `*.env` (line 39) already ignores. Git keeps
+tracking an ignored file, so its edits still reach commits. But the line has three effects:
+- **Search tools that honour `.gitignore` skip the template.** That includes ripgrep, and with it Claude Code's
+  Grep and the review agents. `rg -l --hidden GRAFANA_ADMIN_PASSWORD docker/` finds the compose file and
+  `grafana-password-check.sh`, not the template; only `--no-ignore` finds it. A change to a variable can
+  therefore miss the template unnoticed (the README and three backlog items describe its values).
+- **A recreated or renamed template is silently left out by `git add`** ("paths are ignored", unless `-f`).
+- **It reads as if the template held secrets.** It holds dev placeholders and empty values only.
+
+**Approach.** Delete line 37. Check with `git check-ignore --no-index -v docker/.env.example` (no output) and
+`git check-ignore -v docker/.env` (still `*.env`). Look for other tracked files that `.gitignore` matches:
+`git ls-files -ci --exclude-standard` lists them, and on 2026-10-16 it listed this template alone;
+`docker/secrets/*` and the rest are untracked and stay ignored.
+
+**Touches:** root (`.gitignore`)
 
 ---
 
