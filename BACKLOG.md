@@ -2230,8 +2230,14 @@ package the jar (R1).
 - All 7 services are healthy. No `application-local` is in any jar or image, and CI's check catches a planted
   one. `docker compose run --rm auth-service break-glass-mfa-reset` reaches the command (its refusal, exit 1).
 - No jar fails the build, and so do two.
-- The CI wall clock, now that the smoke test waits for `verify`, is to be measured in the PR (estimate 9–10 min
-  instead of 6–7).
+- CI, measured on PR #498 (run 38891947846, all seven services) against `main`'s run 38862847045:
+  - wall clock: 10 min 16 s instead of 9 min 46 s;
+  - runner time: 11 min 41 s instead of 32 min 40 s;
+  - the smoke test: 3 min 15 s instead of 6 min 08 s;
+  - build-and-test: +44 s, from a first run that restored no cache (compile 37 s instead of 15 s, one download
+    from Central).
+- A change to one service or to `k8s/` alone now takes about 9.5 min instead of about 6 min 12 s (PR #497),
+  because the smoke test follows build-and-test (ADR-0030).
 
 ---
 

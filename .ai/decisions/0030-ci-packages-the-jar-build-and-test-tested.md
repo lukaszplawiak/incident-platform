@@ -78,7 +78,18 @@ next to the developer's `~/.m2`. No image is pushed yet (`push: false`; k8s runs
   dependency bump), two runners for the build path instead of up to ten, no Docker layer cache in the Actions
   cache.
 - **What the smoke test boots** is exactly what the tests ran against. It waits for the whole build-and-test job,
-  not only `verify`: wall clock about 9–10 min instead of 6–7 (estimate, to be measured in the PR).
+  not only `verify`. Measured on PR #498 (CI run 38891947846, all seven services built), against `main`'s run
+  38862847045 of the same day:
+  - wall clock: 10 min 16 s instead of 9 min 46 s;
+  - runner time: 11 min 41 s instead of 32 min 40 s (the 7 image jobs are gone);
+  - the smoke test: 3 min 15 s instead of 6 min 08 s ("Start the stack" 134 s instead of 329 s, since the images
+    only package the jar);
+  - build-and-test: 6 min 45 s instead of 6 min 01 s. A pull request restores no cache before `main` has saved
+    one, so its compile took 37 s instead of 15 s, downloading the tree once from Central;
+  - the `service-jars` upload and download took 9 s and 10 s, the break-glass step 14 s.
+
+  A change to one service or to `k8s/` alone pays for the order: its smoke test used to run beside
+  build-and-test (about 6 min 12 s in all, PR #497) and now follows it (about 9.5 min).
   - When any step of that job fails, the smoke test does not run, on `main` too: `verify`, "No jar holds a local
     config", and on a pull request the changed-lines coverage gate (`diff-cover`).
   - A pull request below 60% changed-line coverage therefore shows no smoke result until its coverage is fixed.
