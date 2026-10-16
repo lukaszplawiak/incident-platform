@@ -438,11 +438,18 @@ where only the session-level hooks apply. Layers and their limits: docs/ai-facto
 
 ### Container images
 
-- **Multi-stage builds**: each service's Dockerfile builds with the JDK image and ships only the JRE image
-  (`eclipse-temurin:<version>-jre-alpine`) and the service jar, without Maven, sources or the build cache.
-- **Non-root**: every image creates `appuser` and runs as `USER appuser`; the jar is owned by that user.
-- **Pinned base images**: builder and runtime images carry an exact version tag, which Renovate updates (all
-  Dockerfile updates grouped into one PR).
+- **The image packages a built jar, nothing else** (backlog #0-141, ADR-0030): each service's Dockerfile takes
+  the jar Maven built, extracts it into Spring Boot's layers in a JRE stage and ships only the JRE image
+  (`eclipse-temurin:<version>-jre-alpine`) with those layers: no JDK, Maven, sources or dependency cache. The
+  build context is an allowlist (`.dockerignore`): only `<service>/target/<service>-*.jar` is sent, so no
+  source, `.env` or local configuration can reach an image. In CI the jar is the one Job 1's `verify` tested.
+- **No local secrets in a jar** (backlog #0-100): the root POM excludes `application-local.*` and
+  `application-secrets.*` from every jar, `shared`'s included, and CI checks it with planted files (Job 1).
+- **Non-root, code not writable**: every image creates `appuser` and runs as `USER appuser`; the application's
+  files are owned by root and not writable by that user, so the service cannot change its own code (until
+  #0-141 the jar was owned by `appuser`).
+- **Pinned base images**: the image carries an exact version tag, which Renovate updates (all Dockerfile
+  updates grouped into one PR).
 - **Container-aware JVM**: `-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0`, so the heap follows the
   container's memory limit instead of the node's.
 
@@ -781,6 +788,9 @@ Open items from the audit and earlier, most important first within each area. Ea
   - `diff-cover` is installed by version only, its package and dependencies unchecked: backlog #0-134.
   - kubectl, which renders the manifests that the k8s job's checks read, is downloaded by `azure/setup-kubectl`
     unverified, although Kubernetes signs it: backlog #0-135.
+  - The Maven distribution `./mvnw` downloads is not checked against a checksum (no `distributionSha256Sum`), and
+    since #0-141 CI keeps it in the Maven cache for up to a month, where the Snyk and OWASP jobs, which hold
+    scanner tokens, run it too (only a push to `main` writes that cache): backlog #0-142.
 - **Container images**
   - Built images are not scanned and no SBOM is produced: backlog #0-70.
   - Mutable image tags in k8s and compose, and k8s third-party images not tracked by Renovate: backlog #0-71.
@@ -842,8 +852,6 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Project**
   - No `SECURITY.md`, no private vulnerability reporting, no Dependabot alerts: backlog #0-74.
 - **Local stack**
-  - A jar built on a developer's machine (`./mvnw package`) contains their gitignored `application-local.yml`
-    with real local secrets; images and CI-built jars do not: backlog #0-100.
   - Every port docker-compose publishes, except Grafana's (on `127.0.0.1` only; Loki, Alloy and the socket proxy
     publish none), is on all interfaces, Postgres included, where the admin is a
     superuser with the password from `docker/.env` (the template's is a known dev value): backlog #0-72. That
@@ -919,10 +927,14 @@ files — the backlog, `/ready`, runbooks — skips it, and the smoke test too: 
 its check scripts read is Markdown; skipped at the job, so it still counts as passed for a required check):
 
 ```
-Checkout → Java 21 setup (Temurin) → Compile → Run tests with JaCoCo → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
+Checkout → Java 21 setup (Temurin) → Restore the Maven repository → Compile → Run tests with JaCoCo → No jar holds a local config → Upload the service jars → (main) Save the Maven repository → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
 ```
 
 - Compiles all 7 modules and runs the full test suite
+- The only build of the code in CI (backlog #0-141, ADR-0030): the jars `verify` tested are uploaded as the `service-jars` artifact (1 day, uncompressed: a jar is a zip already; only when Job 4 will run), and Job 4 packages exactly those jars into the images
+- Maven repository cache (backlog #0-141): restored from the newest entry of the month even when the POMs changed, so a dependency bump downloads only what is new (setup-java's own cache restores only an exact match, so every Renovate PR downloaded the whole tree again); saved on a push to `main` only, so pull requests (and the Snyk and OWASP workflows, which restore it by the same key) share main's entry instead of each storing its own
+- `.mvn/maven.config` makes every `./mvnw` retry a 429, 500, 502, 503 or 504 from the repository (the resolver retries only 429 and 503 by default; on 2026-10-15 one 502 from Maven Central failed four runs)
+- No jar holds a developer's `application-local.*` or `application-secrets.*` (backlog #0-100): CI plants both in every module, and `check-no-local-config-in-jars.sh` (after its own cases) fails if a service jar, or the `shared` jar nested in it, packaged one, or cannot be read
 - JaCoCo coverage reports uploaded as artifacts (retained 14 days)
 - Coverage gate in the build: **60%** line coverage per module (`jacoco:check`)
 - On pull requests: at least **60%** of the changed Java lines must be covered (`diff-cover`); the uncovered lines are listed in the job summary
@@ -932,28 +944,18 @@ Checkout → Java 21 setup (Temurin) → Compile → Run tests with JaCoCo → U
 
 A path filter (`dorny/paths-filter`) decides what the expensive downstream jobs must do:
 
-- **`services`** — which service images need building. A change under one service's directory rebuilds only that service; a change to `shared/**`, `service-parent/**` or the root `pom.xml` rebuilds all 7, and every push to `main` builds all 7 as a safety net.
-- **`infra`** — whether anything changed that could break the compose stack (`docker/**`, Dockerfiles, `k8s/**`, `application*.yml`, the root `pom.xml` and each service's `pom.xml`).
+- **`services`** — which services changed. A change to `shared/**`, `service-parent/**` or the root `pom.xml` lists all 7, and so does every push to `main`. The smoke test (Job 4) runs when it is not empty. Until backlog #0-141 it was also the matrix of a job that built each changed service's image on its own runner; the smoke test builds all 7 from the same jars, so that job was removed.
+- **`infra`** — whether anything changed that could break the compose stack (`docker/**`, Dockerfiles, `.dockerignore`, `k8s/**`, `application*.yml`, the root `pom.xml` and each service's `pom.xml`).
 
-### Job 3 — Build Docker Images
-
-Runs after Jobs 1 and 2 whenever the computed `services` list is non-empty (on pull requests as well as on pushes to `main`):
-
-```
-Build Docker image (dynamic matrix: only the changed services, up to all 7) → GitHub Actions cache (layer reuse)
-```
-
-- Matrix strategy with `fail-fast: false` — one failure doesn't cancel others
-- Uses `docker/build-push-action` with GitHub Actions cache for fast layer reuse
-- Images are validated but not pushed (`push: false`) — no registry configured yet (next step: GitHub Container Registry)
-
-### Job 4 — Validate Kubernetes Manifests
+### Job 3 — Validate Kubernetes Manifests
 
 Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays with `kubectl kustomize` and validates each rendered output with `kubeconform -strict` against the API schemas of the Kubernetes version pinned in the job (`KUBERNETES_VERSION`, also the kubectl that renders), from a pinned commit of the schema repository; kubeconform itself is a pinned release, checked against its SHA-256 before it runs (backlog #0-76). It also cross-checks that every service directory with a `Dockerfile` has a matching Deployment in the rendered base, that staging and prod set no Spring profile (backlog #0-63), that mail is caught by Mailpit in dev only (`check-k8s-mail.rb`, backlog #0-42), and that each overlay renders into its own namespace, with no prod image untagged or `latest`, and prod's services on a release tag rather than an environment's name (`check-k8s-environments.rb`, backlog #0-29; tags stay mutable until #0-71).
 
-### Job 5 — Docker Compose Smoke Test
+### Job 4 — Docker Compose Smoke Test
 
-Boots PostgreSQL, Redis, Kafka, the log pipeline (docker-socket-proxy, Loki, Alloy) and all 7 services with `docker compose up`, curls each service's health endpoint, checks the services' DB role, and checks that every service's lines reach Loki parsed (`.github/scripts/test-log-collection.sh`, backlog #0-94). Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed, unless the pull request changes Markdown only.
+Builds the 7 images and boots them with PostgreSQL, Redis, Kafka and the log pipeline (docker-socket-proxy, Loki, Alloy) through `docker compose up`, curls each service's health endpoint, checks that auth-service's break-glass command still reaches `main` through the image's entrypoint (run without options, it must refuse with exit 1), checks the services' DB role, and checks that every service's lines reach Loki parsed (`.github/scripts/test-log-collection.sh`, backlog #0-94). Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed, unless the pull request changes Markdown only.
+
+The one place in CI where images are built (backlog #0-141, ADR-0030), from Job 1's jars: the `service-jars` artifact is put back into each `<service>/target/`, and each Dockerfile only packages that jar, extracted into Spring Boot's layers (`jarmode=tools extract --layers`). So the job boots exactly what the tests ran against, and neither compiles nor downloads from Maven Central. It therefore starts once Job 1 is green, and does not run when Job 1 failed. The images are not pushed — no registry configured yet (next step: GitHub Container Registry, backlog #0-71; the image tested here is then the one to push).
 
 ### Security Scanning
 
@@ -1233,8 +1235,13 @@ cp -n .env.example .env   # if Step 1 has not created it yet
 #   JWT_SECRET=$(openssl rand -base64 64)
 #   MFA_ENCRYPTION_KEY=$(openssl rand -base64 32)
 #   SLACK_ENCRYPTION_KEY=$(openssl rand -base64 32)   # a different value
-docker compose up -d
+cd ..
+make dev-up   # ./mvnw clean package -DskipTests, then docker compose up -d --build
 ```
+
+> The service images package the jars Maven built in `<service>/target/` and compile nothing themselves
+> (backlog #0-141): `make dev-up` builds the jars first and rebuilds the images from them. A plain
+> `docker compose up --build` packages whatever jar is in `target/` (none fails the build, and so do two).
 
 > **auth-service** requires `MFA_ENCRYPTION_KEY` and `SLACK_ENCRYPTION_KEY` — two different
 > 32-byte base64 AES-256-GCM keys, for TOTP secrets and tenants' Slack bot tokens at rest. See `docker/.env.example` for all required variables.
@@ -1429,14 +1436,17 @@ eval $(minikube docker-env)
 
 ### Step 3 — Build all Docker images
 
+The images package the jars Maven builds (backlog #0-141), so build those first:
+
 ```bash
+./mvnw clean package -DskipTests
 for service in auth-service ingestion-service incident-service notification-service escalation-service postmortem-service oncall-service; do
   echo "Building $service..."
   docker build -t $service:dev -f $service/Dockerfile .
 done
 ```
 
-First run takes 20–40 minutes — Maven downloads all dependencies. Subsequent builds are fast due to Docker layer cache.
+The first Maven build downloads all dependencies into `~/.m2` (once; later builds reuse it); the images themselves only package the jars, in seconds, and a change to the code alone rebuilds only each image's application layer.
 
 Verify:
 ```bash
@@ -1776,7 +1786,7 @@ curl -s -X POST http://localhost:8086/api/v1/oncall/schedules \
 ## Makefile commands
 
 ```bash
-make dev-up          # Start the whole docker-compose stack (infra, monitoring, log pipeline, services); needs the three passwords in docker/.env
+make dev-up          # Build the jars (make build), then start the whole docker-compose stack (infra, monitoring, log pipeline, services, rebuilt from those jars); needs Java 21 and the three passwords in docker/.env
 make dev-down        # Stop all containers
 make dev-reset       # Stop + remove volumes (clean database)
 make grafana-password-check # Warn if GRAFANA_ADMIN_PASSWORD is under 16 characters, or Grafana still accepts admin/admin (a volume from before it); runs at the end of dev-up

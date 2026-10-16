@@ -360,6 +360,30 @@
                     </execution>
                 </executions>
             </plugin>
+            <!--
+                Fixed (backlog #0-100): a developer's gitignored local configuration
+                (application-local.*, application-secrets.*: their real local secrets, the JWT
+                secret, the MFA and Slack encryption keys, the database password, the Gemini
+                API key) stays out of every jar. Until #0-100 `./mvnw package` on a developer's
+                machine put application-local.yml in as BOOT-INF/classes/, and since #0-141 the
+                local images package that jar (ADR-0030). Here, not in service-parent, so that
+                `shared` (a library on this parent, nested in every service jar as
+                BOOT-INF/lib/shared-*.jar) is covered too. Excluded from the jar only: the files
+                are still copied to target/classes, which spring-boot:run (make run-*) reads
+                with the local profile. The version is the one spring-boot-starter-parent
+                manages. CI plants such files and checks that no jar holds one (ci.yml,
+                build-and-test).
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>**/application-local.*</exclude>
+                        <exclude>**/application-secrets.*</exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

@@ -98,7 +98,26 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'maven'
+
+      # Backlog #0-141 (ADR-0030): the Maven repository CI's build-and-test saved
+      # on main, restored by the same key (by prefix within the month), never
+      # saved here: one cache entry for every workflow, not one per workflow, and
+      # only what that entry lacks (this scan's own plugins) comes from Maven
+      # Central. setup-java's `cache: maven` restored only an exact match of the
+      # POMs' hash and saved an entry of its own. Keep the key equal to ci.yml's.
+      - name: Maven cache month
+        id: maven-cache-month
+        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Maven repository
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.m2/wrapper
+          key: maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-
 
       - name: Build project
         run: ./mvnw clean compile -DskipTests --no-transfer-progress

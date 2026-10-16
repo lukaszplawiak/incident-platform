@@ -8,7 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # The whole docker-compose stack: infrastructure, monitoring, the log pipeline (Loki, Alloy, a Docker socket proxy)
-# and, if built, the services — needs docker/.env with the three passwords (see below)
+# and the services — needs docker/.env with the three passwords (see below). It builds the jars first
+# (`make build`): the images only package <service>/target/*.jar and compile nothing (backlog #0-141, ADR-0030)
 make dev-up                 # start        make dev-down   # stop
 make dev-reset              # stop + wipe volumes (clean DB)
 

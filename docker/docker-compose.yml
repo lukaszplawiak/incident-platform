@@ -489,8 +489,10 @@ services:
 
   # ==========================================================
   # APPLICATION SERVICES
-  # Build from source: docker compose build
-  # Start all:        docker compose up -d
+  # The images package the jars Maven built in <service>/target/ and compile nothing (backlog #0-141,
+  # ADR-0030). Build and start: make dev-up (make build, then docker compose up -d --build).
+  # A plain `docker compose up --build` packages whatever jar target/ holds.
+  # Start all, images already built: docker compose up -d
   #
   # Ports:
   #   auth-service        8087

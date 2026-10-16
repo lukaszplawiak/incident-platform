@@ -32,6 +32,11 @@
         service parented here gets a working jar automatically, with
         nothing to remember to add.
 
+        Since backlog #0-141 the images no longer run `java -jar app.jar`:
+        they extract the repackaged jar into Spring Boot's layers
+        (`jarmode=tools extract`) and start it through JarLauncher. Without
+        this plugin that extraction fails already when the image is built.
+
         Deliberately NOT the parent of `shared` — `shared` is a plain
         library module with no @SpringBootApplication main class. If it
         inherited this plugin's repackage execution, `mvn package` would

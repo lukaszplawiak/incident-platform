@@ -20,8 +20,14 @@ import java.util.Map;
  * mode.
  *
  * <pre>
- * java -jar app.jar break-glass-mfa-reset --break-glass.mfa-reset.user-email=... ...
+ * docker compose run --rm auth-service break-glass-mfa-reset --break-glass.mfa-reset.user-email=... ...
+ * java -jar auth-service-*.jar break-glass-mfa-reset --break-glass.mfa-reset.user-email=... ...
  * </pre>
+ *
+ * The image (backlog #0-141) has no {@code app.jar}: it runs the jar's
+ * extracted layers through Spring Boot's {@code JarLauncher}, which passes the
+ * arguments after the image's entrypoint to {@code main} unchanged, so
+ * {@code docker compose run} (or a container's {@code args}) appends them.
  *
  * <h2>Why a subcommand, not a property</h2>
  * The first version started the command when the property
