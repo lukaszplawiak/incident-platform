@@ -1,6 +1,6 @@
 ---
 name: review-k8s
-description: Review of Dockerfiles, k8s manifests and module POMs against the structural rules CI enforces, and POM supply-chain changes. Read-only; runs when those files change.
+description: Review of Dockerfiles, .dockerignore files, k8s manifests and module POMs against the structural rules CI enforces, and POM supply-chain changes. Read-only; runs when those files change.
 tools: Read, Grep, Glob, Bash
 model: claude-sonnet-5-5
 maxTurns: 40

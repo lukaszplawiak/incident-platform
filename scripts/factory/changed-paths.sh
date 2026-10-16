@@ -62,7 +62,10 @@ for f in $(git diff --no-renames --name-only --diff-filter=D "$mb"...HEAD | grep
     git cat-file -e "$base:$f" 2>/dev/null && edited_applied="$edited_applied$f (deleted)"$'\n'
 done
 entities=$(git diff "$mb"...HEAD -- '*.java' | grep -E '^\+.*@(Entity|Table|Column|Version)\b' | head -1 || true)
-k8s=$(match '(^k8s/|(^|/)Dockerfile$|(^|/)pom\.xml$)')
+# .dockerignore decides what reaches every image's build context (since backlog #0-141 an allowlist of
+# the service jars), so it is the k8s reviewer's, like the Dockerfiles that read it. So is a
+# <service>/Dockerfile.dockerignore: BuildKit uses it instead of the root file for that Dockerfile's build.
+k8s=$(match '(^k8s/|(^|/)Dockerfile(\.dockerignore)?$|(^|/)pom\.xml$|^\.dockerignore$)')
 pom_supply=$(git diff "$mb"...HEAD -- '*pom.xml' | grep -E '^\+.*<(plugin|repository|pluginRepository|dependency)>' | head -5 || true)
 deleted_tests=$(git diff --no-renames --name-only --diff-filter=D "$mb"...HEAD | grep -E '/src/test/' || true)
 disabled_added=$(git diff "$mb"...HEAD -- '*.java' | grep -cE '^\+.*@Disabled' || true)

@@ -12,7 +12,7 @@ the file of its own dimension, nothing else from `.ai/rules/review/`.
 | security | `review-security` | `security.md` — tenant isolation, auth, secrets, injection | always |
 | performance | `review-performance` | `performance.md` — hot paths, queries, Kafka, memory | always (may answer "not performance-sensitive") |
 | migration | `review-migration` | `migration.md` — Flyway | the diff touches `*/src/main/resources/db/migration/*.sql` or an `@Entity` |
-| k8s | `review-k8s` | `k8s.md` — Dockerfile, `k8s/`, module POMs | the diff touches `k8s/`, a `Dockerfile` or a `pom.xml` |
+| k8s | `review-k8s` | `k8s.md` — Dockerfile, `.dockerignore`, `k8s/`, module POMs | the diff touches `k8s/`, a `Dockerfile`, a `pom.xml`, the root `.dockerignore` or a `Dockerfile.dockerignore` |
 | docs | `review-docs` | `docs.md` — documentation tells the truth about the code | autopilot: always; manual `/review`: only when asked (`6`) |
 
 **Each finding belongs to exactly one dimension.** Report a finding only in your own dimension. If you

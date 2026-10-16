@@ -1963,6 +1963,17 @@ bot token can merge around every check. None of these settings is visible in a d
    `human:fp-<dimension>` and `human:missed-<dimension>` for each review dimension.
 5. Make "Factory guards" a required check once its workflow has run green on `main`.
 
+**Decide before auto-merge: `.dockerignore` (noted 2026-10-16, PR #499).** Since #0-141 the root
+`.dockerignore` is the allowlist that keeps sources, `.env` files and `application-local.yml` out of every
+image's build context (SEC-33). An agent may change it: a narrowing breaks the image build (the smoke test is
+red), and a widening reaches an image only together with a Dockerfile `COPY`. Both changes go to the k8s
+reviewer (PR #499) and to the security reviewer, who answers `NEEDS_HUMAN` for a widening; no script checks
+it (`check-no-local-config-in-jars.sh` checks the jars, not the images). That is enough while the owner
+reads every PR before merging. Once a PR can merge without that read, decide whether `.dockerignore` and
+`*/Dockerfile.dockerignore` go on the build-config list of `.ai/rules/protected-paths.md` (the autopilot then
+stops on any change to them, and Factory guards rule 6 asks for the owner's approval). Not done in #499: the
+list is for what decides how the build is verified, and today a reviewer and the owner catch a widening.
+
 **Acceptance criteria.**
 AC1. A test PR from the machine account cannot be merged by it while a required check is red.
 AC2. A PR touching `.ai/rules/` stays unmergeable until the owner approves it.

@@ -9,8 +9,12 @@ architect's plan lists, or the whole file when the change reaches this area (sel
 You catch the specific CI failures this project's pipeline enforces, before they reach CI. Read
 `.ai/context/infrastructure.md` ("CI gotchas") first — it defines exactly what to check here.
 
-If there's no new Dockerfile, no new/changed file under `k8s/`, and no changed `pom.xml` in the diff, say
-so and return `APPROVE`.
+If there's no new Dockerfile, no new/changed file under `k8s/`, no changed `pom.xml`, no changed root
+`.dockerignore` and no changed `Dockerfile.dockerignore` in the diff, say so and return `APPROVE`. The root
+`.dockerignore` decides what reaches every image's build context (an allowlist of the service jars since
+backlog #0-141), and a `<service>/Dockerfile.dockerignore` replaces it for that Dockerfile's build; check a
+change to either against K8S-07, and report one that lets more into the build context as `outOfScope` for
+security (SEC-33).
 
 ## Checks, in order of how likely they are to fail CI
 
