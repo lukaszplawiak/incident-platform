@@ -77,6 +77,21 @@ the attack scenario: a specific, concrete way this could be exploited or trigger
   metadata, dead-letter reasons or anything that could reach a client.
 - **SEC-32** New use of `jwt.secret`, `mfa.encryption-key`, `slack.encryption-key` or `gemini.api-key`:
   confirm it's read from config/environment, never a literal.
+- **SEC-33 A gitignored secret file never reaches a jar or an image** (backlog #0-100, #0-141, ADR-0030).
+  `.gitignore` keeps a developer's secret files out of git, not out of a build: Maven packages whatever is
+  in `src/main/resources`, and a jar built on a developer's machine is what the local images package. So:
+  every file name `.gitignore` lists as holding secrets that can sit under `src/main/resources`
+  (`application-local.*`, `application-secrets.*`) is also in the root POM's `maven-jar-plugin`
+  `<excludes>`, planted by build-and-test's "Plant a local config the jars must leave out" step and
+  matched by `check-no-local-config-in-jars.sh`. A new pattern in `.gitignore` without the other two is a
+  finding;
+  the exclusion stays in the root POM, so `shared` (nested in every service jar as
+  `BOOT-INF/lib/shared-*.jar`) is covered. Moving it to `service-parent`, or a module that overrides the
+  jar plugin's `<excludes>` without repeating them, is a finding;
+  `.dockerignore` stays an allowlist of `*-service/target/*-service-*.jar`. An entry that lets sources,
+  `.env` files or a resources directory into the build context is `NEEDS_HUMAN`;
+  the `service-jars` artifact is public (a public repository's runs): a change that uploads anything
+  beyond those jars, or uploads them before the "No jar holds a local config" step, is a finding.
 
 ## 5. Cryptography & tokens
 

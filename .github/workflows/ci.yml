@@ -104,7 +104,52 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'maven'
+
+      # Backlog #0-141: the Maven repository and the wrapper's Maven
+      # distribution, restored from the newest cache of this month even when
+      # the POMs changed, so a dependency bump downloads only what is new.
+      # setup-java's `cache: maven` restored only an exact match of the POMs'
+      # hash (no restore-keys, by design: actions/setup-java#269), so every
+      # Renovate PR downloaded the whole tree from Maven Central again. The
+      # month in the key is what #269 was about: a restored repository keeps
+      # the versions it no longer needs, and a new month starts from an empty
+      # one. Saved on a push to main only (see "Save the Maven repository"):
+      # a pull request reads main's cache (one entry for all of them, not one
+      # per PR branch in the 10 GB Actions cache), and so do snyk.yml and
+      # owasp-dependency-check.yml, by the same key, never saving. Keep the
+      # three keys equal.
+      - name: Maven cache month
+        id: maven-cache-month
+        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the Maven repository
+        id: maven-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.m2/wrapper
+          key: maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-
+
+      # Backlog #0-100: the root POM keeps a developer's gitignored local
+      # configuration (application-local.*, application-secrets.*: real local
+      # secrets) out of every jar. CI has no such files, so it plants both in
+      # each service and in `shared` (nested in every service jar); "No jar
+      # holds a local config" below fails if any jar packaged one.
+      - name: Plant a local config the jars must leave out
+        run: |
+          for dockerfile in */Dockerfile; do
+            set -- "$@" "${dockerfile%/Dockerfile}"
+          done
+          for module in shared "$@"; do
+            mkdir -p "$module/src/main/resources"
+            for name in application-local.yml application-secrets.yml; do
+              printf '# CI marker (backlog #0-100): must not reach the jar\n' \
+                > "$module/src/main/resources/$name"
+            done
+          done
 
       - name: Compile project
         run: ./mvnw clean compile -DskipTests --no-transfer-progress
@@ -114,6 +159,43 @@ jobs:
           ./mvnw verify \
             -pl shared,service-parent,auth-service,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service \
             --no-transfer-progress
+
+      # The ninth structural rule (.ai/context/infrastructure.md). The
+      # checker's own cases run first, so a broken checker cannot pass.
+      - name: No jar holds a local config
+        run: |
+          .github/scripts/test-no-local-config-in-jars.sh
+          .github/scripts/check-no-local-config-in-jars.sh
+
+      # Backlog #0-141 (ADR-0030): build once, package many. The jars `verify`
+      # just built and tested are the ones the smoke test (job 4) packages
+      # into the images, so CI compiles and downloads dependencies once, here,
+      # and never in Docker. Only after a green verify: a jar whose tests
+      # failed is never packaged. `*-service-*.jar` matches the repackaged
+      # jar, not `*.jar.original`, and keeps the `<service>/target/` paths the
+      # Dockerfiles copy from. Uncompressed: a jar is a zip already, and
+      # compressing about 800 MB again only costs time. Uploaded only when the
+      # smoke test will run: the same condition as that job's `if:` (keep the
+      # two equal), so a pull request it skips (one that changes only
+      # .github/scripts/, say) sends no 800 MB nobody downloads.
+      - name: Upload service jars
+        if: github.event_name == 'push' || (needs.detect-changes.outputs.code == 'true' && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.services != '[]'))
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: service-jars
+          path: '*-service/target/*-service-*.jar'
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Save the Maven repository
+        if: github.event_name == 'push' && steps.maven-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.m2/wrapper
+          key: ${{ steps.maven-cache.outputs.cache-primary-key }}
 
       - name: Upload Jacoco coverage reports
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -217,17 +299,16 @@ jobs:
   #
   # Feeds three downstream decisions:
   # - `code` (boolean): does the change touch anything but Markdown?
-  #   false skips build-and-test (job 1) and the smoke test (job 5) on a
+  #   false skips build-and-test (job 1) and the smoke test (job 4) on a
   #   pull request; a push to main always runs both.
-  # - `services` (JSON array): which service Docker images actually
-  #   need building. Any single service filter matching means only
-  #   that service is rebuilt. A change under `shared/**` (every
-  #   service's Dockerfile COPYs and builds it) or `pom.xml` forces
-  #   ALL 7 — there's no safe way to build a subset in that case. Push
-  #   to main always builds all 7 too, as a periodic safety net against
-  #   drift the path-based logic might miss.
+  # - `services` (JSON array): which services changed. A change under
+  #   `shared/**` or `pom.xml` lists all 7, and so does every push to main.
+  #   The smoke test (job 4) runs when it is not empty. Until backlog
+  #   #0-141 it was also the matrix of a job that built each changed
+  #   service's image on its own runner; the smoke test builds all seven
+  #   from the same jars anyway, so that job proved nothing more.
   # - `infra` (boolean): did anything change that could plausibly break
-  #   the docker-compose-smoke-test job (job 5)? Gates whether that
+  #   the docker-compose-smoke-test job (job 4)? Gates whether that
   #   expensive job runs on a PR at all.
   # ──────────────────────────────────────────────────────────
   detect-changes:
@@ -235,7 +316,7 @@ jobs:
     runs-on: ubuntu-latest
     # On a pull_request, dorny/paths-filter lists the PR's files through the
     # API, which needs pull-requests: read. Without it this job fails, and
-    # docker-build and the smoke test (which need its outputs) go with it.
+    # the smoke test (which needs its outputs) goes with it.
     permissions:
       contents: read
       pull-requests: read
@@ -294,11 +375,13 @@ jobs:
               - '**/src/main/resources/application*.yml'
               - 'pom.xml'
               - '*/pom.xml'
+              # Backlog #0-141: what the images' build context lets in.
+              - '.dockerignore'
               # Backlog #0-94 step 2: the smoke test runs it; a PR changing
               # only the script must run it too.
               - '.github/scripts/test-log-collection.sh'
 
-      - name: Compute Docker build matrix
+      - name: Compute the changed services
         id: compute
         env:
           CHANGES: ${{ steps.filter.outputs.changes }}
@@ -318,50 +401,7 @@ jobs:
           fi
 
   # ──────────────────────────────────────────────────────────
-  # Job 3: Build Docker images
-  #
-  # Runs on every PR now, not just after merge to main — a broken
-  # Dockerfile should block a PR, not be discovered on main after the
-  # fact. push: false everywhere — this job never publishes an image,
-  # it only proves each one builds.
-  #
-  # Matrix is computed by detect-changes (job 2), not hand-listed —
-  # only services whose own directory or `shared` actually changed get
-  # built. Skips entirely (matrix of zero) if this PR touches nothing
-  # under any service or shared/.
-  # ──────────────────────────────────────────────────────────
-  docker-build:
-    name: Build Docker Images
-    runs-on: ubuntu-latest
-    needs: [ build-and-test, detect-changes ]
-    if: needs.detect-changes.outputs.services != '[]'
-
-    strategy:
-      fail-fast: false
-      matrix:
-        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        with:
-          persist-credentials: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
-
-      - name: Build Docker image — ${{ matrix.service }}
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
-        with:
-          context: .
-          file: ${{ matrix.service }}/Dockerfile
-          push: false
-          tags: incident-platform/${{ matrix.service }}:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  # ──────────────────────────────────────────────────────────
-  # Job 4: Validate Kubernetes manifests
+  # Job 3: Validate Kubernetes manifests
   #
   # Always runs, unconditionally — unlike Docker builds and the smoke
   # test, this is cheap (seconds, no JVM/container boot), so there's no
@@ -757,10 +797,10 @@ jobs:
             alertname=LogsDropped scope=platform severity=high reason=ingester_error
 
   # ──────────────────────────────────────────────────────────
-  # Job 5: Smoke test — boot the real stack via docker compose and
+  # Job 4: Smoke test — boot the real stack via docker compose and
   # confirm every service reports healthy.
   #
-  # Static validation (jobs 3 and 4) proves the files are well-formed.
+  # Static validation (job 3) proves the files are well-formed.
   # It cannot prove the application actually starts — wrong port
   # numbers, missing required env vars, or services that can't reach
   # their dependencies all pass static validation and fail here (this
@@ -774,12 +814,17 @@ jobs:
   # too: only the real services' output shows that their lines reach
   # Loki parsed.
   #
-  # Depends only on detect-changes, NOT on docker-build — this job
-  # builds everything itself via `docker compose up` (compose's own
-  # `build:` blocks), it doesn't consume docker-build's images at all.
-  # Making it depend on docker-build would let a docker-build skip
-  # (empty matrix — nothing service-specific changed) cascade-skip this
-  # job too, even when e.g. only docker-compose.yml itself changed.
+  # The one place in CI where the images are built (backlog #0-141,
+  # ADR-0030): `docker compose up` builds all seven through compose's own
+  # `build:` blocks, from the jars build-and-test's `verify` tested (the
+  # `service-jars` artifact, put back into each `<service>/target/`). The
+  # Dockerfiles only package a jar, so this job neither compiles nor
+  # downloads from Maven Central (a 502 there failed it, 2026-10-15), and
+  # it boots exactly what the tests ran against. Until #0-141 every image
+  # compiled its service again and resolved its dependencies on its own,
+  # here and in a separate per-service image job, which this job replaced.
+  # Hence `needs: build-and-test`: it starts once verify is green and does
+  # not run when verify failed, on main too.
   #
   # Runs on every push to main unconditionally (safety net — catches
   # things path-filtering can miss, e.g. a transitive dependency bump
@@ -793,7 +838,12 @@ jobs:
   docker-compose-smoke-test:
     name: Docker Compose Smoke Test
     runs-on: ubuntu-latest
-    needs: detect-changes
+    # build-and-test is skipped only on a pull request that changes Markdown
+    # alone, which `code` below skips too; the `if:` names no status function,
+    # so a failed or skipped build-and-test skips this job. Any failed step of
+    # it, not only `verify`: the local-config check and, on a pull request,
+    # the changed-lines coverage gate too (ADR-0030, Consequences).
+    needs: [ detect-changes, build-and-test ]
     # Fixed (backlog #35): previously only `event_name == push` (i.e.
     # after merge, too late) or `infra == 'true'` — the infra filter only
     # matches docker/**, Dockerfile, k8s/**, application*.yml, and pom.xml
@@ -806,9 +856,8 @@ jobs:
     # this shape — pure .java changes, no infra file touched — and would
     # have been invisible to this job on their original PR.
     #
-    # Added `needs.detect-changes.outputs.services != '[]'` — the exact
-    # same condition job 3 (docker-build) already gates on, reusing it
-    # rather than inventing a parallel path filter. `services` already
+    # Added `needs.detect-changes.outputs.services != '[]'`, reusing
+    # detect-changes' output rather than inventing a parallel path filter. `services` already
     # captures "did anything under this service's own directory change"
     # (including .java files, unlike infra's application*.yml-only
     # scoping), so this closes the gap using data already computed two
@@ -830,6 +879,9 @@ jobs:
     # README matches its `services` filter) has nothing to boot differently,
     # as build-and-test (job 1) concludes too; it no longer waits for this
     # job's 20 minutes.
+    #
+    # build-and-test's "Upload service jars" step has this same condition, so
+    # the artifact exists exactly when this job runs: keep the two equal.
     if: github.event_name == 'push' || (needs.detect-changes.outputs.code == 'true' && (needs.detect-changes.outputs.infra == 'true' || needs.detect-changes.outputs.services != '[]'))
     timeout-minutes: 20
     # docker-compose.yml requires both database passwords (backlog #0-78) and
@@ -839,6 +891,16 @@ jobs:
     env:
       DB_PASSWORD: ci-smoke-test-db-password
       POSTGRES_ADMIN_PASSWORD: ci-smoke-test-admin-password
+      # JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY have no
+      # default in docker-compose.yml; everything else falls back safely for
+      # a smoke test. Set for the whole job since backlog #0-141: the
+      # break-glass step starts auth-service once more (`docker compose run`),
+      # not only "Start the stack". Dummy CI-only values, never used anywhere
+      # real. SLACK_ENCRYPTION_KEY (backlog #0-21) is a different key from
+      # MFA_ENCRYPTION_KEY on purpose — auth-service refuses to start without it.
+      JWT_SECRET: ci-smoke-test-secret-not-for-real-use-minimum-64-characters-long-k8s
+      MFA_ENCRYPTION_KEY: n8WIymtbGNC8V61F6BVDfbswbkBLJNqY9bi+GYJEt5M=
+      SLACK_ENCRYPTION_KEY: XrKj1e9X/qBW4x1/woM+mZoYIMkRaNap0Qs8Id+ujE8=
       # Required by compose since #0-94 step 2 (Grafana is not started here).
       GRAFANA_ADMIN_PASSWORD: ci-smoke-test-grafana-password
 
@@ -848,18 +910,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # Into the workspace: the artifact keeps the `<service>/target/` paths
+      # each Dockerfile copies its jar from.
+      - name: Download service jars
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: service-jars
+
       - name: Start the stack
-        env:
-          # JWT_SECRET, MFA_ENCRYPTION_KEY and SLACK_ENCRYPTION_KEY have no
-          # default in docker-compose.yml (nor do the two database
-          # passwords, set in the job's env above); everything else falls
-          # back safely for a smoke test. Dummy CI-only values, never used
-          # anywhere real. SLACK_ENCRYPTION_KEY (backlog #0-21) is a
-          # different key from MFA_ENCRYPTION_KEY on purpose — auth-service
-          # refuses to start without it.
-          JWT_SECRET: ci-smoke-test-secret-not-for-real-use-minimum-64-characters-long-k8s
-          MFA_ENCRYPTION_KEY: n8WIymtbGNC8V61F6BVDfbswbkBLJNqY9bi+GYJEt5M=
-          SLACK_ENCRYPTION_KEY: XrKj1e9X/qBW4x1/woM+mZoYIMkRaNap0Qs8Id+ujE8=
         run: |
           docker compose -f docker/docker-compose.yml up -d --wait --wait-timeout 300 \
             postgres redis kafka docker-socket-proxy loki alloy \
@@ -892,6 +950,27 @@ jobs:
           if [ "$failed" -eq 1 ]; then
             exit 1
           fi
+
+      # Backlog #0-141 (ADR-0030): the images start the extracted jar through
+      # Spring Boot's JarLauncher, and auth-service's break-glass command
+      # (backlog #0-88, ADR-0007) depends on it passing the arguments after
+      # the entrypoint to main unchanged. Run without its options, the command
+      # must start, recognise the subcommand and refuse: exit code 1 and its
+      # own message, not the service starting (which would mean the
+      # subcommand never reached main) and nothing changed in the database.
+      - name: The break-glass command reaches auth-service's main
+        run: |
+          set +e
+          out=$(docker compose -f docker/docker-compose.yml run --rm --no-deps -T \
+            auth-service break-glass-mfa-reset 2>&1)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 1 ] || ! grep -q 'Break-glass MFA reset refused: --break-glass.mfa-reset.user-email is required' <<<"$out"; then
+            echo "::error::break-glass-mfa-reset without options: expected exit 1 and its refusal, got exit $rc"
+            printf '%s\n' "$out" | tail -20
+            exit 1
+          fi
+          echo "break-glass-mfa-reset reached main and refused as expected (exit 1)."
 
       # Backlog #0-78: the services' DB role must not be a superuser (it was,
       # through the image's POSTGRES_USER, which made SQL injection in any

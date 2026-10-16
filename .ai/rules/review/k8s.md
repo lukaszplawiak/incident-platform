@@ -18,9 +18,10 @@ so and return `APPROVE`.
   is a matching `Deployment` in `k8s/base`, name-matched exactly as CI checks it (check an existing
   service's Deployment name against its directory name for the pattern).
 - **K8S-02 `service-parent` parenting.** A new runnable service's `pom.xml` has `<parent>` =
-  `service-parent`, not the root POM; otherwise `spring-boot-maven-plugin` isn't inherited and
-  `java -jar app.jar` fails with "no main manifest attribute". `shared` is the deliberate exception and
-  stays on the root parent.
+  `service-parent`, not the root POM; otherwise `spring-boot-maven-plugin` isn't inherited, the jar is not
+  repackaged (no `Main-Class`/`Start-Class`, no `BOOT-INF/layers.idx`), and the image's
+  `jarmode=tools extract` fails at build time. `shared` is the deliberate exception and stays on the root
+  parent.
 - **K8S-03 Kustomize/kubeconform validity.** If `kubectl kustomize` and `kubeconform` are available, run
   the same check CI runs: `kubectl kustomize k8s/overlays/dev | kubeconform -strict -summary -` (and the
   other overlays). Report any validation errors verbatim. `kubeconform` is often not installed locally;
@@ -32,12 +33,27 @@ so and return `APPROVE`.
   port (8097), don't reintroduce one. Every service but auth-service gets `AUTH_SERVICE_URL`.
 - **K8S-06 Resource limits and health checks.** A new Deployment has resource requests/limits and
   readiness/liveness probes consistent with the other services' manifests.
-- **K8S-07 Docker image matrix.** CI's image matrix is path-filtered: confirm a new service's Dockerfile
-  path would be picked up by that filter (check the workflow if it's in the diff, or flag it as something
-  to verify manually).
+- **K8S-07 Image build in the smoke test.** Since backlog #0-141 (ADR-0030) there is no per-service image
+  matrix: the smoke test builds every image through `docker/docker-compose.yml`'s `build:` blocks from
+  build-and-test's `service-jars` artifact. A new service needs:
+  - a compose service with `build: { context: .., dockerfile: <service>/Dockerfile }`;
+  - its name in the smoke test's service lists (`up`, the health checks, the log dump) and in
+    build-and-test's `-pl` list;
+  - a directory named `<name>-service`, which the artifact's path pattern (`*-service/target/*-service-*.jar`),
+    the `.dockerignore` allowlist and `check-no-local-config-in-jars.sh` all match.
 - **K8S-08 POM supply chain.** A changed `pom.xml` that adds a `<plugin>`, `<repository>`,
   `<pluginRepository>` or a dependency is `NEEDS_HUMAN` (`_common.md`): `mvn verify` executes it wherever
-  it runs. Version bumps of an existing dependency are not.
+  it runs. Version bumps of an existing dependency are not. Configuring a plugin the parent already
+  manages and the default lifecycle already runs (`maven-jar-plugin`, `maven-surefire-plugin`), without a
+  `<version>` of its own or a new `<execution>`, is not adding one: review its configuration instead.
+- **K8S-09 A Dockerfile only packages the jar** (backlog #0-141, ADR-0030). Every `<service>/Dockerfile`:
+  has a JRE base only (`eclipse-temurin:<version>-jre-alpine`, the same pinned tag in both stages), no JDK;
+  runs no `mvnw`/`mvn` and copies no sources: its only input from the context is
+  `COPY <service>/target/<service>-*.jar jar/`, with its own service's name;
+  keeps the exactly-one-jar guard before `jarmode=tools extract --layers --launcher`;
+  copies the four layers in order (dependencies, spring-boot-loader, snapshot-dependencies, application)
+  without `--chown`, then `USER appuser`, and starts with
+  `org.springframework.boot.loader.launch.JarLauncher`.
 
 ## Output notes
 

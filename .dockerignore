@@ -1,19 +1,6 @@
-**/target/
-**/.git/
-**/.github/
-
-**/.idea/
-**/.vscode/
-**/*.iml
-
-**/*.log
-**/*.tmp
-
-**/Dockerfile*
-**/.dockerignore
-
-**/README.md
-**/docs/
-
-**/application-local.yml
-**/application-local.yaml
+# Backlog #0-141 (ADR-0030): an allowlist. The Dockerfiles package the jar Maven built and read nothing
+# else from the build context, so nothing else is sent: no sources, no .git, no .env, no developer's
+# application-local.yml. Until #0-141 the images compiled the sources and this file listed what to leave out.
+# `*.jar.original` (the jar before Spring Boot repackages it) does not match the pattern.
+*
+!*-service/target/*-service-*.jar

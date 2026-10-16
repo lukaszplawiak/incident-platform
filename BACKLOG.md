@@ -104,7 +104,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-97](#0-97-kafka-consumers-on-defaulterrorhandler-and-a-dead-letter-replay) | Kafka consumers on `DefaultErrorHandler`, and a dead-letter replay | design | Low | Open |
 | [0-98](#0-98-mfa-recovery-verifies-the-person-by-procedure-only) | MFA recovery verifies the person by procedure only | design | Low | Open |
 | [0-99](#0-99-public-token-endpoints-have-no-request-limit) | Public token endpoints have no request limit | security | Low | Open |
-| [0-100](#0-100-a-locally-built-jar-contains-the-developers-application-localyml) | A locally built jar contains the developer's `application-local.yml` | tech-debt | Low | Open |
 | [0-101](#0-101-offboard-a-tenant) | Offboard a tenant | design | Medium | Open |
 | [0-102](#0-102-the-pause-of-suspended-tenants-background-work-at-scale) | The pause of suspended tenants' background work at scale | performance | Low | Open |
 | [0-105](#0-105-the-email-channels-worst-case-send-is-not-checked-against-the-scheduler-lock) | The email channel's worst-case send is not checked against the scheduler lock | performance | Low | Open |
@@ -128,6 +127,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
+| [0-142](#0-142-the-maven-distribution-the-wrapper-downloads-is-not-checked) | The Maven distribution the wrapper downloads is not checked | ci | Low | Open |
+| [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
 
 ---
 
@@ -1731,29 +1732,6 @@ through); 429 with Retry-After; the WARN for an invalid token sampled or counted
 
 ---
 
-### 0-100. A locally built jar contains the developer's `application-local.yml`
-
-**Type:** tech-debt · **Priority:** Low · **Status:** Open (found while closing #0-81)
-
-**Problem.** Each service reads a developer's `application-local.yml` from `src/main/resources`
-(`make run-*`, `spring-boot:run -Dspring-boot.run.profiles=local`). It is gitignored and
-`.dockerignore`d, so it is never committed and never reaches an image or a CI-built jar. But
-`./mvnw package` on a developer's machine puts it into `target/*.jar` as
-`BOOT-INF/classes/application-local.yml`, with that developer's real local secrets (JWT secret,
-MFA and Slack encryption keys, database password, Gemini API key). A jar copied off the machine,
-or run elsewhere with the `local` profile, carries them.
-
-**Approach.** Exclude `application-local.*` from the jar in `service-parent` (`maven-jar-plugin`
-`excludes`), so `spring-boot:run`, which reads `target/classes`, keeps working; a test (or a CI
-step on a freshly packaged jar) that the jar has no `application-local`. Alternatively move the
-local file out of the source tree (`./config/application-local.yml` next to the module, which
-Spring Boot also loads from the working directory), which needs the README "Step 2" templates and
-the Makefile changed.
-
-**When.** Whenever `service-parent` is next touched, or before anyone hands a locally built jar on.
-
----
-
 ### 0-101. Offboard a tenant
 
 **Type:** design · **Priority:** Medium · **Status:** Open (split out of #0-82)
@@ -2183,6 +2161,116 @@ room, so the placement can drift until the pods are rescheduled. Not observable 
 **Approach.** Once the target cluster and its zones are known: a second constraint on `topology.kubernetes.io/zone`
 (`ScheduleAnyway` unless every zone is sure to have capacity), extended in `check-k8s-environments.rb` rule 6; and
 decide whether the cluster runs a descheduler (`RemovePodsViolatingTopologySpreadConstraint`) or accepts the drift.
+
+---
+
+### 0-141. One 502 from Maven Central fails the image builds
+
+**Type:** bug · **Priority:** Medium · **Status:** Done, PR #498 (found 2026-10-16 in the smoke tests of 2026-10-15; with
+#0-100 and #0-144). Kept in full as the record of the decision and the design it replaced, which ADR-0030 and the code
+refer to.
+
+**Problem.** On 2026-10-15 around 19:16 UTC the Docker Compose smoke test failed on three Renovate PRs (#402
+oncall-service, #165 auth-service, #194 ingestion-service) and on `main` after #496, each in a Dockerfile's
+`dependency:go-offline` on a different artifact, with a 5xx from `repo.maven.apache.org` (502 Bad Gateway); none of
+the PRs changed what failed, and a rerun is the only remedy. Two causes. The Maven resolver does not retry a 502:
+Maven 3.9.16 ships resolver 1.9.27, whose `aether.connector.http.retryHandler.serviceUnavailable` defaults to
+`429,503`. And each of the seven Dockerfiles resolves on its own, with its own cache (`id=<service>-m2`): the smoke
+test builds on a fresh runner, so one run fetches nearly the same tree, and the Maven distribution the wrapper
+downloads, seven times, seven chances to meet a 5xx.
+
+**Decided (owner, 2026-10-16, third round; ADR-0030).** Maven builds the services once, and the images only
+package the jar (R1).
+- The Dockerfiles are a JRE `layers` stage: `COPY <service>/target/<service>-*.jar`, exactly one, then
+  `jarmode=tools extract --layers --launcher`. The runtime stage takes 4 layered `COPY`s and starts with
+  `JarLauncher`; files are root-owned and not writable by `appuser`.
+- No Maven, sources or JDK in Docker. `.dockerignore` is an allowlist of those jars.
+- build-and-test uploads the jars `verify` tested (`service-jars`, uncompressed, 1 day). The smoke test
+  (`needs: build-and-test`) puts them back into `<service>/target/` and is the only job that builds images.
+- The per-service `docker-build` matrix is removed: same images, same jars, nothing more proven.
+- The Maven repository cache moves from setup-java's `cache: maven` to `actions/cache`.
+  - setup-java restores only an exact match of the POMs' hash, so every Renovate PR downloaded the whole tree.
+  - The new cache restores by prefix within the month and is saved on a push to `main` only.
+- `.mvn/maven.config` retries 429, 500, 502, 503 and 504 (the resolver default is 3 attempts, 5 s apart).
+- `make dev-up` runs `make build` first, then `compose up -d --build`.
+- #0-100 is fixed with it: a local jar would otherwise carry `application-local.yml` into a local image.
+  - The root POM excludes `application-local.*` and `application-secrets.*` from every jar, `shared`'s too.
+  - CI plants both in every module, and `check-no-local-config-in-jars.sh` (with `test-…sh`, 14 cases, mutation
+    tested) checks each service jar and the `shared` jar nested in it.
+- The smoke test runs `break-glass-mfa-reset` without options and expects its refusal (exit 1), which proves
+  that `JarLauncher` passes the arguments to `main`.
+- `snyk.yml` and `owasp-dependency-check.yml` restore the same Maven cache and never save.
+
+**History of the decision.**
+- **First:** retry plus one identical go-offline step in every Dockerfile, into a shared locked cache (A+B1').
+  Measured on an empty builder: 245 → 237 s for the 7 images, one resolve instead of seven, builder cache
+  9.7 → 6.5 GB.
+- **Review r1 found** that its `/m2` copy is a 670 MB layer per image, which docker-build's
+  `cache-to: type=gha,mode=max` would export into the 10 GB Actions cache.
+- **Second (X):** keep Maven in the Dockerfile, but let CI replace a `FROM scratch AS jar` stage with
+  build-and-test's jar.
+  - Parts: `build-contexts`, a compose override, a contract checker, and a job building from source on
+    `infra` PRs and `main`.
+  - It was implemented and reviewed, then replaced before merge. That job downloaded from Central again on every
+    push to `main` and on most Renovate PRs. The per-service matrix duplicated the smoke test, and each matrix
+    runner downloaded all 800 MB of jars.
+  - X's reason, a fresh clone without a JDK, does not hold: Java 21 is a prerequisite.
+- **Rejected throughout:**
+  - Jib: no Dockerfiles, which the checks and the hardening are written against; reconsider with the registry,
+    #0-71.
+  - Buildpacks: builder images of several GB.
+  - A separate `package -DskipTests` job: two compilations.
+  - A repository proxy.
+
+**Measured** (locally, R1):
+- `./mvnw clean package -DskipTests` takes 13 s, and the 7 images build in 13 s.
+- Each image's build context is only its jar (about 120 MB).
+- Layers (incident-service): dependencies 121 MB, loader 0.7 MB, snapshot dependencies 4 kB, application 0.7 MB.
+  A code change replaced only the application layer.
+- All 7 services are healthy. No `application-local` is in any jar or image, and CI's check catches a planted
+  one. `docker compose run --rm auth-service break-glass-mfa-reset` reaches the command (its refusal, exit 1).
+- No jar fails the build, and so do two.
+- CI, measured on PR #498 (run 38891947846, all seven services) against `main`'s run 38862847045:
+  - wall clock: 10 min 16 s instead of 9 min 46 s;
+  - runner time: 11 min 41 s instead of 32 min 40 s;
+  - the smoke test: 3 min 15 s instead of 6 min 08 s;
+  - build-and-test: +44 s, from a first run that restored no cache (compile 37 s instead of 15 s, one download
+    from Central).
+- A change to one service or to `k8s/` alone now takes about 9.5 min instead of about 6 min 12 s (PR #497),
+  because the smoke test follows build-and-test (ADR-0030).
+
+---
+
+### 0-142. The Maven distribution the wrapper downloads is not checked
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-141, 2026-10-16)
+
+**Problem.** `.mvn/wrapper/maven-wrapper.properties` names the Maven distribution by URL only
+(`distributionType=only-script`, Maven 3.9.16 from `repo.maven.apache.org`); `./mvnw` downloads it on a runner
+whose Maven cache misses and on a developer's machine, and runs it unchecked. Since #0-141 the distribution
+(`~/.m2/wrapper`) is also kept in CI's Maven cache for up to a month, so a tampered download would be reused by
+every run of that month, not only the one that fetched it (only a push to `main` writes the cache). A tampered or truncated zip would run with
+the build's access to the sources and, on a runner, to the job's token. Every other tool CI downloads is pinned
+by checksum (ADR-0021, ADR-0027).
+
+**Approach.** Add `distributionSha256Sum` (the SHA-256 published next to the zip on Central) to
+`maven-wrapper.properties`; check that the only-script `mvnw` 3.3.4 verifies it (it refuses a mismatch) and that
+Renovate's Maven wrapper manager updates the sum with the version, or document the hand bump as for the Snyk CLI.
+
+---
+
+### 0-143. The images do not use a CDS or AOT cache
+
+**Type:** design · **Priority:** Low · **Status:** Open (left open by #0-141, ADR-0030, 2026-10-16)
+
+**Problem.** Since #0-141 every image runs the jar extracted into Spring Boot's layers, the layout Spring Boot's
+CDS support (and Java 24+'s AOT cache) is built on, but no image creates or uses an archive: each start loads and
+links every class again. Start-up time matters for the HPAs' scale-up and for a rollout; not measured.
+
+**Approach.** Measure the start-up of one service first. If worth it: a training run in the `layers` stage
+(`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
+`ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
+(check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
 
 ---
 

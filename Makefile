@@ -11,9 +11,11 @@ help:
 	@echo "  Incident Platform — dostępne komendy:"
 	@echo ""
 	@echo "  Środowisko lokalne:"
-	@echo "    make dev-up       — uruchom cały stack docker-compose (infrastruktura, monitoring,"
-	@echo "                        logi: Loki/Alloy/proxy Dockera, serwisy); wymaga docker/.env"
-	@echo "                        z DB_PASSWORD, POSTGRES_ADMIN_PASSWORD i GRAFANA_ADMIN_PASSWORD"
+	@echo "    make dev-up       — zbuduj jary (make build) i uruchom cały stack docker-compose"
+	@echo "                        (infrastruktura, monitoring, logi: Loki/Alloy/proxy Dockera,"
+	@echo "                        serwisy z tych jarów); wymaga Javy 21 i docker/.env"
+	@echo "                        z DB_PASSWORD, POSTGRES_ADMIN_PASSWORD i GRAFANA_ADMIN_PASSWORD;"
+	@echo "                        sama infrastruktura pod spring-boot:run (bez buildu): README Step 1"
 	@echo "    make dev-down     — zatrzymaj kontenery (też wymaga haseł w docker/.env)"
 	@echo "    make grafana-password-check — hasło Grafany krótsze niż 16 znaków albo nadal admin/admin"
 	@echo "    make dev-reset    — zatrzymaj + usuń volumes (czysta baza)"
@@ -35,9 +37,14 @@ help:
 # Środowisko lokalne (Docker Compose)
 # ============================================================
 
-dev-up:
+# Backlog #0-141 (ADR-0030): obrazy serwisów pakują jar zbudowany przez Mavena
+# (target/), same nic nie kompilują. Dlatego najpierw `make build` (czysty build,
+# kilkanaście sekund, z lokalnego ~/.m2), a `--build` przebudowuje obrazy z tych
+# jarów: bez niego compose uruchomiłby obrazy ze starym kodem. Samo
+# `docker compose up --build` spakowałoby to, co akurat leży w target/.
+dev-up: build
 	@echo "► Uruchamiam środowisko lokalne..."
-	docker compose -f docker/docker-compose.yml up -d
+	docker compose -f docker/docker-compose.yml up -d --build
 	@echo "✓ Środowisko działa:"
 	@echo "  PostgreSQL : localhost:5432"
 	@echo "  Redis      : localhost:6379"

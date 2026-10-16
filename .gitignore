@@ -33,8 +33,8 @@ application-local.yml
 application-local.yaml
 application-secrets.yml
 
-# Env variable
-docker/.env.example
+# Env variable (docker/.env and other *.env; docker/.env.example is the tracked template, not ignored:
+# backlog #0-144)
 .env.local
 *.env
 
