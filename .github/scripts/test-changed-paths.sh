@@ -52,6 +52,12 @@ case_ "entity → migration"         '.ruleFiles | index("migration")' -- \
       'notification-service/src/main/java/n/E.java=@Entity class E { @Version Long v; }'
 case_ "k8s manifest → k8s"         '(.ruleFiles | index("k8s")) and .areas == ["k8s"]' -- \
       'k8s/base/a.yaml=kind: Deployment'
+case_ ".dockerignore → k8s, root"  '(.ruleFiles | index("k8s")) and .areas == ["root"]' -- \
+      '.dockerignore=*'
+case_ "a nested .dockerignore → no k8s" '(.ruleFiles | index("k8s")) | not' -- \
+      'docs/.dockerignore=*'
+case_ "Dockerfile.dockerignore → k8s" '.ruleFiles | index("k8s")' -- \
+      'auth-service/Dockerfile.dockerignore=*'
 case_ "README → docs, root"        '(.ruleFiles | index("docs")) and .areas == ["root"]' -- \
       'README.md=# readme, changed'
 big=$(printf 'class K { @KafkaListener(topics = "t") void on() {}\n'; seq 1 40000 | sed 's/.*/  \/\/ filler line &/'; printf '}')

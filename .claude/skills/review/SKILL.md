@@ -44,7 +44,10 @@ to get the list of changed files. If there are no changes at all, say so and sto
   `src/main/resources/db/migration/.*\.(sql|java)$`, or does the diff add/change an `@Entity`, `@Table`,
   `@Column` or `@Version`? If yes, add `review-migration`.
 - K8s/build files: does the changed-files list contain a path matching
-  `(^|/)k8s/|(^|/)Dockerfile$|(^|/)pom\.xml$`? If yes, add `review-k8s`.
+  `(^|/)k8s/|(^|/)Dockerfile(\.dockerignore)?$|(^|/)pom\.xml$|^\.dockerignore$`? If yes, add `review-k8s`.
+  (`.dockerignore` decides what reaches every image's build context, and a `Dockerfile.dockerignore`
+  replaces it for that Dockerfile's build, so both are reviewed with the Dockerfiles; the autopilot's
+  gate, `scripts/factory/changed-paths.sh`, matches them the same way.)
 
 If `4` or `5` was explicitly typed but its check finds no match, note it as skipped in the final report.
 `review-docs` (`6`) has no auto-gate here.
