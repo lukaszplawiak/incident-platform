@@ -126,7 +126,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
-| [0-138](#0-138-no-poddisruptionbudget-or-topology-spread-protects-the-replica-floors) | No PodDisruptionBudget or topology spread protects the replica floors | design | Medium | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 
@@ -2152,30 +2151,6 @@ CI, but a reviewer cannot cite a rule for a change that weakens it. The check al
 ClusterRole or ClusterRoleBinding added to one environment would act across the whole cluster unchecked. When the
 rule is written, decide whether the check should also refuse every cluster-scoped kind other than Namespace in an
 overlay's render; that part touches `.github/scripts/check-k8s-environments.rb` and its test as well.
-
----
-
-### 0-138. No PodDisruptionBudget or topology spread protects the replica floors
-
-**Type:** design · **Priority:** Medium · **Status:** Open (found in the analysis of #0-137, 2026-10-15)
-
-**Problem.** Since #0-137 every service in prod has an HPA floor of at least 2 (auth-service 2, incident-service and
-ingestion-service 3, the other four 2), so one pod can fail and the service stays up. Nothing protects that floor from
-the cluster itself: `k8s/` has no PodDisruptionBudget, so a node drain or a cluster upgrade may evict every replica of a
-service at once, and no `topologySpreadConstraints` or anti-affinity, so the scheduler may place all replicas on one
-node, whose failure then takes the service down. The floor guards against a pod failing, not against the node or zone
-it runs on.
-
-**Approach.** A PodDisruptionBudget per service in the overlays that have a floor of 2 or more (`maxUnavailable: 1`,
-which stays satisfiable at any replica count, rather than a `minAvailable` that can block a drain at the floor), and
-`topologySpreadConstraints` on `kubernetes.io/hostname` (and `topology.kubernetes.io/zone` once the cluster's zones are
-known) with `whenUnsatisfiable: ScheduleAnyway` so a small cluster still schedules. Decide whether dev, with one replica,
-gets none. A check of the renders, in `check-k8s-environments.rb`, that every prod service with a floor of 2 has one.
-
-**Decided (owner, 2026-10-16; ADR-0029, Accepted).** The budgets live in base, one per service (`maxUnavailable: 1` cannot block a
-drain at any count, so dev and staging's floors of 1 need no exception), with `unhealthyPodEvictionPolicy: AlwaysAllow`;
-the spread is on `kubernetes.io/hostname` only, `ScheduleAnyway`, `matchLabelKeys: [pod-template-hash]`; zones and
-rebalancing go to #0-140. The check covers every render, not only prod (`check-k8s-environments.rb` rule 6).
 
 ---
 
