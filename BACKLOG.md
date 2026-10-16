@@ -126,8 +126,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
-| [0-138](#0-138-no-poddisruptionbudget-or-topology-spread-protects-the-replica-floors) | No PodDisruptionBudget or topology spread protects the replica floors | design | Medium | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
+| [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 
 ---
 
@@ -2154,25 +2154,6 @@ overlay's render; that part touches `.github/scripts/check-k8s-environments.rb` 
 
 ---
 
-### 0-138. No PodDisruptionBudget or topology spread protects the replica floors
-
-**Type:** design · **Priority:** Medium · **Status:** Open (found in the analysis of #0-137, 2026-10-15)
-
-**Problem.** Since #0-137 every service in prod has an HPA floor of at least 2 (auth-service 2, incident-service and
-ingestion-service 3, the other four 2), so one pod can fail and the service stays up. Nothing protects that floor from
-the cluster itself: `k8s/` has no PodDisruptionBudget, so a node drain or a cluster upgrade may evict every replica of a
-service at once, and no `topologySpreadConstraints` or anti-affinity, so the scheduler may place all replicas on one
-node, whose failure then takes the service down. The floor guards against a pod failing, not against the node or zone
-it runs on.
-
-**Approach.** A PodDisruptionBudget per service in the overlays that have a floor of 2 or more (`maxUnavailable: 1`,
-which stays satisfiable at any replica count, rather than a `minAvailable` that can block a drain at the floor), and
-`topologySpreadConstraints` on `kubernetes.io/hostname` (and `topology.kubernetes.io/zone` once the cluster's zones are
-known) with `whenUnsatisfiable: ScheduleAnyway` so a small cluster still schedules. Decide whether dev, with one replica,
-gets none. A check of the renders, in `check-k8s-environments.rb`, that every prod service with a floor of 2 has one.
-
----
-
 ### 0-139. The HPAs scale the JVM services on memory
 
 **Type:** design · **Priority:** Low · **Status:** Open (found in the analysis of #0-137, 2026-10-15)
@@ -2186,6 +2167,22 @@ arithmetic counts. Not measured: no cluster runs these manifests yet.
 **Approach.** Measure first, on a cluster under load: whether memory utilisation follows the load at all. If it does
 not, scale on CPU only, or on a metric that follows the work (requests per pod, or the Kafka consumer lag through KEDA
 for the consumers), and keep memory as a limit (OOM protection), not a scaling signal.
+
+---
+
+### 0-140. The services' pods are not spread over zones, nor rebalanced after scale-down
+
+**Type:** design · **Priority:** Low · **Status:** Open (left open by #0-138, ADR-0029, 2026-10-16)
+
+**Problem.** Since #0-138 each service's pods spread over nodes (`topologySpreadConstraints` on
+`kubernetes.io/hostname`, `ScheduleAnyway`), but not over zones: on a cluster with several zones, every pod of a
+service may run in one zone, whose outage takes the service down. And the spread is applied only when a pod is
+scheduled: an HPA scale-down removes pods without regard to it, and a drain's evicted pods land wherever there is
+room, so the placement can drift until the pods are rescheduled. Not observable yet: no cluster runs these manifests.
+
+**Approach.** Once the target cluster and its zones are known: a second constraint on `topology.kubernetes.io/zone`
+(`ScheduleAnyway` unless every zone is sure to have capacity), extended in `check-k8s-environments.rb` rule 6; and
+decide whether the cluster runs a descheduler (`RemovePodsViolatingTopologySpreadConstraint`) or accepts the drift.
 
 ---
 

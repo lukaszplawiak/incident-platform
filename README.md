@@ -1562,7 +1562,7 @@ The `k8s/` directory uses **Kustomize** with environment overlays:
 
 ```
 k8s/
-├── base/               # Environment-agnostic manifests (Deployments, Services, HPA, Ingress)
+├── base/               # Environment-agnostic manifests (Deployments, Services, HPA, PodDisruptionBudget, Ingress)
 └── overlays/
     ├── dev/            # Minikube: 1 replica (HPAs at 1–1), 768Mi memory limit, relaxed probe delays (services only);
     │                   # Mailpit catches mail: kubectl -n incident-platform-dev port-forward svc/mailpit 8025
@@ -1584,6 +1584,7 @@ Key features of the base configuration:
   | prod | 2–3 | 3–5 | 3–5 | 2–2 |
 
   Prod never runs a service on one pod. The four at 2–2 gain availability, not throughput, from a second pod: for notification, escalation and postmortem one pod already consumes all three partitions of `incidents.lifecycle`, their `@Scheduled` jobs run on one pod at a time under ShedLock, and Slack, mail, SMS and Gemini set their pace; oncall-service serves HTTP only, to escalation and notification, so its load follows theirs. The ceilings bound the Postgres connections (backlog #0-79, `docs/database-roles.md`). The decision and the options it was chosen over: ADR-0028.
+- **PodDisruptionBudget and spread over nodes** — each service has a budget of one pod (`maxUnavailable: 1`, `unhealthyPodEvictionPolicy: AlwaysAllow`, `k8s/base/<service>/pdb.yml`), so a node drain or a cluster upgrade moves its pods one at a time and never empties the floor above; a `minAvailable` at the floor would block every drain. Its pods spread over nodes (`topologySpreadConstraints` on `kubernetes.io/hostname`, `ScheduleAnyway`, so a one-node minikube still schedules), so one node failing takes at most part of the floor. Both in base, for every overlay (backlog #0-138, checked in CI by `check-k8s-environments.rb`, ADR-0029); zones wait for a known cluster (backlog #0-140).
 - **ShedLock** — prevents duplicate scheduled job execution across replicas
 
 ---
@@ -1967,9 +1968,9 @@ incident-platform/
 │       └── provisioning/          # Grafana datasources (Prometheus, Loki) and dashboards, auto-provisioned
 │
 └── k8s/
-    ├── base/                      # Deployments, Services, HPA, Ingress, ConfigMap, Namespace
+    ├── base/                      # Deployments, Services, HPA, PDB, Ingress, ConfigMap, Namespace
     │   ├── infrastructure/        # PostgreSQL StatefulSet, Kafka StatefulSet, Redis Deployment
-    │   └── {service}/             # deployment.yml + service-hpa.yml per service
+    │   └── {service}/             # deployment.yml + service-hpa.yml + pdb.yml per service
     └── overlays/
         ├── dev/                   # Minikube: 1 replica, 768Mi memory, relaxed probe delays, secrets
         ├── staging/

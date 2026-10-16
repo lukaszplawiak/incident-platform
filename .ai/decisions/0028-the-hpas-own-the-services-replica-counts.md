@@ -59,6 +59,7 @@ one-time scale-down the documentation warns of costs nothing now.
   no longer carries a count (`docs/database-roles.md`, the password migration on Kubernetes).
 - Raising a ceiling changes #0-79's connection arithmetic (`docs/database-roles.md`); check it there first.
 - Left open: nothing protects a floor of 2 from a node drain or from both pods landing on one node (#0-138,
-  PodDisruptionBudget and topology spread); the HPAs scale the JVMs on memory too, which may not follow the load
-  (#0-139). On a cluster that already runs these Deployments, removing `spec.replicas` first needs the documentation's
-  Client-Side (`kubectl apply edit-last-applied`) or Server-Side Apply step, or it drops to one pod once.
+  PodDisruptionBudget and topology spread; since decided in ADR-0029); the HPAs scale the JVMs on memory too, which
+  may not follow the load (#0-139). On a cluster that already runs these Deployments, removing `spec.replicas` first
+  needs the documentation's Client-Side (`kubectl apply edit-last-applied`) or Server-Side Apply step, or it drops to
+  one pod once.

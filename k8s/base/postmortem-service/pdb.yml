@@ -1,0 +1,22 @@
+# PodDisruptionBudget (backlog #0-138, ADR-0029): a node drain or a cluster upgrade evicts at most one
+# postmortem-service pod at a time, so the HPA's floor (2 or more in prod, backlog #0-137) is not emptied by
+# the cluster itself. It limits voluntary evictions only: a node that fails takes its pods regardless,
+# which is what the topologySpreadConstraints in deployment.yml spread against.
+# maxUnavailable: 1, not minAvailable: a minAvailable equal to the floor would refuse every eviction while
+# the service runs at its floor (prod's 2-2 services always do) and block the drain; one unavailable pod
+# can always be granted, at any replica count, dev's single pod included. That is why it lives in base
+# and holds for every overlay.
+# unhealthyPodEvictionPolicy: AlwaysAllow: a pod that is not Ready (crash loop, failing probe) can be
+# evicted even when the budget is used up, so a broken pod never holds a drain (GA in Kubernetes 1.31).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postmortem-service-pdb
+  labels:
+    app.kubernetes.io/part-of: incident-platform
+spec:
+  maxUnavailable: 1
+  unhealthyPodEvictionPolicy: AlwaysAllow
+  selector:
+    matchLabels:
+      app: postmortem-service

@@ -532,8 +532,10 @@ jobs:
       # into another environment's namespace, or prod runs an untagged or `latest` image or a service
       # tagged with an environment's name. Backlog #0-137: it also fails when a service's replica count is
       # not owned by its HPA alone (spec.replicas set, no HPA, an HPA aimed at a missing Deployment, a
-      # floor above the ceiling) or a prod HPA's floor is below 2. Its mutation test runs first, so a
-      # broken checker cannot pass.
+      # floor above the ceiling) or a prod HPA's floor is below 2. Backlog #0-138 (ADR-0029): and when a
+      # service is not covered by exactly one PodDisruptionBudget of maxUnavailable 1 with
+      # unhealthyPodEvictionPolicy AlwaysAllow, or does not spread over nodes (hostname, ScheduleAnyway).
+      # Its mutation test runs first, so a broken checker cannot pass.
       - name: Each overlay deploys its own environment
         run: |
           set -euo pipefail
