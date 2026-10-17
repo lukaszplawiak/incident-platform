@@ -128,7 +128,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-145](#0-145-nothing-checks-that-the-copies-of-a-workflow-cache-key-are-equal) | Nothing checks that the copies of a workflow cache key are equal | ci | Low | Open |
 | [0-146](#0-146-ci-does-not-lint-its-workflows-and-actions) | CI does not lint its workflows and actions | ci | Low | Open |
 
 ---
@@ -2265,34 +2264,6 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
-
----
-
-### 0-145. Nothing checks that the copies of a workflow cache key are equal
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-142, 2026-10-17)
-
-**Problem.** The Maven repository cache key (`maven-repo-<os>-<month>-<POMs' hash>`, #0-141) and the Maven
-distribution cache key (`maven-wrapper-<os>-<hash of the properties and the checker>`, #0-142, ADR-0031) are each
-written out four times: `ci.yml` (which saves them), `snyk.yml`, and the two jobs of
-`owasp-dependency-check.yml` (which only restore). Only comments keep the copies equal. A drift is not a hole (a
-scanner job then misses: it downloads the tree again, and mvnw downloads and checks the zip itself), but it
-silently costs the Maven Central downloads #0-141 removed, and with them its 5xx exposure.
-
-**Approach.** A structural check in CI (`.github/scripts/check-*.sh` with its own cases, like the others) that
-extracts every `actions/cache` `key:`/`restore-keys:` naming `~/.m2/repository` or `~/.m2/wrapper` from the
-workflows and fails unless each path has exactly one distinct key (and one restore prefix). Alternative: one
-reusable composite action for "restore the Maven caches", called by all four jobs, so there is one copy.
-
-**Decided (2026-10-17, owner chose both, with two actions).** The action alone removes the copies but not the
-next one: a job added later with its own `actions/cache` (or setup-java `cache: maven`) on `~/.m2` would bring
-the drift back, and could also break #0-142's rules (`~/.m2/wrapper` cached alone, by its exact key, never with
-`restore-keys`), which only review guarded. So: `.github/actions/restore-maven-caches` (month, both restores,
-outputs) for all four jobs and `save-maven-caches` (both saves) for build-and-test, the save a separate action
-because a save's path list must equal the restore's; the distribution's key also hashes both actions, so a
-change to them checks again. `check-maven-caches.rb` (+ 31 cases, 24 mutations caught) is the tenth structural
-rule: no other cache of `~/.m2` but OWASP Dependency-Check's data (`~/.m2/repository/org/owasp/`), the distribution alone
-and without `restore-keys`, no `~`/`~/.m2` or glob there, save path = restore path, the key's four files.
 
 ---
 
