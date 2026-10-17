@@ -1,0 +1,44 @@
+# ============================================================
+# Saves the two Maven caches restore-maven-caches restored (backlog #0-145, ADR-0031), each only when its
+# restore missed (an exact hit has nothing new to save, and a save of an existing key fails).
+#
+# Called by ci.yml's build-and-test alone, after verify, under `if: github.event_name == 'push'`: only a
+# push to main writes them, so a pull request (a fork's too) reads main's entries and never writes one
+# that main, snyk.yml or owasp-dependency-check.yml would restore. The paths here must be the restore's,
+# exactly: the path list is part of an entry's version (check-maven-caches.rb compares them).
+# ============================================================
+name: Save the Maven caches
+description: Saves the Maven distribution and the Maven repository under the keys restore-maven-caches computed, each only after a miss
+
+inputs:
+  wrapper-cache-hit:
+    description: restore-maven-caches' wrapper-cache-hit
+    required: true
+  wrapper-key:
+    description: restore-maven-caches' wrapper-key
+    required: true
+  repository-cache-hit:
+    description: restore-maven-caches' repository-cache-hit
+    required: true
+  repository-key:
+    description: restore-maven-caches' repository-key
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Save the Maven repository
+      if: inputs.repository-cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.m2/repository
+        key: ${{ inputs.repository-key }}
+
+    # Backlog #0-142: an entry saved here was checked (ci.yml ran check-maven-wrapper-sum.sh on the miss)
+    # and trusted as far as main's build is: it is saved after verify ran main's code.
+    - name: Save the Maven distribution
+      if: inputs.wrapper-cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.m2/wrapper
+        key: ${{ inputs.wrapper-key }}

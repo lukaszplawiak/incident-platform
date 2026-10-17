@@ -338,8 +338,11 @@ in Settings).
   It runs whenever build-and-test's wrapper cache misses, which a bump always does. mvnw does not check a
   distribution it has already unpacked, so CI no longer keeps that in the monthly Maven repository cache, which
   restores older entries by prefix. It has a cache of its own instead, restored by its exact key (the
-  properties and the checker), written only by a push to `main` that ran the check. The Snyk and OWASP jobs
-  restore that cache too. The root `./mvnw` is the only wrapper: the copies six modules carried from the first
+  properties, the checker and the two cache actions), written only by a push to `main` that ran the check. The
+  Snyk and OWASP jobs restore that cache too. Both caches are written in one place,
+  `.github/actions/restore-maven-caches` and `save-maven-caches`, and `check-maven-caches.rb` refuses a cache of
+  `~/.m2` anywhere else, the distribution with `restore-keys` or another path, and a key that stops hashing what
+  decides the check (backlog #0-145). The root `./mvnw` is the only wrapper: the copies six modules carried from the first
   commit, unpinned but unpacking into the same directory, are gone. A developer's existing `~/.m2/wrapper` is
   not checked again: delete `~/.m2/wrapper/dists/apache-maven-*` once and the next `./mvnw` downloads and
   checks it.
@@ -937,12 +940,13 @@ files — the backlog, `/ready`, runbooks — skips it, and the smoke test too: 
 its check scripts read is Markdown; skipped at the job, so it still counts as passed for a required check):
 
 ```
-Checkout → Java 21 setup (Temurin) → Restore the Maven distribution → (on a miss) Check its checksum → Restore the Maven repository → Compile → Run tests with JaCoCo → No jar holds a local config → Upload the service jars → (main) Save the Maven repository and distribution → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
+Checkout → Java 21 setup (Temurin) → Restore the Maven caches → (on a miss of the distribution) Check its checksum → Compile → Run tests with JaCoCo → No jar holds a local config → Upload the service jars → (main) Save the Maven caches → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
 ```
 
 - Compiles all 7 modules and runs the full test suite
 - The only build of the code in CI (backlog #0-141, ADR-0030): the jars `verify` tested are uploaded as the `service-jars` artifact (1 day, uncompressed: a jar is a zip already; only when Job 4 will run), and Job 4 packages exactly those jars into the images
 - Maven repository cache (backlog #0-141): restored from the newest entry of the month even when the POMs changed, so a dependency bump downloads only what is new (setup-java's own cache restores only an exact match, so every Renovate PR downloaded the whole tree again); saved on a push to `main` only, so pull requests (and the Snyk and OWASP workflows, which restore it by the same key) share main's entry instead of each storing its own
+- Both Maven caches are restored through `.github/actions/restore-maven-caches` (here and in the Snyk and OWASP workflows) and saved through `save-maven-caches` (here, on `main`), the only place their paths and keys are written; `check-maven-caches.rb` (after its own cases) refuses any other cache of `~/.m2`, `~/.m2/wrapper` with another path or with `restore-keys`, a save to another path than the restore's, and a distribution key that stops hashing what decides the check (backlog #0-145)
 - Maven distribution (backlog #0-142, ADR-0031): pinned by `distributionSha256Sum`; on a miss of its own exact-key cache, `check-maven-wrapper-sum.sh` (after its own cases, which run every time) checks the sum against Apache's SHA-512 before `./mvnw` downloads the zip and checks it again; saved on a push to `main` only, and kept out of the repository cache, whose prefix restore would bring back a distribution mvnw never checks
 - `.mvn/maven.config` makes every `./mvnw` retry a 429, 500, 502, 503 or 504 from the repository (the resolver retries only 429 and 503 by default; on 2026-10-15 one 502 from Maven Central failed four runs)
 - No jar holds a developer's `application-local.*` or `application-secrets.*` (backlog #0-100): CI plants both in every module, and `check-no-local-config-in-jars.sh` (after its own cases) fails if a service jar, or the `shared` jar nested in it, packaged one, or cannot be read

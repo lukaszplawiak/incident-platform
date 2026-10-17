@@ -129,6 +129,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
 | [0-145](#0-145-nothing-checks-that-the-copies-of-a-workflow-cache-key-are-equal) | Nothing checks that the copies of a workflow cache key are equal | ci | Low | Open |
+| [0-146](#0-146-ci-does-not-lint-its-workflows-and-actions) | CI does not lint its workflows and actions | ci | Low | Open |
 
 ---
 
@@ -2282,6 +2283,34 @@ silently costs the Maven Central downloads #0-141 removed, and with them its 5xx
 extracts every `actions/cache` `key:`/`restore-keys:` naming `~/.m2/repository` or `~/.m2/wrapper` from the
 workflows and fails unless each path has exactly one distinct key (and one restore prefix). Alternative: one
 reusable composite action for "restore the Maven caches", called by all four jobs, so there is one copy.
+
+**Decided (2026-10-17, owner chose both, with two actions).** The action alone removes the copies but not the
+next one: a job added later with its own `actions/cache` (or setup-java `cache: maven`) on `~/.m2` would bring
+the drift back, and could also break #0-142's rules (`~/.m2/wrapper` cached alone, by its exact key, never with
+`restore-keys`), which only review guarded. So: `.github/actions/restore-maven-caches` (month, both restores,
+outputs) for all four jobs and `save-maven-caches` (both saves) for build-and-test, the save a separate action
+because a save's path list must equal the restore's; the distribution's key also hashes both actions, so a
+change to them checks again. `check-maven-caches.rb` (+ 31 cases, 24 mutations caught) is the tenth structural
+rule: no other cache of `~/.m2` but OWASP Dependency-Check's data (`~/.m2/repository/org/owasp/`), the distribution alone
+and without `restore-keys`, no `~`/`~/.m2` or glob there, save path = restore path, the key's four files.
+
+---
+
+### 0-146. CI does not lint its workflows and actions
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-145, 2026-10-17)
+
+**Problem.** Nothing in CI runs actionlint (or any linter) on `.github/workflows/*.yml` and `.github/actions/*/action.yml`;
+only a developer who runs it by hand sees its findings. Since #0-145 build-and-test passes the outputs of
+`restore-maven-caches` into the inputs of `save-maven-caches`: a misspelt output, input or a missing required input
+there is not a failure at run time, the caches just stop being saved (a silent miss on every run, the Maven
+Central downloads #0-141 removed). actionlint 1.7.12 reads local actions' metadata and refuses all three (checked
+2026-10-17), along with expression, `needs`, `if` and shell (shellcheck) mistakes in every workflow.
+
+**Approach.** A step (or a small job) that runs actionlint on every PR touching `.github/`, pinned like kubeconform
+(ADR-0027): a release version and its SHA-256 in the job's `env`, downloaded into `RUNNER_TEMP`, checked before it
+is unpacked; shellcheck for the `run:` blocks pinned the same way, or explicitly off. Decide whether existing
+findings are fixed first or the step starts with a baseline. Renovate cannot bump a checksum (as for the Snyk CLI).
 
 ---
 
