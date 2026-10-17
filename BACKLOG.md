@@ -129,7 +129,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
 | [0-147](#0-147-ci-does-not-audit-its-workflows-for-security-zizmor) | CI does not audit its workflows for security (zizmor) | ci | Low | Open |
-| [0-148](#0-148-main-guard-may-run-for-a-fork-pull-request-from-a-branch-named-main) | main-guard may run for a fork pull request from a branch named `main` | security | Medium | Open |
 | [0-149](#0-149-the-sh-scripts-and-the-composite-actions-steps-are-not-shellchecked) | The `.sh` scripts and the composite actions' steps are not shellchecked | ci | Low | Open |
 
 ---
@@ -2281,33 +2280,14 @@ formerly Trail of Bits) is the usual tool for that next to actionlint. Run offli
 use GitHub's `$/` self-repository syntax instead of `./`, which actionlint 1.7.12 predates, so not adoptable yet);
 22 in its pedantic persona.
 
-**Approach.** Decide #0-148 first. Then zizmor in the `lint-workflows` job, pinned like actionlint (its releases
+**Approach.** #0-148 is done (PR #503: main-guard acts only on a push to this repository); if zizmor still
+reports the `workflow_run` trigger itself, its ignore cites those checks. Then zizmor in the `lint-workflows` job, pinned like actionlint (its releases
 carry no checksum file: GitHub's digest; wait for a release a few weeks old, its cadence is fast), offline mode
 or with a read-only token, and a `zizmor.yml` whose every ignore names its reason (the `$/` audit until actionlint
 supports the syntax). Touches `.github/`, so human-only. Also a rule in `.ai/context/security.md` for this class (found in
 the review of #0-148): a trigger that runs with this repository's token for an event an outsider can cause
 (`workflow_run`, `pull_request_target`) checks whose run it acts on (`event`, `head_repository`), never only a
 branch name; the reviewers had no rule to cite.
-
----
-
-### 0-148. main-guard may run for a fork pull request from a branch named `main`
-
-**Type:** security · **Priority:** Medium · **Status:** Open (found in the analysis of #0-146, 2026-10-17; likely, not yet confirmed)
-
-**Problem.** `.github/workflows/main-guard.yml` runs `on: workflow_run` of CI, `branches: [ main ]`, with
-`issues: write`, and opens an `autopilot-stop` issue when that run failed. If the `branches` filter matches the
-head branch of the triggering run (likely: the security review of #0-146 reads GitHub's documented semantics that
-way, and fork pull request runs do trigger `workflow_run` in the base repository; not confirmed in the docs or a
-test fork on 2026-10-17), a failing CI run of a
-pull request from a fork whose branch is named `main` would start it in this repository's context and open the
-issue: anyone could stop the autopilot. No injection: its values reach the script through `env:`, it checks out
-nothing.
-
-**Approach.** Confirm the behaviour (GitHub's docs, or a test fork). Either way, cheap to close: the job's `if:`
-also requires `github.event.workflow_run.event == 'push'` and
-`github.event.workflow_run.head_repository.full_name == github.repository`; a test case if the factory guards'
-checks can express it. Touches `.github/`, so human-only.
 
 ---
 
