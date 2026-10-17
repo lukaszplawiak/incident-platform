@@ -129,6 +129,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-142](#0-142-the-maven-distribution-the-wrapper-downloads-is-not-checked) | The Maven distribution the wrapper downloads is not checked | ci | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
+| [0-145](#0-145-nothing-checks-that-the-copies-of-a-workflow-cache-key-are-equal) | Nothing checks that the copies of a workflow cache key are equal | ci | Low | Open |
 
 ---
 
@@ -2268,6 +2269,19 @@ by checksum (ADR-0021, ADR-0027).
 `maven-wrapper.properties`; check that the only-script `mvnw` 3.3.4 verifies it (it refuses a mismatch) and that
 Renovate's Maven wrapper manager updates the sum with the version, or document the hand bump as for the Snyk CLI.
 
+**Decided (2026-10-17, owner chose option B; ADR-0031).** Two facts of the Approach were wrong (checked):
+Central publishes no `.sha256` for the zip (only `.sha1`/`.sha512`/`.asc`), and the sum alone would not have
+closed the cache gap, because mvnw checks the sum only when it downloads: a distribution already unpacked
+under `~/.m2/wrapper` runs unchecked, and the monthly repository cache restored one by prefix. Renovate does
+rewrite the sum on a bump, but it hashes what it downloaded and compares it with nothing. So: the sum in the
+properties (first value from a zip checked against `downloads.apache.org`'s `.sha512`);
+`check-maven-wrapper-sum.sh` (+ 29 cases) checks it against Apache's SHA-512 on every miss of a new
+`~/.m2/wrapper` cache with an exact key (properties + checker, no month, no `restore-keys`, saved on `main`
+only, restored by snyk/owasp too); `~/.m2/wrapper` left the repository cache. GPG and re-checking a
+developer's existing `~/.m2/wrapper` are left out (ADR-0031 says why; README Step 3 gives the one-time `rm`).
+Found in review: six services still had their own `mvnw` + `.mvn/wrapper` (first commit, no sum, same URL, so
+same unpacked directory as the root's); deleted, with their `.gitattributes`. The root wrapper is the only one.
+
 ---
 
 ### 0-143. The images do not use a CDS or AOT cache
@@ -2282,6 +2296,24 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
+
+---
+
+### 0-145. Nothing checks that the copies of a workflow cache key are equal
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-142, 2026-10-17)
+
+**Problem.** The Maven repository cache key (`maven-repo-<os>-<month>-<POMs' hash>`, #0-141) and the Maven
+distribution cache key (`maven-wrapper-<os>-<hash of the properties and the checker>`, #0-142, ADR-0031) are each
+written out four times: `ci.yml` (which saves them), `snyk.yml`, and the two jobs of
+`owasp-dependency-check.yml` (which only restore). Only comments keep the copies equal. A drift is not a hole (a
+scanner job then misses: it downloads the tree again, and mvnw downloads and checks the zip itself), but it
+silently costs the Maven Central downloads #0-141 removed, and with them its 5xx exposure.
+
+**Approach.** A structural check in CI (`.github/scripts/check-*.sh` with its own cases, like the others) that
+extracts every `actions/cache` `key:`/`restore-keys:` naming `~/.m2/repository` or `~/.m2/wrapper` from the
+workflows and fails unless each path has exactly one distinct key (and one restore prefix). Alternative: one
+reusable composite action for "restore the Maven caches", called by all four jobs, so there is one copy.
 
 ---
 

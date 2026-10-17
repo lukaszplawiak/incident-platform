@@ -109,15 +109,23 @@ jobs:
         id: maven-cache-month
         run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
 
+      # Backlog #0-142: the Maven distribution ./mvnw runs, by the exact key
+      # ci.yml saves it under (keep the two equal); see ci.yml "Restore the
+      # Maven distribution". On a miss mvnw downloads the zip and checks it
+      # against distributionSha256Sum, which ci.yml checked against Apache.
+      - name: Restore the Maven distribution
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ runner.os }}-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties', '.github/scripts/check-maven-wrapper-sum.sh') }}
+
       - name: Restore the Maven repository
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.m2/repository
-            ~/.m2/wrapper
-          key: maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          path: ~/.m2/repository
+          key: maven-repo-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
-            maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-
+            maven-repo-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-
 
       - name: Build project
         run: ./mvnw clean compile -DskipTests --no-transfer-progress

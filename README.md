@@ -330,6 +330,19 @@ in Settings).
   kubeconform publishes no signature or attestation, so this catches a swapped file, not a
   malicious release, which only a deliberate bump would bring in. kubectl, which writes the renders,
   is pinned by version only: `azure/setup-kubectl` checks nothing it downloads (backlog #0-135).
+- **The Maven distribution pinned and verified** (backlog #0-142, ADR-0031): `./mvnw` checks the zip it
+  downloads against `distributionSha256Sum` in `.mvn/wrapper/maven-wrapper.properties` and refuses a mismatch.
+  Central publishes no SHA-256 for it, and Renovate writes the sum of whatever it downloaded when it bumps
+  Maven, so CI checks the sum itself: `check-maven-wrapper-sum.sh` downloads the zip, checks it against the
+  SHA-512 Apache publishes on another host (`downloads.apache.org`), and compares its SHA-256 with the property.
+  It runs whenever build-and-test's wrapper cache misses, which a bump always does. mvnw does not check a
+  distribution it has already unpacked, so CI no longer keeps that in the monthly Maven repository cache, which
+  restores older entries by prefix. It has a cache of its own instead, restored by its exact key (the
+  properties and the checker), written only by a push to `main` that ran the check. The Snyk and OWASP jobs
+  restore that cache too. The root `./mvnw` is the only wrapper: the copies six modules carried from the first
+  commit, unpinned but unpacking into the same directory, are gone. A developer's existing `~/.m2/wrapper` is
+  not checked again: delete `~/.m2/wrapper/dists/apache-maven-*` once and the next `./mvnw` downloads and
+  checks it.
 
 **In repository settings**
 
@@ -788,9 +801,6 @@ Open items from the audit and earlier, most important first within each area. Ea
   - `diff-cover` is installed by version only, its package and dependencies unchecked: backlog #0-134.
   - kubectl, which renders the manifests that the k8s job's checks read, is downloaded by `azure/setup-kubectl`
     unverified, although Kubernetes signs it: backlog #0-135.
-  - The Maven distribution `./mvnw` downloads is not checked against a checksum (no `distributionSha256Sum`), and
-    since #0-141 CI keeps it in the Maven cache for up to a month, where the Snyk and OWASP jobs, which hold
-    scanner tokens, run it too (only a push to `main` writes that cache): backlog #0-142.
 - **Container images**
   - Built images are not scanned and no SBOM is produced: backlog #0-70.
   - Mutable image tags in k8s and compose, and k8s third-party images not tracked by Renovate: backlog #0-71.
@@ -927,12 +937,13 @@ files — the backlog, `/ready`, runbooks — skips it, and the smoke test too: 
 its check scripts read is Markdown; skipped at the job, so it still counts as passed for a required check):
 
 ```
-Checkout → Java 21 setup (Temurin) → Restore the Maven repository → Compile → Run tests with JaCoCo → No jar holds a local config → Upload the service jars → (main) Save the Maven repository → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
+Checkout → Java 21 setup (Temurin) → Restore the Maven distribution → (on a miss) Check its checksum → Restore the Maven repository → Compile → Run tests with JaCoCo → No jar holds a local config → Upload the service jars → (main) Save the Maven repository and distribution → Upload coverage reports → (PR) coverage summary → (PR) changed-lines coverage gate
 ```
 
 - Compiles all 7 modules and runs the full test suite
 - The only build of the code in CI (backlog #0-141, ADR-0030): the jars `verify` tested are uploaded as the `service-jars` artifact (1 day, uncompressed: a jar is a zip already; only when Job 4 will run), and Job 4 packages exactly those jars into the images
 - Maven repository cache (backlog #0-141): restored from the newest entry of the month even when the POMs changed, so a dependency bump downloads only what is new (setup-java's own cache restores only an exact match, so every Renovate PR downloaded the whole tree again); saved on a push to `main` only, so pull requests (and the Snyk and OWASP workflows, which restore it by the same key) share main's entry instead of each storing its own
+- Maven distribution (backlog #0-142, ADR-0031): pinned by `distributionSha256Sum`; on a miss of its own exact-key cache, `check-maven-wrapper-sum.sh` (after its own cases, which run every time) checks the sum against Apache's SHA-512 before `./mvnw` downloads the zip and checks it again; saved on a push to `main` only, and kept out of the repository cache, whose prefix restore would bring back a distribution mvnw never checks
 - `.mvn/maven.config` makes every `./mvnw` retry a 429, 500, 502, 503 or 504 from the repository (the resolver retries only 429 and 503 by default; on 2026-10-15 one 502 from Maven Central failed four runs)
 - No jar holds a developer's `application-local.*` or `application-secrets.*` (backlog #0-100): CI plants both in every module, and `check-no-local-config-in-jars.sh` (after its own cases) fails if a service jar, or the `shared` jar nested in it, packaged one, or cannot be read
 - JaCoCo coverage reports uploaded as artifacts (retained 14 days)
@@ -1196,6 +1207,10 @@ auth-service:
 ```bash
 ./mvnw clean install -DskipTests
 ```
+
+The first `./mvnw` downloads Maven and refuses it unless its SHA-256 is the `distributionSha256Sum` in
+`.mvn/wrapper/maven-wrapper.properties` (backlog #0-142). A Maven it unpacked before that sum existed is not
+checked again; `rm -rf ~/.m2/wrapper/dists/apache-maven-*` once makes it download and check it.
 
 ### Step 4 — Start all services
 

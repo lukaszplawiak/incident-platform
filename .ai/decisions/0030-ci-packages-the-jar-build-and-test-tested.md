@@ -1,6 +1,6 @@
 # ADR-0030: Maven builds the services once; the images only package the jar, in CI the one build-and-test tested (backlog #0-141)
 
-- **Status:** Accepted
+- **Status:** Accepted. Amended by ADR-0031 (Maven cache: `~/.m2/wrapper` cached apart by exact key; the repository cache keyed `maven-repo-`, POMs only)
 - **Backlog:** #0-141 (with #0-100; follow-ups #0-142, #0-143; registry #0-71)
 - **Date:** 2026-10-16
 - **Author:** human (owner's choice of R1 after a first design, X, was reviewed; written up by Claude Code in the owner's session)
@@ -44,6 +44,8 @@ next to the developer's `~/.m2`. No image is pushed yet (`push: false`; k8s runs
   versions a restored repository accumulates (#269's concern).
   - `snyk.yml` and `owasp-dependency-check.yml` restore the same entry by the same key and never save.
   - `.mvn/maven.config` retries 429/500/502/503/504.
+  - Since #0-142 (ADR-0031) this cache holds `~/.m2/repository` only: the wrapper's distribution, which it also
+    held at first, has its own cache by exact key, because mvnw never checks a distribution it finds unpacked.
 - **Locally:** `make dev-up` runs `make build` (`./mvnw clean package -DskipTests`, 13 s measured) and then
   `compose up -d --build`.
 - **#0-100 is fixed together:** a local jar would otherwise carry `application-local.yml` into a local image.
@@ -104,5 +106,5 @@ next to the developer's `~/.m2`. No image is pushed yet (`push: false`; k8s runs
   and so do two. The README says so.
 - **The artifact is public.** `service-jars` can be downloaded from a public repository's runs; it holds what the
   public sources build, and no `application-local` (checked).
-- **Left open:** the wrapper's Maven distribution has no checksum (#0-142); CDS/AOT (#0-143); registry push,
+- **Left open:** CDS/AOT (#0-143); registry push,
   scanning and digests (#0-71, #0-70).
