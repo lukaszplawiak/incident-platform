@@ -128,7 +128,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-147](#0-147-ci-tools-are-bumped-by-hand-and-checked-once-and-ci-does-not-audit-its-workflows-for-security-zizmor) | CI tools are bumped by hand and checked once, and CI does not audit its workflows for security (zizmor) | ci | Low | Open |
 | [0-149](#0-149-the-sh-scripts-and-the-composite-actions-steps-are-not-shellchecked) | The `.sh` scripts and the composite actions' steps are not shellchecked | ci | Low | Open |
 | [0-150](#0-150-the-nvd-api-key-is-on-the-owasp-scans-command-line) | The NVD API key is on the OWASP scan's command line | security | Low | Open |
 | [0-151](#0-151-local-actions-are-called-by-path-not-by-githubs-self-repository-syntax) | Local actions are called by path, not by GitHub's self-repository syntax | ci | Low | Open |
@@ -2278,43 +2277,6 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
-
----
-
-### 0-147. CI tools are bumped by hand and checked once, and CI does not audit its workflows for security (zizmor)
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the analysis of #0-146, 2026-10-17; widened by the
-owner on 2026-10-17 to the pattern every pinned tool follows, done in the same PR)
-
-**Problem (pinned tools).** The Snyk CLI (ADR-0021), kubeconform (ADR-0027), actionlint and shellcheck (ADR-0032)
-are pinned by version and SHA-256, but bumped by hand (Renovate tracks none: "it cannot compute a checksum"), the
-SHA-256's source is checked once, by hand, at the bump, and the download-and-check steps exist in five copies. The
-publishers offer more than we check: attestations (actionlint, zizmor), a signed checksum file (Snyk), a
-`CHECKSUMS` file (kubeconform); shellcheck nothing. A Renovate dry run (2026-10-17) showed its
-`github-release-attachments` datasource bumps a tag and an asset's SHA-256 together, computing the SHA-256 from
-what it downloads (trust on first use, as #0-142).
-
-**Approach (pinned tools).** ADR-0033: a pin is a `# renovate:` comment naming the repository and a `verify=`
-method, then `<NAME>_VERSION` (the tag) and `<NAME>_SHA256`; `renovate.json` bumps them (a PR per tool, after 7
-days); `check-pinned-tools.sh` checks every pin on every run against GitHub's digest and the method;
-`install-pinned-tool.sh` is the one installer. All four tools move to it, and zizmor is the fifth.
-
-**Problem (zizmor).** actionlint (#0-146) checks that workflows are correct; only review checks that they are safe:
-dangerous triggers (`workflow_run`, `pull_request_target`), credentials persisted by checkout, template injection
-beyond the inline case, excessive `permissions:`, unpinned or impostor actions, cache poisoning. zizmor (zizmorcore,
-formerly Trail of Bits) is the usual tool for that next to actionlint. Run offline on 2026-10-17 (1.31.1): one
-`high` (`dangerous-triggers`, `main-guard.yml`'s `workflow_run`, see #0-148) and five `low` (`self-repository`:
-use GitHub's `$/` self-repository syntax instead of `./`, which actionlint 1.7.12 predates, so not adoptable yet);
-22 in its pedantic persona.
-
-**Approach (zizmor).** #0-148 is done (PR #503: main-guard acts only on a push to this repository); if zizmor still
-reports the `workflow_run` trigger itself, its ignore cites those checks. Then zizmor in the `lint-workflows` job, pinned like actionlint (its releases
-carry no checksum file: GitHub's digest; wait for a release a few weeks old, its cadence is fast), offline mode
-or with a read-only token, and a `zizmor.yml` whose every ignore names its reason (the `$/` audit until actionlint
-supports the syntax). Touches `.github/`, so human-only. Also a rule in `.ai/context/security.md` for this class (found in
-the review of #0-148): a trigger that runs with this repository's token for an event an outsider can cause
-(`workflow_run`, `pull_request_target`) checks whose run it acts on (`event`, `head_repository`), never only a
-branch name; the reviewers had no rule to cite.
 
 ---
 
