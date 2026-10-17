@@ -128,7 +128,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-145](#0-145-nothing-checks-that-the-copies-of-a-workflow-cache-key-are-equal) | Nothing checks that the copies of a workflow cache key are equal | ci | Low | Open |
+| [0-146](#0-146-ci-does-not-lint-its-workflows-and-actions) | CI does not lint its workflows and actions | ci | Low | Open |
 
 ---
 
@@ -2267,21 +2267,21 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 
 ---
 
-### 0-145. Nothing checks that the copies of a workflow cache key are equal
+### 0-146. CI does not lint its workflows and actions
 
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-142, 2026-10-17)
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-145, 2026-10-17)
 
-**Problem.** The Maven repository cache key (`maven-repo-<os>-<month>-<POMs' hash>`, #0-141) and the Maven
-distribution cache key (`maven-wrapper-<os>-<hash of the properties and the checker>`, #0-142, ADR-0031) are each
-written out four times: `ci.yml` (which saves them), `snyk.yml`, and the two jobs of
-`owasp-dependency-check.yml` (which only restore). Only comments keep the copies equal. A drift is not a hole (a
-scanner job then misses: it downloads the tree again, and mvnw downloads and checks the zip itself), but it
-silently costs the Maven Central downloads #0-141 removed, and with them its 5xx exposure.
+**Problem.** Nothing in CI runs actionlint (or any linter) on `.github/workflows/*.yml` and `.github/actions/*/action.yml`;
+only a developer who runs it by hand sees its findings. Since #0-145 build-and-test passes the outputs of
+`restore-maven-caches` into the inputs of `save-maven-caches`: a misspelt output, input or a missing required input
+there is not a failure at run time, the caches just stop being saved (a silent miss on every run, the Maven
+Central downloads #0-141 removed). actionlint 1.7.12 reads local actions' metadata and refuses all three (checked
+2026-10-17), along with expression, `needs`, `if` and shell (shellcheck) mistakes in every workflow.
 
-**Approach.** A structural check in CI (`.github/scripts/check-*.sh` with its own cases, like the others) that
-extracts every `actions/cache` `key:`/`restore-keys:` naming `~/.m2/repository` or `~/.m2/wrapper` from the
-workflows and fails unless each path has exactly one distinct key (and one restore prefix). Alternative: one
-reusable composite action for "restore the Maven caches", called by all four jobs, so there is one copy.
+**Approach.** A step (or a small job) that runs actionlint on every PR touching `.github/`, pinned like kubeconform
+(ADR-0027): a release version and its SHA-256 in the job's `env`, downloaded into `RUNNER_TEMP`, checked before it
+is unpacked; shellcheck for the `run:` blocks pinned the same way, or explicitly off. Decide whether existing
+findings are fixed first or the step starts with a baseline. Renovate cannot bump a checksum (as for the Snyk CLI).
 
 ---
 

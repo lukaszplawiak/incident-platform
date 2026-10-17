@@ -99,33 +99,15 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      # Backlog #0-141 (ADR-0030): the Maven repository CI's build-and-test saved
-      # on main, restored by the same key (by prefix within the month), never
-      # saved here: one cache entry for every workflow, not one per workflow, and
-      # only what that entry lacks (this scan's own plugins) comes from Maven
-      # Central. setup-java's `cache: maven` restored only an exact match of the
-      # POMs' hash and saved an entry of its own. Keep the key equal to ci.yml's.
-      - name: Maven cache month
-        id: maven-cache-month
-        run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
-
-      # Backlog #0-142: the Maven distribution ./mvnw runs, by the exact key
-      # ci.yml saves it under (keep the two equal); see ci.yml "Restore the
-      # Maven distribution". On a miss mvnw downloads the zip and checks it
-      # against distributionSha256Sum, which ci.yml checked against Apache.
-      - name: Restore the Maven distribution
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.m2/wrapper
-          key: maven-wrapper-${{ runner.os }}-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties', '.github/scripts/check-maven-wrapper-sum.sh') }}
-
-      - name: Restore the Maven repository
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.m2/repository
-          key: maven-repo-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            maven-repo-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-
+      # Backlog #0-145 (ADR-0031): the Maven distribution and the Maven
+      # repository CI's build-and-test saved on main, through the one action
+      # that writes their paths and keys (ci.yml calls it too). Never saved
+      # here, so only what the entry lacks (this scan's own plugins) comes
+      # from Maven Central. On a miss of the distribution, mvnw downloads the
+      # zip and checks it against distributionSha256Sum, which build-and-test
+      # checked against Apache.
+      - name: Restore the Maven caches
+        uses: ./.github/actions/restore-maven-caches
 
       - name: Build project
         run: ./mvnw clean compile -DskipTests --no-transfer-progress

@@ -1,6 +1,7 @@
 # ADR-0031: The Maven distribution `./mvnw` runs is pinned by SHA-256, checked against Apache's SHA-512, and cached in CI by its exact key (backlog #0-142)
 
-- **Status:** Accepted (2026-10-17). Amends ADR-0030: its Maven repository cache no longer holds `~/.m2/wrapper`, and its key no
+- **Status:** Accepted (2026-10-17); amended the same day by #0-145 (the cache actions, enforced by the tenth
+  structural rule). Amends ADR-0030: its Maven repository cache no longer holds `~/.m2/wrapper`, and its key no
   longer hashes `.mvn/wrapper/maven-wrapper.properties`
 - **Backlog:** #0-142 (follows #0-141 / ADR-0030)
 - **Date:** 2026-10-17
@@ -37,13 +38,21 @@ monthly Maven repository cache, restored by prefix (`restore-keys`) in ci.yml an
   `apache-maven-<v>-bin.zip`, and exactly one lowercase 64-hex `distributionSha256Sum`. It downloads the zip,
   checks it against Apache's `.sha512` (on `downloads.apache.org`, or `archive.apache.org` as a fallback), and
   then compares its SHA-256 with the property.
-- In CI, `~/.m2/wrapper` has its own cache, `maven-wrapper-<os>-<hashFiles(properties, checker)>`: an exact key,
-  with no month and no `restore-keys`. build-and-test restores it and runs the checker on a miss, which is when
-  mvnw is about to download. It saves the cache on a push to `main` only. snyk/owasp restore it by the same key,
-  never save it and never run the checker. The Maven repository cache no longer holds `~/.m2/wrapper`, and its key
-  hashes the POMs only, under a new prefix `maven-repo-<os>-<month>-`: entries saved before, which hold an
-  unchecked `~/.m2/wrapper`, cannot match its `restore-keys` (their other path list already keeps `actions/cache`
-  from restoring them, `getCacheVersion`; the prefix does not rely on that).
+- In CI, `~/.m2/wrapper` has its own cache, `maven-wrapper-<os>-<hashFiles(properties, checker, both cache
+  actions)>`: an exact key, with no month and no `restore-keys`. build-and-test restores it and runs the checker on
+  a miss, which is when mvnw is about to download. It saves the cache on a push to `main` only. snyk/owasp restore
+  it by the same key, never save it and never run the checker. The Maven repository cache no longer holds
+  `~/.m2/wrapper`, and its key hashes the POMs only, under a new prefix `maven-repo-<os>-<month>-`: entries saved
+  before, which hold an unchecked `~/.m2/wrapper`, cannot match its `restore-keys` (their other path list already
+  keeps `actions/cache` from restoring them, `getCacheVersion`; the prefix does not rely on that).
+- Since #0-145 both caches are written in one place: `.github/actions/restore-maven-caches` (the month, both
+  restores, their hits and keys as outputs), called by all four jobs, and `.github/actions/save-maven-caches`
+  (both saves, from those outputs), called by build-and-test alone under `if: github.event_name == 'push'`.
+  `.github/scripts/check-maven-caches.rb` (the tenth structural rule, cases in `test-maven-caches.sh`) enforces
+  the rules above: no workflow or other action caches anything under `~/.m2` but OWASP Dependency-Check's data
+  (`~/.m2/repository/org/owasp/`), and none uses setup-java's `cache: maven`; `~/.m2/wrapper` cached alone, without
+  `restore-keys`; no `~` or `~/.m2` (or a glob there) in the actions; the same path list to save as to restore;
+  the distribution's key hashing the four files.
 - The root wrapper is the only one. The six module copies are deleted, together with the modules' `.gitattributes`,
   which only set line endings for them. Every Maven command runs from the root (`-pl <module>`).
 
@@ -67,10 +76,10 @@ monthly Maven repository cache, restored by prefix (`restore-keys`) in ci.yml an
 - A cache hit is trusted as far as `main`'s build is: the entry is saved at the end of build-and-test, after
   `verify` ran `main`'s code and tests, not right after the checked download (the repository cache works the same
   way, and only merged code runs there).
-- The four copies of the wrapper key (ci.yml, snyk.yml, owasp's two jobs) stay equal (the comments say so; a drift
-  is only a miss, after which mvnw downloads and checks the zip itself; nothing checks it, backlog #0-145); a reviewer flags a `~/.m2/wrapper` back in
-  the repository cache's `path`, a `restore-keys` on the wrapper cache, a mvnd/other-host `distributionUrl`, or a
-  `mvnw` or `.mvn/` anywhere but the root.
+- CI refuses (`check-maven-caches.rb`, #0-145) a cache of `~/.m2` outside the two actions, `~/.m2/wrapper` back in
+  the repository cache's `path`, a `restore-keys` on the wrapper cache, and a key that stops hashing what decides the
+  check. A reviewer still flags a mvnd/other-host `distributionUrl` (`check-maven-wrapper-sum.sh` refuses it too) and
+  a `mvnw` or `.mvn/` anywhere but the root.
 - Knowingly left open: a developer's existing `~/.m2/wrapper` (and the devcontainer's `incident-platform-m2`
   volume) is not re-checked. Deleting `~/.m2/wrapper/dists/apache-maven-<v>` once makes mvnw download and check
   it (README). There is no GPG check (above). `mvnw` itself is a tracked file, reviewed like code.

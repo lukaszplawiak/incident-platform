@@ -1,0 +1,71 @@
+# ============================================================
+# Restores the two Maven caches every job that runs ./mvnw uses (backlog #0-145, ADR-0031): the Maven
+# distribution ./mvnw runs (~/.m2/wrapper, #0-142) and the Maven repository (~/.m2/repository, #0-141).
+#
+# The only place their paths and keys are written, with save-maven-caches beside it (backlog #0-145): an
+# entry is restored only when key, path list and compression all match (the path list is part of an
+# entry's version, actions/toolkit getCacheVersion), and four jobs restore what ci.yml saves. Until #0-145
+# each of them carried its own copy, kept equal by comments only; a drift was silent (a miss, the whole
+# tree from Maven Central again, the 5xx exposure #0-141 removed). .github/scripts/check-maven-caches.rb
+# refuses a workflow that touches ~/.m2 with a cache step of its own.
+#
+# Needs the repository checked out (the keys hash its files). Saves nothing: ci.yml's build-and-test
+# saves, on a push to main only, through save-maven-caches with this action's outputs.
+# ============================================================
+name: Restore the Maven caches
+description: Restores the Maven distribution (~/.m2/wrapper, exact key) and the Maven repository (~/.m2/repository, by prefix within the month)
+
+outputs:
+  wrapper-cache-hit:
+    description: "'true' when the Maven distribution was restored by its exact key"
+    value: ${{ steps.wrapper.outputs.cache-hit }}
+  wrapper-key:
+    description: The Maven distribution's key, for save-maven-caches
+    value: ${{ steps.wrapper.outputs.cache-primary-key }}
+  repository-cache-hit:
+    description: "'true' when the Maven repository was restored by its exact key (not by prefix)"
+    value: ${{ steps.repository.outputs.cache-hit }}
+  repository-key:
+    description: The Maven repository's key, for save-maven-caches
+    value: ${{ steps.repository.outputs.cache-primary-key }}
+
+runs:
+  using: composite
+  steps:
+    # Backlog #0-142: mvnw checks distributionSha256Sum (.mvn/wrapper/maven-wrapper.properties) only when
+    # it downloads the zip; a distribution already unpacked under ~/.m2/wrapper runs unchecked, whatever
+    # the sum says (its directory is named after the URL alone). So it has a cache of its own, restored by
+    # its exact key and nothing else: no month, no restore-keys. An entry exists only once a push to main
+    # has missed it, run check-maven-wrapper-sum.sh (ci.yml, right after this action), had mvnw download
+    # and check the zip, and passed verify. The key hashes everything that decides what is checked and
+    # how it is cached: the properties, the checker and both actions, so a change to any of them is a
+    # miss and is checked again (check-maven-caches.rb refuses a key that leaves one out).
+    - name: Restore the Maven distribution
+      id: wrapper
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.m2/wrapper
+        key: maven-wrapper-${{ runner.os }}-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties', '.github/scripts/check-maven-wrapper-sum.sh', '.github/actions/restore-maven-caches/action.yml', '.github/actions/save-maven-caches/action.yml') }}
+
+    # Backlog #0-141: restored from the newest entry of this month even when the POMs changed, so a
+    # dependency bump downloads only what is new. setup-java's `cache: maven` restored only an exact match
+    # of the POMs' hash (no restore-keys, by design: actions/setup-java#269), so every Renovate PR
+    # downloaded the whole tree from Maven Central again. The month is what #269 was about: a restored
+    # repository keeps the versions it no longer needs, and a new month starts from an empty one.
+    - name: Maven cache month
+      id: month
+      shell: bash
+      run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
+
+    # The prefix is maven-repo-, not the maven- of the entries saved before #0-142, which held an unchecked
+    # ~/.m2/wrapper: restore-keys cannot match them (their other path list already kept actions/cache from
+    # restoring them; the prefix does not rely on that). The key hashes the POMs only: ~/.m2/wrapper is
+    # not in this cache, and must never be (check-maven-caches.rb).
+    - name: Restore the Maven repository
+      id: repository
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/.m2/repository
+        key: maven-repo-${{ runner.os }}-${{ steps.month.outputs.month }}-${{ hashFiles('**/pom.xml') }}
+        restore-keys: |
+          maven-repo-${{ runner.os }}-${{ steps.month.outputs.month }}-
