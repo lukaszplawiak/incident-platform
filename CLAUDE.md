@@ -33,10 +33,12 @@ kubectl kustomize k8s/overlays/dev | kubeconform -strict -summary \
   -kubernetes-version "$(sed -n 's/^ *KUBERNETES_VERSION: *//p' .github/workflows/ci.yml)" \
   -schema-location "$(sed -n 's/^ *KUBECONFORM_SCHEMA_LOCATION: *//p' .github/workflows/ci.yml)" -
 
-# Lint the workflows the way CI's lint-workflows job does (backlog #0-146): it matches CI only with the
-# actionlint and shellcheck versions that job pins; the first line prints them next to the ones on your PATH
-grep -E '^ *(ACTIONLINT|SHELLCHECK)_VERSION:' .github/workflows/ci.yml; actionlint -version | head -1; shellcheck --version | sed -n 2p
-actionlint -shellcheck="$(command -v shellcheck)"
+# Lint the workflows the way CI's lint-workflows job does (backlog #0-146, #0-147): it matches CI only with the
+# actionlint, shellcheck and zizmor versions that job pins; the first line prints them next to the ones on your PATH
+grep -E '^ *(ACTIONLINT|SHELLCHECK|ZIZMOR)_VERSION:' .github/workflows/ci.yml; actionlint -version | head -1; shellcheck --version | sed -n 2p; zizmor --version
+actionlint -shellcheck="$(command -v shellcheck)"; zizmor --offline --persona regular .
+# Every CI tool pin (`# renovate:` + *_VERSION + *_SHA256) against its publisher (ADR-0033); needs gh and jq, and gpg for Snyk's
+.github/scripts/check-pinned-tools.sh
 ```
 
 `make test-unit` (`-Dgroups="unit"`) is in the Makefile but no test carries a JUnit `unit` tag — it runs nothing. Use `./mvnw test`.

@@ -1,6 +1,6 @@
 # ADR-0032: CI lints every workflow, and its calls of local actions, with actionlint and shellcheck, both pinned by version and SHA-256 (backlog #0-146)
 
-- **Status:** Accepted (2026-10-17)
+- **Status:** Accepted (2026-10-17); amended by ADR-0033 (bumps by Renovate, checked against the publisher, one installer)
 - **Backlog:** #0-146 (follow-ups #0-147, #0-148, #0-149)
 - **Date:** 2026-10-17
 - **Author:** human (owner chose option B; written up by Claude Code in the owner's session)
@@ -36,9 +36,10 @@ image's shellcheck is 0.9.0 from apt, not pinned.
 - Findings are `::error` annotations (the format template is in the step's `env`, not in the script: there
   shellcheck would flag its own `$err`, SC2016, and an `-ignore` would silence that rule everywhere). No baseline
   and no ignore list: the repository is clean.
-- Bumped by hand, as for the Snyk CLI; Renovate tracks neither. `ci.yml`'s job `env` is the only copy. CLAUDE.md's
-  local command prints those versions from it and runs the actionlint and shellcheck on the developer's PATH: a
-  local result matches CI only when those are the same versions.
+- Bumped by hand, as for the Snyk CLI; Renovate tracks neither (amended by ADR-0033: Renovate bumps both, and
+  CI checks each against its publisher). `ci.yml`'s job `env` is the only copy. CLAUDE.md's local command
+  prints those versions from it and runs the actionlint and shellcheck on the developer's PATH: a local result
+  matches CI only when those are the same versions.
 
 ## Alternatives considered
 
