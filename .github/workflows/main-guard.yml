@@ -6,6 +6,14 @@
 # latest CI result itself, so this issue is the visible, remote half of the stop: closable from a phone,
 # and a place to note what broke. Reverting is the owner's decision, not automated: the failing commit is
 # not always the one to revert.
+#
+# Fixed (backlog #0-148): `branches: [ main ]` matches the head branch of the CI run, a name the author of a
+# pull request chooses: a fork's branch named `main` matched it (runs of this repository's own PR branches
+# never started this workflow, runs of pushes to main always did), and a fork pull request's CI run does
+# trigger workflow_run here, with this workflow's token. A failing run of such a pull request could open the
+# issue and stop the autopilot, again after every close. So the job also requires a push to this
+# repository: the filter narrows when it starts, the `if:` decides whose run it trusts.
+# preflight.sh reads main's CI result the same way (`--event push`).
 # ============================================================
 
 name: Main guard
@@ -24,7 +32,10 @@ permissions:
 jobs:
   stop-on-red-main:
     name: Stop the autopilot on a red main
-    if: github.event.workflow_run.conclusion == 'failure'
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Open the autopilot-stop issue

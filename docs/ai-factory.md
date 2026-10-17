@@ -159,9 +159,10 @@ says which stage was off. Nothing is blocked on it. Touches is an experiment wit
 an exit criterion (`.ai/rules/planning.md`): if it never teaches anything, it goes.
 
 **Stopping it**: create `.ai/STOP` (local), or open an issue labelled `autopilot-stop` (works from a
-phone). The preflight also refuses to start when: main's CI is red, the working tree is dirty, 2 items
-in a row were BLOCKED, an audit is due, the daily merge limit (5) is reached, or another run holds the
-lock (`scripts/factory/state.sh unlock` clears a stale one).
+phone). The preflight also refuses to start when: main's CI is red (the latest run of a push to main; a
+fork pull request's run from a branch named `main` does not count, backlog #0-148), the working tree is
+dirty, 2 items in a row were BLOCKED, an audit is due, the daily merge limit (5) is reached, or another run
+holds the lock (`scripts/factory/state.sh unlock` clears a stale one).
 
 The breaker and the audit counter are reset only by the owner, outside the autopilot session (which may
 not run `scripts/factory-admin/`): after resolving the BLOCKED items, delete `.ai/STOP` and run

@@ -4,6 +4,10 @@
 
 name: CI
 
+# main's CI result is the run of a push to main, and only that (backlog #0-148): main-guard.yml (its job's
+# `if:`) and scripts/factory/preflight.sh (`gh run list --event push`) ignore every other event, because a
+# pull request's head branch, a fork's included, may be named `main`. A new trigger that runs main's code
+# (merge_group, workflow_dispatch, schedule) is ignored by both until they are changed with it.
 on:
   push:
     branches: [ main ]

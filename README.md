@@ -428,7 +428,9 @@ security boundary, so every rule that matters is also enforced outside the model
 - **Merge**: shadow mode does not rely on the agents — `gh pr merge` is denied to autopilot sessions and the
   only push a hook allows is `git push -u origin <type>/<branch>`, until #0-113's bot account and branch
   protection exist. A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
-  the preflight honours.
+  the preflight honours. Both read main's CI result from a push to this repository only (backlog #0-148): a
+  fork pull request from a branch named `main` matches a `main` branch filter, and it neither opens the issue
+  nor counts as main's result in the preflight.
 - **Owner labels are verified** (backlog #0-126): the audits count a `human:*` label only when the repository
   owner added it (`scripts/factory/audit-data.sh` reads each PR's label events; a label by another account, with
   no event, or while the owner cannot be read counts for nothing, and so does every label while the autopilot runs on
