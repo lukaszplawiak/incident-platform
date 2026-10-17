@@ -128,7 +128,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-146](#0-146-ci-does-not-lint-its-workflows-and-actions) | CI does not lint its workflows and actions | ci | Low | Open |
 | [0-147](#0-147-ci-does-not-audit-its-workflows-for-security-zizmor) | CI does not audit its workflows for security (zizmor) | ci | Low | Open |
 | [0-148](#0-148-main-guard-may-run-for-a-fork-pull-request-from-a-branch-named-main) | main-guard may run for a fork pull request from a branch named `main` | security | Medium | Open |
 | [0-149](#0-149-the-sh-scripts-and-the-composite-actions-steps-are-not-shellchecked) | The `.sh` scripts and the composite actions' steps are not shellchecked | ci | Low | Open |
@@ -2267,35 +2266,6 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
-
----
-
-### 0-146. CI does not lint its workflows and actions
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-145, 2026-10-17)
-
-**Problem.** Nothing in CI runs actionlint (or any linter) on `.github/workflows/*.yml` and `.github/actions/*/action.yml`;
-only a developer who runs it by hand sees its findings. Since #0-145 build-and-test passes the outputs of
-`restore-maven-caches` into the inputs of `save-maven-caches`: a misspelt output, input or a missing required input
-there is not a failure at run time, the caches just stop being saved (a silent miss on every run, the Maven
-Central downloads #0-141 removed). actionlint 1.7.12 reads local actions' metadata and refuses all three (checked
-2026-10-17), along with expression, `needs`, `if` and shell (shellcheck) mistakes in every workflow.
-
-**Approach.** A step (or a small job) that runs actionlint on every PR touching `.github/`, pinned like kubeconform
-(ADR-0027): a release version and its SHA-256 in the job's `env`, downloaded into `RUNNER_TEMP`, checked before it
-is unpacked; shellcheck for the `run:` blocks pinned the same way, or explicitly off. Decide whether existing
-findings are fixed first or the step starts with a baseline. Renovate cannot bump a checksum (as for the Snyk CLI).
-
-**Decided (2026-10-17, owner chose B; ADR-0032).** A job `lint-workflows` in `ci.yml`, always run: actionlint
-1.7.12 and shellcheck 0.11.0, both pinned by version and SHA-256 in the job's `env` (actionlint's sum where its
-`checksums.txt` and GitHub's digest agree; shellcheck publishes none, so GitHub's digest), never the runner's
-shellcheck (0.9.0, apt, unpinned) nor `download-actionlint.bash` (a script from its main branch). The repository is
-clean today (no baseline, no ignore list); the format template sits in the step's `env`, since in the script
-shellcheck flags its own `$err` (SC2016). Checked in a Linux container: both sums OK, a wrong sum stops the job
-before unpacking, a finding is an `::error` annotation and exit 1. zizmor (#0-147) and `main-guard.yml` (#0-148)
-apart. Found in review: actionlint lints workflows and how they call local actions, not a composite action's own
-steps (a shell error put in one passed) nor any `.sh` file, so the docs say exactly that; shellcheck for those is
-#0-149.
 
 ---
 
