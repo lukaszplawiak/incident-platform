@@ -128,7 +128,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-146](#0-146-ci-does-not-lint-its-workflows-and-actions) | CI does not lint its workflows and actions | ci | Low | Open |
+| [0-147](#0-147-ci-does-not-audit-its-workflows-for-security-zizmor) | CI does not audit its workflows for security (zizmor) | ci | Low | Open |
+| [0-148](#0-148-main-guard-may-run-for-a-fork-pull-request-from-a-branch-named-main) | main-guard may run for a fork pull request from a branch named `main` | security | Medium | Open |
+| [0-149](#0-149-the-sh-scripts-and-the-composite-actions-steps-are-not-shellchecked) | The `.sh` scripts and the composite actions' steps are not shellchecked | ci | Low | Open |
 
 ---
 
@@ -2267,21 +2269,62 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 
 ---
 
-### 0-146. CI does not lint its workflows and actions
+### 0-147. CI does not audit its workflows for security (zizmor)
 
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-145, 2026-10-17)
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the analysis of #0-146, 2026-10-17)
 
-**Problem.** Nothing in CI runs actionlint (or any linter) on `.github/workflows/*.yml` and `.github/actions/*/action.yml`;
-only a developer who runs it by hand sees its findings. Since #0-145 build-and-test passes the outputs of
-`restore-maven-caches` into the inputs of `save-maven-caches`: a misspelt output, input or a missing required input
-there is not a failure at run time, the caches just stop being saved (a silent miss on every run, the Maven
-Central downloads #0-141 removed). actionlint 1.7.12 reads local actions' metadata and refuses all three (checked
-2026-10-17), along with expression, `needs`, `if` and shell (shellcheck) mistakes in every workflow.
+**Problem.** actionlint (#0-146) checks that workflows are correct; only review checks that they are safe:
+dangerous triggers (`workflow_run`, `pull_request_target`), credentials persisted by checkout, template injection
+beyond the inline case, excessive `permissions:`, unpinned or impostor actions, cache poisoning. zizmor (zizmorcore,
+formerly Trail of Bits) is the usual tool for that next to actionlint. Run offline on 2026-10-17 (1.31.1): one
+`high` (`dangerous-triggers`, `main-guard.yml`'s `workflow_run`, see #0-148) and five `low` (`self-repository`:
+use GitHub's `$/` self-repository syntax instead of `./`, which actionlint 1.7.12 predates, so not adoptable yet);
+22 in its pedantic persona.
 
-**Approach.** A step (or a small job) that runs actionlint on every PR touching `.github/`, pinned like kubeconform
-(ADR-0027): a release version and its SHA-256 in the job's `env`, downloaded into `RUNNER_TEMP`, checked before it
-is unpacked; shellcheck for the `run:` blocks pinned the same way, or explicitly off. Decide whether existing
-findings are fixed first or the step starts with a baseline. Renovate cannot bump a checksum (as for the Snyk CLI).
+**Approach.** Decide #0-148 first. Then zizmor in the `lint-workflows` job, pinned like actionlint (its releases
+carry no checksum file: GitHub's digest; wait for a release a few weeks old, its cadence is fast), offline mode
+or with a read-only token, and a `zizmor.yml` whose every ignore names its reason (the `$/` audit until actionlint
+supports the syntax). Touches `.github/`, so human-only.
+
+---
+
+### 0-148. main-guard may run for a fork pull request from a branch named `main`
+
+**Type:** security · **Priority:** Medium · **Status:** Open (found in the analysis of #0-146, 2026-10-17; likely, not yet confirmed)
+
+**Problem.** `.github/workflows/main-guard.yml` runs `on: workflow_run` of CI, `branches: [ main ]`, with
+`issues: write`, and opens an `autopilot-stop` issue when that run failed. If the `branches` filter matches the
+head branch of the triggering run (likely: the security review of #0-146 reads GitHub's documented semantics that
+way, and fork pull request runs do trigger `workflow_run` in the base repository; not confirmed in the docs or a
+test fork on 2026-10-17), a failing CI run of a
+pull request from a fork whose branch is named `main` would start it in this repository's context and open the
+issue: anyone could stop the autopilot. No injection: its values reach the script through `env:`, it checks out
+nothing.
+
+**Approach.** Confirm the behaviour (GitHub's docs, or a test fork). Either way, cheap to close: the job's `if:`
+also requires `github.event.workflow_run.event == 'push'` and
+`github.event.workflow_run.head_repository.full_name == github.repository`; a test case if the factory guards'
+checks can express it. Touches `.github/`, so human-only.
+
+---
+
+### 0-149. The `.sh` scripts and the composite actions' steps are not shellchecked
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-146, 2026-10-17)
+
+**Problem.** The `lint-workflows` job (#0-146, ADR-0032) runs shellcheck only on the workflows' own `run:` blocks,
+through actionlint: actionlint does not lint a composite action's steps (checked: a shell error put in
+`restore-maven-caches`' `run:` passed) and reads no `.sh` file. The repository's shell is mostly in scripts: the
+CI checks and their tests (`.github/scripts/`), the factory gates (`scripts/factory/`) and the agent hooks
+(`.claude/hooks/`), several of them security controls (the shell guards of #0-130/#0-132). With the pinned
+shellcheck 0.11.0 on 2026-10-17: 98 findings in 54 files, 16 of them warnings (SC2086, SC2034, SC2164, SC1003,
+SC2088...) and 82 notes (SC2015, SC2016, SC1091...).
+
+**Approach.** The pinned shellcheck is already in the job. Decide between fixing every finding first and a
+severity floor (`-S warning`) with the warnings fixed; either way each disable is inline with its reason, not a
+global exclude. The composite actions' `run:` steps can be extracted from their `action.yml` and fed to the same
+binary (today one step, `restore-maven-caches`' month). `scripts/factory/` and `.claude/hooks/` are protected
+paths: human-only, and the hooks' own tests (`test-hooks.sh`) must stay green after any fix.
 
 ---
 
