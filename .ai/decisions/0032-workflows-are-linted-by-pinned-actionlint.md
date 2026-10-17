@@ -61,5 +61,6 @@ image's shellcheck is 0.9.0 from apt, not pinned.
   actionlint does not know syntax newer than its release (GitHub's `$/` self-repository references, July 2026,
   postdate 1.7.12): adopting new syntax waits for a release that knows it.
 - Knowingly left open: security-focused linting (zizmor, #0-147); `main-guard.yml`'s `workflow_run` trigger
-  (#0-148); shellcheck of the composite actions' steps and of the `.sh` scripts (#0-149: 98 findings on
-  2026-10-17, 16 of them warnings, partly under protected paths).
+  (#0-148; since closed: main-guard and the preflight count only a push to this repository, BACKLOG-DONE);
+  shellcheck of the composite actions' steps and of the `.sh` scripts (#0-149: 98 findings on 2026-10-17, 16
+  of them warnings, partly under protected paths).

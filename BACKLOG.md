@@ -2284,7 +2284,10 @@ use GitHub's `$/` self-repository syntax instead of `./`, which actionlint 1.7.1
 **Approach.** Decide #0-148 first. Then zizmor in the `lint-workflows` job, pinned like actionlint (its releases
 carry no checksum file: GitHub's digest; wait for a release a few weeks old, its cadence is fast), offline mode
 or with a read-only token, and a `zizmor.yml` whose every ignore names its reason (the `$/` audit until actionlint
-supports the syntax). Touches `.github/`, so human-only.
+supports the syntax). Touches `.github/`, so human-only. Also a rule in `.ai/context/security.md` for this class (found in
+the review of #0-148): a trigger that runs with this repository's token for an event an outsider can cause
+(`workflow_run`, `pull_request_target`) checks whose run it acts on (`event`, `head_repository`), never only a
+branch name; the reviewers had no rule to cite.
 
 ---
 

@@ -6,7 +6,7 @@
 # this check unless the PR's author is the repository owner or the owner approved the PR's head commit. The autopilot's machine account can do neither, so its PRs with such a
 # change wait for the owner; the owner's own PRs pass. Only an approval of the PR's current commit by the
 # owner (or an organisation member) counts. Detection: .github/scripts/check-factory-guards.sh.
-# Also runs the tests of the autopilot's hooks, of this check and of the queue and state scripts, validates the
+# Also runs the tests of the autopilot's hooks, of this check and of the queue, state and preflight scripts, validates the
 # execution queue (.ai/plan/queue.md) against the backlog, checks that the deny rules, the shell-write
 # hook and CODEOWNERS still cover .ai/rules/protected-paths.md, and that every escape marker in the backlog is one
 # the audits can read (backlog #0-128).
@@ -55,6 +55,9 @@ jobs:
 
       - name: State script tests
         run: .github/scripts/test-factory-state.sh
+
+      - name: Preflight tests
+        run: .github/scripts/test-preflight.sh
 
       - name: Protected path check tests
         run: .github/scripts/test-protected-paths.sh

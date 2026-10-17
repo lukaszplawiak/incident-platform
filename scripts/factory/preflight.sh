@@ -5,10 +5,11 @@
 #
 # Refuses to start when: .ai/STOP exists; the working tree is not clean; the current branch is not main
 # or cannot fast-forward to origin/main; an open issue carries the `autopilot-stop` label; the latest CI
-# run on main failed; the circuit breaker tripped (FACTORY_MAX_BLOCKED consecutive BLOCKED items,
-# default 2); an audit is due (FACTORY_AUDIT_EVERY shipped items since the last one, default 10); the
-# daily merge limit is reached (FACTORY_MAX_MERGES_PER_DAY, default 5); another run holds the lock
-# (younger than FACTORY_LOCK_HOURS, default 3); Docker is not reachable (the tests need it).
+# run of a push to main did not succeed (or has a status gh does not document); the circuit breaker
+# tripped (FACTORY_MAX_BLOCKED consecutive BLOCKED items, default 2); an audit is due
+# (FACTORY_AUDIT_EVERY shipped items since the last one, default 10); the daily merge limit is reached
+# (FACTORY_MAX_MERGES_PER_DAY, default 5); another run holds the lock (younger than FACTORY_LOCK_HOURS,
+# default 3); Docker is not reachable (the tests need it).
 # The breaker and the audit trigger create .ai/STOP, so the owner has to clear them on purpose.
 # ============================================================
 set -uo pipefail
@@ -50,12 +51,18 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     for l in autopilot shadow blocked risk-high autopilot-stop; do
         grep -qx "$l" <<<"$labels" || add "label '$l' does not exist (backlog #0-113)"
     done
-    ci=$(gh run list --workflow ci.yml --branch main --limit 1 --json status,conclusion --jq '.[0] | "\(.status)/\(.conclusion)"' 2>/dev/null || echo "?")
+    # Fixed (backlog #0-148): `--branch` matches a run's head branch, a name a pull request's author
+    # chooses, so the latest run "on main" could be a fork pull request's from a branch named `main`: a red
+    # or not yet approved one could stop the autopilot, a green one hide a red main. A push to this repository
+    # is the only run that is main's (a push to a fork runs in the fork). main-guard.yml filters the same.
+    # No run at all prints nothing (`// empty`), so it reaches the "" arm, not `*` as "null/null".
+    ci=$(gh run list --workflow ci.yml --branch main --event push --limit 1 --json status,conclusion --jq '.[0] // empty | "\(.status)/\(.conclusion)"' 2>/dev/null || echo "?")
     case "$ci" in
-        completed/success|"") ;;
+        completed/success|"") ;;  # green, or no run of main yet
         completed/*) add "latest CI run on main: $ci" ;;
         "?") add "could not read CI status of main" ;;
-        *) ;;  # in progress: the next preflight decides
+        requested/*|queued/*|pending/*|waiting/*|in_progress/*) ;;  # not finished: the next preflight decides
+        *) add "unexpected CI status of main: $ci" ;;
     esac
     merged=$(gh pr list --label autopilot --state merged --search "merged:>=$today" --json number --jq 'length' 2>/dev/null || echo "?")
     if ! is_int "$merged"; then add "could not count today's merged autopilot PRs"
