@@ -1,6 +1,6 @@
 # ADR-0027: The k8s job's validation inputs are pinned: kubeconform by checksum, its schemas by commit, one Kubernetes version (backlog #0-76)
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by ADR-0033 (bumps by Renovate, checked against the publisher, one installer)
 - **Backlog:** #0-76 (open follow-ups #0-134, #0-135)
 - **Date:** 2026-10-15
 - **Author:** human (owner's choice of option and version; written up by Claude Code in the owner's session)
@@ -29,9 +29,11 @@ ADR-0021 already pins the Snyk CLI by version and SHA-256.
   and the schemas (`-kubernetes-version`): a minor supported upstream (until 2027-06-28), as no cluster
   sets one. A bump goes only to a version whose `v<version>-standalone-strict` directory the pinned commit
   has, and compares the renders before and after (a newer kubectl bundles a newer kustomize).
-- All four values are bumped by hand; Renovate tracks none of them. `ci.yml`'s job `env` is their only
-  copy: CLAUDE.md's local command reads them from it, and README and `.ai/context/infrastructure.md` name
-  it instead of a version. 1.36.5 in this record is the version chosen on 2026-10-15, not the current one.
+- All four values are bumped by hand; Renovate tracks none of them (amended by ADR-0033: Renovate now bumps
+  `KUBECONFORM_VERSION` with its SHA-256, which CI checks against the release's `CHECKSUMS`; the other two
+  stay by hand). `ci.yml`'s job `env` is their only copy: CLAUDE.md's local command reads them from it, and
+  README and `.ai/context/infrastructure.md` name it instead of a version. 1.36.5 in this record is the
+  version chosen on 2026-10-15, not the current one.
 
 ## Alternatives considered
 

@@ -17,6 +17,17 @@
 
   "labels": ["dependencies"],
 
+  "customManagers": [
+    {
+      "description": "CI tools pinned in a workflow's or a composite action's env (backlog #0-147, ADR-0033): a `# renovate:` comment, then <NAME>_VERSION (a release tag) and <NAME>_SHA256. Renovate bumps the tag and computes the new SHA-256 from the release asset that had the old one; .github/scripts/check-pinned-tools.sh then checks it against the publisher (the comment's verify=).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/", "/^\\.github/actions/[^/]+/action\\.ya?ml$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+) verify=\\S+\\s+[A-Z0-9_]+_VERSION: (?<currentValue>\\S+)\\s+[A-Z0-9_]+_SHA256: (?<currentDigest>[0-9a-f]{64})"
+      ]
+    }
+  ],
+
   "packageRules": [
     {
       "description": "Spring Boot — group all Spring updates into one PR",
@@ -60,6 +71,12 @@
       "matchManagers": ["github-actions"],
       "groupName": "GitHub Actions",
       "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "CI tools pinned in workflows (backlog #0-147): one PR per tool, after a week; a bump is trusted only once lint-workflows' check-pinned-tools.sh passes",
+      "matchManagers": ["custom.regex"],
+      "matchDatasources": ["github-release-attachments"],
+      "minimumReleaseAge": "7 days"
     },
     {
       "description": "Docker base images — group all Dockerfile updates",

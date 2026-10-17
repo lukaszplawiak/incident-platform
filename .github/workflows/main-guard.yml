@@ -18,20 +18,27 @@
 
 name: Main guard
 
-on:
-  workflow_run:
+# zizmor (backlog #0-147) rates every workflow_run trigger high, whatever guards it: the run it reacts to
+# may be a fork's. Here the job's `if:` acts only on a push to this repository (#0-148), checks out
+# nothing and runs no code from the triggering run, so the finding is suppressed on the trigger itself
+# (on both lines: zizmor versions place it on either).
+on:  # zizmor: ignore[dangerous-triggers] the job acts only on a push to this repository (backlog #0-148)
+  workflow_run:  # zizmor: ignore[dangerous-triggers] backlog #0-148, see above
     workflows: [ CI ]
     types: [ completed ]
     branches: [ main ]
 
-# GITHUB_TOKEN scope (backlog #0-59): read, plus issues: write for the stop issue only.
-permissions:
-  contents: read
-  issues: write
+# GITHUB_TOKEN scope (backlog #0-59): nothing at the workflow level; the one job asks for what it uses,
+# so a job added later starts with no scope (zizmor's excessive-permissions, backlog #0-147).
+permissions: {}
 
 jobs:
   stop-on-red-main:
     name: Stop the autopilot on a red main
+    # issues: write for the stop issue only; contents: read for `gh` to read the repository.
+    permissions:
+      contents: read
+      issues: write
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.event == 'push' &&

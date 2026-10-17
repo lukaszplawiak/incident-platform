@@ -10,7 +10,8 @@
 # Maven projects.
 #
 # The CLI is the standalone binary at a pinned version, checked
-# against a SHA-256 kept in this file before it runs (backlog #0-61).
+# against a SHA-256 kept in this file before it runs (backlog #0-61,
+# ADR-0033: install-pinned-tool.sh).
 # It used to be `npm install -g snyk` (whatever npm served that
 # minute, a Node wrapper whose unbundled `@sentry/node ^7` range was
 # resolved at install time) followed by `snyk auth <token>`, which
@@ -51,16 +52,20 @@ on:
 permissions:
   contents: read
 
-# Snyk CLI, pinned for both jobs (backlog #0-61). Renovate cannot bump
-# these: it would change the version but not the checksum, so bump both
-# by hand. Take the checksum from two independent channels and commit it
-# only if they are equal; the .sha256 file alone comes from the same host
-# as the binary, so it cannot tell a replaced binary from a real one:
-#   1. curl -fsSL https://downloads.snyk.io/cli/v<version>/snyk-linux.sha256
-#   2. npm pack snyk@<version>, then the `snyk-linux` line of
-#      package/wrapper_dist/generated/sha256sums.txt (npm registry)
+# Snyk CLI, pinned for both jobs (backlog #0-61, ADR-0033): the snyk-linux
+# asset of the snyk/cli GitHub release, the same file downloads.snyk.io
+# serves. Renovate bumps the tag and the SHA-256 together; ci.yml's
+# check-pinned-tools.sh then requires the SHA-256 in that release's
+# sha256sums.txt.asc, signed by Snyk's code-signing key
+# (.github/keys/<fingerprint>.asc). That replaces ADR-0021's hand check of two
+# channels (downloads.snyk.io and npm): a signature by Snyk's key holds
+# whichever host served the files. Each job below runs the same check on this
+# file before it installs the CLI: ci.yml's verdict on the pull request does
+# not stop a merge (no required checks on main, backlog #0-113), so a bump
+# merged red still never gets SNYK_TOKEN.
 env:
-  SNYK_CLI_VERSION: 1.1307.4
+  # renovate: datasource=github-release-attachments depName=snyk/cli verify=gpg:467717A30B2B4658415975629691DA64D0025194
+  SNYK_CLI_VERSION: v1.1307.4
   SNYK_CLI_SHA256: b0baee4fa4d7d11b7df927a1046cf8137a8a89fafac8101a45c3c0e0777ddc35
 
 # Every `uses:` names a full commit SHA, with its tag in a comment (backlog
@@ -93,6 +98,34 @@ jobs:
           # installed at run time) could read it from there (backlog #0-60).
           persist-credentials: false
 
+      # The pin above against Snyk's signed checksums (backlog #0-147,
+      # ADR-0033), before the build so a bad pin fails in seconds. --expect 1:
+      # a pin renamed out of the *_SHA256 form would otherwise pass unseen.
+      # The script uses the token only to read public releases (it also
+      # carries this job's security-events: write); SNYK_TOKEN does not exist
+      # yet.
+      - name: The pinned Snyk CLI matches Snyk's signed checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/check-pinned-tools.sh --expect 1 .github/workflows/snyk.yml
+
+      # Stops the job before the token exists in any process if the binary
+      # is not the one pinned above (backlog #0-61, install-pinned-tool.sh).
+      # Installed into RUNNER_TEMP and put on PATH for later steps: no sudo.
+      # Before the build (backlog #0-147 review): the installer is a script
+      # from the checkout, and the build runs Maven plugins and annotation
+      # processors from the dependency tree, which could rewrite it. They
+      # could still change files or $GITHUB_PATH for the scan step: same job,
+      # same user. That exposure is older than this order (the scan needs the
+      # build's output) and is not closed by it.
+      - name: Install Snyk CLI (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          .github/scripts/install-pinned-tool.sh --repo snyk/cli --tag "$SNYK_CLI_VERSION" \
+            --asset snyk-linux --sha256 "$SNYK_CLI_SHA256" --name snyk --into "${RUNNER_TEMP}/snyk-cli"
+          echo "${RUNNER_TEMP}/snyk-cli" >> "$GITHUB_PATH"
+          "${RUNNER_TEMP}/snyk-cli/snyk" --version
+
       - name: Set up Java 21
         uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
@@ -111,19 +144,6 @@ jobs:
 
       - name: Build project
         run: ./mvnw clean compile -DskipTests --no-transfer-progress
-
-      # Stops the job before the token exists in any process if the binary
-      # is not the one pinned above (backlog #0-61). Installed into
-      # RUNNER_TEMP and put on PATH for later steps: no sudo needed.
-      - name: Install Snyk CLI (pinned, checksum verified)
-        run: |
-          curl --fail --silent --show-error --location --retry 2 \
-            --output snyk "https://downloads.snyk.io/cli/v${SNYK_CLI_VERSION}/snyk-linux"
-          echo "${SNYK_CLI_SHA256}  snyk" | sha256sum --check --strict
-          install -D -m 0755 snyk "${RUNNER_TEMP}/snyk-cli/snyk"
-          rm snyk
-          echo "${RUNNER_TEMP}/snyk-cli" >> "$GITHUB_PATH"
-          "${RUNNER_TEMP}/snyk-cli/snyk" --version
 
       - name: Run Snyk dependency scan
         # The only step that sees the token (read by the CLI, no `snyk auth`).
@@ -164,13 +184,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: The pinned Snyk CLI matches Snyk's signed checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/check-pinned-tools.sh --expect 1 .github/workflows/snyk.yml
+
       - name: Install Snyk CLI (pinned, checksum verified)
         run: |
-          curl --fail --silent --show-error --location --retry 2 \
-            --output snyk "https://downloads.snyk.io/cli/v${SNYK_CLI_VERSION}/snyk-linux"
-          echo "${SNYK_CLI_SHA256}  snyk" | sha256sum --check --strict
-          install -D -m 0755 snyk "${RUNNER_TEMP}/snyk-cli/snyk"
-          rm snyk
+          set -euo pipefail
+          .github/scripts/install-pinned-tool.sh --repo snyk/cli --tag "$SNYK_CLI_VERSION" \
+            --asset snyk-linux --sha256 "$SNYK_CLI_SHA256" --name snyk --into "${RUNNER_TEMP}/snyk-cli"
           echo "${RUNNER_TEMP}/snyk-cli" >> "$GITHUB_PATH"
           "${RUNNER_TEMP}/snyk-cli/snyk" --version
 
