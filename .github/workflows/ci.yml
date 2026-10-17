@@ -598,6 +598,88 @@ jobs:
           ruby .github/scripts/check-k8s-environments.rb /tmp
 
   # ──────────────────────────────────────────────────────────
+  # Lint the workflows and actions (backlog #0-146, ADR-0032)
+  #
+  # actionlint reads every .github/workflows/*.yml: expressions and
+  # contexts, `needs`, untrusted input used inline in a script, each
+  # workflow `run:` block through shellcheck, and every call of a local
+  # action against that action's inputs and outputs (a misspelt
+  # restore-maven-caches output passed to save-maven-caches is not a
+  # failure at run time, the caches just stop being saved). It does not
+  # lint a composite action's own steps, nor the .sh scripts (#0-149).
+  # Until #0-146 only a developer who ran it by hand saw any of that.
+  #
+  # Both tools are pinned like kubeconform (ADR-0027): a release and its
+  # SHA-256 in the job's env, downloaded into RUNNER_TEMP and checked
+  # before they are unpacked, so the result changes only with a change in
+  # this repository. Not actionlint's own download-actionlint.bash (a
+  # script from its main branch, run unchecked), not a Marketplace action
+  # (#0-62), and not the runner's shellcheck (apt, unpinned: a new runner
+  # image could turn CI red with no change here). The sums are bumped by
+  # hand, as for the Snyk CLI: Renovate cannot compute one. Always runs:
+  # a few seconds, no JVM. Locally: CLAUDE.md "Commands".
+  # ──────────────────────────────────────────────────────────
+  lint-workflows:
+    name: Lint Workflows
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # ACTIONLINT_SHA256 is the release's linux_amd64 archive: committed only
+    # when the release's checksums.txt and GitHub's own digest of the asset
+    # agree. SHELLCHECK_SHA256 is the linux.x86_64 .tar.gz: shellcheck
+    # publishes no checksum file, so GitHub's digest of the asset is the
+    # only source (ADR-0032). Both catch a swapped file, not a malicious
+    # release, which only a deliberate bump would bring in.
+    env:
+      ACTIONLINT_VERSION: 1.7.12
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      SHELLCHECK_VERSION: 0.11.0
+      SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install actionlint and shellcheck (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          tools="${RUNNER_TEMP}/lint-tools"
+          mkdir -p "$tools"
+
+          archive="${RUNNER_TEMP}/actionlint.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$tools" actionlint
+          rm "$archive"
+
+          archive="${RUNNER_TEMP}/shellcheck.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 --output "$archive" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz"
+          echo "${SHELLCHECK_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$tools" --strip-components=1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          rm "$archive"
+
+          "${tools}/actionlint" -version
+          "${tools}/shellcheck" --version
+
+      # -shellcheck names the pinned binary, so the runner's own shellcheck
+      # (on PATH) is never the one used. One ::error annotation per finding.
+      # The template is in env, not in the script: in single quotes there,
+      # shellcheck would flag its own `$err` (SC2016), and an -ignore would
+      # silence that rule in every workflow. actionlint turns the \n into a
+      # newline itself.
+      - name: Lint the workflows and actions
+        env:
+          ACTIONLINT_FORMAT: '{{range $err := .}}::error file={{$err.Filepath}},line={{$err.Line}},col={{$err.Column}}::{{$err.Message}} [{{$err.Kind}}] (backlog #0-146)\n{{end}}'
+        run: |
+          set -euo pipefail
+          tools="${RUNNER_TEMP}/lint-tools"
+          "${tools}/actionlint" -shellcheck="${tools}/shellcheck" -format "$ACTIONLINT_FORMAT"
+
+  # ──────────────────────────────────────────────────────────
   # PostgreSQL roles (backlog #0-78), and the database password config (#0-66)
   #
   # Runs .github/scripts/test-postgres-roles.sh against the postgres image

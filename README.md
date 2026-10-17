@@ -330,6 +330,15 @@ in Settings).
   kubeconform publishes no signature or attestation, so this catches a swapped file, not a
   malicious release, which only a deliberate bump would bring in. kubectl, which writes the renders,
   is pinned by version only: `azure/setup-kubectl` checks nothing it downloads (backlog #0-135).
+- **Workflows and actions linted, the linters pinned** (backlog #0-146, ADR-0032): the "Lint Workflows" job
+  runs actionlint on every workflow on each push and PR: expressions, `needs`, how a workflow calls a local
+  action (a misspelt input or output would otherwise fail silently), untrusted input used inline in a script, and
+  every workflow `run:` block through shellcheck. Not yet the steps inside the composite actions, nor the `.sh`
+  scripts (backlog #0-149). Both are the releases pinned in that job's `env`, checked
+  against the SHA-256 kept next to them before they are unpacked (actionlint's when its `checksums.txt` and
+  GitHub's digest agree; shellcheck publishes no checksum file, so GitHub's digest); not actionlint's
+  `download-actionlint.bash` from its main branch, and not the runner's own shellcheck, so the result changes only
+  with a change here. Security-focused linting (zizmor) is backlog #0-147.
 - **The Maven distribution pinned and verified** (backlog #0-142, ADR-0031): `./mvnw` checks the zip it
   downloads against `distributionSha256Sum` in `.mvn/wrapper/maven-wrapper.properties` and refuses a mismatch.
   Central publishes no SHA-256 for it, and Renovate writes the sum of whatever it downloaded when it bumps
@@ -971,6 +980,13 @@ Always runs. Renders `k8s/base` and the `dev`, `staging` and `prod` overlays wit
 Builds the 7 images and boots them with PostgreSQL, Redis, Kafka and the log pipeline (docker-socket-proxy, Loki, Alloy) through `docker compose up`, curls each service's health endpoint, checks that auth-service's break-glass command still reaches `main` through the image's entrypoint (run without options, it must refuse with exit 1), checks the services' DB role, and checks that every service's lines reach Loki parsed (`.github/scripts/test-log-collection.sh`, backlog #0-94). Runs on every push to `main`, and on pull requests when `infra` changed or any service directory changed, unless the pull request changes Markdown only.
 
 The one place in CI where images are built (backlog #0-141, ADR-0030), from Job 1's jars: the `service-jars` artifact is put back into each `<service>/target/`, and each Dockerfile only packages that jar, extracted into Spring Boot's layers (`jarmode=tools extract --layers`). So the job boots exactly what the tests ran against, and neither compiles nor downloads from Maven Central. It therefore starts once Job 1 is green, and does not run when Job 1 failed. The images are not pushed — no registry configured yet (next step: GitHub Container Registry, backlog #0-71; the image tested here is then the one to push).
+
+### Job 5 — Lint Workflows
+
+Always runs (seconds). actionlint, with shellcheck for every workflow `run:` block, on every
+`.github/workflows/*.yml` and on how they call the local actions in `.github/actions/` (their own steps and the `.sh`
+scripts are not linted yet, backlog #0-149), one `::error` annotation per finding; both tools are pinned by version and SHA-256 in
+the job's `env` and checked before they run (backlog #0-146, ADR-0032).
 
 ### Security Scanning
 
