@@ -105,9 +105,46 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      # Backlog #0-141: the Maven repository and the wrapper's Maven
-      # distribution, restored from the newest cache of this month even when
-      # the POMs changed, so a dependency bump downloads only what is new.
+      # Backlog #0-142: the Maven distribution ./mvnw runs. mvnw checks
+      # distributionSha256Sum (.mvn/wrapper/maven-wrapper.properties) only
+      # when it downloads the zip; a distribution already unpacked under
+      # ~/.m2/wrapper runs unchecked, whatever the sum says (its directory is
+      # named after the URL alone). So it has a cache of its own, restored by
+      # its exact key and nothing else: no month, no restore-keys, unlike the
+      # repository below, which until #0-142 carried it and could restore it
+      # from an older entry. An entry exists only once a push to main has
+      # missed it, checked the sum against Apache's own SHA-512 (next step),
+      # had mvnw download and check the zip, and passed verify; a changed
+      # properties file or checker is a new key, so it is checked again.
+      # snyk.yml and owasp-dependency-check.yml restore it by the same key,
+      # never saving and never checking: keep the four copies of this key
+      # equal (here, snyk.yml, and owasp-dependency-check.yml's two jobs).
+      - name: Restore the Maven distribution
+        id: maven-wrapper-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: maven-wrapper-${{ runner.os }}-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties', '.github/scripts/check-maven-wrapper-sum.sh') }}
+
+      # Backlog #0-142: Maven Central publishes no SHA-256 for the zip, and
+      # Renovate writes the sum of whatever it downloaded when it bumps the
+      # version, so the sum is checked against the SHA-512 Apache publishes on
+      # another host before mvnw relies on it. Only when the cache missed:
+      # that is when mvnw is about to download (a hit was checked by the run
+      # that saved it). The checker's own cases (offline) run every time, so
+      # a broken checker cannot pass.
+      - name: The Maven distribution is the released one
+        run: |
+          .github/scripts/test-maven-wrapper-sum.sh
+          if [ "$WRAPPER_CACHE_HIT" != true ]; then
+            .github/scripts/check-maven-wrapper-sum.sh
+          fi
+        env:
+          WRAPPER_CACHE_HIT: ${{ steps.maven-wrapper-cache.outputs.cache-hit }}
+
+      # Backlog #0-141: the Maven repository, restored from the newest cache
+      # of this month even when the POMs changed, so a dependency bump
+      # downloads only what is new.
       # setup-java's `cache: maven` restored only an exact match of the POMs'
       # hash (no restore-keys, by design: actions/setup-java#269), so every
       # Renovate PR downloaded the whole tree from Maven Central again. The
@@ -117,7 +154,14 @@ jobs:
       # a pull request reads main's cache (one entry for all of them, not one
       # per PR branch in the 10 GB Actions cache), and so do snyk.yml and
       # owasp-dependency-check.yml, by the same key, never saving. Keep the
-      # three keys equal.
+      # four copies of the key equal (here, snyk.yml, and
+      # owasp-dependency-check.yml's two jobs). The key hashes the POMs only:
+      # the wrapper's properties name the Maven distribution, which since
+      # #0-142 is not in this cache. Its prefix is maven-repo-, not the
+      # maven- of the entries saved before #0-142, which still hold an
+      # unchecked ~/.m2/wrapper: restore-keys cannot match them at all
+      # (their different path list already keeps actions/cache from
+      # restoring them; the prefix does not rely on that).
       - name: Maven cache month
         id: maven-cache-month
         run: echo "month=$(date -u +%Y-%m)" >> "$GITHUB_OUTPUT"
@@ -126,12 +170,10 @@ jobs:
         id: maven-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.m2/repository
-            ~/.m2/wrapper
-          key: maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-${{ hashFiles('**/pom.xml', '.mvn/wrapper/maven-wrapper.properties') }}
+          path: ~/.m2/repository
+          key: maven-repo-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
-            maven-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-
+            maven-repo-${{ runner.os }}-${{ steps.maven-cache-month.outputs.month }}-
 
       # Backlog #0-100: the root POM keeps a developer's gitignored local
       # configuration (application-local.*, application-secrets.*: real local
@@ -192,10 +234,16 @@ jobs:
         if: github.event_name == 'push' && steps.maven-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.m2/repository
-            ~/.m2/wrapper
+          path: ~/.m2/repository
           key: ${{ steps.maven-cache.outputs.cache-primary-key }}
+
+      # Backlog #0-142: see "Restore the Maven distribution".
+      - name: Save the Maven distribution
+        if: github.event_name == 'push' && steps.maven-wrapper-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: ${{ steps.maven-wrapper-cache.outputs.cache-primary-key }}
 
       - name: Upload Jacoco coverage reports
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

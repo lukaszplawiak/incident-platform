@@ -127,8 +127,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
-| [0-142](#0-142-the-maven-distribution-the-wrapper-downloads-is-not-checked) | The Maven distribution the wrapper downloads is not checked | ci | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
+| [0-145](#0-145-nothing-checks-that-the-copies-of-a-workflow-cache-key-are-equal) | Nothing checks that the copies of a workflow cache key are equal | ci | Low | Open |
 
 ---
 
@@ -2252,24 +2252,6 @@ package the jar (R1).
 
 ---
 
-### 0-142. The Maven distribution the wrapper downloads is not checked
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-141, 2026-10-16)
-
-**Problem.** `.mvn/wrapper/maven-wrapper.properties` names the Maven distribution by URL only
-(`distributionType=only-script`, Maven 3.9.16 from `repo.maven.apache.org`); `./mvnw` downloads it on a runner
-whose Maven cache misses and on a developer's machine, and runs it unchecked. Since #0-141 the distribution
-(`~/.m2/wrapper`) is also kept in CI's Maven cache for up to a month, so a tampered download would be reused by
-every run of that month, not only the one that fetched it (only a push to `main` writes the cache). A tampered or truncated zip would run with
-the build's access to the sources and, on a runner, to the job's token. Every other tool CI downloads is pinned
-by checksum (ADR-0021, ADR-0027).
-
-**Approach.** Add `distributionSha256Sum` (the SHA-256 published next to the zip on Central) to
-`maven-wrapper.properties`; check that the only-script `mvnw` 3.3.4 verifies it (it refuses a mismatch) and that
-Renovate's Maven wrapper manager updates the sum with the version, or document the hand bump as for the Snyk CLI.
-
----
-
 ### 0-143. The images do not use a CDS or AOT cache
 
 **Type:** design · **Priority:** Low · **Status:** Open (left open by #0-141, ADR-0030, 2026-10-16)
@@ -2282,6 +2264,24 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
+
+---
+
+### 0-145. Nothing checks that the copies of a workflow cache key are equal
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-142, 2026-10-17)
+
+**Problem.** The Maven repository cache key (`maven-repo-<os>-<month>-<POMs' hash>`, #0-141) and the Maven
+distribution cache key (`maven-wrapper-<os>-<hash of the properties and the checker>`, #0-142, ADR-0031) are each
+written out four times: `ci.yml` (which saves them), `snyk.yml`, and the two jobs of
+`owasp-dependency-check.yml` (which only restore). Only comments keep the copies equal. A drift is not a hole (a
+scanner job then misses: it downloads the tree again, and mvnw downloads and checks the zip itself), but it
+silently costs the Maven Central downloads #0-141 removed, and with them its 5xx exposure.
+
+**Approach.** A structural check in CI (`.github/scripts/check-*.sh` with its own cases, like the others) that
+extracts every `actions/cache` `key:`/`restore-keys:` naming `~/.m2/repository` or `~/.m2/wrapper` from the
+workflows and fails unless each path has exactly one distinct key (and one restore prefix). Alternative: one
+reusable composite action for "restore the Maven caches", called by all four jobs, so there is one copy.
 
 ---
 
