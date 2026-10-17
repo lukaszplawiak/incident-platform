@@ -127,7 +127,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-136](#0-136-the-security-review-rules-have-no-rule-for-the-ci-supply-chain) | The security review rules have no rule for the CI supply chain | docs | Low | Open |
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
-| [0-142](#0-142-the-maven-distribution-the-wrapper-downloads-is-not-checked) | The Maven distribution the wrapper downloads is not checked | ci | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
 | [0-145](#0-145-nothing-checks-that-the-copies-of-a-workflow-cache-key-are-equal) | Nothing checks that the copies of a workflow cache key are equal | ci | Low | Open |
 
@@ -2250,37 +2249,6 @@ package the jar (R1).
     from Central).
 - A change to one service or to `k8s/` alone now takes about 9.5 min instead of about 6 min 12 s (PR #497),
   because the smoke test follows build-and-test (ADR-0030).
-
----
-
-### 0-142. The Maven distribution the wrapper downloads is not checked
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-141, 2026-10-16)
-
-**Problem.** `.mvn/wrapper/maven-wrapper.properties` names the Maven distribution by URL only
-(`distributionType=only-script`, Maven 3.9.16 from `repo.maven.apache.org`); `./mvnw` downloads it on a runner
-whose Maven cache misses and on a developer's machine, and runs it unchecked. Since #0-141 the distribution
-(`~/.m2/wrapper`) is also kept in CI's Maven cache for up to a month, so a tampered download would be reused by
-every run of that month, not only the one that fetched it (only a push to `main` writes the cache). A tampered or truncated zip would run with
-the build's access to the sources and, on a runner, to the job's token. Every other tool CI downloads is pinned
-by checksum (ADR-0021, ADR-0027).
-
-**Approach.** Add `distributionSha256Sum` (the SHA-256 published next to the zip on Central) to
-`maven-wrapper.properties`; check that the only-script `mvnw` 3.3.4 verifies it (it refuses a mismatch) and that
-Renovate's Maven wrapper manager updates the sum with the version, or document the hand bump as for the Snyk CLI.
-
-**Decided (2026-10-17, owner chose option B; ADR-0031).** Two facts of the Approach were wrong (checked):
-Central publishes no `.sha256` for the zip (only `.sha1`/`.sha512`/`.asc`), and the sum alone would not have
-closed the cache gap, because mvnw checks the sum only when it downloads: a distribution already unpacked
-under `~/.m2/wrapper` runs unchecked, and the monthly repository cache restored one by prefix. Renovate does
-rewrite the sum on a bump, but it hashes what it downloaded and compares it with nothing. So: the sum in the
-properties (first value from a zip checked against `downloads.apache.org`'s `.sha512`);
-`check-maven-wrapper-sum.sh` (+ 29 cases) checks it against Apache's SHA-512 on every miss of a new
-`~/.m2/wrapper` cache with an exact key (properties + checker, no month, no `restore-keys`, saved on `main`
-only, restored by snyk/owasp too); `~/.m2/wrapper` left the repository cache. GPG and re-checking a
-developer's existing `~/.m2/wrapper` are left out (ADR-0031 says why; README Step 3 gives the one-time `rm`).
-Found in review: six services still had their own `mvnw` + `.mvn/wrapper` (first commit, no sum, same URL, so
-same unpacked directory as the root's); deleted, with their `.gitattributes`. The root wrapper is the only one.
 
 ---
 
