@@ -773,6 +773,66 @@ jobs:
           fi
 
   # ──────────────────────────────────────────────────────────
+  # Secret scan (backlog #0-109, ADR-0036)
+  #
+  # betterleaks, with its default rules, on every commit a pull request
+  # adds (base..head) and every commit a push brings to main
+  # (before..after): what each commit adds, merge commits included (their
+  # diff against each parent), not the tree, so a secret added and deleted
+  # again within a pull request fails it too, in the commit that added it
+  # (the merge commit keeps both in main's history). Each commit that adds
+  # or removes a gitleaks:allow comment gets a warning, so none is unseen. GitHub's push protection
+  # (README "Infrastructure Hardening") blocks a known provider's token at
+  # the push, but not a generic one, and this project's secrets are generic:
+  # the JWT secret, the AES keys, the database passwords. Both run after the
+  # push: in this public repository a branch is public once pushed, so a
+  # finding here is a secret to rotate, not to delete. What this stops is
+  # the secret reaching main unseen. Nothing in the repository changes the
+  # rules (secret-scan.sh refuses a config or an ignore file); a finding that
+  # is no secret is allowed on its own line, with its reason. Pinned like
+  # every CI tool (ADR-0033); betterleaks' releases are immutable, with a
+  # release attestation, not a build one (verify=release). Always runs:
+  # seconds. Locally: CLAUDE.md "Commands".
+  # ──────────────────────────────────────────────────────────
+  secret-scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    env:
+      # renovate: datasource=github-release-attachments depName=betterleaks/betterleaks verify=release
+      BETTERLEAKS_VERSION: v1.9.0
+      BETTERLEAKS_SHA256: f8b185a39ffcece2a1ca82bf3a4e7435cd81963ffd16b7a9128daf75f35f6de7
+
+    steps:
+      # The full history: both ends of the range, and every commit between
+      # them, must be in the clone.
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install betterleaks (pinned, checksum verified)
+        run: |
+          set -euo pipefail
+          .github/scripts/install-pinned-tool.sh --repo betterleaks/betterleaks --tag "$BETTERLEAKS_VERSION" \
+            --asset "betterleaks_${BETTERLEAKS_VERSION#v}_linux_x64.tar.gz" --sha256 "$BETTERLEAKS_SHA256" \
+            --member betterleaks --into "${RUNNER_TEMP}/scan-tools"
+          "${RUNNER_TEMP}/scan-tools/betterleaks" version
+
+      # The script's own cases first, with the same binary, so a broken
+      # script cannot pass.
+      - name: No secret in the commits
+        env:
+          FROM: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          TO: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.event.after }}
+        run: |
+          set -euo pipefail
+          BETTERLEAKS="${RUNNER_TEMP}/scan-tools/betterleaks" .github/scripts/test-secret-scan.sh
+          .github/scripts/secret-scan.sh "${RUNNER_TEMP}/scan-tools/betterleaks" "$FROM" "$TO"
+
+  # ──────────────────────────────────────────────────────────
   # PostgreSQL roles (backlog #0-78), and the database password config (#0-66)
   #
   # Runs .github/scripts/test-postgres-roles.sh against the postgres image

@@ -307,12 +307,14 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   `persist-credentials: false`. No job pushes, so no later step needs the token that checkout would
   otherwise leave behind for it to read.
 - **Every CI tool pinned, bumped by Renovate, and checked against its publisher** (backlog #0-147, ADR-0033):
-  the Snyk CLI, kubeconform, actionlint, shellcheck and zizmor are each a release tag and a SHA-256 in their
+  the Snyk CLI, kubeconform, actionlint, shellcheck, zizmor and betterleaks are each a release tag and a SHA-256 in their
   job's `env`, under a `# renovate:` comment. One script installs them all (`install-pinned-tool.sh`: download,
   compare the SHA-256, then unpack into the runner's temp directory, no `sudo`). Renovate bumps tag and SHA-256
   together, but computes the SHA-256 from what it downloaded itself, so CI's `check-pinned-tools.sh` checks every
   pin on every run: GitHub's own digest of the release asset, then the strongest proof each publisher gives,
-  named by the pin's `verify=`: a GitHub artifact attestation (actionlint, zizmor), a `sha256sums.txt.asc` signed
+  named by the pin's `verify=`: a GitHub artifact attestation (actionlint, zizmor), the asset in an immutable
+  release's attestation (betterleaks: nothing about how it was built, but neither tag nor asset replaceable since,
+  ADR-0036), a `sha256sums.txt.asc` signed
   by Snyk's code-signing key (committed under `.github/keys/`), the release's `CHECKSUMS` (kubeconform: same host,
   catches a swapped file, not a malicious release), or GitHub's digest alone (shellcheck signs nothing). Until
   #0-147 every bump was by hand and no tool was tracked. Since #0-149 `check-downloads.rb` refuses a download
@@ -373,13 +375,26 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   commit, unpinned but unpacking into the same directory, are gone. A developer's existing `~/.m2/wrapper` is
   not checked again: delete `~/.m2/wrapper/dists/apache-maven-*` once and the next `./mvnw` downloads and
   checks it.
+- **Every commit scanned for secrets** (backlog #0-109, ADR-0036): the "Secret Scan" job, a required check, runs
+  pinned betterleaks with its default rules on every commit a pull request adds and every commit a push brings to
+  `main` (what each commit adds, merge commits included, so a secret added and deleted again within a pull
+  request fails it too, in the commit that added it). Generic passwords and keys count, the form of this project's own secrets (the JWT secret, the AES keys,
+  the database passwords), which push protection (below) does not recognise. Nothing in the repository changes
+  the rules: `secret-scan.sh` refuses a `.gitleaks.toml`/`.betterleaks.toml` and an ignore file; a finding that
+  is no secret is allowed on its line with `gitleaks:allow` and its reason, and every commit that adds or removes
+  one gets a warning naming it. Findings are annotations without the value. It runs after the push, like push protection: a pushed branch is already public, so a finding is a
+  secret to rotate; what it stops is that secret reaching `main` unseen (before the push: #0-156). The 1170
+  commits on `main` were scanned once when it was added (fixtures, placeholders and the Alertmanager dev token
+  untracked in ff2b4da; nothing to rotate).
 
 **In repository settings**
 
 - Workflow permissions default: **read** — a fallback only, since every workflow declares its own.
   GitHub Actions may not approve pull requests.
 - Workflows from first-time contributors' fork PRs wait for approval before they run.
-- Secret scanning with **push protection**: a push containing a recognised secret is rejected.
+- Secret scanning with **push protection**: a push containing a known provider's token (Slack, Google, GitHub,
+  AWS, ...) is rejected, unless the pusher bypasses it with a reason; non-provider patterns are off. It does not
+  see a generic password or key: the Secret Scan job (above) does.
 - **What guards `main` is files, not UI settings** (backlog #0-113, ADR-0034): the ruleset `main`, the
   repository settings and the list of admins in `.github/repository-settings/`, applied by the owner with
   `.github/scripts/repository-settings.rb apply`. The ruleset: a pull request (no direct push, for anyone),
@@ -498,7 +513,8 @@ dispatched by hand on any branch, running its unreviewed build next to `SNYK_TOK
 bot's token included (#0-154); the autopilot may push to any feature branch, the
 owner's included (#0-131); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
-(#0-116, accepted for shadow mode, required before auto-merge); no secret scanning (#0-109); no Maven Enforcer
+(#0-116, accepted for shadow mode, required before auto-merge); secrets are scanned only after the push, when a
+branch is already public, and an allow comment passes whatever its line holds (#0-156, ADR-0036); no Maven Enforcer
 (#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines, and most of
 their checks still let a command through when the check itself fails (a grep or jq error, #0-132);
 subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
@@ -1037,6 +1053,14 @@ actions, one annotation per finding not suppressed with its reason (backlog #0-1
 `main`, repository settings and admins against `.github/repository-settings/` (`main`'s copy, on a PR that does
 not change it), and every required check against the jobs that report one (backlog #0-113, ADR-0034,
 `repository-settings.rb check`).
+
+### Job 6 — Secret Scan
+
+Always runs (seconds). Installs the pinned betterleaks (backlog #0-109, ADR-0036), runs the cases of
+`secret-scan.sh` with it, then the scan: every commit from the pull request's base to its head, or from a push's
+previous `main` to the new one, with betterleaks' default rules (no config or ignore file of the repository is
+read: the script fails on one). One `::error` annotation per finding (rule, file, line, commit), never the value;
+a line that holds no secret says so with `gitleaks:allow` and its reason. A required check of `main`.
 
 ### Security Scanning
 

@@ -16,6 +16,9 @@
 #       attestation        the asset carries a GitHub artifact attestation (Sigstore) from <owner/repo>,
 #                          built from the release's own tag (`gh attestation verify --source-ref
 #                          refs/tags/<tag>`): not from another branch or tag of that repository
+#       release            the asset is part of the release as published, an immutable release (`gh release
+#                          verify-asset <tag>`: GitHub's release attestation lists its digest), so neither the tag
+#                          nor the asset can be replaced since; says nothing of how it was built (backlog #0-109)
 #       gpg:<fingerprint>  the release's sha256sums.txt.asc is signed by that key (committed under
 #                          .github/keys/, the file named by the fingerprint), which is neither expired nor
 #                          revoked in that file, and lists the asset's SHA-256
@@ -105,10 +108,10 @@ while IFS=$'\t' read -r repo tag sha meth file line; do
     what="$repo $tag"
     if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then err "$loc" "$what: the SHA-256 must be 64 lowercase hex characters"; continue; fi
     case "$meth" in
-        attestation|digest) ;;
+        attestation|release|digest) ;;
         gpg:*) [[ "${meth#gpg:}" =~ ^[0-9A-F]{40}$ ]] || { err "$loc" "$what: verify=gpg: takes a 40-character uppercase fingerprint"; continue; } ;;
         checksums:?*) ;;
-        *) err "$loc" "$what: unknown verify method '$meth' (attestation, gpg:<fingerprint>, checksums:<file>, digest)"; continue ;;
+        *) err "$loc" "$what: unknown verify method '$meth' (attestation, release, gpg:<fingerprint>, checksums:<file>, digest)"; continue ;;
     esac
 
     # gh's own last line says why (404, rate limit, network, token): "no such release" alone sent the reader
@@ -138,6 +141,17 @@ while IFS=$'\t' read -r repo tag sha meth file line; do
             fi
             if ! out=$(gh attestation verify "$d/$asset" --repo "$repo" --source-ref "refs/tags/$tag" 2>&1 </dev/null); then
                 err "$loc" "$what: $asset has no valid attestation from $repo built from refs/tags/$tag: $(echo "$out" | tail -1)"; continue
+            fi
+            ;;
+        release)
+            if ! gh release download "$tag" -R "$repo" -p "$asset" -D "$d" </dev/null >/dev/null 2>&1; then
+                err "$loc" "$what: could not download $asset"; continue
+            fi
+            if [ "$(sha256 "$d/$asset" | cut -d' ' -f1)" != "$sha" ]; then
+                err "$loc" "$what: $asset as downloaded does not have the pinned SHA-256"; continue
+            fi
+            if ! out=$(gh release verify-asset "$tag" "$d/$asset" -R "$repo" 2>&1 </dev/null); then
+                err "$loc" "$what: $asset is not attested as part of the immutable release $tag: $(echo "$out" | tail -1)"; continue
             fi
             ;;
         checksums:*)
