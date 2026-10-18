@@ -10,6 +10,8 @@ set -uo pipefail
 input=$(cat)
 cmd=$(json_get "$input" '.tool_input.command'); rc=$?
 [ "$rc" -eq 3 ] && block "jq or python3 is required for factory-ops"
+# '$(' is the literal text of a substitution, matched, not run (backlog #0-149).
+# shellcheck disable=SC2016
 case "$cmd" in
     *'|'*|*';'*|*'&'*|*'>'*|*'<'*|*'$('*|*'`'*|*'#'*|*$'\n'*) block "one script per call, no chaining, redirects or comments" ;;
 esac

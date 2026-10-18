@@ -315,7 +315,11 @@ in Settings).
   named by the pin's `verify=`: a GitHub artifact attestation (actionlint, zizmor), a `sha256sums.txt.asc` signed
   by Snyk's code-signing key (committed under `.github/keys/`), the release's `CHECKSUMS` (kubeconform: same host,
   catches a swapped file, not a malicious release), or GitHub's digest alone (shellcheck signs nothing). Until
-  #0-147 every bump was by hand and no tool was tracked.
+  #0-147 every bump was by hand and no tool was tracked. Since #0-149 `check-downloads.rb` refuses a download
+  that would bypass the pins: curl, wget, a release asset's URL or `gh release download` in any workflow's or
+  composite action's `run:` block, unless the line says why it is not one (`# not-a-download: <why>`, today the
+  smoke test's health probe). It catches the honest mistake, not a determined one (another program, a script the
+  step calls), which the owner's review of `.github/` still has to see.
 - **Scan tools pinned and verified before they receive a secret** (backlog #0-61): the Snyk CLI is
   the standalone binary at the version pinned in `snyk.yml`, checked against the SHA-256 kept next to
   it. A different binary stops the job before `SNYK_TOKEN` exists in any process. The token reaches
@@ -340,8 +344,12 @@ in Settings).
 - **Workflows and actions linted, the linters pinned** (backlog #0-146, ADR-0032): the "Lint Workflows" job
   runs actionlint on every workflow on each push and PR: expressions, `needs`, how a workflow calls a local
   action (a misspelt input or output would otherwise fail silently), untrusted input used inline in a script, and
-  every workflow `run:` block through shellcheck. Not yet the steps inside the composite actions, nor the `.sh`
-  scripts (backlog #0-149). zizmor audits the same files, the composite actions' `action.yml` included, for
+  every workflow `run:` block through shellcheck. The same pinned shellcheck checks every tracked `.sh` file (the
+  CI checks, the autopilot's gates, the agents' hooks) and the composite actions' steps, which actionlint does not
+  read (backlog #0-149, `check-shell.rb`): every severity, notes included, since the check that matters most in a
+  guard, a variable left unquoted (SC2086), is a note; with `--norc`, so no `.shellcheckrc` (shellcheck looks for
+  one above every script, and none is a protected path) can turn a check off. A finding that is meant is disabled
+  at its line, with its reason. zizmor audits the same files, the composite actions' `action.yml` included, for
   security (backlog #0-147): dangerous triggers, credentials left by checkout, template injection, excessive
   permissions, unpinned actions, cache poisoning; its default persona, offline, any finding fails the job. Offline,
   its five audits that need GitHub's API do not run, impostor commits among them (a pinned SHA that exists only in a
@@ -997,9 +1005,11 @@ The one place in CI where images are built (backlog #0-141, ADR-0030), from Job 
 Always runs (seconds). First the pinned CI tools themselves: the tests of `install-pinned-tool.sh` and
 `check-pinned-tools.sh`, then every tool pin in every workflow checked against its publisher (backlog #0-147,
 ADR-0033). Then actionlint, with shellcheck for every workflow `run:` block, on every `.github/workflows/*.yml` and on
-how they call the local actions in `.github/actions/` (their own steps and the `.sh` scripts are not linted yet,
-backlog #0-149), one `::error` annotation per finding (backlog #0-146, ADR-0032); and zizmor's security audit of the
-same files and the actions, one annotation per finding not suppressed with its reason (backlog #0-147).
+how they call the local actions in `.github/actions/`, one `::error` annotation per finding (backlog #0-146,
+ADR-0032); shellcheck, the same binary, on every tracked `.sh` file and the composite actions' steps, every severity
+(backlog #0-149, `check-shell.rb`); no download in a `run:` block outside `install-pinned-tool.sh` (backlog #0-149,
+`check-downloads.rb`); each checker's own cases run first; and zizmor's security audit of the same files and the
+actions, one annotation per finding not suppressed with its reason (backlog #0-147).
 
 ### Security Scanning
 

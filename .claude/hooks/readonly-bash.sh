@@ -34,6 +34,8 @@ cmd=$(json_get "$input" '.tool_input.command'); rc=$?
 [ "$rc" -eq 3 ] && block "jq or python3 is required for this agent's Bash guard"
 [ -n "$cmd" ] || exit 0
 
+# '$(' is the literal text of a substitution, matched, not run (backlog #0-149).
+# shellcheck disable=SC2016
 case "$cmd" in
     *'|'*|*';'*|*'&'*|*'>'*|*'<'*|*'$('*|*'`'*|*$'\n'*)
         block "one read-only command per call: no pipes, chaining, redirects or substitutions (a | inside quotes counts too). $HINT" ;;

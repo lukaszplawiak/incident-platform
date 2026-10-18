@@ -5,6 +5,9 @@
 # PRs for `head:docs/backlog-ready`.
 # Run: .github/scripts/test-audit-data.sh   (also run by .github/workflows/factory-guards.yml)
 # ============================================================
+# The fixtures are Markdown and scripts written as literal text: `$` and backticks in single quotes are meant
+# (backlog #0-149).
+# shellcheck disable=SC2016
 set -uo pipefail
 
 SRC=$(cd "$(dirname "$0")/../.." && pwd)
@@ -251,6 +254,9 @@ expect_jq "a shallow clone vouches for nothing" "$F" '.escaped == [] and ([.case
 rm .git/shallow
 
 echo "audit-data: the marker is defined once (backlog #0-128, AC10)"
+# The grep pattern 'Escaped from:\\\\' matches `Escaped from:` and two backslashes: a copy of the marker's
+# pattern escaped inside audit-data.sh (backlog #0-149).
+# shellcheck disable=SC1003
 if [ "$(grep -c "^MARKER=" "$SRC/scripts/factory/_marker.sh")" -eq 1 ] \
    && ! grep -q 'MARKER=.*Fixes' "$SRC/scripts/factory/audit-data.sh" "$SRC/.github/scripts/check-escape-markers.sh" \
    && ! grep -q 'Escaped from:\\\\' "$SRC/scripts/factory/audit-data.sh" \

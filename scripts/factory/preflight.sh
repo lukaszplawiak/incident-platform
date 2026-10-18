@@ -73,7 +73,7 @@ fi
 
 blocked=$(jq -r '.consecutiveBlocked' "$STATE_FILE")
 shipped=$(jq -r '.shippedSinceAudit' "$STATE_FILE")
-is_int "$blocked" && is_int "$shipped" || { add "state file unreadable"; blocked=99; shipped=0; }
+{ is_int "$blocked" && is_int "$shipped"; } || { add "state file unreadable"; blocked=99; shipped=0; }
 if [ "$blocked" -ge "$MAX_BLOCKED" ]; then
     add "circuit breaker: $blocked items BLOCKED in a row"
     [ -f .ai/STOP ] || printf 'circuit breaker: %s items BLOCKED in a row (%s). Resolve them, then delete this file and run scripts/factory-admin/state-reset.sh blocked.\n' "$blocked" "$today" > .ai/STOP

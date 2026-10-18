@@ -24,6 +24,8 @@
 # `Escaped from:` vanished from the audits without CI noticing.
 # ============================================================
 
+# Read by the scripts that source this file, not here (backlog #0-149).
+# shellcheck disable=SC2034
 MARKER='\*\*Fixes:\*\* #0-[0-9]+.*\*\*Escaped from:\*\*'
 MARKER_ATTEMPT='escaped[[:space:]]+from[[:space:]]*(\*\*)?[[:space:]]*:[[:space:]]*(\*\*)?[[:space:]]*[a-z]'
 

@@ -28,8 +28,8 @@ json_list() { printf '%s\n' "$1" | sed '/^$/d' | jq -R . | jq -s .; }
 match() { printf '%s\n' "$files" | grep -E "$1" || true; }
 
 # The protected paths come from their one definition, as it is on the base (.ai/rules/protected-paths.md).
-protected_re=$(protected_paths protected "$base" | paths_regex anchored) \
-    && build_re=$(protected_paths build-config "$base" | paths_regex anchored) \
+{ protected_re=$(protected_paths protected "$base" | paths_regex anchored) \
+    && build_re=$(protected_paths build-config "$base" | paths_regex anchored); } \
     || { jq -n --arg b "$base" '{error:("cannot read the lists of .ai/rules/protected-paths.md on " + $b)}'; exit 1; }
 protected=$(match "$protected_re")
 build_config=$(match "$build_re")
@@ -94,6 +94,8 @@ rule_files="general"$'\n'"architecture"$'\n'"security"
 # pipeline would count as false on a large diff.
 grep -qE '@(KafkaListener|Scheduled|Query|Modifying|Async|Cacheable)\b|extends (Jpa|Crud|PagingAndSorting|ListCrud)Repository|findAll\(|Executor|KafkaTemplate|RestClient|WebClient|@Transactional' <<<"$added_java" \
     && rule_files="$rule_files"$'\n'"performance"
+# `[ -n "$(… | grep)" ]`, not the `grep -q` shellcheck suggests: the same SIGPIPE as above (backlog #0-149).
+# shellcheck disable=SC2143
 { [ -n "$(match '(\.md$|/src/main/resources/application[^/]*\.ya?ml$)' | grep -vE '^(\.ai/(work|decisions)/|BACKLOG(-DONE)?\.md$)')" ] \
   || grep -qE '@(RestController|Controller|(Get|Post|Put|Patch|Delete|Request)Mapping)\b' <<<"$added_java"; } \
     && rule_files="$rule_files"$'\n'"docs"

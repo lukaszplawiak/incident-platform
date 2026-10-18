@@ -46,6 +46,8 @@ case_() {
 }
 
 R=svc/src/main/resources
+# ${DB_PASSWORD} is Spring's placeholder, written into the YAML as is (backlog #0-149).
+# shellcheck disable=SC2016
 OK_DS='spring:\n  datasource:\n    url: jdbc:postgresql://db/x\n    password: ${DB_PASSWORD}\n'
 
 echo "Database password config check"

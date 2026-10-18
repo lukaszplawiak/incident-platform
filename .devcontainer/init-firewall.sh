@@ -115,7 +115,7 @@ iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited
 # IPv6: loopback only. Applied whenever the kernel has IPv6 (/proc/net/if_inet6 lists an address, ::1
 # included); a container without IPv6 has nothing to close. Read, not `-s`: procfs files report size 0.
 if grep -q . /proc/net/if_inet6 2>/dev/null; then
-    ip6tables -F && ip6tables -X || { echo "IPv6 is present but ip6tables cannot be set: refusing to leave it open" >&2; exit 1; }
+    { ip6tables -F && ip6tables -X; } || { echo "IPv6 is present but ip6tables cannot be set: refusing to leave it open" >&2; exit 1; }
     ip6tables -A INPUT  -i lo -j ACCEPT
     ip6tables -A OUTPUT -o lo -j ACCEPT
     ip6tables -A INPUT  -m state --state ESTABLISHED,RELATED -j ACCEPT

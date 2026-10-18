@@ -60,7 +60,8 @@ prs=$(gh pr list --state open --json headRefName --limit 300 --jq '.[].headRefNa
 local_branches=$(git for-each-ref --format='%(refname:short)' refs/heads/)
 locks=$(printf '%s\n%s\n' "$prs" "$local_branches" | sed '/^$/d' | jq -R . | jq -s .)
 
-jq -n --argjson items "$backlog" --argjson done "$done_ids" --argjson q "$queue" --argjson locks "$locks" \
+# 'done' quoted: bare, shellcheck reads jq's variable name as the shell keyword (SC1010, backlog #0-149).
+jq -n --argjson items "$backlog" --argjson 'done' "$done_ids" --argjson q "$queue" --argjson locks "$locks" \
       --arg want "$want" --argjson present "$present" '
   ($items | map({key: .id, value: .}) | from_entries) as $byId
   | def isDone($id): ($done | index($id)) != null;

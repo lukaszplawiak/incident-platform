@@ -2305,6 +2305,16 @@ Decide here whether the job gains a structural check for it (refuse a download o
 installer, with an inline exception for the smoke test's health `curl`), next to the shellcheck of the same
 `run:` blocks.
 
+**Decided (owner, 2026-10-18, after `/research #0-149`).** Every severity, no floor: SC2086 (a variable
+unquoted) is a note, and `-S warning` would have dropped it from the guards. On 2026-10-18 the pinned shellcheck
+gave 99 findings in 35 files, 72 once libraries are followed (`--external-sources --source-path=SCRIPTDIR`);
+none was a bug in a gate or a hook, one in a test (`test-hooks.sh`, a failed `cd` ran its commits in the
+developer's repository). All resolved: fixed where the code could say it better, the rest disabled at the line
+with the reason above. `--norc`: a `.shellcheckrc` at the root silenced shellcheck (checked), and none is a
+protected path; actionlint reads none (checked). Composite steps extracted by `run-blocks.rb` (Psych nodes, for
+the line). The download check is in this item, a tripwire not a boundary (`check-downloads.rb`,
+`# not-a-download: <why>`). ADR-0032 and ADR-0033 amended.
+
 ---
 
 ### 0-150. The NVD API key is on the OWASP scan's command line

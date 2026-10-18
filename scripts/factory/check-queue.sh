@@ -46,7 +46,8 @@ backlog=$(read_file BACKLOG.md | backlog_json "$item_re") || { echo '{"valid":fa
 done_ids=$(read_file BACKLOG-DONE.md | done_json) || done_ids='[]'
 queue=$(read_file .ai/plan/queue.md | queue_json) || { echo '{"valid":false,"errors":["cannot parse .ai/plan/queue.md"]}'; exit 1; }
 
-result=$(jq -n --argjson items "$backlog" --argjson done "$done_ids" --argjson q "$queue" --argjson known "$KNOWN_MODULES" '
+# 'done' quoted: bare, shellcheck reads jq's variable name as the shell keyword (SC1010, backlog #0-149).
+result=$(jq -n --argjson items "$backlog" --argjson 'done' "$done_ids" --argjson q "$queue" --argjson known "$KNOWN_MODULES" '
   ($items | map({key: .id, value: .}) | from_entries) as $byId
   | def isDone($id): ($done | index($id)) != null;
     $q.rows as $rows

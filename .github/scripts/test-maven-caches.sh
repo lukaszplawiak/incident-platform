@@ -8,6 +8,9 @@
 # Run by the build-and-test job in .github/workflows/ci.yml, before the checker; locally:
 #   .github/scripts/test-maven-caches.sh
 # ============================================================
+# The cases hand the checker a workflow's text: `~` and `$` in single quotes are literal on purpose, the
+# checker reads them as written (backlog #0-149).
+# shellcheck disable=SC2016,SC2088
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)

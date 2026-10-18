@@ -82,7 +82,7 @@ fi
 # rewrite what -S, -p and show see; a shallow clone is refused below (its boundary commits show their whole files as
 # added) (review round 2).
 export GIT_NO_REPLACE_OBJECTS=1 GIT_GRAFT_FILE=/dev/null
-NODIFF="--no-textconv --no-ext-diff"
+NODIFF=(--no-textconv --no-ext-diff)
 shallow=$(git rev-parse --is-shallow-repository 2>/dev/null) || shallow=unknown
 # Unique: a copied line is one marker, not two, in the reviewers audit too.
 escaped=$(grep -hE "$MARKER" BACKLOG.md BACKLOG-DONE.md 2>/dev/null | jq -R . | jq -s 'unique')
@@ -96,7 +96,7 @@ escaped=$(grep -hE "$MARKER" BACKLOG.md BACKLOG-DONE.md 2>/dev/null | jq -R . | 
 # --since-as-filter, not --since: --since stops walking at the first older commit, so one back-dated commit would
 # hide every marker behind it (review round 3). Each line goes to jq as its own JSON value, no separator to split
 # on: a marker may hold a tab (review round 3).
-backlog_log=$(git log $NODIFF --since-as-filter="$since" --format= -p -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null)
+backlog_log=$(git log "${NODIFF[@]}" --since-as-filter="$since" --format= -p -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null)
 escaped_new=$(printf '%s\n' "$backlog_log" | grep -E "^\+[^+].*$MARKER" | sed 's/^+//' | while IFS= read -r l; do
                   jq -n --arg s "$(marker_span "$l")" --arg l "$l" '{span: $s, line: $l}'
               done | jq -s 'group_by(.span) | map(.[0].line)')
@@ -125,7 +125,7 @@ adds_marker() {
     local a
     while IFS= read -r a; do
         [ "$(marker_span "$a")" = "$2" ] && return 0
-    done < <(git show $NODIFF --format= "$1" -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null | grep -E '^\+[^+]' | grep -F -- "$2" | sed 's/^+//')
+    done < <(git show "${NODIFF[@]}" --format= "$1" -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null | grep -E '^\+[^+]' | grep -F -- "$2" | sed 's/^+//')
     return 1
 }
 # Every command in the loop below reads /dev/null, not the loop's input (the marker lines) (review round 3).
@@ -137,7 +137,7 @@ while IFS= read -r line; do
     # The origin is the oldest commit, in the history's order, that adds this marker, wherever the line went and
     # whatever else on it changed. Commit dates can be set by anyone, but a forged one can only make a marker
     # unverified (the bot's commit found first) or not new: the vouching itself is GitHub's.
-    for c in $(git log $NODIFF -S"$span" --reverse --format=%H -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null); do
+    for c in $(git log "${NODIFF[@]}" -S"$span" --reverse --format=%H -- BACKLOG.md BACKLOG-DONE.md 2>/dev/null </dev/null); do
         if adds_marker "$c" "$span"; then sha=$c; break; fi
     done
     if [ -z "$owner" ] || [ -z "$repo" ]; then reason="the repository owner is unknown"

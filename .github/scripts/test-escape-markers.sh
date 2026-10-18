@@ -4,6 +4,8 @@
 # the check and of scripts/factory/_marker.sh.
 # Run: .github/scripts/test-escape-markers.sh   (also run by .github/workflows/factory-guards.yml)
 # ============================================================
+# The cases are Markdown lines: backticks and `$` in single quotes are literal on purpose (backlog #0-149).
+# shellcheck disable=SC2016
 set -uo pipefail
 
 SRC=$(cd "$(dirname "$0")/../.." && pwd)

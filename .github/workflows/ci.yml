@@ -605,7 +605,8 @@ jobs:
   # action against that action's inputs and outputs (a misspelt
   # restore-maven-caches output passed to save-maven-caches is not a
   # failure at run time, the caches just stop being saved). It does not
-  # lint a composite action's own steps, nor the .sh scripts (#0-149).
+  # lint a composite action's own steps, nor the .sh scripts: since #0-149
+  # check-shell.rb runs the same pinned shellcheck on both, every severity.
   # Until #0-146 only a developer who ran it by hand saw any of that.
   #
   # zizmor (backlog #0-147) audits the same files, the composite actions'
@@ -629,8 +630,9 @@ jobs:
   # image could turn CI red with no change here). Renovate bumps each pin
   # (tag and SHA-256 together, under its `# renovate:` comment), and
   # check-pinned-tools.sh, below, checks every pin in every workflow against
-  # its publisher. Always runs: seconds, no JVM. Locally: CLAUDE.md
-  # "Commands".
+  # its publisher; check-downloads.rb refuses a download in a `run:` block
+  # that would bypass the pins (#0-149). Always runs: seconds, no JVM.
+  # Locally: CLAUDE.md "Commands".
   # ──────────────────────────────────────────────────────────
   lint-workflows:
     name: Lint Workflows
@@ -704,6 +706,30 @@ jobs:
           set -euo pipefail
           tools="${RUNNER_TEMP}/lint-tools"
           "${tools}/actionlint" -shellcheck="${tools}/shellcheck" -format "$ACTIONLINT_FORMAT"
+
+      # Backlog #0-149: the pinned shellcheck on every tracked .sh file and
+      # on the composite actions' run steps, neither of which actionlint
+      # (above) reads. Every severity, notes included (SC2086 is a note), and
+      # --norc, so no .shellcheckrc turns a check off; a finding that is meant
+      # is disabled where it is, with its reason. The checker's own cases run
+      # first, with the same binary.
+      - name: Shellcheck the scripts and the composite actions' steps
+        run: |
+          set -euo pipefail
+          ruby --version
+          SHELLCHECK="${RUNNER_TEMP}/lint-tools/shellcheck" .github/scripts/test-check-shell.sh
+          ruby .github/scripts/check-shell.rb "${RUNNER_TEMP}/lint-tools/shellcheck"
+
+      # Backlog #0-149, ADR-0033: a tool is downloaded by
+      # install-pinned-tool.sh only. Refuses curl, wget, a release asset's URL
+      # and gh release download in every workflow's and composite action's
+      # `run:` block, unless the line says why it is not one
+      # (`# not-a-download: <why>`, the smoke test's health probe).
+      - name: Tools are downloaded by install-pinned-tool.sh only
+        run: |
+          set -euo pipefail
+          .github/scripts/test-check-downloads.sh
+          ruby .github/scripts/check-downloads.rb
 
       # Backlog #0-147: one ::error/::warning annotation per finding
       # (--format github); exits non-zero on any finding not suppressed. Reads
@@ -1070,7 +1096,7 @@ jobs:
           for service in auth-service ingestion-service incident-service notification-service escalation-service postmortem-service oncall-service; do
             port="${ports[$service]}"
             echo "Checking $service on port $port..."
-            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:$port/actuator/health" || echo "CURL_FAILED")
+            status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:$port/actuator/health" || echo "CURL_FAILED")  # not-a-download: a health probe of a local service
             if [ "$status" != "200" ]; then
               echo "::error::$service health check returned '$status' (expected 200) on port $port"
               failed=1

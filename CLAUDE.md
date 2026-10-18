@@ -33,10 +33,13 @@ kubectl kustomize k8s/overlays/dev | kubeconform -strict -summary \
   -kubernetes-version "$(sed -n 's/^ *KUBERNETES_VERSION: *//p' .github/workflows/ci.yml)" \
   -schema-location "$(sed -n 's/^ *KUBECONFORM_SCHEMA_LOCATION: *//p' .github/workflows/ci.yml)" -
 
-# Lint the workflows the way CI's lint-workflows job does (backlog #0-146, #0-147): it matches CI only with the
-# actionlint, shellcheck and zizmor versions that job pins; the first line prints them next to the ones on your PATH
+# Lint the workflows and scripts the way CI's lint-workflows job does (backlog #0-146, #0-147, #0-149): it matches CI
+# only with the actionlint, shellcheck and zizmor versions that job pins; the first line prints them next to the ones on your PATH
 grep -E '^ *(ACTIONLINT|SHELLCHECK|ZIZMOR)_VERSION:' .github/workflows/ci.yml; actionlint -version | head -1; shellcheck --version | sed -n 2p; zizmor --version
 actionlint -shellcheck="$(command -v shellcheck)"; zizmor --offline --persona regular .
+# shellcheck of every tracked .sh file and the composite actions' steps (new files count once `git add -N`), and no download
+# outside install-pinned-tool.sh; a meant finding is disabled at its line with its reason, never by a .shellcheckrc
+ruby .github/scripts/check-shell.rb "$(command -v shellcheck)"; ruby .github/scripts/check-downloads.rb
 # Every CI tool pin (`# renovate:` + *_VERSION + *_SHA256) against its publisher (ADR-0033); needs gh and jq, and gpg for Snyk's
 .github/scripts/check-pinned-tools.sh
 ```
