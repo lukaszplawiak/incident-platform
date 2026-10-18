@@ -1,0 +1,9 @@
+# zizmor configuration (backlog #0-147, ADR-0033); ci.yml's lint-workflows job runs zizmor with it.
+# Every suppression names its reason and the condition that ends it. A finding suppressed on one line
+# goes inline, next to that line (`# zizmor: ignore[<audit>] <reason>`), not here.
+rules:
+  # GitHub's `$/` self-repository syntax for local actions (July 2026) postdates the pinned actionlint
+  # (ADR-0032): adopting it now would fail actionlint in the same job. Turn this back on, and switch the
+  # `uses: ./.github/actions/...` lines, once the pinned actionlint accepts `$/` (backlog #0-151).
+  self-repository:
+    disable: true

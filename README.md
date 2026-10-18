@@ -306,39 +306,48 @@ in Settings).
 - **No token left in `.git/config`** (backlog #0-60): every `actions/checkout` sets
   `persist-credentials: false`. No job pushes, so no later step needs the token that checkout would
   otherwise leave behind for it to read.
+- **Every CI tool pinned, bumped by Renovate, and checked against its publisher** (backlog #0-147, ADR-0033):
+  the Snyk CLI, kubeconform, actionlint, shellcheck and zizmor are each a release tag and a SHA-256 in their
+  job's `env`, under a `# renovate:` comment. One script installs them all (`install-pinned-tool.sh`: download,
+  compare the SHA-256, then unpack into the runner's temp directory, no `sudo`). Renovate bumps tag and SHA-256
+  together, but computes the SHA-256 from what it downloaded itself, so CI's `check-pinned-tools.sh` checks every
+  pin on every run: GitHub's own digest of the release asset, then the strongest proof each publisher gives,
+  named by the pin's `verify=`: a GitHub artifact attestation (actionlint, zizmor), a `sha256sums.txt.asc` signed
+  by Snyk's code-signing key (committed under `.github/keys/`), the release's `CHECKSUMS` (kubeconform: same host,
+  catches a swapped file, not a malicious release), or GitHub's digest alone (shellcheck signs nothing). Until
+  #0-147 every bump was by hand and no tool was tracked.
 - **Scan tools pinned and verified before they receive a secret** (backlog #0-61): the Snyk CLI is
   the standalone binary at the version pinned in `snyk.yml`, checked against the SHA-256 kept next to
   it. A different binary stops the job before `SNYK_TOKEN` exists in any process. The token reaches
   only the scan step, as the `SNYK_TOKEN` environment variable the CLI reads itself; there is no
   `snyk auth`, which put the token in the process arguments and in a config file every later step
   could read. This replaced `npm install -g snyk`: whatever version npm served at that moment, a Node
-  wrapper whose unbundled `@sentry/node ^7` dependency was resolved at install time. Version and
-  checksum are bumped together by hand (Renovate cannot compute the checksum), as `diff-cover`'s
-  version is pinned in `ci.yml` (that one without a checksum: backlog #0-134); the checksum is
-  committed only when Snyk's download server and the npm package of the same version agree on it,
-  since the server alone also serves the binary. The CLI is installed without `sudo`, into the
-  runner's temp directory.
+  wrapper whose unbundled `@sentry/node ^7` dependency was resolved at install time. Pinned and
+  checked as every CI tool is (above): a bump is trusted once Snyk's signature over its checksums
+  verifies. That check runs in CI's Lint Workflows on the pull request, and again in both `snyk.yml`
+  jobs before the CLI is installed: `main` has no required checks yet (backlog #0-113), so a bump
+  merged with Lint Workflows red stops there and never gets the token.
+  `diff-cover` is pinned by version only (backlog #0-134).
 - **Manifest validation pinned, binary and schemas** (backlog #0-76): kubeconform is the release
-  pinned in `ci.yml`, checked against the SHA-256 kept next to it before it is unpacked, and it
+  pinned in `ci.yml` (as every CI tool is, above), and it
   validates against the schemas of one Kubernetes version (`KUBERNETES_VERSION` in the job's `env`,
   also the version of the kubectl that renders; ADR-0027) taken from a pinned commit of `yannh/kubernetes-json-schema`, so the result changes only
   with a change in this repository. It used to be whatever `releases/latest` served, piped into
   `tar` unchecked, validating against the newest Kubernetes from that repository's moving `master`;
   a replaced binary also runs before the checks that read the same renders (the Spring profile of
-  #0-63, the mail of #0-42) and could have made them pass. The checksum is committed when the
-  release's `CHECKSUMS` file and GitHub's own digest of the asset agree; both come from GitHub and
-  kubeconform publishes no signature or attestation, so this catches a swapped file, not a
-  malicious release, which only a deliberate bump would bring in. kubectl, which writes the renders,
+  #0-63, the mail of #0-42) and could have made them pass. kubectl, which writes the renders,
   is pinned by version only: `azure/setup-kubectl` checks nothing it downloads (backlog #0-135).
 - **Workflows and actions linted, the linters pinned** (backlog #0-146, ADR-0032): the "Lint Workflows" job
   runs actionlint on every workflow on each push and PR: expressions, `needs`, how a workflow calls a local
   action (a misspelt input or output would otherwise fail silently), untrusted input used inline in a script, and
   every workflow `run:` block through shellcheck. Not yet the steps inside the composite actions, nor the `.sh`
-  scripts (backlog #0-149). Both are the releases pinned in that job's `env`, checked
-  against the SHA-256 kept next to them before they are unpacked (actionlint's when its `checksums.txt` and
-  GitHub's digest agree; shellcheck publishes no checksum file, so GitHub's digest); not actionlint's
-  `download-actionlint.bash` from its main branch, and not the runner's own shellcheck, so the result changes only
-  with a change here. Security-focused linting (zizmor) is backlog #0-147.
+  scripts (backlog #0-149). zizmor audits the same files, the composite actions' `action.yml` included, for
+  security (backlog #0-147): dangerous triggers, credentials left by checkout, template injection, excessive
+  permissions, unpinned actions, cache poisoning; its default persona, offline, any finding fails the job. Offline,
+  its five audits that need GitHub's API do not run, impostor commits among them (a pinned SHA that exists only in a
+  fork of the action: a known gap, backlog #0-62), and every suppression names its reason (inline, or `.github/zizmor.yml` for an audit turned off). All three
+  are pinned as every CI tool is (above); not actionlint's `download-actionlint.bash` from its main branch, and not
+  the runner's own shellcheck, so the result changes only with a change here.
 - **The Maven distribution pinned and verified** (backlog #0-142, ADR-0031): `./mvnw` checks the zip it
   downloads against `distributionSha256Sum` in `.mvn/wrapper/maven-wrapper.properties` and refuses a mismatch.
   Central publishes no SHA-256 for it, and Renovate writes the sum of whatever it downloaded when it bumps
@@ -985,10 +994,12 @@ The one place in CI where images are built (backlog #0-141, ADR-0030), from Job 
 
 ### Job 5 — Lint Workflows
 
-Always runs (seconds). actionlint, with shellcheck for every workflow `run:` block, on every
-`.github/workflows/*.yml` and on how they call the local actions in `.github/actions/` (their own steps and the `.sh`
-scripts are not linted yet, backlog #0-149), one `::error` annotation per finding; both tools are pinned by version and SHA-256 in
-the job's `env` and checked before they run (backlog #0-146, ADR-0032).
+Always runs (seconds). First the pinned CI tools themselves: the tests of `install-pinned-tool.sh` and
+`check-pinned-tools.sh`, then every tool pin in every workflow checked against its publisher (backlog #0-147,
+ADR-0033). Then actionlint, with shellcheck for every workflow `run:` block, on every `.github/workflows/*.yml` and on
+how they call the local actions in `.github/actions/` (their own steps and the `.sh` scripts are not linted yet,
+backlog #0-149), one `::error` annotation per finding (backlog #0-146, ADR-0032); and zizmor's security audit of the
+same files and the actions, one annotation per finding not suppressed with its reason (backlog #0-147).
 
 ### Security Scanning
 
@@ -1049,6 +1060,10 @@ Key configuration (`renovate.json`):
 - **GitHub Actions** (`helpers:pinGitHubActionDigests`): keeps every `uses:` pinned to a commit SHA
   and updates the SHA and its `# vX.Y.Z` comment together; all action updates are grouped into one
   PR (backlog #0-60)
+- **CI tools** (a `customManagers` regex, backlog #0-147): each tool pinned in a workflow's `env` under a
+  `# renovate:` comment gets its own PR, 7 days after its release, with the tag and the SHA-256 changed together
+  (datasource `github-release-attachments`); the PR is trusted only once Lint Workflows' `check-pinned-tools.sh`
+  passes
 
 Setup: install the Renovate GitHub App at https://github.com/apps/renovate and authorize
 it for this repository. Renovate will open a "Configure Renovate" PR to confirm the setup.

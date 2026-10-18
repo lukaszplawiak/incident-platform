@@ -128,8 +128,10 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-147](#0-147-ci-does-not-audit-its-workflows-for-security-zizmor) | CI does not audit its workflows for security (zizmor) | ci | Low | Open |
 | [0-149](#0-149-the-sh-scripts-and-the-composite-actions-steps-are-not-shellchecked) | The `.sh` scripts and the composite actions' steps are not shellchecked | ci | Low | Open |
+| [0-150](#0-150-the-nvd-api-key-is-on-the-owasp-scans-command-line) | The NVD API key is on the OWASP scan's command line | security | Low | Open |
+| [0-151](#0-151-local-actions-are-called-by-path-not-by-githubs-self-repository-syntax) | Local actions are called by path, not by GitHub's self-repository syntax | ci | Low | Open |
+| [0-152](#0-152-refresh-the-snyk-cli-signing-key-before-2027-01-06) | Refresh the Snyk CLI signing key before 2027-01-06 | ci | Medium | Open |
 
 ---
 
@@ -1956,8 +1958,9 @@ bot token can merge around every check. None of these settings is visible in a d
 1. A machine account for the autopilot, collaborator with **Write** (not Admin), fine-grained token for
    this repository only (contents and pull requests read/write, metadata read).
 2. Branch protection (or a ruleset) on `main`: PR required, required checks ("Build, Test & Coverage",
-   "Docker Compose Smoke Test" — #0-2, "Factory guards"), CODEOWNERS review required, and **no bypass for
-   administrators**.
+   "Docker Compose Smoke Test" — #0-2, "Factory guards", "Lint Workflows" — #0-147: it checks a Renovate bump of
+   a CI tool against its publisher, and `snyk.yml` runs the Snyk CLI with its token on the push to `main`
+   whether or not that check passed), CODEOWNERS review required, and **no bypass for administrators**.
 3. "Automatically delete head branches" on (the CLAUDE.md "delete the branch after every merge" rule for
    PRs merged by `--auto`).
 4. Labels: `autopilot`, `shadow`, `blocked`, `risk-high`, `autopilot-stop`, `human:agree`,
@@ -2085,8 +2088,8 @@ coverage gate that could be made to pass, not a credential.
 
 **Approach.** A lock file with every package's hashes (`pip-compile --generate-hashes`, or `uv pip
 compile`) committed under `.github/`, installed with `pip install --require-hashes --no-deps -r`; Renovate
-can update a pip-compile file and its hashes together (`pip-compile` manager), so unlike the Snyk CLI the
-bump need not be by hand. Decide whether that manager is turned on for `.github/`.
+can update a pip-compile file and its hashes together (`pip-compile` manager), so the bump need not be by
+hand (as for the release-asset tools since #0-147, ADR-0033). Decide whether that manager is turned on for `.github/`.
 
 ---
 
@@ -2133,6 +2136,15 @@ cited as blocking.
 data file a workflow downloads is pinned (version, commit or digest) and checked (checksum from two
 channels, or a signature) before it runs; ADR-0021, ADR-0027. Check: every new `curl`/`wget`/install in
 `.github/` names a version and verifies it." Open gaps it would flag today: #0-134, #0-135.
+
+**Also (found in the review of #0-147, 2026-10-17).** ADR-0033 replaced ADR-0021's two channels with a check
+against the publisher (attestation, signature, checksums file or digest), so the rule cites ADR-0033 and reads
+"checked against its publisher by `check-pinned-tools.sh`, installed only by `install-pinned-tool.sh`". The
+security reviewer of #0-147 named two more checks the rule should carry: a privileged trigger (`workflow_run`,
+`pull_request_target`) decides by event and repository, never by branch name (the fork's `main` of #0-148,
+today only in `.ai/context/security.md` "CI workflows"); and no code from the checkout that a step holding a
+secret relies on (an installer script, a tool it runs) runs after an untrusted build step in the same job (the
+Snyk CLI's installer ran after `./mvnw compile` until that review).
 
 **Also (found in the review of #0-29, 2026-10-15).** No rule covers the separation of deployment environments
 either: which namespace an overlay deploys into and what prod runs. `check-k8s-environments.rb` enforces both in
@@ -2268,29 +2280,6 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 
 ---
 
-### 0-147. CI does not audit its workflows for security (zizmor)
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the analysis of #0-146, 2026-10-17)
-
-**Problem.** actionlint (#0-146) checks that workflows are correct; only review checks that they are safe:
-dangerous triggers (`workflow_run`, `pull_request_target`), credentials persisted by checkout, template injection
-beyond the inline case, excessive `permissions:`, unpinned or impostor actions, cache poisoning. zizmor (zizmorcore,
-formerly Trail of Bits) is the usual tool for that next to actionlint. Run offline on 2026-10-17 (1.31.1): one
-`high` (`dangerous-triggers`, `main-guard.yml`'s `workflow_run`, see #0-148) and five `low` (`self-repository`:
-use GitHub's `$/` self-repository syntax instead of `./`, which actionlint 1.7.12 predates, so not adoptable yet);
-22 in its pedantic persona.
-
-**Approach.** #0-148 is done (PR #503: main-guard acts only on a push to this repository); if zizmor still
-reports the `workflow_run` trigger itself, its ignore cites those checks. Then zizmor in the `lint-workflows` job, pinned like actionlint (its releases
-carry no checksum file: GitHub's digest; wait for a release a few weeks old, its cadence is fast), offline mode
-or with a read-only token, and a `zizmor.yml` whose every ignore names its reason (the `$/` audit until actionlint
-supports the syntax). Touches `.github/`, so human-only. Also a rule in `.ai/context/security.md` for this class (found in
-the review of #0-148): a trigger that runs with this repository's token for an event an outsider can cause
-(`workflow_run`, `pull_request_target`) checks whose run it acts on (`event`, `head_repository`), never only a
-branch name; the reviewers had no rule to cite.
-
----
-
 ### 0-149. The `.sh` scripts and the composite actions' steps are not shellchecked
 
 **Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-146, 2026-10-17)
@@ -2308,6 +2297,67 @@ severity floor (`-S warning`) with the warnings fixed; either way each disable i
 global exclude. The composite actions' `run:` steps can be extracted from their `action.yml` and fed to the same
 binary (today one step, `restore-maven-caches`' month). `scripts/factory/` and `.claude/hooks/` are protected
 paths: human-only, and the hooks' own tests (`test-hooks.sh`) must stay green after any fix.
+
+**Also (found in the review of #0-147, 2026-10-17).** ADR-0033 says a tool CI downloads is installed only by
+`install-pinned-tool.sh`, but nothing enforces it: a new `curl … | tar` (or `wget`, a `releases/download` URL)
+in a workflow's or composite action's `run:` passes CI, and `check-pinned-tools.sh` sees only `*_SHA256` lines.
+Decide here whether the job gains a structural check for it (refuse a download of a release asset outside the
+installer, with an inline exception for the smoke test's health `curl`), next to the shellcheck of the same
+`run:` blocks.
+
+---
+
+### 0-150. The NVD API key is on the OWASP scan's command line
+
+**Type:** security · **Priority:** Low · **Status:** Open (found by zizmor's pedantic and auditor personas in the
+analysis of #0-147, 2026-10-17)
+
+**Problem.** `.github/workflows/owasp-dependency-check.yml` runs `./mvnw dependency-check:aggregate
+-Dnvd.api.key=${{ secrets.NVD_API_KEY }}`: the secret is expanded into the script and becomes an argument of the
+Maven process, readable by any process of that job (`/proc/<pid>/cmdline`, `ps`), not only in the log, which
+GitHub masks. Moving it to the step's `env:` alone does not help: `"$NVD_API_KEY"` is still an argument. The other
+secrets reach only their step as environment variables (`.ai/context/security.md`, "CI workflows").
+
+**Approach.** dependency-check's Maven plugin reads the key from an environment variable it is told the name of
+(`nvdApiKeyEnvironmentVariable`): set it in the root `pom.xml`'s plugin configuration and give the step
+`env: NVD_API_KEY`. A `pom.xml` change is build configuration (the owner's, rule 6). Confirm the option on the
+plugin version in use first.
+
+---
+### 0-151. Local actions are called by path, not by GitHub's self-repository syntax
+
+**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-147, 2026-10-17; waits on actionlint)
+
+**Problem.** The workflows call `.github/actions/restore-maven-caches` and `save-maven-caches` as
+`uses: ./.github/actions/...`. GitHub's `$/` self-repository syntax (July 2026) names the repository the workflow
+runs from rather than a path in the checkout, and zizmor's `self-repository` audit asks for it. The pinned
+actionlint (v1.7.12) predates the syntax and would refuse it, so `.github/zizmor.yml` turns the audit off for the
+whole repository (#0-147): a new local action called by path is not flagged either.
+
+**Approach.** When Renovate bumps actionlint (#0-147, ADR-0033) to a release that accepts `$/`: switch the five
+`uses: ./.github/actions/...` lines (zizmor's auto-fix), check that `check-maven-caches.rb` (the tenth structural
+rule) still recognises the two actions under the new form, and delete the `self-repository` entry from
+`.github/zizmor.yml`. Touches `.github/`, so human-only.
+
+---
+### 0-152. Refresh the Snyk CLI signing key before 2027-01-06
+
+**Type:** ci · **Priority:** Medium · **Status:** Open (found in the review of #0-147, 2026-10-17; due before 2027-01-06)
+
+**Problem.** `check-pinned-tools.sh` checks the Snyk CLI pin against `sha256sums.txt.asc`, signed by the key
+committed as `.github/keys/467717A30B2B4658415975629691DA64D0025194.asc` (ADR-0033). That key (the primary,
+which signs) and its encryption subkey expire on 2027-01-06. From that day gpg reports every signature by it as
+`EXPKEYSIG`, the checker refuses it, and Lint Workflows is red on every pull request and on `main`, where
+`main-guard.yml` then opens the `autopilot-stop` issue; both `snyk.yml` jobs, which run the same check before
+installing the CLI, stop too, so no Snyk scan runs. The checker warns (`::warning` on a green job) only from 30
+days ahead.
+
+**Approach.** In December 2026: take the key from the snyk/cli repository
+(`help/_about-this-project/snyk-code-signing-public.pgp`) and from keys.openpgp.org; if Snyk extended it (same
+fingerprint, later expiry), replace the armor in the committed file; if Snyk rotated it, add the new key's file and
+change `verify=gpg:` in `snyk.yml`, after checking the new fingerprint against docs.snyk.io. Either way the three
+sources must agree, as on 2026-10-17. Run `check-pinned-tools.sh` with gpg before merging. Touches `.github/`, so
+human-only.
 
 ---
 
