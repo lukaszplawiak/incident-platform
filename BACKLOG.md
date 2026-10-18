@@ -128,7 +128,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-149](#0-149-the-sh-scripts-and-the-composite-actions-steps-are-not-shellchecked) | The `.sh` scripts and the composite actions' steps are not shellchecked | ci | Low | Open |
 | [0-150](#0-150-the-nvd-api-key-is-on-the-owasp-scans-command-line) | The NVD API key is on the OWASP scan's command line | security | Low | Open |
 | [0-151](#0-151-local-actions-are-called-by-path-not-by-githubs-self-repository-syntax) | Local actions are called by path, not by GitHub's self-repository syntax | ci | Low | Open |
 | [0-152](#0-152-refresh-the-snyk-cli-signing-key-before-2027-01-06) | Refresh the Snyk CLI signing key before 2027-01-06 | ci | Medium | Open |
@@ -2277,33 +2276,6 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 (`-XX:ArchiveClassesAtExit=application.jsa -Dspring.context.exit=onRefresh`) and `-XX:SharedArchiveFile` in the
 `ENTRYPOINT`; the training run starts the Spring context, so it must not need the database, Kafka or secrets
 (check what each service's refresh touches), and the JVM flags of the training run and of the runtime must match.
-
----
-
-### 0-149. The `.sh` scripts and the composite actions' steps are not shellchecked
-
-**Type:** ci · **Priority:** Low · **Status:** Open (found in the review of #0-146, 2026-10-17)
-
-**Problem.** The `lint-workflows` job (#0-146, ADR-0032) runs shellcheck only on the workflows' own `run:` blocks,
-through actionlint: actionlint does not lint a composite action's steps (checked: a shell error put in
-`restore-maven-caches`' `run:` passed) and reads no `.sh` file. The repository's shell is mostly in scripts: the
-CI checks and their tests (`.github/scripts/`), the factory gates (`scripts/factory/`) and the agent hooks
-(`.claude/hooks/`), several of them security controls (the shell guards of #0-130/#0-132). With the pinned
-shellcheck 0.11.0 on 2026-10-17: 98 findings in 54 files, 16 of them warnings (SC2086, SC2034, SC2164, SC1003,
-SC2088...) and 82 notes (SC2015, SC2016, SC1091...).
-
-**Approach.** The pinned shellcheck is already in the job. Decide between fixing every finding first and a
-severity floor (`-S warning`) with the warnings fixed; either way each disable is inline with its reason, not a
-global exclude. The composite actions' `run:` steps can be extracted from their `action.yml` and fed to the same
-binary (today one step, `restore-maven-caches`' month). `scripts/factory/` and `.claude/hooks/` are protected
-paths: human-only, and the hooks' own tests (`test-hooks.sh`) must stay green after any fix.
-
-**Also (found in the review of #0-147, 2026-10-17).** ADR-0033 says a tool CI downloads is installed only by
-`install-pinned-tool.sh`, but nothing enforces it: a new `curl … | tar` (or `wget`, a `releases/download` URL)
-in a workflow's or composite action's `run:` passes CI, and `check-pinned-tools.sh` sees only `*_SHA256` lines.
-Decide here whether the job gains a structural check for it (refuse a download of a release asset outside the
-installer, with an inline exception for the smoke test's health `curl`), next to the shellcheck of the same
-`run:` blocks.
 
 ---
 

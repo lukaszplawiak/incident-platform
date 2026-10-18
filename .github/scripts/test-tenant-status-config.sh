@@ -42,6 +42,8 @@ case_() {
 
 D='FROM scratch\n'
 Y=src/main/resources/application.yml
+# ${AUTH_SERVICE_URL:...} is Spring's placeholder, written into the YAML as is (backlog #0-149).
+# shellcheck disable=SC2016
 GOOD='server:\n  port: 8080\nauth-service:\n  base-url: ${AUTH_SERVICE_URL:http://localhost:8087}\n'
 
 echo "Tenant status config check"

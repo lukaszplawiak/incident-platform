@@ -24,6 +24,8 @@
 #   root   files at the repository root (pom.xml, README.md, CLAUDE.md, Makefile), .ai/context/,
 #          architecture-tests/
 #   docs   docs/          k8s   k8s/          docker   docker/          ci   .github/, scripts/
+# Read by the scripts that source this file (check-queue.sh), not here (backlog #0-149).
+# shellcheck disable=SC2034
 KNOWN_MODULES='["shared","service-parent","auth-service","ingestion-service","incident-service","notification-service","escalation-service","postmortem-service","oncall-service","root","docs","k8s","docker","ci"]'
 
 backlog_json() {

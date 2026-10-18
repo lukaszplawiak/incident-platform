@@ -32,7 +32,7 @@ touch .ai/runs/LOCK
 out=$($ST record blocked 0-42 - implement)
 expect_jq "blocked without a PR: empty pr, stage kept" "$out" \
     '.history[-1] == (.history[-1] | {t, item: "0-42", outcome: "blocked", pr: "", stage: "implement"}) and .consecutiveBlocked == 1'
-[ -e .ai/runs/LOCK ] && fail "record released no lock" || ok "record releases the lock"
+if [ -e .ai/runs/LOCK ]; then fail "record released no lock"; else ok "record releases the lock"; fi
 
 out=$($ST record blocked 0-43 https://github.com/o/r/pull/7 ship)
 expect_jq "blocked with a PR and a stage" "$out" '.history[-1].pr == "https://github.com/o/r/pull/7" and .history[-1].stage == "ship" and .consecutiveBlocked == 2'

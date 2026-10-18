@@ -20,6 +20,8 @@ case "${1:-get}" in
     record)
         outcome=${2:?shipped or blocked}; item=${3:?item id}; pr=${4:-}; stage=${5:-}
         [ "$pr" = "-" ] && pr=""
+        # $t, $i, $p and $s are jq's variables (the --arg below), not the shell's (backlog #0-149).
+        # shellcheck disable=SC2016
         case "$outcome" in
             shipped) filter='.consecutiveBlocked=0 | .shippedSinceAudit+=1 | .history=(.history+[{t:$t,item:$i,outcome:"shipped",pr:$p}])[-200:]' ;;
             blocked) filter='.consecutiveBlocked+=1 | .history=(.history+[{t:$t,item:$i,outcome:"blocked",pr:$p} + (if $s == "" then {} else {stage:$s} end)])[-200:]' ;;
@@ -27,7 +29,7 @@ case "${1:-get}" in
         esac
         # Release the lock even if the state cannot be updated; never replace the state with a failed write.
         rm -f "$RUNS_DIR/LOCK"
-        jq --arg i "$item" --arg p "$pr" --arg s "$stage" --arg t "$now" "$filter" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE" \
+        { jq --arg i "$item" --arg p "$pr" --arg s "$stage" --arg t "$now" "$filter" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"; } \
             || { echo '{"error":"state update failed; state file left unchanged"}'; exit 1; }
         cat "$STATE_FILE" ;;
     unlock) rm -f "$RUNS_DIR/LOCK"; echo '{"unlocked":true}' ;;

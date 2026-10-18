@@ -51,6 +51,8 @@ set -f   # `*` is a CODEOWNERS pattern here, not a glob
 last_owners() {   # last_owners <path> — prints "<pattern> <owner count>" of the last line matching it
     local path=$1 line pattern last="" owners=0
     while IFS= read -r line; do
+        # Split into words on purpose, the pattern and its owners; no glob expansion (set -f above).
+        # shellcheck disable=SC2086
         set -- $line
         pattern=${1:-}; shift || true
         case "$pattern" in

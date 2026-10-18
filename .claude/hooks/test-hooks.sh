@@ -5,6 +5,9 @@
 #
 # Run: .claude/hooks/test-hooks.sh   (also run by .github/workflows/factory-guards.yml)
 # ============================================================
+# The cases hand the hooks a command's text: `$` and backticks in single quotes are literal on purpose, the
+# hooks must see them unexpanded (backlog #0-149).
+# shellcheck disable=SC2016
 set -uo pipefail
 
 HOOKS=$(cd "$(dirname "$0")" && pwd)
@@ -26,16 +29,20 @@ expect() {
     if [ "$rc" -eq "$want" ]; then echo "  ok: $name"; else echo "::error::$name: expected exit $want, got $rc"; failures=$((failures+1)); fi
 }
 
-# A repository whose main has one migration; the working branch adds a second.
-mkdir -p "$WORK/repo/svc/src/main/resources/db/migration"
-cd "$WORK/repo"
-git init -q -b main
-git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
-echo "create table a();" > svc/src/main/resources/db/migration/V1__a.sql
-git add . && git -c user.email=t@t -c user.name=t commit -q -m v1
-git checkout -q -b feat/x
-echo "create table b();" > svc/src/main/resources/db/migration/V2__b.sql
-cd - >/dev/null
+# A repository whose main has one migration; the working branch adds a second. In a subshell with -e: this
+# script runs without it, and a failed step here (the cd above all) ran the git commands that follow in the
+# repository the tests were started from (backlog #0-149).
+(
+    set -e
+    mkdir -p "$WORK/repo/svc/src/main/resources/db/migration"
+    cd "$WORK/repo"
+    git init -q -b main
+    git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+    echo "create table a();" > svc/src/main/resources/db/migration/V1__a.sql
+    git add . && git -c user.email=t@t -c user.name=t commit -q -m v1
+    git checkout -q -b feat/x
+    echo "create table b();" > svc/src/main/resources/db/migration/V2__b.sql
+) || { echo "::error::cannot set up the test repository in $WORK/repo"; exit 1; }
 
 M="$HOOKS/guard-migrations.sh"
 echo "guard-migrations"
@@ -157,7 +164,7 @@ expect 0 "git status --short (new files)" "$R" -- "$(bash_call 'git status --sho
 expect 0 "git grep with several -e"       "$R" -- "$(bash_call 'git grep -n -i -e mailpit -e MAIL_HOST -- docker')"
 expect_hint() {   # expect_hint <name> <command> [mode] [extra text] — refused (exit 2), message names the alternatives
     local name=$1 command=$2 mode=${3:-} extra=${4:-} err rc
-    err=$(cd "$WORK/repo" && printf '%s' "$(bash_call "$command")" | "$R" $mode 2>&1 >/dev/null); rc=$?
+    err=$(cd "$WORK/repo" && printf '%s' "$(bash_call "$command")" | "$R" ${mode:+"$mode"} 2>&1 >/dev/null); rc=$?
     if [ "$rc" -eq 2 ] && grep -q "Read tool" <<<"$err" && grep -qF -- "git grep -n -e" <<<"$err" \
        && ! grep -q "Grep or Glob" <<<"$err" && { [ -z "$extra" ] || grep -qF -- "$extra" <<<"$err"; }; then echo "  ok: $name"
     else echo "::error::$name: expected a refusal with the Read / git grep hint${extra:+ and '$extra'}, got exit $rc: $err"; failures=$((failures+1)); fi
@@ -404,9 +411,10 @@ for loc in C.UTF-8 en_US.UTF-8; do
     if ! LC_ALL=$loc bash -c 're="(^|[[:space:]])git[[:space:]]"; [[ $(printf "\xff git grep") =~ $re ]]' 2>/dev/null; then UTF8=$loc; break; fi
 done
 m_rc() { LC_ALL=${UTF8:-C} bash -c '. "$1"/_lib.sh; matches "$2" "$3"' _ "$HOOKS" "$1" "$2"; echo $?; }
-[ "$(m_rc x '(a')" = 2 ] && echo "  ok: matches: invalid expression is 2" || { echo "::error::matches: invalid expression is not 2"; failures=$((failures+1)); }
+if [ "$(m_rc x '(a')" = 2 ]; then echo "  ok: matches: invalid expression is 2"; else echo "::error::matches: invalid expression is not 2"; failures=$((failures+1)); fi
 if [ -n "$UTF8" ]; then
-    [ "$(m_rc "$(printf '\xff git grep')" '(^|[[:space:]])git[[:space:]]')" = 0 ] && echo "  ok: matches: invalid UTF-8 still matches ($UTF8)" || { echo "::error::matches: invalid UTF-8 read as no match"; failures=$((failures+1)); }
+    if [ "$(m_rc "$(printf '\xff git grep')" '(^|[[:space:]])git[[:space:]]')" = 0 ]; then echo "  ok: matches: invalid UTF-8 still matches ($UTF8)"
+    else echo "::error::matches: invalid UTF-8 read as no match"; failures=$((failures+1)); fi
 else
     echo "  skip: matches: invalid UTF-8 (no UTF-8 locale here in which bash fails that match)"
 fi

@@ -1,7 +1,7 @@
 # ADR-0033: Every CI tool downloaded from a GitHub release is a pin Renovate bumps and CI checks against its publisher, installed by one script; zizmor audits the workflows (backlog #0-147)
 
-- **Status:** Accepted (2026-10-17)
-- **Backlog:** #0-147 (follow-up #0-150)
+- **Status:** Accepted (2026-10-17); amended by #0-149 (the one installer is enforced: `check-downloads.rb`)
+- **Backlog:** #0-147 (follow-ups #0-149, #0-150)
 - **Date:** 2026-10-17
 - **Author:** human (owner chose the pattern and asked for it in all places; written up by Claude Code in the owner's session)
 - **Reversible:** yes
@@ -82,7 +82,11 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
 
 - A new tool is a pin in this form with the strongest `verify=` its publisher offers, installed by
   `install-pinned-tool.sh`; a `curl … | tar` of its own, or a `*_SHA256` outside the form, is a violation (the
-  checker refuses the latter).
+  checker refuses the latter; amended by #0-149: `check-downloads.rb` refuses the former, curl, wget, a release
+  asset's URL or `gh release download` in any workflow's or composite action's `run:` block, unless the line
+  ends with `# not-a-download: <why>`, today only the smoke test's health probe. It is a check against the
+  honest mistake, not a boundary: another program, a script the step calls or an action that fetches its own
+  binary pass it, and stay with the owner's review of `.github/`).
 - Renovate opens a PR per tool bump; a red `check-pinned-tools.sh` on it means the bytes are not the publisher's:
   close it, do not copy a sum.
 - A new Snyk signing key is a new `.github/keys/<fingerprint>.asc` and a `verify=gpg:` change, after the same

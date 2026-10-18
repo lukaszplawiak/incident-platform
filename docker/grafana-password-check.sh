@@ -51,7 +51,7 @@ env_value() {
             # compose (checked on v2) turns \" \\ \$ \a \b \f \n \r \t \v \0 into
             # one character each, keeps any other backslash pair as two, and
             # does not interpolate an escaped \$. Only the length matters here.
-            local rest=${value#\"} out= c closed= interpolated=
+            local rest=${value#\"} out='' c closed='' interpolated=''
             while [ -n "$rest" ]; do
                 c=${rest:0:1}; rest=${rest:1}
                 case "$c" in

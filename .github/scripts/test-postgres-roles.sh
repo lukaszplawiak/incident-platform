@@ -22,6 +22,9 @@
 # network: inside the container, the socket and 127.0.0.1 use 'trust'
 # authentication and would accept any password.
 # ============================================================
+# `[ test ] && pass ... || fail ...` throughout: pass and fail only print and count, so the fail branch runs
+# only when the test is false (backlog #0-149).
+# shellcheck disable=SC2015
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)

@@ -96,6 +96,8 @@ shell_words() {
         if [ "$q" = "'" ]; then
             if [ "$c" = "'" ]; then q=""; else tok="$tok$c"; fi
         elif [ "$q" = '"' ]; then
+            # '\' is one literal backslash, matched as a character (backlog #0-149).
+            # shellcheck disable=SC1003
             case "$c" in
                 '"') q="" ;;
                 '$'|'`') echo "REFUSE expansion inside double quotes"; return 1 ;;
@@ -105,6 +107,8 @@ shell_words() {
                 *) tok="$tok$c" ;;
             esac
         else
+            # '\' is one literal backslash, matched as a character (backlog #0-149).
+            # shellcheck disable=SC1003
             case "$c" in
                 "'"|'"') q=$c; have=1 ;;
                 '\') i=$((i + 1))
