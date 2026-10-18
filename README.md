@@ -296,8 +296,13 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   a PR comment, which would need `pull-requests: write` (backlog #0-57).
 - **`pull_request`, never `pull_request_target`**: a PR from a fork runs with a read-only token and
   without the repository's secrets.
-- **Secrets only through `secrets.*`** (`SNYK_TOKEN`, `NVD_API_KEY`), in the scan workflows, which
-  run only on `main`, on a schedule or by hand — never on a PR.
+- **Secrets only in an environment only `main` may use** (backlog #0-154, ADR-0035): `SNYK_TOKEN` and
+  `NVD_API_KEY` are secrets of the environment `scans`, whose deployment branch policy allows `main` alone and
+  which admins may not bypass; the repository holds no secret. The scan workflows run on `main`, on a schedule
+  or by hand, never on a PR, and a dispatch on another branch is refused before any step: without it, that
+  branch's own scripts, action and build would run next to the secret (the machine account's token may
+  dispatch). The environment is a file in `.github/repository-settings/environments/` with the ruleset, and
+  Lint Workflows refuses a job that reads a secret outside an environment whose file names it.
 - **Actions pinned by commit SHA** (backlog #0-60): every `uses:` names the full 40-character
   commit, with its tag in a comment (`actions/checkout@<sha> # v4.4.0`). A tag can be repointed by
   whoever controls the action's repository, as in the `tj-actions/changed-files` compromise
@@ -330,8 +335,7 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   checked as every CI tool is (above): a bump is trusted once Snyk's signature over its checksums
   verifies. That check runs in CI's Lint Workflows on the pull request, and again in both `snyk.yml`
   jobs before the CLI is installed: Lint Workflows is a required check of `main` (backlog #0-113), but
-  the owner can merge around it, and `snyk.yml` can be dispatched by hand on a branch that was never
-  reviewed (#0-154), so the check stays where the token is used.
+  the owner can merge around it, so the check stays where the token is used.
   `diff-cover` is pinned by version only (backlog #0-134).
 - **Manifest validation pinned, binary and schemas** (backlog #0-76): kubeconform is the release
   pinned in `ci.yml` (as every CI tool is, above), and it
@@ -493,9 +497,9 @@ security boundary, so every rule that matters is also enforced outside the model
   the owner's open PR is in the owner's PR too (#0-131).
 
 **Known gaps**: a bypass actor or an admin added in the UI is seen only when the owner runs
-`repository-settings.rb check` (#0-113, ADR-0034); `snyk.yml` and `owasp-dependency-check.yml` can be
-dispatched by hand on any branch, running its unreviewed build next to `SNYK_TOKEN` or `NVD_API_KEY`, the
-bot's token included (#0-154); the autopilot may push to any feature branch, the
+`repository-settings.rb check` (#0-113, ADR-0034), and so is a secret added in the UI (ADR-0035); a scan that
+cannot run on `main` (an expired token, an NVD outage) looks the same as one that found issues, and alerts no one
+(#0-155); the autopilot may push to any feature branch, the
 owner's included (#0-131); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
 (#0-116, accepted for shadow mode, required before auto-merge); no secret scanning (#0-109); no Maven Enforcer
@@ -1034,7 +1038,7 @@ ADR-0032); shellcheck, the same binary, on every tracked `.sh` file and the comp
 (backlog #0-149, `check-shell.rb`); no download in a `run:` block outside `install-pinned-tool.sh` (backlog #0-149,
 `check-downloads.rb`); each checker's own cases run first; and zizmor's security audit of the same files and the
 actions, one annotation per finding not suppressed with its reason (backlog #0-147). Last, GitHub's ruleset of
-`main`, repository settings and admins against `.github/repository-settings/` (`main`'s copy, on a PR that does
+`main`, the environments, repository settings and admins, and every secret a job reads, against `.github/repository-settings/` (`main`'s copy, on a PR that does
 not change it), and every required check against the jobs that report one (backlog #0-113, ADR-0034,
 `repository-settings.rb check`).
 
@@ -1077,7 +1081,9 @@ Job B: Code scan (SAST) → SARIF upload to GitHub Security tab (not running, ba
 - The CLI is a pinned standalone binary, checksum-verified before it runs, and the token reaches
   only the scan step (backlog #0-61, see [Infrastructure Hardening](#infrastructure-hardening))
 
-Required GitHub secrets: `SNYK_TOKEN`, `NVD_API_KEY` (optional — speeds NVD download from ~15 min to ~2 min).
+Required secrets, in the environment `scans` (Settings → Environments; never repository secrets, ADR-0035):
+`SNYK_TOKEN`, `NVD_API_KEY` (optional — speeds NVD download from ~15 min to ~2 min; the plugin reads it from the
+environment variable, never a property, backlog #0-150).
 
 ### Dependency Updates — Renovate
 

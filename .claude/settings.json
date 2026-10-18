@@ -1,5 +1,5 @@
 {
-  "$comment": "Shared project settings for every Claude Code session in this repository. Autopilot sessions add .claude/settings.autopilot.json on top (claude --settings .claude/settings.autopilot.json). Changes need the owner's review (CODEOWNERS). The merge denies (backlog #0-113, ADR-0034): the owner's admin role bypasses the ruleset of main at merge, required checks included, and an interactive session runs gh with the owner's own login, so a session may not use that bypass (--admin, or a merge through the API, which bypasses without asking), nor remove the ruleset outright (gh api on the rulesets, REST or GraphQL, a PATCH of the repository or gh repo edit, repository-settings.rb plan/apply; check stays allowed), nor give the approval the ruleset asks of the owner (gh pr review, the reviews API or GraphQL: a session is the code owner too), nor change who is a collaborator (an admin gets the bypass); the owner runs those themselves, the merge as `! gh pr merge <n> --merge --admin --match-head-commit <sha they read>` (the bypass skips the review of the last push, so without the SHA a commit pushed onto the branch after their reading would merge unread, #0-131). A plain `gh pr merge` respects the ruleset. Like the hooks, these patterns stop a mistake, not a command shaped to get past them.",
+  "$comment": "Shared project settings for every Claude Code session in this repository. Autopilot sessions add .claude/settings.autopilot.json on top (claude --settings .claude/settings.autopilot.json). Changes need the owner's review (CODEOWNERS). The merge denies (backlog #0-113, ADR-0034): the owner's admin role bypasses the ruleset of main at merge, required checks included, and an interactive session runs gh with the owner's own login, so a session may not use that bypass (--admin, or a merge through the API, which bypasses without asking), nor remove the ruleset outright (gh api on the rulesets, REST or GraphQL, a PATCH of the repository or gh repo edit, repository-settings.rb plan/apply; check stays allowed), nor give the approval the ruleset asks of the owner (gh pr review, the reviews API or GraphQL: a session is the code owner too), nor change who is a collaborator (an admin gets the bypass), nor an environment or a secret (backlog #0-154: the scans' secrets live in the environment only main may use); the owner runs those themselves, the merge as `! gh pr merge <n> --merge --admin --match-head-commit <sha they read>` (the bypass skips the review of the last push, so without the SHA a commit pushed onto the branch after their reading would merge unread, #0-131). A plain `gh pr merge` respects the ruleset. Like the hooks, these patterns stop a mistake, not a command shaped to get past them.",
   "permissions": {
     "defaultMode": "plan",
     "deny": [
@@ -20,6 +20,10 @@
       "Bash(gh api *pulls/*/reviews*)",
       "Bash(gh api *PullRequestReview*)",
       "Bash(gh api *collaborators*)",
+      "Bash(gh api *environments*)",
+      "Bash(gh api *Environment*)",
+      "Bash(gh api *secrets*)",
+      "Bash(gh secret *)",
       "Bash(*repository-settings.rb plan*)",
       "Bash(*repository-settings.rb apply*)",
       "Read(./docker/.env)",

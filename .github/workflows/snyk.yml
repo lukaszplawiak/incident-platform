@@ -24,10 +24,19 @@
 #   - Every Monday at 09:00 Warsaw time (scheduled)
 #   - Manual trigger (workflow_dispatch)
 #
-# Required GitHub secret:
+# Required secret, in the environment `scans` (backlog #0-154), never a repository secret:
 #   SNYK_TOKEN — get free token at https://snyk.io
 #   Account Settings -> Personal Access Tokens -> Generate
-#   Add to: Settings -> Secrets and variables -> Actions -> SNYK_TOKEN
+#   Add to: Settings -> Environments -> scans -> Environment secrets -> SNYK_TOKEN
+#
+# Both jobs run in the environment `scans`, which only main may use
+# (.github/repository-settings/environments/scans.json, ADR-0035): a manual
+# dispatch on another branch would run that branch's scripts and build next to
+# the token, so the environment refuses it before any step runs. That holds
+# whatever this file says on the branch: an old copy without `environment:`
+# finds no repository secret to read. The `if:` only makes such a run show as
+# skipped instead of failed. `deployment: false`: the jobs are not
+# deployments, so the environment's history stays empty.
 # ============================================================
 
 name: Snyk Security Scan
@@ -61,9 +70,9 @@ permissions:
 # channels (downloads.snyk.io and npm): a signature by Snyk's key holds
 # whichever host served the files. Each job below runs the same check on this
 # file before it installs the CLI: Lint Workflows is a required check of
-# main (backlog #0-113), but the owner can merge around it and this workflow
-# can be dispatched by hand on any branch (#0-154), so a bump that reaches
-# this run unchecked still never gets SNYK_TOKEN.
+# main (backlog #0-113), but the owner can merge around it, so a bump that
+# reaches main unchecked still never gets SNYK_TOKEN. (A dispatch on another
+# branch runs no job at all: the environment `scans`, #0-154, above.)
 env:
   # renovate: datasource=github-release-attachments depName=snyk/cli verify=gpg:467717A30B2B4658415975629691DA64D0025194
   SNYK_CLI_VERSION: v1.1307.4
@@ -84,7 +93,11 @@ jobs:
   # ──────────────────────────────────────────────────────────
   snyk-dependencies:
     name: Snyk — Dependency Scan
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment:
+      name: scans
+      deployment: false
     # upload-sarif writes to the Security tab.
     permissions:
       contents: read
@@ -173,7 +186,11 @@ jobs:
   # ──────────────────────────────────────────────────────────
   snyk-code:
     name: Snyk — Code Scan (SAST)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    environment:
+      name: scans
+      deployment: false
     # upload-sarif writes to the Security tab.
     permissions:
       contents: read

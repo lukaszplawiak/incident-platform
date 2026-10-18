@@ -1,6 +1,6 @@
 # ADR-0034: `main` is guarded by one ruleset kept in the repository, bypassed at merge only by the owner's admin role; CI compares GitHub with the files (backlog #0-113)
 
-- **Status:** Accepted (2026-10-18)
+- **Status:** Accepted (2026-10-18); amended by ADR-0035 (the files and the check also hold the environments and which secrets exist)
 - **Backlog:** #0-113 (follow-ups #0-153, #0-154)
 - **Date:** 2026-10-18
 - **Author:** human (owner chose one ruleset, every CI job as a required check, and that only their own account may bypass it, at merge; written up by Claude Code in the owner's session)
@@ -145,7 +145,9 @@ that PR needs a new push or an update from `main`.
   (Actions' `sha_pinning_required` and allowed actions, the default token permissions, secret scanning, fork PR
   approval) stays a list checked by hand: each comes from another endpoint, most need an admin token to read, and
   each workflow already declares its own `permissions:`. A setting that decides who can merge belongs in the files.
+  (Amended by ADR-0035: the environments and which secrets exist are files too.)
 - Not covered by the ruleset, which guards merges into `main`: a workflow run on another branch. `snyk.yml` and
   `owasp-dependency-check.yml` can be dispatched by hand on any branch, which runs that branch's unreviewed
-  build next to their secrets (#0-154).
+  build next to their secrets (#0-154). (Amended by ADR-0035: closed, the secrets live in an environment only
+  `main` may use, kept as a file with the ruleset.)
 - The CLAUDE.md rule "delete the branch after every merge" now finds the remote branch deleted by GitHub.

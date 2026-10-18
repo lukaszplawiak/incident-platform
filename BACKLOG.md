@@ -127,11 +127,12 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-139](#0-139-the-hpas-scale-the-jvm-services-on-memory) | The HPAs scale the JVM services on memory | design | Low | Open |
 | [0-140](#0-140-the-services-pods-are-not-spread-over-zones-nor-rebalanced-after-scale-down) | The services' pods are not spread over zones, nor rebalanced after scale-down | design | Low | Open |
 | [0-143](#0-143-the-images-do-not-use-a-cds-or-aot-cache) | The images do not use a CDS or AOT cache | design | Low | Open |
-| [0-150](#0-150-the-nvd-api-key-is-on-the-owasp-scans-command-line) | The NVD API key is on the OWASP scan's command line | security | Low | Open |
+| [0-150](#0-150-the-nvd-api-key-is-on-the-owasp-scans-command-line) | The NVD API key is on the OWASP scan's command line | security | Low | In progress |
 | [0-151](#0-151-local-actions-are-called-by-path-not-by-githubs-self-repository-syntax) | Local actions are called by path, not by GitHub's self-repository syntax | ci | Low | Open |
 | [0-152](#0-152-refresh-the-snyk-cli-signing-key-before-2027-01-06) | Refresh the Snyk CLI signing key before 2027-01-06 | ci | Medium | Open |
 | [0-153](#0-153-decide-which-paths-need-the-owners-review-before-auto-merge) | Decide which paths need the owner's review, before auto-merge | design | Medium | Open |
-| [0-154](#0-154-the-scan-workflows-secrets-reach-a-branch-dispatched-by-hand) | The scan workflows' secrets reach a branch dispatched by hand | security | High | Open |
+| [0-154](#0-154-the-scan-workflows-secrets-reach-a-branch-dispatched-by-hand) | The scan workflows' secrets reach a branch dispatched by hand | security | High | In progress |
+| [0-155](#0-155-a-scan-that-cannot-run-on-main-alerts-no-one) | A scan that cannot run on `main` alerts no one | ci | Medium | Open |
 
 ---
 
@@ -2243,7 +2244,7 @@ links every class again. Start-up time matters for the HPAs' scale-up and for a 
 
 ### 0-150. The NVD API key is on the OWASP scan's command line
 
-**Type:** security · **Priority:** Low · **Status:** Open (found by zizmor's pedantic and auditor personas in the
+**Type:** security · **Priority:** Low · **Status:** In progress, with #0-154 (owner's decision 2026-10-18; found by zizmor's pedantic and auditor personas in the
 analysis of #0-147, 2026-10-17)
 
 **Problem.** `.github/workflows/owasp-dependency-check.yml` runs `./mvnw dependency-check:aggregate
@@ -2336,7 +2337,7 @@ AC2. `docs/ai-factory.md` phase 3 names the decision.
 
 ### 0-154. The scan workflows' secrets reach a branch dispatched by hand
 
-**Type:** security · **Priority:** High · **Status:** Open — found in the security review of #0-113 (2026-10-18); not introduced by it: the ruleset of `main` guards merges, not runs on other branches
+**Type:** security · **Priority:** High · **Status:** In progress — environment `scans` kept as a file with its check (ADR-0035, owner's decision 2026-10-18, with #0-150); to be applied, the secrets moved and AC1 verified before the merge. Found in the security review of #0-113 (2026-10-18); not introduced by it: the ruleset of `main` guards merges, not runs on other branches
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 
 **Problem.** `snyk.yml` (line 46) and `owasp-dependency-check.yml` (line 39) have `workflow_dispatch`, and nothing
@@ -2356,6 +2357,34 @@ dispatch on a branch whose own copy drops the `if:` runs that copy: only the env
 **Acceptance criteria.**
 AC1. A dispatch of either workflow on a branch other than `main` runs no step that can read its secret.
 AC2. README "Infrastructure Hardening" records the control, and the known gap of #0-113 is removed.
+
+---
+
+### 0-155. A scan that cannot run on `main` alerts no one
+
+**Type:** ci · **Priority:** Medium · **Status:** Open — found in the analysis of #0-154 (2026-10-18)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+
+**Problem.** From 2026-10-18 06:16 every run of `snyk.yml`'s dependency scan on `main` ended in `Authentication
+error (SNYK-0005)`: `SNYK_TOKEN` (last set 2026-07-19) no longer authenticates, most likely a Snyk token expired
+after 90 days. Until then the same job failed on its findings (46–47 issues, #0-69), so a red Snyk run on `main` was
+normal and the switch from "found issues" to "could not scan at all" changed nothing anyone sees. Nothing watches
+it: `main-guard.yml` reacts to the CI workflow only, the code scan hides its errors behind `continue-on-error: true`
+(its 403, #0-68), and so does the OWASP scan, whose NVD outage or bad key would look the same as a clean run. The
+platform then has no dependency scan while every signal says what it always said.
+
+**Approach (to analyse).** Tell a tool that could not run from one that found something: `snyk test` exits 1 on
+findings and 2 on an error (authentication, configuration), 3 when it finds no project; dependency-check reports
+an NVD failure in its log. A scan step could fail hard only on the error case, and something must then reach the
+owner: `main-guard.yml` widened to the scan workflows for that case only (it would stop the autopilot, which may be
+too much for a scan), or an issue of its own, opened by the scan's run on `main` or `schedule` and closed by its
+next good run. Also, as #0-152 does for Snyk's signing key: record the token's expiry and warn ahead of it. Whatever
+is chosen, the #0-69 and #0-68 failures must not raise it every week, or it says nothing either.
+
+**Acceptance criteria.**
+AC1. A scan on `main` (push or schedule) that cannot authenticate or reach its database reaches the owner in a way
+that does not depend on opening the Actions tab.
+AC2. A scan that only finds issues (#0-69) does not.
 
 ---
 

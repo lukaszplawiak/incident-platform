@@ -13,13 +13,19 @@
 # takes 2-15 minutes and should not slow down every build.
 #
 # Run locally:
-#   ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
+#   NVD_API_KEY=your-key ./mvnw dependency-check:aggregate
 #   open target/dependency-check-report.html
 #
-# Required GitHub secret (optional but recommended):
+# Required secret (optional but recommended), in the environment `scans`
+# (backlog #0-154), never a repository secret:
 #   NVD_API_KEY — speeds up NVD download from ~15 min to ~2 min
 #   Free key at: https://nvd.nist.gov/developers/request-an-api-key
-#   Add to: Settings -> Secrets and variables -> Actions -> NVD_API_KEY
+#   Add to: Settings -> Environments -> scans -> Environment secrets -> NVD_API_KEY
+#
+# The scan job runs in the environment `scans`, which only main may use
+# (ADR-0035, as in snyk.yml): a manual dispatch on another branch would run
+# that branch's mvnw, POM and plugins next to the key. Both jobs are skipped
+# off main, so such a dispatch builds nothing either.
 # ============================================================
 
 name: OWASP Dependency-Check
@@ -62,6 +68,7 @@ jobs:
   # ============================================================
   build:
     name: Build project
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
@@ -101,8 +108,12 @@ jobs:
   # ============================================================
   owasp-dependency-check:
     name: OWASP Dependency-Check
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     needs: build
+    environment:
+      name: scans
+      deployment: false
 
     steps:
       - name: Checkout code
@@ -141,12 +152,18 @@ jobs:
       # Security scan (fail only on real CVEs)
       # Fail-safe enabled for NVD outages
       # ------------------------------------------------------------
+      # Backlog #0-150: the key is an environment variable of this step only,
+      # which the plugin reads itself (`nvdApiKeyEnvironmentVariable` in the root
+      # pom.xml), never an argument of the Maven process, where any process of
+      # the job could read it (/proc/<pid>/cmdline) and Maven's debug log shows
+      # it (GHSA-qqhq-8r2c-c3f5).
       - name: Run OWASP Dependency-Check
         continue-on-error: true
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           timeout 20m ./mvnw dependency-check:aggregate \
             --no-transfer-progress \
-            -Dnvd.api.key=${{ secrets.NVD_API_KEY }} \
             -DfailBuildOnCVSS=${{ env.OWASP_FAIL_THRESHOLD }}
 
       # ------------------------------------------------------------
