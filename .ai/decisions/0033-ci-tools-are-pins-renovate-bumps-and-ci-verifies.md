@@ -45,7 +45,8 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
   `check-maven-wrapper-sum.sh` does for the wrapper (ADR-0031). A tool that receives a secret is checked again
   where it runs: both `snyk.yml` jobs run it on `snyk.yml` with `--expect 1` (a pin renamed out of the
   `_SHA256` form would otherwise not be seen, and pass) before installing the CLI, so a bump merged with Lint
-  Workflows red (`main` has no required checks, #0-113) never gets `SNYK_TOKEN`.
+  Workflows red (`main` has no required checks, #0-113; since ADR-0034 it has, but the owner can merge around
+  them and the workflow can be dispatched on any branch, #0-154) never gets `SNYK_TOKEN`.
 - **`install-pinned-tool.sh` is the only installer**: downloads the release asset from github.com, compares its
   SHA-256 with the pin before anything reads it, installs one executable into `RUNNER_TEMP`, no `sudo`. The Snyk
   CLI now comes from its GitHub release (the same `snyk-linux` downloads.snyk.io serves).

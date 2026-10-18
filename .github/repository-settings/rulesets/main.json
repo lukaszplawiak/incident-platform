@@ -1,0 +1,48 @@
+{
+  "name": "main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "include": ["refs/heads/main"],
+      "exclude": []
+    }
+  },
+  "bypass_actors": [
+    { "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "pull_request" }
+  ],
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": true,
+        "require_last_push_approval": true,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "required_reviewers": [],
+        "allowed_merge_methods": ["merge", "squash", "rebase"]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": false,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          { "context": "Build, Test & Coverage", "integration_id": 15368 },
+          { "context": "Detect Changes", "integration_id": 15368 },
+          { "context": "Validate Kubernetes Manifests", "integration_id": 15368 },
+          { "context": "Lint Workflows", "integration_id": 15368 },
+          { "context": "PostgreSQL Roles", "integration_id": 15368 },
+          { "context": "Validate Monitoring Config", "integration_id": 15368 },
+          { "context": "Docker Compose Smoke Test", "integration_id": 15368 },
+          { "context": "Factory guards", "integration_id": 15368 }
+        ]
+      }
+    }
+  ]
+}

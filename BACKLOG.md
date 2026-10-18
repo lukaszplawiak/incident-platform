@@ -114,7 +114,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-110](#0-110-maven-enforcer-allowed-repositories-and-pinned-plugin-versions) | Maven Enforcer: allowed repositories and pinned plugin versions | ci | Low | Open |
 | [0-111](#0-111-openapi-contract-diff-on-pull-requests) | OpenAPI contract diff on pull requests | ci | Low | Open |
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
-| [0-113](#0-113-repository-settings-the-ai-factory-depends-on) | Repository settings the AI factory depends on | ci | High | Open |
 | [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
@@ -131,6 +130,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-150](#0-150-the-nvd-api-key-is-on-the-owasp-scans-command-line) | The NVD API key is on the OWASP scan's command line | security | Low | Open |
 | [0-151](#0-151-local-actions-are-called-by-path-not-by-githubs-self-repository-syntax) | Local actions are called by path, not by GitHub's self-repository syntax | ci | Low | Open |
 | [0-152](#0-152-refresh-the-snyk-cli-signing-key-before-2027-01-06) | Refresh the Snyk CLI signing key before 2027-01-06 | ci | Medium | Open |
+| [0-153](#0-153-decide-which-paths-need-the-owners-review-before-auto-merge) | Decide which paths need the owner's review, before auto-merge | design | Medium | Open |
+| [0-154](#0-154-the-scan-workflows-secrets-reach-a-branch-dispatched-by-hand) | The scan workflows' secrets reach a branch dispatched by hand | security | High | Open |
 
 ---
 
@@ -1945,45 +1946,6 @@ AC2. Once required, a score under the threshold fails the check.
 
 ---
 
-### 0-113. Repository settings the AI factory depends on
-
-**Type:** ci · **Priority:** High · **Status:** Open — machine account `lukaszplawiakbot` (Write) and the labels done 2026-10-09; branch protection, auto-delete and the token in the devcontainer open
-**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
-
-**Problem.** The autopilot's merge safety is in GitHub settings, not in this repository: without them a
-bot token can merge around every check. None of these settings is visible in a diff.
-
-**Work** (owner, in the GitHub UI; `docs/ai-factory.md` "Setup" has the details).
-1. A machine account for the autopilot, collaborator with **Write** (not Admin), fine-grained token for
-   this repository only (contents and pull requests read/write, metadata read).
-2. Branch protection (or a ruleset) on `main`: PR required, required checks ("Build, Test & Coverage",
-   "Docker Compose Smoke Test" — #0-2, "Factory guards", "Lint Workflows" — #0-147: it checks a Renovate bump of
-   a CI tool against its publisher, and `snyk.yml` runs the Snyk CLI with its token on the push to `main`
-   whether or not that check passed), CODEOWNERS review required, and **no bypass for administrators**.
-3. "Automatically delete head branches" on (the CLAUDE.md "delete the branch after every merge" rule for
-   PRs merged by `--auto`).
-4. Labels: `autopilot`, `shadow`, `blocked`, `risk-high`, `autopilot-stop`, `human:agree`,
-   `human:fp-<dimension>` and `human:missed-<dimension>` for each review dimension.
-5. Make "Factory guards" a required check once its workflow has run green on `main`.
-
-**Decide before auto-merge: `.dockerignore` (noted 2026-10-16, PR #499).** Since #0-141 the root
-`.dockerignore` is the allowlist that keeps sources, `.env` files and `application-local.yml` out of every
-image's build context (SEC-33). An agent may change it: a narrowing breaks the image build (the smoke test is
-red), and a widening reaches an image only together with a Dockerfile `COPY`. Both changes go to the k8s
-reviewer (PR #499) and to the security reviewer, who answers `NEEDS_HUMAN` for a widening; no script checks
-it (`check-no-local-config-in-jars.sh` checks the jars, not the images). That is enough while the owner
-reads every PR before merging. Once a PR can merge without that read, decide whether `.dockerignore` and
-`*/Dockerfile.dockerignore` go on the build-config list of `.ai/rules/protected-paths.md` (the autopilot then
-stops on any change to them, and Factory guards rule 6 asks for the owner's approval). Not done in #499: the
-list is for what decides how the build is verified, and today a reviewer and the owner catch a widening.
-
-**Acceptance criteria.**
-AC1. A test PR from the machine account cannot be merged by it while a required check is red.
-AC2. A PR touching `.ai/rules/` stays unmergeable until the owner approves it.
-AC3. README "Infrastructure Hardening" records the settings.
-
----
-
 ### 0-116. The devcontainer firewall does not bind code an agent runs
 
 **Type:** design · **Priority:** High · **Status:** Open — accepted for shadow mode (decision 2026-10-09); must be done before phase 3 (auto-merge)
@@ -2330,6 +2292,70 @@ fingerprint, later expiry), replace the armor in the committed file; if Snyk rot
 change `verify=gpg:` in `snyk.yml`, after checking the new fingerprint against docs.snyk.io. Either way the three
 sources must agree, as on 2026-10-17. Run `check-pinned-tools.sh` with gpg before merging. Touches `.github/`, so
 human-only.
+
+---
+
+### 0-153. Decide which paths need the owner's review, before auto-merge
+
+**Type:** design · **Priority:** Medium · **Status:** Open — noted 2026-10-16 (PR #499) in #0-113, moved here from it and widened by its security review (2026-10-18); a precondition of phase 3 (auto-merge, `docs/ai-factory.md`)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+
+**Problem.** Since #0-113 (ADR-0034) the code owner review of `.github/CODEOWNERS` is enforced, so what it does not
+name is what a PR can change on green checks alone, and with auto-merge without anyone reading it. Three points are
+known.
+
+**1. `.dockerignore` (noted 2026-10-16, PR #499).** Since #0-141 the root
+`.dockerignore` is the allowlist that keeps sources, `.env` files and `application-local.yml` out of every
+image's build context (SEC-33). An agent may change it: a narrowing breaks the image build (the smoke test is
+red), and a widening reaches an image only together with a Dockerfile `COPY`. Both changes go to the k8s
+reviewer (PR #499) and to the security reviewer, who answers `NEEDS_HUMAN` for a widening; no script checks
+it (`check-no-local-config-in-jars.sh` checks the jars, not the images). That is enough while the owner
+reads every PR before merging. Once a PR can merge without that read, decide whether `.dockerignore` and
+`*/Dockerfile.dockerignore` go on the build-config list of `.ai/rules/protected-paths.md` (the autopilot then
+stops on any change to them, and Factory guards rule 6 asks for the owner's approval). Not done in #499: the
+list is for what decides how the build is verified, and today a reviewer and the owner catch a widening.
+
+**2. `.ai/context/` and `.ai/decisions/` (security review of #0-113, 2026-10-18).** Every agent and reviewer reads
+them as authority (the architecture, security and CI rules, the decided patterns), but neither is in CODEOWNERS nor
+on the protected list. A PR that changes only Markdown skips the build (`detect-changes`), so a bot PR rewriting
+`.ai/context/security.md`, or adding an ADR that "decides" a pattern the reviewers then accept, merges on green.
+Harmless while the owner reads every PR (shadow mode); decide before phase 3 whether they become code-owned (the
+autopilot's own knowledge updates, `.ai/rules/implementation.md`, then wait for the owner) or stay open with
+another check.
+
+**3. The shadow-mode catch-all (#0-113, 2026-10-18).** Until phase 3 `.github/CODEOWNERS` opens with `* @lukaszplawiak`,
+so every PR needs the owner's approval (the machine account's own approval would otherwise count). Phase 3
+removes that line; what this item decides is what stays owned once it is gone.
+
+**Acceptance criteria.**
+AC1. Each path above is either code-owned (CODEOWNERS, and `.ai/rules/protected-paths.md` when an agent must not
+write it) or the reason it is not is recorded here and in `docs/ai-factory.md`.
+AC2. `docs/ai-factory.md` phase 3 names the decision.
+
+---
+
+### 0-154. The scan workflows' secrets reach a branch dispatched by hand
+
+**Type:** security · **Priority:** High · **Status:** Open — found in the security review of #0-113 (2026-10-18); not introduced by it: the ruleset of `main` guards merges, not runs on other branches
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+
+**Problem.** `snyk.yml` (line 46) and `owasp-dependency-check.yml` (line 39) have `workflow_dispatch`, and nothing
+ties their jobs to `main`. Anyone with Write can dispatch either on any branch, the autopilot's machine account
+included (its classic `repo` token may; the missing `workflow` scope only stops it pushing changes to
+`.github/workflows/`). The run is that branch's code: its `.github/scripts/`, `pom.xml` and Maven build, none of
+them reviewed, in the same job as `SNYK_TOKEN` (`snyk.yml` lines 151, 203) or `NVD_API_KEY` (line 149). The
+secret is set on the scan step only (#0-61), but an earlier step of the same job runs the branch's build
+(`./mvnw clean compile`), which can change what later steps run (`$GITHUB_ENV`, `$GITHUB_PATH`, files on the
+runner). `push` and `schedule` run `main` only, so the dispatch is the one way in.
+
+**Approach (to analyse).** Either the secrets move to a GitHub environment whose deployment branch policy allows
+`main` only (the environment is a repository setting, so it belongs in `.github/repository-settings/` and its
+check, #0-113), or each job gets `if: github.ref == 'refs/heads/main'` (in the workflow, visible in a diff, but a
+dispatch on a branch whose own copy drops the `if:` runs that copy: only the environment binds). Probably both.
+
+**Acceptance criteria.**
+AC1. A dispatch of either workflow on a branch other than `main` runs no step that can read its secret.
+AC2. README "Infrastructure Hardening" records the control, and the known gap of #0-113 is removed.
 
 ---
 

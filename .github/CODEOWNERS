@@ -1,15 +1,22 @@
 # ============================================================
-# Human-owned paths of the AI factory (backlog #0-113). With "Require review from Code Owners" on in the
-# branch protection of main, a PR touching any of these waits for the owner's approval; every other PR
-# can merge on green checks alone (the autopilot's --auto merge).
+# Human-owned paths of the AI factory (backlog #0-113). The ruleset of main
+# (.github/repository-settings/rulesets/main.json, ADR-0034) requires a code owner's review, so a PR touching
+# any of these waits for the owner's approval of its last push. GitHub reads this file from main, not from the
+# PR, so a PR cannot remove its own paths from it. The owner's own PRs merge through the ruleset's bypass (the
+# admin role, at merge only): an author cannot approve their own PR.
+#
+# Shadow mode: the first line makes the owner the code owner of every path, so every PR, Renovate's and the
+# owner's own included, needs the owner's approval. The ruleset's one required approval alone would not do:
+# GitHub counts an approval from anyone with Write, and the autopilot's machine account could approve a PR it
+# did not open (security review of #0-113). Phase 3 (docs/ai-factory.md) removes that line, after #0-153 decides
+# which paths stay owned, so a PR touching none of the paths below can merge on its required checks alone.
 #
 # The owner must be a login GitHub can resolve: it ignores lines whose owner it cannot, and then nothing
-# is protected. While the autopilot pushes with the owner's own account (shadow mode without the machine
-# account of #0-113), leave "Require review from Code Owners" off: GitHub does not let an author approve
-# their own pull request, so every autopilot PR touching these paths could never merge. With the rule off,
-# this file enforces nothing: the paths below are guarded only by the autopilot's path gate
-# (scripts/factory/changed-paths.sh) and by the owner reading each PR before merging it.
+# is protected. GitHub applies the last line that matches a path; every line names the owner.
 # ============================================================
+
+# Shadow mode: every path (removed in phase 3, #0-153)
+*                           @lukaszplawiak
 
 # What the agents are judged by, and their own configuration
 /.ai/rules/                 @lukaszplawiak

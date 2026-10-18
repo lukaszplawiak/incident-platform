@@ -281,9 +281,9 @@ the summary below only places them.
 ### GitHub and CI
 
 What protects the pipeline itself: the `GITHUB_TOKEN`, the secrets and `main`. Part of it lives in
-the workflow files, part in repository settings, which no diff shows, so the settings are listed here
-too (state as of 2026-09-29; check them with `gh api repos/{owner}/{repo}/...` after changing anything
-in Settings).
+the workflow files, part in repository settings. What guards `main` is kept as files and checked by CI
+(#0-113); the other settings no diff shows, so they are listed here too (checked 2026-10-18; check them
+with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
 
 **In the workflow files**
 
@@ -329,8 +329,9 @@ in Settings).
   wrapper whose unbundled `@sentry/node ^7` dependency was resolved at install time. Pinned and
   checked as every CI tool is (above): a bump is trusted once Snyk's signature over its checksums
   verifies. That check runs in CI's Lint Workflows on the pull request, and again in both `snyk.yml`
-  jobs before the CLI is installed: `main` has no required checks yet (backlog #0-113), so a bump
-  merged with Lint Workflows red stops there and never gets the token.
+  jobs before the CLI is installed: Lint Workflows is a required check of `main` (backlog #0-113), but
+  the owner can merge around it, and `snyk.yml` can be dispatched by hand on a branch that was never
+  reviewed (#0-154), so the check stays where the token is used.
   `diff-cover` is pinned by version only (backlog #0-134).
 - **Manifest validation pinned, binary and schemas** (backlog #0-76): kubeconform is the release
   pinned in `ci.yml` (as every CI tool is, above), and it
@@ -379,7 +380,26 @@ in Settings).
   GitHub Actions may not approve pull requests.
 - Workflows from first-time contributors' fork PRs wait for approval before they run.
 - Secret scanning with **push protection**: a push containing a recognised secret is rejected.
-- Ruleset "Protect main": `main` cannot be deleted or force-pushed.
+- **What guards `main` is files, not UI settings** (backlog #0-113, ADR-0034): the ruleset `main`, the
+  repository settings and the list of admins in `.github/repository-settings/`, applied by the owner with
+  `.github/scripts/repository-settings.rb apply`. The ruleset: a pull request (no direct push, for anyone),
+  one approval of the last push (a code owner's, `.github/CODEOWNERS` read from `main`, when the PR touches an
+  owned path; until phase 3 `CODEOWNERS` opens with `* @lukaszplawiak`, so every PR needs the owner's, and the
+  bot's token, whose own approval would otherwise count, merges nothing) with stale approvals
+  dismissed, every `ci.yml` job and Factory guards as required checks, each pinned to GitHub Actions (a commit
+  status of the same name does not count), no force-push or deletion. Its one bypass: the admin role, at merge
+  only, so the owner can merge their own PR without a review, or with a red check when CI fails for an outside
+  reason; GitHub records each bypass. Only the owner is an admin (`repository.json` lists them, the check
+  compares), and interactive Claude Code sessions, which use the owner's login, may not use the bypass
+  nor change the ruleset (`.claude/settings.json` denies `gh pr merge --admin`, merges through the API, `gh api`
+  on the rulesets, `gh repo edit`, `gh pr review` and `repository-settings.rb plan`/`apply`: the owner runs them, the merge with
+  `--match-head-commit` so a commit pushed after their reading cannot ride along, #0-131).
+  `delete_branch_on_merge` on, `allow_auto_merge` off (phase 3, after #0-116). Lint Workflows compares GitHub
+  with the files on every PR and push (`repository-settings.rb check`, main's files for a PR that does not
+  change them), so a setting changed in the UI turns CI red, and refuses a required check that no job of a
+  pull request's workflows reports or that two jobs could. Its limit: CI's token sees neither the bypass
+  actors, nor the repository settings, nor the admins, so those are compared only when the owner runs the
+  check (its summary names what it skipped).
 - Actions must be pinned to a full-length commit SHA (`sha_pinning_required`, backlog #0-60): a
   workflow with a tag-pinned `uses:` fails to start, so a tag no longer depends on review alone. It
   was turned on once `main` had no tag-pinned `uses:` left and its run was green (2026-09-29);
@@ -443,8 +463,9 @@ security boundary, so every rule that matters is also enforced outside the model
   but loopback, and blocks all traffic if its own setup fails (`FIREWALL SETUP FAILED`). It narrows exfiltration, it
   does not prevent it: the host's Docker (needed by Testcontainers) and GitHub itself remain channels.
 - **Merge**: shadow mode does not rely on the agents — `gh pr merge` is denied to autopilot sessions and the
-  only push a hook allows is `git push -u origin <type>/<branch>`, until #0-113's bot account and branch
-  protection exist. A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
+  only push a hook allows is `git push -u origin <type>/<branch>`; and the bot account (Write) cannot push to
+  `main` or merge around a red check or a code owner's path, whatever runs in the session: the ruleset of
+  `main` (#0-113, above in "GitHub and CI"). A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
   the preflight honours. Both read main's CI result from a push to this repository only (backlog #0-148): a
   fork pull request from a branch named `main` matches a `main` branch filter, and it neither opens the issue
   nor counts as main's result in the preflight.
@@ -471,7 +492,10 @@ security boundary, so every rule that matters is also enforced outside the model
   pattern defined once in `scripts/factory/_marker.sh`. Its limit: a commit the autopilot pushes onto a branch of
   the owner's open PR is in the owner's PR too (#0-131).
 
-**Known gaps**: the GitHub settings themselves (#0-113); the autopilot may push to any feature branch, the
+**Known gaps**: a bypass actor or an admin added in the UI is seen only when the owner runs
+`repository-settings.rb check` (#0-113, ADR-0034); `snyk.yml` and `owasp-dependency-check.yml` can be
+dispatched by hand on any branch, running its unreviewed build next to `SNYK_TOKEN` or `NVD_API_KEY`, the
+bot's token included (#0-154); the autopilot may push to any feature branch, the
 owner's included (#0-131); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
 (#0-116, accepted for shadow mode, required before auto-merge); no secret scanning (#0-109); no Maven Enforcer
@@ -1009,7 +1033,10 @@ how they call the local actions in `.github/actions/`, one `::error` annotation 
 ADR-0032); shellcheck, the same binary, on every tracked `.sh` file and the composite actions' steps, every severity
 (backlog #0-149, `check-shell.rb`); no download in a `run:` block outside `install-pinned-tool.sh` (backlog #0-149,
 `check-downloads.rb`); each checker's own cases run first; and zizmor's security audit of the same files and the
-actions, one annotation per finding not suppressed with its reason (backlog #0-147).
+actions, one annotation per finding not suppressed with its reason (backlog #0-147). Last, GitHub's ruleset of
+`main`, repository settings and admins against `.github/repository-settings/` (`main`'s copy, on a PR that does
+not change it), and every required check against the jobs that report one (backlog #0-113, ADR-0034,
+`repository-settings.rb check`).
 
 ### Security Scanning
 

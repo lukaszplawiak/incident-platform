@@ -296,6 +296,6 @@ Implemented:
 - Agents (`.claude/agents/`), the autopilot and audit workflows (`.claude/workflows/`)
 
 Not implemented yet (tracked in `BACKLOG.md`): architecture tests (#0-108), secret scanning (#0-109),
-Maven Enforcer (#0-110), OpenAPI diff (#0-111), mutation testing (#0-112); the GitHub settings the
-autopilot depends on (#0-113). Until #0-113 is done the autopilot runs in shadow mode only (it opens PRs,
-the owner merges). The phases are described in `docs/ai-factory.md`.
+Maven Enforcer (#0-110), OpenAPI diff (#0-111), mutation testing (#0-112). The GitHub settings the
+autopilot depends on are files in `.github/repository-settings/` (#0-113, ADR-0034). Until #0-116 and #0-153 are done
+the autopilot runs in shadow mode only (it opens PRs, the owner merges). The phases are described in `docs/ai-factory.md`.

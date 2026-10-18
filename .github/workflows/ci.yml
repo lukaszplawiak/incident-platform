@@ -655,9 +655,13 @@ jobs:
       ZIZMOR_SHA256: e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a
 
     steps:
+      # Depth 2: on a pull request HEAD is GitHub's merge commit, and the
+      # settings step (repository-settings.rb --main) compares it with its
+      # first parent (main).
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          fetch-depth: 2
           persist-credentials: false
 
       - name: Pinned tool script tests
@@ -738,6 +742,35 @@ jobs:
         run: |
           set -euo pipefail
           "${RUNNER_TEMP}/lint-tools/zizmor" --offline --persona regular --format github .
+
+      # Backlog #0-113, ADR-0034: the ruleset guarding main, the repository
+      # settings and its admins are files in .github/repository-settings/;
+      # this fails when GitHub's differ from them, in either direction, and
+      # on a required check no job of a pull request's workflows reports (or
+      # that two jobs report). On a pull request, main is fetched now and
+      # passed as --main: the script reads main's files unless this merge
+      # commit changes them against its first parent (main), so once the
+      # owner applies another pull request's change and merges it, a re-run
+      # here passes instead of comparing GitHub with this branch's older
+      # copy, and a pull request that changes them is checked with its own
+      # (red until the owner applies them, ADR-0034). The token
+      # is read-only: GitHub shows it neither the bypass actors, nor the
+      # repository settings, nor the admins, so those are compared only when
+      # the owner runs it (the summary names them). Last in the job, so a
+      # GitHub outage or a changed setting hides no lint finding above. The
+      # cases run first.
+      - name: The repository settings match .github/repository-settings/
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          .github/scripts/test-repository-settings.sh
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git fetch --quiet --depth=1 origin "refs/heads/${GITHUB_BASE_REF}"
+            ruby .github/scripts/repository-settings.rb check --main FETCH_HEAD
+          else
+            ruby .github/scripts/repository-settings.rb check
+          fi
 
   # ──────────────────────────────────────────────────────────
   # PostgreSQL roles (backlog #0-78), and the database password config (#0-66)
