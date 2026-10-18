@@ -42,6 +42,10 @@ actionlint -shellcheck="$(command -v shellcheck)"; zizmor --offline --persona re
 ruby .github/scripts/check-shell.rb "$(command -v shellcheck)"; ruby .github/scripts/check-downloads.rb
 # Every CI tool pin (`# renovate:` + *_VERSION + *_SHA256) against its publisher (ADR-0033); needs gh and jq, and gpg for Snyk's
 .github/scripts/check-pinned-tools.sh
+# GitHub's ruleset of main, repository settings and admins against .github/repository-settings/ (backlog #0-113, ADR-0034);
+# with the owner's token it also compares what CI cannot see; `plan`, then `apply`, after changing a file (the owner's own
+# commands: sessions are denied them)
+ruby .github/scripts/repository-settings.rb check
 ```
 
 `make test-unit` (`-Dgroups="unit"`) is in the Makefile but no test carries a JUnit `unit` tag — it runs nothing. Use `./mvnw test`.
@@ -154,7 +158,17 @@ workflow in `.claude/workflows/`), in the order of the approved queue `.ai/plan/
 - **Don't guess silently on ambiguity.** If a request could reasonably mean two
   different things (which service, which layer, whether to touch the DB schema),
   ask rather than assuming the simpler interpretation.
-- **Delete the branch after every merge.** Once a PR is merged, delete its branch
-  both on `origin` (`git push origin --delete <branch>`) and locally
-  (`git branch -d <branch>`), after switching back to `main` and pulling. Don't let
-  merged branches accumulate.
+- **Delete the branch after every merge.** Once a PR is merged, GitHub deletes its
+  branch on `origin` (`delete_branch_on_merge`, backlog #0-113); delete it locally
+  (`git branch -d <branch>`) after switching back to `main` and pulling, and check
+  that `git ls-remote --heads origin <branch>` prints nothing (if it does,
+  `git push origin --delete <branch>`). Don't let merged branches accumulate.
+  A PR that needs the bypass of the ruleset of `main` (the owner's own PR touching
+  a code owner's path, or one whose CI is red for an outside reason) is merged by
+  the owner, typing `! gh pr merge <n> --merge --admin --match-head-commit <sha>`:
+  sessions are denied the bypass (`.claude/settings.json`, ADR-0034). On "zmerguj"
+  for such a PR, give the owner that command with the head SHA of the commit
+  reviewed (the bypass skips the review of the last push, so a commit pushed onto
+  the branch after the review would merge unread, #0-131). Changing the settings
+  (`repository-settings.rb plan`/`apply`, `gh api` on the rulesets, `gh repo edit`)
+  and approving a PR (`gh pr review`) are the owner's commands too.

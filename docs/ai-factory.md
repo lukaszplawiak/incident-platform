@@ -35,7 +35,7 @@ from it.
 | 1 | Use the panel by hand: `/review` (same agents and rules as the autopilot) | you trust its findings on your own changes |
 | 1b | Plan the order: `/plan-backlog` proposes `.ai/plan/queue.md` (order, Touches, why); you edit and merge it | a queue you agree with is on `main` |
 | 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label the bot's PRs from your own account (#0-126) (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`; optionally `human:introduced-<stage>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
-| 3 | Auto-merge, after #0-113 (bot account, branch protection) and #0-116 (code an agent runs must not be able to drop the devcontainer's firewall): in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
+| 3 | Auto-merge, after #0-116 (code an agent runs must not be able to drop the devcontainer's firewall) and the decision on which paths need the owner's review (#0-153: `.dockerignore`, `.ai/context/`, `.ai/decisions/`); #0-113's bot account and rulesets are in place: set `allow_auto_merge` to `true` in `.github/repository-settings/repository.json`, set `required_approving_review_count` to 0 in `rulesets/main.json`, and remove the shadow-mode `*` line of `.github/CODEOWNERS` (#0-153 decides which paths stay owned; a PR touching none then merges on green checks), and `apply` them (Setup step 3), after checking that the bot's token still has no `workflow` scope (`gh auth status` as the bot: with it, the bot could push a workflow whose token reports a required check, ADR-0034), in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
 | 4 | Audits every 10 items (the preflight stops with "audit due"): `/audit` runs both targets — `reviewers` (one analyst per dimension) and `pipeline` (backlog #0-121: every case traced from the stage that introduced it to the one that detected it, with why each stage between let it through) — one report each | acceptance of recommendations stays in 40–80% |
 | 5 | Later: cloud runs; a stage of the pipeline audit gets its own analyst only when the data shows it produces most of the cases. Never: two items at once (#0-114, decided against) | — |
 
@@ -70,14 +70,23 @@ from it.
    container mounts the same directory). It is gitignored and never committed; keep it out of the workspace
    (rules you want on the host belong in `~/.claude/settings.json` there, which the container does not
    see).
-3. **GitHub** (#0-113): bot as collaborator with Write; branch protection on `main` with required checks
-   ("Build, Test & Coverage", "Docker Compose Smoke Test", "Factory guards"), required CODEOWNERS review
-   (only once the bot account exists, see below), no bypass for administrators; "Automatically delete head
-   branches"; the labels listed in #0-113 (created 2026-10-09). `.github/CODEOWNERS` names the owner's
-   login. Shadow mode on the owner's own account, before the bot exists: leave the required CODEOWNERS
-   review off (an author cannot approve their own PR, so every autopilot PR touching those paths could
-   never merge); the protected paths are then guarded only by the autopilot's path gate and by your review
-   of each PR.
+3. **GitHub** (#0-113, ADR-0034): the bot as a collaborator with Write (not Admin); the labels listed in
+   #0-113 (created 2026-10-09). The rest is files in `.github/repository-settings/`, never set in the UI:
+   the ruleset `main` (a PR with your approval of its last push: `.github/CODEOWNERS` names you for every path
+   until phase 3, every CI job and
+   "Factory guards" as required checks, no force-push or deletion), the repository settings
+   (`delete_branch_on_merge` on, `allow_auto_merge` off until phase 3) and the admins (you alone). The
+   ruleset's one bypass is the admin role, at merge only: you merge your own PRs, or a PR whose CI is red for
+   an outside reason, with `! gh pr merge <n> --merge --admin --match-head-commit <sha>`, typed by you, with
+   the head commit you read (the bypass also skips the review of the last push: without the SHA a commit the
+   bot pushed onto your branch afterwards, #0-131, would merge unread). Claude Code sessions are denied the
+   bypass, every write to the ruleset and `gh pr review` (an approval of theirs would be yours), since they use your login. To change a setting: edit its file in a
+   PR, then with your own (admin) token run `! ruby .github/scripts/repository-settings.rb plan` and `apply` from that branch just before
+   merging it; the PR's Lint Workflows checks GitHub against its files and is red until then, and other open
+   PRs, checked against main's files, are red from the `apply` to the merge (re-run them after). A setting
+   changed in the UI turns every PR's Lint Workflows red. CI's token sees neither the bypass actors, nor the
+   repository settings, nor the admins: `ruby .github/scripts/repository-settings.rb check`, run with your
+   token, compares those too.
 4. **Before the first run**, in an autopilot session, run `/workflow-authoring` and check two things in
    `.claude/workflows/backlog-autopilot.js` (and the same constant in `audit.js`, `docs-audit.js`,
    `seed-bugs.js`): `AGENT_TYPE_OPTION`, the `agent()` option that selects a custom agent (not in the
@@ -199,7 +208,7 @@ The agents' instructions are not a boundary; these are, each with its limit:
 | `dontAsk` + deny rules (`settings.autopilot.json`) | file-tool writes to human-owned paths and to the gates' own files; the network tools; force pushes, merges, `gh api` | what a shell command does indirectly — hence the hooks |
 | Hooks (`.claude/hooks/`, tested by `test-hooks.sh`) | skipped verification, `exec:` goals, shell writes to protected paths, file-tool writes outside the repository (and `..` or a symlink as the last component), any `git grep` option outside an allow-list (abbreviated, quoted or expanded forms included), a line continuation (backslash-newline) in any command, pushes other than a feature branch, running tampered factory scripts, secret reads | a shell command shaped to get past a pattern: they are heuristics |
 | Gates on commits (`changed-paths.sh` before review, CI "Factory guards" on the PR) | the same changes once committed, whatever produced them | — the PR is the last and most reliable line |
-| CODEOWNERS + branch protection (#0-113) | a merge of any of it without the owner | — once configured; until then shadow mode is what keeps `main` safe |
+| The ruleset of `main` (#0-113, ADR-0034, `.github/repository-settings/`) | a push to `main` without a PR (anyone's), a merge with a red or missing required check, without an approval of the last push, or of a code owner's path without the owner's (anyone's but the owner's) | the owner's token can merge any PR (the admin role's bypass, at merge; Claude Code sessions are denied it); a bypass actor or an admin added in the UI is seen only when the owner runs `repository-settings.rb check` |
 | Devcontainer + firewall | the agents' own commands: access to your host account, files and credentials; network beyond Anthropic, GitHub, Maven Central (IPv4; IPv6 only loopback; a failed setup blocks everything) | **code an agent runs** (a test): Testcontainers needs the host's Docker, and Docker access is root over the devcontainer itself, so such code can drop the firewall, start a container outside it, or read files the agents' tools may not (#0-116, accepted for shadow mode only); data through DNS the resolver forwards; GitHub itself as a channel |
 
 ## Measuring the reviewers and the pipeline

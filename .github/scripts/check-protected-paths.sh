@@ -46,10 +46,13 @@ while IFS= read -r p; do
 done <<<"$entries"
 
 # CODEOWNERS: GitHub applies the last matching line; it must name an owner. Probed for the entry itself and
-# for every path under it that has a line of its own (a narrower line could take part of it away).
+# for every path under it that has a line of its own (a narrower line could take part of it away). The entry
+# also needs a line of its own ("/<path>" or "/<dir>/" above it): the shadow-mode catch-all `*` (backlog
+# #0-113) matches every path, so without this a deleted line would go unnoticed until phase 3 removes `*`.
 set -f   # `*` is a CODEOWNERS pattern here, not a glob
-last_owners() {   # last_owners <path> — prints "<pattern> <owner count>" of the last line matching it
-    local path=$1 line pattern last="" owners=0
+last_owners() {   # last_owners <path> — prints "<pattern> <owner count> <own>" of the last line matching it;
+                  # <own> is 1 when a line other than `*` matches it
+    local path=$1 line pattern last="" owners=0 own=0
     while IFS= read -r line; do
         # Split into words on purpose, the pattern and its owners; no glob expansion (set -f above).
         # shellcheck disable=SC2086
@@ -61,8 +64,9 @@ last_owners() {   # last_owners <path> — prints "<pattern> <owner count>" of t
             *) continue ;;
         esac
         last=$pattern; owners=$#
+        [ "$pattern" = '*' ] || own=1
     done <<<"$owner_rules"
-    [ -n "$last" ] && echo "$last $owners"
+    [ -n "$last" ] && echo "$last $owners $own"
 }
 while IFS= read -r p; do
     [ -n "$p" ] || continue
@@ -73,10 +77,11 @@ while IFS= read -r p; do
     while IFS= read -r probe; do
         [ -n "$probe" ] || continue
         res=$(last_owners "$probe")
-        if [ -z "$res" ]; then
-            echo "::error::$codeowners has no rule for $probe ($PROTECTED_PATHS_FILE lists $p)"; failures=$((failures+1))
-        elif [ "${res##* }" -eq 0 ]; then
-            echo "::error::$codeowners: the last rule matching $probe is '${res% *}' with no owner ($PROTECTED_PATHS_FILE lists $p)"; failures=$((failures+1))
+        read -r last owners own <<<"$res"
+        if [ -z "$res" ] || [ "$own" != 1 ]; then
+            echo "::error::$codeowners has no rule for $probe ($PROTECTED_PATHS_FILE lists $p; the shadow-mode '*' does not count)"; failures=$((failures+1))
+        elif [ "$owners" -eq 0 ]; then
+            echo "::error::$codeowners: the last rule matching $probe is '$last' with no owner ($PROTECTED_PATHS_FILE lists $p)"; failures=$((failures+1))
         fi
     done <<<"$probes"
 done <<<"$owned"

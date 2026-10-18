@@ -3,8 +3,9 @@
 # PreToolUse (Bash), autopilot sessions only: the one push an agent may make is
 #     git push -u origin <type>/<name>
 # of a feature branch. No refspec (`a:main`, `HEAD:refs/heads/main`), no `+`, no force flag, no other
-# remote, never main. Until branch protection exists (backlog #0-113) this hook is what keeps shadow mode
-# from being a direct push to main; after it, it is the second line. Fails closed.
+# remote, never main. Since backlog #0-113 the ruleset of main refuses a direct push from any account
+# (ADR-0034), so this hook is the second line, and still the only one that keeps the push to the session's
+# own feature branch (#0-131). Fails closed.
 # ============================================================
 set -uo pipefail
 . "$(dirname "$0")/_lib.sh"

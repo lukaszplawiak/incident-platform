@@ -33,6 +33,7 @@ expect 1 "a missing deny for a build-config file fails" "$WORK/no-edit.json"
 printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 0\n' > "$WORK/open-hook.sh"
 expect 1 "a hook that lets writes through fails" "$SRC/.claude/settings.autopilot.json" "$WORK/open-hook.sh"
 
+# The shadow-mode catch-all (`*`, backlog #0-113) still matches the path, and does not count as its rule.
 grep -v '^/.ai/audit/decisions.md' "$SRC/.github/CODEOWNERS" > "$WORK/CODEOWNERS-missing"
 expect 1 "a protected path without a CODEOWNERS rule fails" "$SRC/.claude/settings.autopilot.json" "$SRC/.claude/hooks/guard-protected-bash.sh" "$WORK/CODEOWNERS-missing"
 
@@ -46,7 +47,12 @@ expect 1 "a later narrower line without an owner fails (last match wins)" "$SRC/
 expect 0 "an unowned line before the owned one is overridden" "$SRC/.claude/settings.autopilot.json" "$SRC/.claude/hooks/guard-protected-bash.sh" "$WORK/CODEOWNERS-unowned-first"
 
 printf '* @owner\n' > "$WORK/CODEOWNERS-star"
-expect 0 "a global * rule with an owner covers everything" "$SRC/.claude/settings.autopilot.json" "$SRC/.claude/hooks/guard-protected-bash.sh" "$WORK/CODEOWNERS-star"
+# The shadow-mode catch-all (backlog #0-113) is not a protected path's own rule: removed in phase 3, it would take
+# every path with it.
+expect 1 "a global * rule alone is no path's own rule" "$SRC/.claude/settings.autopilot.json" "$SRC/.claude/hooks/guard-protected-bash.sh" "$WORK/CODEOWNERS-star"
+
+{ cat "$SRC/.github/CODEOWNERS"; echo '*'; } > "$WORK/CODEOWNERS-star-last"
+expect 1 "a last * line without an owner takes every review away" "$SRC/.claude/settings.autopilot.json" "$SRC/.claude/hooks/guard-protected-bash.sh" "$WORK/CODEOWNERS-star-last"
 
 echo '{"permissions":{"deny":[]}}' > "$WORK/empty.json"
 expect 1 "settings without deny rules fail" "$WORK/empty.json"

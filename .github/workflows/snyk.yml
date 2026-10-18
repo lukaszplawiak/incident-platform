@@ -60,9 +60,10 @@ permissions:
 # (.github/keys/<fingerprint>.asc). That replaces ADR-0021's hand check of two
 # channels (downloads.snyk.io and npm): a signature by Snyk's key holds
 # whichever host served the files. Each job below runs the same check on this
-# file before it installs the CLI: ci.yml's verdict on the pull request does
-# not stop a merge (no required checks on main, backlog #0-113), so a bump
-# merged red still never gets SNYK_TOKEN.
+# file before it installs the CLI: Lint Workflows is a required check of
+# main (backlog #0-113), but the owner can merge around it and this workflow
+# can be dispatched by hand on any branch (#0-154), so a bump that reaches
+# this run unchecked still never gets SNYK_TOKEN.
 env:
   # renovate: datasource=github-release-attachments depName=snyk/cli verify=gpg:467717A30B2B4658415975629691DA64D0025194
   SNYK_CLI_VERSION: v1.1307.4

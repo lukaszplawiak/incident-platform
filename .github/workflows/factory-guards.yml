@@ -11,7 +11,9 @@
 # hook and CODEOWNERS still cover .ai/rules/protected-paths.md, and that every escape marker in the backlog is one
 # the audits can read (backlog #0-128).
 #
-# Required check: "Factory guards" (repository settings, backlog #0-113), once this has run green on main.
+# A required check of main (its ruleset, .github/repository-settings/rulesets/main.json, backlog #0-113,
+# ADR-0034). On its own it binds nobody who can change check-factory-guards.sh, since a pull request runs its
+# own copy: the ruleset's code owner review of .github/ is what makes such a change wait for the owner.
 # ============================================================
 
 name: Factory guards

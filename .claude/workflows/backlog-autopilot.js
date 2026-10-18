@@ -20,7 +20,8 @@ export const meta = {
 //   item:     '#0-25'           take this item instead (it must still be `ready` on main, deps done, no lock)
 //   branch:   'fix/0-25-…'      resume an existing branch (after a BLOCKED item was resolved, or a
 //                               branch from scripts/factory-admin/local-implement.sh): skips pick/plan/implement
-//   shadow:   true (default)    open the PR, never merge. Set false only after backlog #0-113.
+//   shadow:   true (default)    open the PR, never merge. Set false only in phase 3 (docs/ai-factory.md:
+//                               after backlog #0-116 and #0-153).
 //   maxRounds: 3                review rounds before the item is BLOCKED
 //   localReview: false          advisory second opinion from a local model (scripts/factory/local-review.sh)
 //
