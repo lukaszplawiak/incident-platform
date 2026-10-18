@@ -114,7 +114,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-110](#0-110-maven-enforcer-allowed-repositories-and-pinned-plugin-versions) | Maven Enforcer: allowed repositories and pinned plugin versions | ci | Low | Open |
 | [0-111](#0-111-openapi-contract-diff-on-pull-requests) | OpenAPI contract diff on pull requests | ci | Low | Open |
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
-| [0-113](#0-113-repository-settings-the-ai-factory-depends-on) | Repository settings the AI factory depends on | ci | High | Open |
 | [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
@@ -1944,34 +1943,6 @@ target list), threshold start at 60% and raised later; informational for two wee
 **Acceptance criteria.**
 AC1. A PR reports the mutation score of its changed classes in the job summary.
 AC2. Once required, a score under the threshold fails the check.
-
----
-
-### 0-113. Repository settings the AI factory depends on
-
-**Type:** ci · **Priority:** High · **Status:** In progress — machine account `lukaszplawiakbot` (Write), the labels and the bot's token in the devcontainer done; the ruleset of `main`, the repository settings and the admins are files with a CI check (ADR-0034, owner's decision 2026-10-18: one ruleset, bypassed at merge only by the owner's admin role, never by a Claude Code session), to be applied and verified (AC1, AC2) before the merge. The `.dockerignore` decision moved to #0-153; manual dispatches of the scan workflows on unreviewed branches are #0-154
-**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
-
-**Problem.** The autopilot's merge safety is in GitHub settings, not in this repository: without them a
-bot token can merge around every check. None of these settings is visible in a diff.
-
-**Work** (owner, in the GitHub UI; `docs/ai-factory.md` "Setup" has the details).
-1. A machine account for the autopilot, collaborator with **Write** (not Admin), fine-grained token for
-   this repository only (contents and pull requests read/write, metadata read).
-2. Branch protection (or a ruleset) on `main`: PR required, required checks ("Build, Test & Coverage",
-   "Docker Compose Smoke Test" — #0-2, "Factory guards", "Lint Workflows" — #0-147: it checks a Renovate bump of
-   a CI tool against its publisher, and `snyk.yml` runs the Snyk CLI with its token on the push to `main`
-   whether or not that check passed), CODEOWNERS review required, and **no bypass for administrators**.
-3. "Automatically delete head branches" on (the CLAUDE.md "delete the branch after every merge" rule for
-   PRs merged by `--auto`).
-4. Labels: `autopilot`, `shadow`, `blocked`, `risk-high`, `autopilot-stop`, `human:agree`,
-   `human:fp-<dimension>` and `human:missed-<dimension>` for each review dimension.
-5. Make "Factory guards" a required check once its workflow has run green on `main`.
-
-**Acceptance criteria.**
-AC1. A test PR from the machine account cannot be merged by it while a required check is red.
-AC2. A PR touching `.ai/rules/` stays unmergeable until the owner approves it.
-AC3. README "Infrastructure Hardening" records the settings.
 
 ---
 
