@@ -110,7 +110,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-106](#0-106-kubernetes-has-no-observability-stack) | Kubernetes has no observability stack | design | Medium | Open |
 | [0-107](#0-107-no-alert-reads-log-content) | No alert reads log content | design | Low | Open |
 | [0-108](#0-108-architecture-tests-archunit-for-the-invariants-in-claudemd) | Architecture tests (ArchUnit) for the invariants in CLAUDE.md | ci | Medium | Open |
-| [0-109](#0-109-no-secret-scanning-in-ci-or-before-a-commit) | No secret scanning in CI or before a commit | ci | Medium | In progress |
 | [0-110](#0-110-maven-enforcer-allowed-repositories-and-pinned-plugin-versions) | Maven Enforcer: allowed repositories and pinned plugin versions | ci | Low | Open |
 | [0-111](#0-111-openapi-contract-diff-on-pull-requests) | OpenAPI contract diff on pull requests | ci | Low | Open |
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
@@ -1869,42 +1868,6 @@ in `.ai/rules/review/architecture.md` as "enforced by tests, do not review by ha
 AC1. `./mvnw verify` runs the architecture tests in CI ("Build, Test & Coverage") and they pass on `main`.
 AC2. Each confirmed rule fails a test fixture that violates it (one negative test per rule).
 AC3. `.ai/rules/review/architecture.md` lists the enforced rules; CODEOWNERS covers the module.
-
----
-
-### 0-109. No secret scanning in CI or before a commit
-
-**Type:** ci · **Priority:** Medium · **Status:** In progress
-**Autopilot:** not-ready · **Risk:** high · **Complexity:** low · **Depends on:** —
-
-**Problem.** Nothing in the repository scans commits for secrets. `check-packaged-profiles.sh` (#0-81) catches
-secret-looking keys under `src/main/resources` only. GitHub's push protection is on (checked 2026-10-18), but it
-recognises a known provider's token only, the pusher can bypass it, and it is a setting no file records; this
-project's own secrets are generic (the JWT secret, the AES keys, the database passwords), which it does not see.
-An agent that pastes one into a test, a log excerpt in `.ai/work/<id>/proofs.md` or a workflow file is not
-caught before the PR, and not at all outside those paths.
-
-**Approach** (superseded by "Decided" below: betterleaks, no `.gitleaks.toml`). gitleaks in CI on every PR and push to `main`, installed as a standalone binary pinned by
-version and SHA-256 next to it, the way the Snyk CLI is (#0-61, ADR-0021) — not a Marketplace action
-(#0-62). A committed `.gitleaks.toml` with allow-list entries only for documented test fixtures. Optional:
-the same binary in a local pre-commit hook and in the devcontainer.
-
-**Acceptance criteria.**
-AC1. A PR that adds a string matching a default gitleaks rule fails a required check.
-AC2. The binary's version and checksum are pinned in the workflow; a checksum mismatch fails the job.
-AC3. README "Infrastructure Hardening" lists the control.
-
-**Decided (2026-10-18, owner; ADR-0036).** betterleaks, not gitleaks: the successor by gitleaks' original author,
-the same rules and flags, better at generic secrets, and its releases are immutable with a release attestation
-(gitleaks has a checksums file only, named by version, which Renovate's bumps would break). Its own required job
-"Secret Scan", not a step of Lint Workflows. Pinned with a new `verify=release` method in
-`check-pinned-tools.sh` (`gh release verify-asset`: betterleaks has no build attestation, which first analysis
-assumed). The commits a pull request adds or a push brings are scanned, not the tree (a secret added and then
-deleted is in no tree). No `.gitleaks.toml`: the default rules, and `secret-scan.sh` refuses a config or an
-ignore file, which the pull request it scans could widen; a finding that is no secret is allowed on its line
-with `gitleaks:allow` and its reason. The 1170 commits on `main` were scanned once: 139 findings, test fixtures,
-placeholders and the Alertmanager dev token untracked in ff2b4da; nothing to rotate. The pre-commit hook and the
-devcontainer are #0-156: both checks here run after the push, when the branch is already public.
 
 ---
 
