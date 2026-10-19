@@ -110,7 +110,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-106](#0-106-kubernetes-has-no-observability-stack) | Kubernetes has no observability stack | design | Medium | Open |
 | [0-107](#0-107-no-alert-reads-log-content) | No alert reads log content | design | Low | Open |
 | [0-108](#0-108-architecture-tests-archunit-for-the-invariants-in-claudemd) | Architecture tests (ArchUnit) for the invariants in CLAUDE.md | ci | Medium | Open |
-| [0-109](#0-109-no-secret-scanning-in-ci-or-before-a-commit) | No secret scanning in CI or before a commit | ci | Medium | Open |
 | [0-110](#0-110-maven-enforcer-allowed-repositories-and-pinned-plugin-versions) | Maven Enforcer: allowed repositories and pinned plugin versions | ci | Low | Open |
 | [0-111](#0-111-openapi-contract-diff-on-pull-requests) | OpenAPI contract diff on pull requests | ci | Low | Open |
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
@@ -132,6 +131,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-152](#0-152-refresh-the-snyk-cli-signing-key-before-2027-01-06) | Refresh the Snyk CLI signing key before 2027-01-06 | ci | Medium | Open |
 | [0-153](#0-153-decide-which-paths-need-the-owners-review-before-auto-merge) | Decide which paths need the owner's review, before auto-merge | design | Medium | Open |
 | [0-154](#0-154-the-scan-workflows-secrets-reach-a-branch-dispatched-by-hand) | The scan workflows' secrets reach a branch dispatched by hand | security | High | Open |
+| [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 
 ---
 
@@ -1871,27 +1871,6 @@ AC3. `.ai/rules/review/architecture.md` lists the enforced rules; CODEOWNERS cov
 
 ---
 
-### 0-109. No secret scanning in CI or before a commit
-
-**Type:** ci · **Priority:** Medium · **Status:** Open
-**Autopilot:** not-ready · **Risk:** high · **Complexity:** low · **Depends on:** —
-
-**Problem.** Nothing scans commits for secrets. `check-packaged-profiles.sh` (#0-81) catches secret-looking
-keys under `src/main/resources` only. An agent that pastes a token into a test, a log excerpt in
-`.ai/work/<id>/proofs.md` or a workflow file is not caught before the PR, and not at all outside those paths.
-
-**Approach.** gitleaks in CI on every PR and push to `main`, installed as a standalone binary pinned by
-version and SHA-256 next to it, the way the Snyk CLI is (#0-61, ADR-0021) — not a Marketplace action
-(#0-62). A committed `.gitleaks.toml` with allow-list entries only for documented test fixtures. Optional:
-the same binary in a local pre-commit hook and in the devcontainer.
-
-**Acceptance criteria.**
-AC1. A PR that adds a string matching a default gitleaks rule fails a required check.
-AC2. The binary's version and checksum are pinned in the workflow; a checksum mismatch fails the job.
-AC3. README "Infrastructure Hardening" lists the control.
-
----
-
 ### 0-110. Maven Enforcer: allowed repositories and pinned plugin versions
 
 **Type:** ci · **Priority:** Low · **Status:** Open
@@ -2106,6 +2085,13 @@ security reviewer of #0-147 named two more checks the rule should carry: a privi
 today only in `.ai/context/security.md` "CI workflows"); and no code from the checkout that a step holding a
 secret relies on (an installer script, a tool it runs) runs after an untrusted build step in the same job (the
 Snyk CLI's installer ran after `./mvnw compile` until that review).
+
+**Also (found in the security review of #0-109, 2026-10-18).** No rule covers a scanner the scanned change can
+reconfigure: a tool that reads its config or ignore file from the checked-out tree (betterleaks' `.gitleaks.toml`
+and `.gitleaksignore` at the root, read even when a flag names another directory) lets the pull request it checks
+switch its rules off; `secret-scan.sh` refuses both (ADR-0036). Nor one for a workflow command built from a
+repository-controlled string (a file name with a newline in an `::error file=...` annotation). Candidate rule: "a
+CI check reads its rules from the base branch or from flags, never from the tree it checks".
 
 **Also (found in the review of #0-29, 2026-10-15).** No rule covers the separation of deployment environments
 either: which namespace an overlay deploys into and what prod runs. `check-k8s-environments.rb` enforces both in
@@ -2356,6 +2342,30 @@ dispatch on a branch whose own copy drops the `if:` runs that copy: only the env
 **Acceptance criteria.**
 AC1. A dispatch of either workflow on a branch other than `main` runs no step that can read its secret.
 AC2. README "Infrastructure Hardening" records the control, and the known gap of #0-113 is removed.
+
+---
+
+### 0-156. Secrets are scanned only after the push
+
+**Type:** security · **Priority:** Medium · **Status:** Open — found in the analysis of #0-109 (2026-10-18)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-109
+
+**Problem.** The Secret Scan job (#0-109, ADR-0036) and GitHub's push protection both run after the push. This
+repository is public, so a secret on a pushed branch is published before either says anything: the finding
+means rotating it, not deleting it. Nothing scans before the push: no git hook in the repository
+(`.githooks`, `core.hooksPath`: none), and the autopilot's push path (`.claude/hooks/guard-git-push.sh`, the
+shipper) checks branches, not content. Also open: an allow comment (`gitleaks:allow`) passes whatever its line
+holds, its reason unchecked.
+
+**Approach.** The same pinned betterleaks before the push: in the factory's push path (the session hook or the
+shipper's script, `.claude/`, owner-only) on the commits the push sends, and as an opt-in pre-push hook for
+developers (`core.hooksPath` to a committed directory), in the devcontainer by default. Decide whether an allow
+comment must carry a reason the script checks (like `# not-a-download: <why>`, #0-149).
+
+**Acceptance criteria.**
+AC1. An agent's push of a commit holding a secret-shaped string is refused before it reaches GitHub.
+AC2. A developer who enables the hook gets the same refusal, with the same rules and binary as CI.
+AC3. README "Infrastructure Hardening" lists the control and drops the gap.
 
 ---
 

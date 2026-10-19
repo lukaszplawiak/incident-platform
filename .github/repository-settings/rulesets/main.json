@@ -37,6 +37,7 @@
           { "context": "Detect Changes", "integration_id": 15368 },
           { "context": "Validate Kubernetes Manifests", "integration_id": 15368 },
           { "context": "Lint Workflows", "integration_id": 15368 },
+          { "context": "Secret Scan", "integration_id": 15368 },
           { "context": "PostgreSQL Roles", "integration_id": 15368 },
           { "context": "Validate Monitoring Config", "integration_id": 15368 },
           { "context": "Docker Compose Smoke Test", "integration_id": 15368 },

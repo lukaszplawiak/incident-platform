@@ -20,7 +20,9 @@ mkdir -p "$WORK/bin" "$FIX" "$WORK/keys"
 
 # gh stub: `api repos/<r>/releases/tags/<t>`, `release download <t> -R <r> -p <name> -D <dir>`,
 # `attestation verify <file> --repo <r> --source-ref <ref>` (valid when "<r> <ref> <sha of file>" is a line of
-# $FIX/attested: an attestation is from one repository and built from one ref).
+# $FIX/attested: an attestation is from one repository and built from one ref), and
+# `release verify-asset <t> <file> -R <r>` (valid when "<r> <t> <sha of file>" is a line of $FIX/released: a
+# release attestation lists the assets of one immutable release).
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env bash
 sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
@@ -38,12 +40,17 @@ case "$1 $2" in
         while [ $# -gt 0 ]; do case "$1" in --repo) r=$2 ;; --source-ref) ref=$2 ;; esac; shift 2; done
         s=$(sha256 "$f" | cut -d' ' -f1)
         grep -qx "$r $ref $s" "$FIX/attested" 2>/dev/null || { echo "no matching attestations found" >&2; exit 1; } ;;
+    "release verify-asset")
+        t=$3; f=$4; shift 4; while [ $# -gt 0 ]; do case "$1" in -R) r=$2 ;; esac; shift 2; done
+        s=$(sha256 "$f" | cut -d' ' -f1)
+        grep -qx "$r $t $s" "$FIX/released" 2>/dev/null || { echo "no attestations found for tag $t" >&2; exit 1; } ;;
     *) echo "gh stub: unexpected $*" >&2; exit 1 ;;
 esac
 STUB
 chmod +x "$WORK/bin/gh"
 export FIX PATH="$WORK/bin:$PATH" PINNED_TOOLS_KEYS_DIR="$WORK/keys"
 : > "$FIX/attested"
+: > "$FIX/released"
 
 # release <repo> <tag> <prerelease true|false> <asset files...> — publishes files from $WORK/files as
 # assets, with GitHub's digest of each; what `release download` serves is the same files unless a test
@@ -128,6 +135,19 @@ release p/fork v1.0.0 false tool-linux.tar.gz
 expect "an attestation from another repository does not count" 1 "has no valid attestation from p/fork" "$W/m.yml"
 cp "$WORK/files/other.tar.gz" "$FIX/o/tool/v1.0.0/serve/tool-linux.tar.gz"
 expect "a download that differs from GitHub's digest" 1 "as downloaded does not have the pinned SHA-256" "$W/l.yml"
+cp "$WORK/files/tool-linux.tar.gz" "$FIX/o/tool/v1.0.0/serve/tool-linux.tar.gz"
+
+echo "check-pinned-tools.sh: release attestation"
+pin "$W/r.yml" o/tool v1.0.0 "$TOOL" release
+expect "a release that is not immutable (no release attestation)" 1 "is not attested as part of the immutable release v1.0.0" "$W/r.yml"
+echo "o/tool v0.9.0 $TOOL" >> "$FIX/released"
+expect "an asset attested for another tag does not count" 1 "immutable release v1.0.0" "$W/r.yml"
+echo "o/tool v1.0.0 $TOOL" >> "$FIX/released"
+expect "an asset of the immutable release" 0 "ok: o/tool v1.0.0 tool-linux.tar.gz (release)" "$W/r.yml"
+pin "$W/r2.yml" p/fork v1.0.0 "$TOOL" release
+expect "a release attestation of another repository does not count" 1 "is not attested as part of the immutable release" "$W/r2.yml"
+cp "$WORK/files/other.tar.gz" "$FIX/o/tool/v1.0.0/serve/tool-linux.tar.gz"
+expect "release: a download that differs from GitHub's digest" 1 "as downloaded does not have the pinned SHA-256" "$W/r.yml"
 cp "$WORK/files/tool-linux.tar.gz" "$FIX/o/tool/v1.0.0/serve/tool-linux.tar.gz"
 
 echo "check-pinned-tools.sh: checksums file"

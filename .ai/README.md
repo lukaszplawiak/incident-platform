@@ -295,7 +295,10 @@ Implemented:
 - Review criteria per dimension, acceptance, readiness and audit rules
 - Agents (`.claude/agents/`), the autopilot and audit workflows (`.claude/workflows/`)
 
-Not implemented yet (tracked in `BACKLOG.md`): architecture tests (#0-108), secret scanning (#0-109),
+Secret scanning: CI's Secret Scan job, on every commit a pull request adds (#0-109, ADR-0036); before the push,
+not yet (#0-156).
+
+Not implemented yet (tracked in `BACKLOG.md`): architecture tests (#0-108),
 Maven Enforcer (#0-110), OpenAPI diff (#0-111), mutation testing (#0-112). The GitHub settings the
 autopilot depends on are files in `.github/repository-settings/` (#0-113, ADR-0034). Until #0-116 and #0-153 are done
 the autopilot runs in shadow mode only (it opens PRs, the owner merges). The phases are described in `docs/ai-factory.md`.
