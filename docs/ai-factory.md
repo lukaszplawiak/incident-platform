@@ -86,7 +86,11 @@ from it.
    PRs, checked against main's files, are red from the `apply` to the merge (re-run them after). A setting
    changed in the UI turns every PR's Lint Workflows red. CI's token sees neither the bypass actors, nor the
    repository settings, nor the admins: `ruby .github/scripts/repository-settings.rb check`, run with your
-   token, compares those too.
+   token, compares those too. The scans' secrets (`SNYK_TOKEN`, `NVD_API_KEY`) live in the environment
+   `scans`, which only `main` may use (ADR-0035), never as repository secrets: `apply` creates the environment
+   and its branch policy but writes no secret, so you set their values in Settings → Environments → `scans`
+   and delete any repository-level copy (Settings → Secrets and variables → Actions); until then `check`
+   lists what is left, and a token you replace goes there, not to the repository.
 4. **Before the first run**, in an autopilot session, run `/workflow-authoring` and check two things in
    `.claude/workflows/backlog-autopilot.js` (and the same constant in `audit.js`, `docs-audit.js`,
    `seed-bugs.js`): `AGENT_TYPE_OPTION`, the `agent()` option that selects a custom agent (not in the

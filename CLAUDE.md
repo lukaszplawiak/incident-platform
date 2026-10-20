@@ -45,7 +45,8 @@ ruby .github/scripts/check-shell.rb "$(command -v shellcheck)"; ruby .github/scr
 .github/scripts/secret-scan.sh "$(command -v betterleaks)" "$(git merge-base origin/main HEAD)" HEAD
 # Every CI tool pin (`# renovate:` + *_VERSION + *_SHA256) against its publisher (ADR-0033); needs gh and jq, and gpg for Snyk's
 .github/scripts/check-pinned-tools.sh
-# GitHub's ruleset of main, repository settings and admins against .github/repository-settings/ (backlog #0-113, ADR-0034);
+# GitHub's ruleset of main, environments, repository settings, admins and secrets against .github/repository-settings/,
+# and every secret a job reads inside an environment that holds it (backlog #0-113, #0-154, ADR-0034, ADR-0035);
 # with the owner's token it also compares what CI cannot see; `plan`, then `apply`, after changing a file (the owner's own
 # commands: sessions are denied them)
 ruby .github/scripts/repository-settings.rb check

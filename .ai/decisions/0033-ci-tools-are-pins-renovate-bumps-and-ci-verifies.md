@@ -48,7 +48,7 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
   where it runs: both `snyk.yml` jobs run it on `snyk.yml` with `--expect 1` (a pin renamed out of the
   `_SHA256` form would otherwise not be seen, and pass) before installing the CLI, so a bump merged with Lint
   Workflows red (`main` has no required checks, #0-113; since ADR-0034 it has, but the owner can merge around
-  them and the workflow can be dispatched on any branch, #0-154) never gets `SNYK_TOKEN`.
+  them and the workflow can be dispatched on any branch, #0-154, closed by ADR-0035) never gets `SNYK_TOKEN`.
 - **`install-pinned-tool.sh` is the only installer**: downloads the release asset from github.com, compares its
   SHA-256 with the pin before anything reads it, installs one executable into `RUNNER_TEMP`, no `sudo`. The Snyk
   CLI now comes from its GitHub release (the same `snyk-linux` downloads.snyk.io serves).
@@ -106,7 +106,7 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
 - A red Lint Workflows on `main` (the Snyk key expired, GitHub's API down) makes `main-guard.yml` open the
   `autopilot-stop` issue with no change in the repository: the autopilot stops until it is green again. The key's
   refresh before 2027-01-06 is backlog #0-152.
-- Knowingly left open: kubectl (`azure/setup-kubectl`, version only: #0-135), `diff-cover` (#0-134), the NVD key
-  inline in `owasp-dependency-check.yml`'s command line (#0-150), an impostor commit behind an action's pinned SHA
-  (zizmor's online audit, #0-62). Outside this pattern by design: the Maven distribution (Apache, ADR-0031) and the
-  container images, pinned by tag (#0-71).
+- Knowingly left open: kubectl (`azure/setup-kubectl`, version only: #0-135), `diff-cover` (#0-134), an impostor
+  commit behind an action's pinned SHA (zizmor's online audit, #0-62). Outside this pattern by design: the Maven distribution (Apache, ADR-0031) and the
+  container images, pinned by tag (#0-71). (The NVD key inline in `owasp-dependency-check.yml`'s command line,
+  #0-150, was closed by ADR-0035: the plugin reads it from the environment variable `NVD_API_KEY`.)

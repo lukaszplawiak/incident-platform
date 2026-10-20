@@ -34,6 +34,12 @@ Read before changing anything under `.github/workflows/` or `.github/actions/`.
   `head_repository.full_name == github.repository` (backlog #0-148); such a job checks out nothing from that run and
   runs none of its code. zizmor flags every such trigger (lint-workflows, backlog #0-147); its suppression sits on
   the trigger line and names the checks that make it safe.
+- **A secret lives in an environment only `main` may use, never in the repository** (backlog #0-154, ADR-0035):
+  a repository secret reaches a manual dispatch on any branch, with that branch's scripts, local actions and build.
+  A job that reads `secrets.<NAME>` runs in the environment whose file under
+  `.github/repository-settings/environments/` names it (`environment: {name: scans, deployment: false}` for the
+  scans), and lint-workflows refuses one that does not, a workflow-level `env:` with a secret, `secrets: inherit`
+  and `secrets[...]`. The values are set by the owner in Settings; the repository holds none.
 - **A step that gets a secret** relies only on what ran before any untrusted code in its job: the tool it runs is
   checked and installed (`check-pinned-tools.sh`, `install-pinned-tool.sh`, scripts from the checkout) before a
   build step, which runs Maven plugins and annotation processors from the dependency tree and could rewrite them
@@ -43,5 +49,5 @@ Read before changing anything under `.github/workflows/` or `.github/actions/`.
   added later gets none (the rule and its form: `.ai/context/infrastructure.md`, backlog #0-59).
 - **Tools a job downloads** are pins checked against their publisher (ADR-0033, `.ai/context/infrastructure.md`),
   and **actions** are pinned by commit SHA (backlog #0-60). A secret reaches only the step that uses it, as an
-  environment variable, not inline in a `run:` script (the OWASP scan's NVD key is still on its command line:
-  backlog #0-150).
+  environment variable, not inline in a `run:` script, and is read by the tool itself, never passed as an
+  argument (the OWASP plugin reads `NVD_API_KEY` through `nvdApiKeyEnvironmentVariable`, backlog #0-150).

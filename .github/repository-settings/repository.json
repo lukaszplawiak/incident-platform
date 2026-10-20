@@ -3,5 +3,6 @@
     "delete_branch_on_merge": true,
     "allow_auto_merge": false
   },
-  "admins": ["lukaszplawiak"]
+  "admins": ["lukaszplawiak"],
+  "repository_secrets": []
 }

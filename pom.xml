@@ -52,7 +52,7 @@
         <wiremock.version>3.13.2</wiremock.version>
         <google-cloud.version>26.83.0</google-cloud.version>
         <itext.version>8.0.5</itext.version>
-        <!-- OWASP plugin version, NVD_API_KEY speeds download from ~15min to ~2min -->
+        <!-- OWASP plugin version; an NVD_API_KEY speeds the download from ~15min to ~2min (below) -->
         <owasp.version>12.2.2</owasp.version>
         <!-- ── Security overrides — versions higher than Spring Boot BOM defaults ── -->
         <!-- CVE-2024-25710, CVE-2024-26308 — fix in 1.26.0. Not managed by Spring Boot BOM;
@@ -60,11 +60,6 @@
         <commons-compress.version>1.28.0</commons-compress.version>
         <!-- CVE-2026-42198 — fix in 42.7.11 -->
         <postgresql.version>42.7.12</postgresql.version>
-        <!-- NVD API key for OWASP Dependency-Check — speeds up NVD database
-             download from ~15 min to ~2 min. Empty by default — override via:
-               ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
-             Free key: https://nvd.nist.gov/developers/request-an-api-key -->
-        <nvd.api.key></nvd.api.key>
     </properties>
 
     <dependencyManagement>
@@ -266,7 +261,7 @@
                      Scans all dependencies against the NVD CVE database.
 
                      Run manually:
-                       ./mvnw dependency-check:aggregate -Dnvd.api.key=your-key
+                       NVD_API_KEY=your-key ./mvnw dependency-check:aggregate
                        open target/dependency-check-report.html
 
                      Not bound to verify — avoids slowing down regular builds.
@@ -274,8 +269,12 @@
                        .github/workflows/owasp-dependency-check.yml
                        (every Monday and on pom.xml changes)
 
-                     NVD API key (free):
+                     NVD API key (free, optional: ~15 min of download become ~2):
                        https://nvd.nist.gov/developers/request-an-api-key
+                     Read from the environment variable NVD_API_KEY, never a
+                     property (backlog #0-150): -Dnvd.api.key put it in the
+                     Maven process's arguments, and nvdApiKey shows it in
+                     Maven's debug log (GHSA-qqhq-8r2c-c3f5).
                      ═══════════════════════════════════════════════════════════ -->
                 <plugin>
                     <groupId>org.owasp</groupId>
@@ -291,7 +290,7 @@
                         <name>OWASP Dependency-Check Report</name>
                         <!-- Suppress false positives -->
                         <suppressionFile>${maven.multiModuleProjectDirectory}/owasp-suppressions.xml</suppressionFile>
-                        <nvdApiKey>${nvd.api.key}</nvdApiKey>
+                        <nvdApiKeyEnvironmentVariable>NVD_API_KEY</nvdApiKeyEnvironmentVariable>
                     </configuration>
                 </plugin>
 

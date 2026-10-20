@@ -9,9 +9,13 @@
 #   rulesets/<name>.json   one repository ruleset each, the request body of GitHub's rulesets API
 #                          (name, target, enforcement, conditions, bypass_actors, rules), every
 #                          parameter written out, `bypass_actors` too when it is empty
+#   environments/<name>.json  one deployment environment each (backlog #0-154, ADR-0035): who may bypass it, its
+#                          deployment branch policy and the branches it allows, its protection rules, and the
+#                          names of the secrets it holds (never their values: apply writes no secret)
 #   repository.json        `settings`: repository settings (`delete_branch_on_merge`, `allow_auto_merge`);
 #                          `admins`: the logins with the admin role, the only ones the ruleset's bypass (the
-#                          admin role) reaches, so a new admin would bypass it too
+#                          admin role) reaches, so a new admin would bypass it too; `repository_secrets`: the
+#                          repository-level secrets allowed (none: one of them reaches a run on any branch)
 #
 # and this script is the one way between them and GitHub:
 #
@@ -27,7 +31,9 @@
 #           requires (a red one would not stop a merge, and a required job that needs it reports "skipped",
 #           which passes), and on a workflow or job whose token may write checks or statuses (its run could
 #           report a required check in the name of GitHub Actions) or that declares none at all (its token is then
-#           the repository default, set in the UI). With --main <commit> (CI, on a pull request: main, fetched) it reads the files from that
+#           the repository default, set in the UI); and on a job that reads a secret (`secrets.<NAME>`, other than
+#           GITHUB_TOKEN) outside an environment whose file names that secret, or a workflow that gives one to
+#           every job (`env:` at the top, `secrets: inherit`). With --main <commit> (CI, on a pull request: main, fetched) it reads the files from that
 #           commit, unless the checked-out commit changes them against its first parent (on a pull request,
 #           GitHub's merge commit, whose first parent is main): so applying another pull request's change
 #           does not leave every open pull request comparing GitHub with its own older copy (review of #0-113).
@@ -38,7 +44,9 @@
 #
 # What `check` cannot see with CI's token: a ruleset's `bypass_actors` (GitHub shows them only to an admin,
 # so an actor added in the UI goes unnoticed in CI), the repository settings (not in the read-only
-# repository response) and the admins (the collaborators list needs more than read). It says so in its
+# repository response), the admins (the collaborators list needs more than read), and which secrets exist,
+# in the repository and in each environment. `apply` creates and updates environments but never deletes one
+# (its secrets would go with it), and never writes a secret: those are the owner's, in Settings. It says so in its
 # summary; run by the owner (an admin token), it compares all three, and `plan`/`apply` refuse to run
 # without them. `apply` never changes who is an admin: that is the owner's decision, in Settings. Arrays
 # are compared as sets (their order means nothing to GitHub). A parameter GitHub adds later fails `check`
@@ -56,6 +64,7 @@ require_relative 'run-blocks'
 
 USAGE = 'usage: repository-settings.rb check|plan|apply [--repo <owner/name>] [--root <repository root>] [--main <commit>]'
 RULESET_KEYS = %w[name target enforcement conditions bypass_actors rules].freeze
+ENVIRONMENT_KEYS = %w[name can_admins_bypass deployment_branch_policy protection_rules branch_policies secrets].freeze
 # The app every required check must come from: GitHub Actions (the app that runs this repository's workflows).
 GITHUB_ACTIONS_APP = 15368
 # A workflow limited to some pull_request activity types must include these, or a new push reports nothing.
@@ -133,9 +142,9 @@ rescue SystemCallError => e
   stop!("cannot run git: #{e.message}")
 end
 
-# The ruleset files (paths from the root), from the working tree (ref nil) or from that commit.
-def ruleset_files(ref)
-  dir = "#{DIR}/rulesets"
+# The JSON files of a directory under DIR (paths from the root), from the working tree (ref nil) or from that commit.
+def settings_files(ref, sub)
+  dir = "#{DIR}/#{sub}"
   if ref
     # Without -r: the files directly in it, as in the working tree.
     git('ls-tree', '--name-only', ref, '--', "#{dir}/").lines.map(&:strip).select { |f| f.end_with?('.json') }.sort
@@ -152,7 +161,7 @@ rescue SystemCallError, JSON::ParserError => e
 end
 
 def load_rulesets(ref)
-  files = ruleset_files(ref)
+  files = settings_files(ref, 'rulesets')
   stop!("no ruleset file under #{DIR}/rulesets#{ref ? " at #{ref}" : ''}: run from the repository root") if files.empty?
   specs = {}
   files.each do |file|
@@ -181,39 +190,101 @@ def load_rulesets(ref)
   specs
 end
 
-# {settings: {name => boolean}, admins: [login]}.
+# {name => {file:, spec:}} of environments/*.json; none is fine (a repository without environments).
+def load_environments(ref)
+  envs = {}
+  settings_files(ref, 'environments').each do |file|
+    spec = load_json(file, ref)
+    next unless spec
+    ok = spec.is_a?(Hash) && spec.keys.sort == ENVIRONMENT_KEYS.sort && spec['name'].is_a?(String) &&
+         [true, false].include?(spec['can_admins_bypass']) &&
+         (spec['deployment_branch_policy'].nil? || spec['deployment_branch_policy'].is_a?(Hash)) &&
+         spec['protection_rules'].is_a?(Array) && spec['protection_rules'].all? { |t| t.is_a?(String) } &&
+         spec['branch_policies'].is_a?(Array) &&
+         spec['branch_policies'].all? { |b| b.is_a?(Hash) && b.keys.sort == %w[name type] } &&
+         spec['secrets'].is_a?(Array) && spec['secrets'].all? { |n| n.is_a?(String) && !n.empty? }
+    unless ok
+      fail!("#{file} must have exactly the keys #{ENVIRONMENT_KEYS.join(', ')}: a name, can_admins_bypass true|false, " \
+            'deployment_branch_policy an object or null, protection_rules the rule types, branch_policies ' \
+            '[{"name", "type"}], secrets the names it holds', file: file)
+      next
+    end
+    # The name goes into the API paths apply writes with the owner's token: no `/`, no `..` (security review of #0-154).
+    unless spec['name'] =~ /\A[A-Za-z0-9_-][A-Za-z0-9._-]*\z/ && !spec['name'].include?('..')
+      fail!("#{file}: the environment name '#{spec['name']}' must be letters, digits, '.', '_' or '-'", file: file)
+      next
+    end
+    # apply writes no reviewers and no wait timer, so the only rule a file can name is the branch policy its own
+    # custom_branch_policies gives (review of #0-154): anything else would never match GitHub.
+    rules = (spec['deployment_branch_policy'] || {})['custom_branch_policies'] ? ['branch_policy'] : []
+    unless spec['protection_rules'] == rules
+      fail!("#{file}: protection_rules must be #{JSON.generate(rules)}: apply sets no reviewers and no wait timer, and " \
+            'a branch_policy rule exactly when custom_branch_policies is true', file: file)
+      next
+    end
+    # An environment that holds a secret is what keeps it from a branch's code (ADR-0035), so it allows main alone
+    # and no admin may bypass that (security review of #0-154): the secrets check below trusts every such file.
+    main_only = spec['can_admins_bypass'] == false &&
+                spec['deployment_branch_policy'] == { 'protected_branches' => false, 'custom_branch_policies' => true } &&
+                spec['branch_policies'] == [{ 'name' => 'main', 'type' => 'branch' }]
+    if !spec['secrets'].empty? && !main_only
+      fail!("#{file}: the environment '#{spec['name']}' holds secrets, so it must allow the branch main alone " \
+            '(deployment_branch_policy {"protected_branches": false, "custom_branch_policies": true}, branch_policies ' \
+            '[{"name": "main", "type": "branch"}]) and can_admins_bypass false (ADR-0035)', file: file)
+      next
+    end
+    if envs.key?(spec['name'])
+      fail!("#{file}: the environment name '#{spec['name']}' is also #{envs[spec['name']][:file]}", file: file)
+      next
+    end
+    envs[spec['name']] = { file: file, spec: spec }
+  end
+  envs
+end
+
+# {settings: {name => boolean}, admins: [login], repository_secrets: [name]}.
 def load_repository(ref)
   file = "#{DIR}/repository.json"
   repo = load_json(file, ref)
-  return { 'settings' => {}, 'admins' => [] } unless repo
+  empty = { 'settings' => {}, 'admins' => [], 'repository_secrets' => [] }
+  return empty unless repo
   settings = repo.is_a?(Hash) ? repo['settings'] : nil
   admins = repo.is_a?(Hash) ? repo['admins'] : nil
-  unless repo.is_a?(Hash) && repo.keys.sort == %w[admins settings] &&
+  secrets = repo.is_a?(Hash) ? repo['repository_secrets'] : nil
+  unless repo.is_a?(Hash) && repo.keys.sort == %w[admins repository_secrets settings] &&
          settings.is_a?(Hash) && !settings.empty? && settings.values.all? { |v| [true, false].include?(v) } &&
-         admins.is_a?(Array) && !admins.empty? && admins.all? { |a| a.is_a?(String) && !a.empty? }
-    fail!("#{file} must be {\"settings\": {<name>: true|false, ...}, \"admins\": [<login>, ...]}", file: file)
-    return { 'settings' => {}, 'admins' => [] }
+         admins.is_a?(Array) && !admins.empty? && admins.all? { |a| a.is_a?(String) && !a.empty? } &&
+         secrets.is_a?(Array) && secrets.all? { |n| n.is_a?(String) && !n.empty? }
+    fail!("#{file} must be {\"settings\": {<name>: true|false, ...}, \"admins\": [<login>, ...], " \
+          '"repository_secrets": [<name>, ...]}', file: file)
+    return empty
   end
   repo
 end
 
 # --- every required check is reported on every pull request, and every such job is required ------------
 
-# The names of the jobs of every workflow, each with its workflow files: [jobs of the workflows that run on
-# every pull request to main, jobs of every workflow whatever its trigger].
-def workflow_jobs
-  jobs = Hash.new { |h, k| h[k] = [] }
-  every = Hash.new { |h, k| h[k] = [] }
-  RunBlocks.workflows(ROOT).each do |path|
-    doc = begin
-      Psych.safe_load(File.read(path), aliases: true)
+# [[file, document]] of every workflow, read once for every check below; one that is not YAML is reported here.
+def load_workflows
+  RunBlocks.workflows(ROOT).map do |path|
+    begin
+      doc = Psych.safe_load(File.read(path), aliases: true)
+      doc.is_a?(Hash) ? [rel(path), doc] : nil
     rescue StandardError => e
       fail!("#{rel(path)} cannot be read as YAML: #{e.message.lines.first.to_s.strip}", file: rel(path))
-      next
+      nil
     end
-    next unless doc.is_a?(Hash)
+  end.compact
+end
+
+# The names of the jobs of every workflow, each with its workflow files: [jobs of the workflows that run on
+# every pull request to main, jobs of every workflow whatever its trigger].
+def workflow_jobs(workflows)
+  jobs = Hash.new { |h, k| h[k] = [] }
+  every = Hash.new { |h, k| h[k] = [] }
+  workflows.each do |file, doc|
     names = (doc['jobs'] || {}).map { |key, job| job.is_a?(Hash) && job['name'] ? job['name'].to_s : key.to_s }
-    names.each { |name| every[name] << rel(path) }
+    names.each { |name| every[name] << file }
     # A token with checks: write or statuses: write, in a run on any branch, reports a check or a status in the
     # name of GitHub Actions, which the integration_id of a required check accepts (security review of #0-113).
     scopes = [['the workflow', doc['permissions']]] +
@@ -222,15 +293,15 @@ def workflow_jobs
     # only the UI sets: every workflow declares its scope (backlog #0-59), and so the check above sees it.
     if doc['permissions'].nil?
       scopes.drop(1).select { |_, perms| perms.nil? }.each do |where, _|
-        fail!("#{rel(path)}: #{where} has no permissions: and neither has the workflow, so its token is the " \
-              "repository's default, set in the UI and seen by no check (backlog #0-59, ADR-0034)", file: rel(path))
+        fail!("#{file}: #{where} has no permissions: and neither has the workflow, so its token is the " \
+              "repository's default, set in the UI and seen by no check (backlog #0-59, ADR-0034)", file: file)
       end
     end
     scopes.each do |where, perms|
       next unless perms == 'write-all' || (perms.is_a?(Hash) && (perms['checks'] == 'write' || perms['statuses'] == 'write'))
-      fail!("#{rel(path)}: #{where} gives its token checks or statuses write: its run could report a required " \
+      fail!("#{file}: #{where} gives its token checks or statuses write: its run could report a required " \
             "check in the name of GitHub Actions (integration_id #{GITHUB_ACTIONS_APP}) without the job behind " \
-            'it (ADR-0034)', file: rel(path))
+            'it (ADR-0034)', file: file)
     end
     # YAML 1.1 reads the key `on` as true.
     on = doc.key?('on') ? doc['on'] : doc[true]
@@ -243,13 +314,13 @@ def workflow_jobs
     next if (filter.keys & %w[paths paths-ignore branches-ignore]).any?
     next if filter.key?('branches') && !Array(filter['branches']).include?('main')
     next if filter.key?('types') && !(PR_TYPES - Array(filter['types'])).empty?
-    names.each { |name| jobs[name] << rel(path) }
+    names.each { |name| jobs[name] << file }
   end
   [jobs, every]
 end
 
-def check_required_checks(specs)
-  jobs, every = workflow_jobs
+def check_required_checks(specs, workflows)
+  jobs, every = workflow_jobs(workflows)
   specs.each_value do |s|
     rule = s[:spec]['rules'].find { |r| r['type'] == 'required_status_checks' }
     next unless rule
@@ -285,6 +356,75 @@ def check_required_checks(specs)
             'skipped and pass (ADR-0034)', file: file)
     end
   end
+end
+
+# --- every secret is read inside an environment that holds it (backlog #0-154) -------------------------------
+
+# A repository secret reaches every run of every workflow, a manual dispatch on any branch included, where the
+# branch's own scripts and build run next to it. An environment whose deployment branch policy allows main only
+# refuses such a run before any step. So a job reads a secret only inside an environment whose file names it.
+# The triggers whose run is main's own code when the ref is main. pull_request_target, workflow_run and the like
+# also run with main's ref, so the environment's policy lets them in, but they are made to act on a branch's
+# code: a job reading a secret is never in such a workflow (security review of #0-154).
+SECRET_TRIGGERS = %w[push schedule workflow_dispatch].freeze
+
+def check_workflow_secrets(envs, workflows)
+  workflows.each do |file, doc|
+    on = doc.key?('on') ? doc['on'] : doc[true]
+    other = (on.is_a?(Hash) ? on.keys : Array(on)).map(&:to_s) - SECRET_TRIGGERS
+    if other.any? && (doc['jobs'] || {}).values.any? { |job| job.is_a?(Hash) && secrets_used?(job) }
+      fail!("#{file}: a job reads a secret in a workflow triggered by #{other.join(', ')}: a job that reads one runs " \
+            "only on #{SECRET_TRIGGERS.join(', ')}, the triggers whose run on main is main's own code (ADR-0035)",
+            file: file)
+    end
+    if secrets_used?(doc['env'])
+      fail!("#{file}: the workflow's env: gives secrets to every job (#{secret_names(doc['env']).join(', ')}): read a secret in " \
+            'the job that needs it, inside its environment (backlog #0-154)', file: file)
+    end
+    (doc['jobs'] || {}).each do |key, job|
+      next unless job.is_a?(Hash)
+      if job['secrets'] == 'inherit'
+        fail!("#{file}: job '#{key}' passes secrets: inherit, every repository secret: name the ones it needs " \
+              '(backlog #0-154)', file: file)
+      end
+      if expressions(job).any? { |x| x =~ WHOLE_SECRETS }
+        fail!("#{file}: job '#{key}' reads secrets as a whole or by index (toJSON(secrets), secrets[...]): write " \
+              'secrets.<NAME>, so it can be checked (backlog #0-154)', file: file)
+      end
+      names = secret_names(job)
+      next if names.empty?
+      env = job['environment'].is_a?(Hash) ? job['environment']['name'] : job['environment']
+      held = envs[env.to_s] ? envs[env.to_s][:spec]['secrets'] : []
+      (names - held).each do |name|
+        where = env ? "the environment '#{env}', whose file under #{DIR}/environments does not name it" : 'no environment'
+        fail!("#{file}: job '#{key}' reads secrets.#{name} in #{where}: a repository secret reaches a manual " \
+              'dispatch on any branch, with that branch\'s code (backlog #0-154, ADR-0035)', file: file)
+      end
+    end
+  end
+end
+
+# The `${{ }}` expressions in a piece of a workflow: only there does `secrets.` name a secret (a file named
+# application-secrets.yml in a script does not).
+def expressions(node)
+  return [] if node.nil?
+  JSON.generate(node).scan(/\$\{\{(.*?)\}\}/m).flatten
+end
+
+# The secrets context, not a property of something else (`needs.a.outputs.secrets` is an output named so), in any
+# case: GitHub's expressions do not tell `Secrets.X` from `secrets.X`.
+SECRET = /(?<![\w.])secrets\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/i.freeze
+# The secrets context used other than as secrets.<NAME>: toJSON(secrets), secrets['X'], every secret at once.
+WHOLE_SECRETS = /(?<![\w.])secrets\b(?!\s*\.\s*[A-Za-z_])/i.freeze
+
+# The names of the secrets a piece of a workflow reads, GITHUB_TOKEN aside (the job's own token).
+def secret_names(node)
+  expressions(node).flat_map { |x| x.scan(SECRET).flatten }.map(&:upcase).uniq.sort - ['GITHUB_TOKEN']
+end
+
+# Whether a piece of a workflow reads a secret at all, by name or as a whole.
+def secrets_used?(node)
+  secret_names(node).any? || expressions(node).any? { |x| x =~ WHOLE_SECRETS }
 end
 
 # --- the comparison ----------------------------------------------------------------------------------
@@ -331,20 +471,29 @@ def ruleset_diff(spec, live)
   [out, visible]
 end
 
+# A list GitHub answers in pages, read as one page of 100: refused when it may not be all of it, rather than
+# compared cut short. key: the field that holds the list (nil: the body is the list).
+def one_page(path, key = nil)
+  body = gh(path)
+  list = key ? (body || {})[key] : body
+  stop!("gh api #{path}: no list") unless list.is_a?(Array)
+  stop!("gh api #{path}: 100 entries or more, and this script reads one page") if list.size >= 100
+  list
+end
+
 # GitHub's state against the files: what differs, what this token could not see, and the plan to fix it,
 # in the order to apply it: every ruleset a file names is created or updated before any other is deleted, so
-# `main` keeps a ruleset at every moment; the repository settings last.
+# `main` keeps a ruleset at every moment; then the repository settings and the environments.
 def compare(repo, specs, repository)
   settings = repository['settings']
-  listed = gh("repos/#{repo}/rulesets?per_page=100")
-  stop!("gh api repos/#{repo}/rulesets: not a list") unless listed.is_a?(Array)
-  stop!('100 rulesets or more: this script reads one page') if listed.size >= 100
+  listed = one_page("repos/#{repo}/rulesets?per_page=100")
   live = {}
   listed.each do |r|
     stop!("two rulesets on GitHub are named '#{r['name']}' (ids #{live[r['name']]['id']} and #{r['id']})") if live.key?(r['name'])
     live[r['name']] = r
   end
-  result = { findings: [], hidden: [], actions: [] }
+  # manual: what apply cannot change (an environment no file names, a secret), shown by plan and apply.
+  result = { findings: [], hidden: [], actions: [], manual: [] }
   specs.each do |name, s|
     if !live.key?(name)
       result[:findings] << [s[:file], "ruleset '#{name}' is not on GitHub: apply the file (repository-settings.rb apply)"]
@@ -375,8 +524,7 @@ def compare(repo, specs, repository)
   end
   result[:actions] << [:patch, nil, patch] unless patch.empty?
   if result[:admin]
-    admins = gh("repos/#{repo}/collaborators?permission=admin&affiliation=all&per_page=100")
-    stop!("gh api repos/#{repo}/collaborators: not a list") unless admins.is_a?(Array)
+    admins = one_page("repos/#{repo}/collaborators?permission=admin&affiliation=all&per_page=100")
     logins = admins.map { |a| a['login'] }.sort
     unless logins == repository['admins'].sort
       result[:admins] = "the admins of #{repo} are #{logins.join(', ')}; the file says " \
@@ -387,7 +535,68 @@ def compare(repo, specs, repository)
   else
     result[:hidden] << "the repository's admins"
   end
+  compare_environments(repo, repository, result)
   result
+end
+
+# The environments, their branch policies and, with an admin token, the secrets they and the repository hold.
+def compare_environments(repo, repository, result)
+  envs = repository['environments']
+  live = one_page("repos/#{repo}/environments?per_page=100", 'environments').map { |e| [e['name'], e] }.to_h
+  envs.each do |name, e|
+    spec = e[:spec]
+    if !live.key?(name)
+      result[:findings] << [e[:file], "environment '#{name}' is not on GitHub: apply the file (repository-settings.rb apply)"]
+      result[:actions] << [:environment, name, spec, nil]
+      next
+    end
+    got = live[name]
+    policies = []
+    if (got['deployment_branch_policy'] || {})['custom_branch_policies']
+      policies = one_page("repos/#{repo}/environments/#{name}/deployment-branch-policies?per_page=100", 'branch_policies')
+    end
+    want = canonical('can_admins_bypass' => spec['can_admins_bypass'],
+                     'deployment_branch_policy' => spec['deployment_branch_policy'],
+                     'protection_rules' => spec['protection_rules'],
+                     'branch_policies' => spec['branch_policies'])
+    have = canonical('can_admins_bypass' => got['can_admins_bypass'],
+                     'deployment_branch_policy' => got['deployment_branch_policy'],
+                     'protection_rules' => Array(got['protection_rules']).map { |r| r['type'] },
+                     'branch_policies' => policies.map { |b| { 'name' => b['name'], 'type' => b['type'] } })
+    out = []
+    diff(want, have, '', out)
+    unless out.empty?
+      out.each { |d| result[:findings] << [e[:file], "environment '#{name}' differs from GitHub's: #{d}"] }
+      result[:actions] << [:environment, name, spec, policies]
+    end
+  end
+  (live.keys - envs.keys).sort.each do |name|
+    result[:findings] << [nil, "environment '#{name}' is on GitHub but in no file under #{DIR}/environments/: apply " \
+                               'does not delete an environment (its secrets would go with it): write it as a file, ' \
+                               'or delete it in Settings, Environments']
+    result[:manual] << result[:findings].last[1]
+  end
+  unless result[:admin]
+    envs.each_key { |name| result[:hidden] << "the secrets of environment '#{name}'" }
+    result[:hidden] << "the repository's secrets"
+    return
+  end
+  envs.each do |name, e|
+    have = live.key?(name) ? one_page("repos/#{repo}/environments/#{name}/secrets?per_page=100", 'secrets').map { |x| x['name'] }.sort : []
+    next if have == e[:spec]['secrets'].sort
+    result[:findings] << [e[:file], "environment '#{name}' holds the secrets #{have.empty? ? 'none' : have.join(', ')}; " \
+                                    "the file says #{e[:spec]['secrets'].sort.join(', ')}: set or remove them in " \
+                                    "Settings, Environments, #{name} (apply never writes a secret)"]
+    result[:manual] << result[:findings].last[1]
+  end
+  have = one_page("repos/#{repo}/actions/secrets?per_page=100", 'secrets').map { |x| x['name'] }.sort
+  return if have == repository['repository_secrets'].sort
+  result[:findings] << ["#{DIR}/repository.json",
+                        "the repository holds the secrets #{have.empty? ? 'none' : have.join(', ')}; the file says " \
+                        "#{repository['repository_secrets'].empty? ? 'none' : repository['repository_secrets'].sort.join(', ')}: " \
+                        'a repository secret reaches a manual dispatch on any branch (backlog #0-154); move it to an ' \
+                        'environment, then delete it in Settings, Secrets and variables, Actions']
+  result[:manual] << result[:findings].last[1]
 end
 
 # --- the modes ----------------------------------------------------------------------------------------
@@ -402,8 +611,8 @@ def check(repo, specs, repository, main: nil, ref: nil)
            elsif ref then " (main's files at #{ref}: this commit does not change them)"
            else " (this commit's files: it changes them)"
            end
-  puts "Repository settings: #{specs.size} ruleset(s), #{repository['settings'].size} setting(s) and the admins " \
-       "match #{DIR}/#{source} on #{repo}#{note}."
+  puts "Repository settings: #{specs.size} ruleset(s), #{repository['environments'].size} environment(s), " \
+       "#{repository['settings'].size} setting(s), the admins and the secrets match #{DIR}/#{source} on #{repo}#{note}."
 end
 
 def describe(action)
@@ -413,6 +622,27 @@ def describe(action)
   when :update then "update ruleset '#{name}' (id #{id})"
   when :delete then "delete ruleset '#{name}' (id #{id}): no file names it"
   when :patch then "set #{body.map { |k, v| "#{k}=#{v}" }.join(', ')}"
+  when :environment then "#{id.nil? ? 'create' : 'update'} environment '#{name}' and its branch policies"
+  end
+end
+
+# Creates or updates an environment (no wait timer, no reviewers: what the file does not name it does not have),
+# then makes its branch policies the file's: adds the missing, deletes the others.
+def apply_environment(repo, spec, live_policies)
+  name = spec['name']
+  gh('--method', 'PUT', "repos/#{repo}/environments/#{name}", '--input', '-',
+     input: JSON.generate('wait_timer' => 0, 'reviewers' => [], 'can_admins_bypass' => spec['can_admins_bypass'],
+                          'deployment_branch_policy' => spec['deployment_branch_policy']))
+  return unless (spec['deployment_branch_policy'] || {})['custom_branch_policies']
+  live_policies ||= []
+  have = live_policies.map { |b| [b['name'], b['type']] }
+  want = spec['branch_policies'].map { |b| [b['name'], b['type']] }
+  (want - have).each do |n, t|
+    gh('--method', 'POST', "repos/#{repo}/environments/#{name}/deployment-branch-policies", '--input', '-',
+       input: JSON.generate('name' => n, 'type' => t))
+  end
+  live_policies.reject { |b| want.include?([b['name'], b['type']]) }.each do |b|
+    gh('--method', 'DELETE', "repos/#{repo}/environments/#{name}/deployment-branch-policies/#{b['id']}")
   end
 end
 
@@ -425,7 +655,9 @@ def plan(repo, specs, repository, apply:)
   end
   stop!("#{result[:admins]}; apply does not change that") if result[:admins]
   actions = result[:actions]
+  result[:manual].each { |m| puts "by hand: #{m}" }
   if actions.empty?
+    stop!('nothing apply can change; the rest is by hand (above)') unless result[:manual].empty?
     puts "Nothing to change: GitHub's settings on #{repo} match #{DIR}/."
     return
   end
@@ -438,6 +670,7 @@ def plan(repo, specs, repository, apply:)
     when :update then gh('--method', 'PUT', "repos/#{repo}/rulesets/#{id}", '--input', '-', input: JSON.generate(body))
     when :delete then gh('--method', 'DELETE', "repos/#{repo}/rulesets/#{id}")
     when :patch then gh('--method', 'PATCH', "repos/#{repo}", '--input', '-', input: JSON.generate(body))
+    when :environment then apply_environment(repo, body, id)
     end
   end
   check(repo, specs, repository) if apply
@@ -445,8 +678,10 @@ end
 
 ref = files_ref(opts['--main'])
 specs = load_rulesets(ref)
-repository = load_repository(ref)
-check_required_checks(specs)
+repository = load_repository(ref).merge('environments' => load_environments(ref))
+workflows = load_workflows
+check_required_checks(specs, workflows)
+check_workflow_secrets(repository['environments'], workflows)
 exit 1 if $errors > 0
 repo = repo_name(opts)
 case mode

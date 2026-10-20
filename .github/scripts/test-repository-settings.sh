@@ -9,6 +9,8 @@
 # Run by the lint-workflows job in .github/workflows/ci.yml, before the check; locally:
 #   .github/scripts/test-repository-settings.sh
 # ============================================================
+# The cases write workflows as literal text: `${{ }}` in single quotes is meant (backlog #0-154).
+# shellcheck disable=SC2016
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -21,7 +23,8 @@ dir=""
 
 # gh stub: `api [--method M] [--input -] <path>` against $GH_STUB_LIVE (rulesets/<id>.json, repo.json, admins.json); every
 # call is logged as "<METHOD> <path>" in its calls file. GH_STUB_HIDE=bypass,repo hides what only an admin
-# sees (setting: one repository setting, from an admin's token too); GH_STUB_FAIL=<text> fails a call whose path contains it; GH_STUB_NOT_LIST=1 answers the list with an object.
+# sees (setting: one repository setting, from an admin's token too); environments are
+# live/environments/<name>.env.json, .policies.json and .secrets.json, the repository's secrets live/repo-secrets.json; GH_STUB_FAIL=<text> fails a call whose path contains it; GH_STUB_NOT_LIST=1 answers the list with an object.
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/gh" <<'STUB'
 #!/usr/bin/env ruby
@@ -57,6 +60,12 @@ when ['GET', 'repos/o/r']
   repo = JSON.parse(File.read(File.join(live, 'repo.json')))
   repo = repo.reject { |k, _| k == 'delete_branch_on_merge' } if hide.include?('setting')
   puts JSON.generate(hide.include?('repo') ? { 'full_name' => 'o/r', 'permissions' => { 'admin' => false } } : repo)
+when ['GET', 'repos/o/r/environments?per_page=100']
+  envs = Dir.glob(File.join(live, 'environments', '*.env.json')).sort.map { |f| JSON.parse(File.read(f)) }
+  puts JSON.generate('total_count' => envs.size, 'environments' => envs)
+when ['GET', 'repos/o/r/actions/secrets?per_page=100']
+  names = JSON.parse(File.read(File.join(live, 'repo-secrets.json')))
+  puts JSON.generate('total_count' => names.size, 'secrets' => names.map { |n| { 'name' => n } })
 when ['POST', 'repos/o/r/rulesets']
   id = (ids.max || 99) + 1
   File.write(file[id], JSON.generate(input.merge('id' => id)))
@@ -66,6 +75,36 @@ when ['PATCH', 'repos/o/r']
   File.write(File.join(live, 'repo.json'), JSON.generate(repo))
   puts JSON.generate(repo)
 else
+  env = path[%r{\Arepos/o/r/environments/([^/?]+)}, 1]
+  if env
+    base = File.join(live, 'environments', env)
+    case [method, path.sub(%r{\Arepos/o/r/environments/[^/?]+}, '')]
+    when ['GET', '/deployment-branch-policies?per_page=100']
+      p = File.exist?("#{base}.policies.json") ? JSON.parse(File.read("#{base}.policies.json")) : []
+      puts JSON.generate('total_count' => p.size, 'branch_policies' => p)
+    when ['GET', '/secrets?per_page=100']
+      names = File.exist?("#{base}.secrets.json") ? JSON.parse(File.read("#{base}.secrets.json")) : []
+      puts JSON.generate('total_count' => names.size, 'secrets' => names.map { |n| { 'name' => n } })
+    when ['PUT', '']
+      rules = (input['deployment_branch_policy'] || {})['custom_branch_policies'] ? [{ 'id' => 1, 'type' => 'branch_policy' }] : []
+      e = { 'name' => env, 'can_admins_bypass' => input['can_admins_bypass'], 'protection_rules' => rules,
+            'deployment_branch_policy' => input['deployment_branch_policy'] }
+      Dir.mkdir(File.join(live, 'environments')) rescue nil
+      File.write("#{base}.env.json", JSON.generate(e))
+      puts JSON.generate(e)
+    when ['POST', '/deployment-branch-policies']
+      p = File.exist?("#{base}.policies.json") ? JSON.parse(File.read("#{base}.policies.json")) : []
+      p << input.merge('id' => (p.map { |b| b['id'] }.max || 0) + 1)
+      File.write("#{base}.policies.json", JSON.generate(p))
+      puts JSON.generate(p.last)
+    else
+      pid = path[%r{/deployment-branch-policies/(\d+)\z}, 1]
+      abort("gh stub: unexpected #{method} #{path}") unless method == 'DELETE' && pid
+      p = JSON.parse(File.read("#{base}.policies.json")).reject { |b| b['id'] == pid.to_i }
+      File.write("#{base}.policies.json", JSON.generate(p))
+    end
+    exit
+  end
   id = path[%r{\Arepos/o/r/rulesets/(\d+)\z}, 1]
   abort("gh stub: unexpected #{method} #{path}") unless id
   abort('HTTP 404: Not Found') unless File.exist?(file[id])
@@ -101,9 +140,11 @@ rb() { (cd "$dir" && ruby -rjson -e "$1"); }
 layout() {
     put .github/workflows/ci.yml 'name: CI' 'on:' '  pull_request:' '    branches: [ main ]' 'permissions: read-all' 'jobs:' \
         '  build:' '    name: Build' '    runs-on: ubuntu-latest' '    steps:' '      - run: echo build' \
-        '  lint:' '    runs-on: ubuntu-latest' '    steps:' '      - run: echo lint'
+        '  lint:' '    runs-on: ubuntu-latest' '    steps:' '      - run: echo lint application-secrets.yml' \
+        '        env:' '          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}'
     put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' \
-        '  publish:' '    runs-on: ubuntu-latest' '    steps:' '      - run: echo publish'
+        '  publish:' '    runs-on: ubuntu-latest' '    environment:' '      name: scans' '      deployment: false' \
+        '    steps:' '      - run: echo publish' '        env:' '          TOKEN: ${{ secrets.TOKEN }}'
     rb '
       cond = { "ref_name" => { "include" => ["refs/heads/main"], "exclude" => [] } }
       checks = { "name" => "checks", "target" => "branch", "enforcement" => "active", "conditions" => cond,
@@ -125,7 +166,21 @@ layout() {
       File.write(".github/repository-settings/rulesets/checks.json", JSON.pretty_generate(checks))
       File.write(".github/repository-settings/rulesets/review.json", JSON.pretty_generate(review))
       File.write(".github/repository-settings/repository.json",
-                 JSON.generate("settings" => { "delete_branch_on_merge" => true }, "admins" => ["owner"]))
+                 JSON.generate("settings" => { "delete_branch_on_merge" => true }, "admins" => ["owner"],
+                               "repository_secrets" => []))
+      Dir.mkdir(".github/repository-settings/environments") rescue nil
+      env = { "name" => "scans", "can_admins_bypass" => false,
+              "deployment_branch_policy" => { "protected_branches" => false, "custom_branch_policies" => true },
+              "protection_rules" => ["branch_policy"], "branch_policies" => [{ "name" => "main", "type" => "branch" }],
+              "secrets" => ["TOKEN"] }
+      File.write(".github/repository-settings/environments/scans.json", JSON.pretty_generate(env))
+      Dir.mkdir("live/environments") rescue nil
+      File.write("live/environments/scans.env.json", JSON.generate("id" => 5, "name" => "scans", "can_admins_bypass" => false,
+        "protection_rules" => [{ "id" => 9, "node_id" => "x", "type" => "branch_policy" }],
+        "deployment_branch_policy" => { "protected_branches" => false, "custom_branch_policies" => true }))
+      File.write("live/environments/scans.policies.json", JSON.generate([{ "id" => 3, "node_id" => "y", "name" => "main", "type" => "branch" }]))
+      File.write("live/environments/scans.secrets.json", JSON.generate(["TOKEN"]))
+      File.write("live/repo-secrets.json", JSON.generate([]))
       extra = { "source_type" => "Repository", "source" => "o/r", "node_id" => "RRS_x",
                 "current_user_can_bypass" => "never", "_links" => {}, "created_at" => "2026-10-18T00:00:00Z" }
       [[11, checks], [12, review]].each do |id, r|
@@ -206,6 +261,51 @@ statuses_job() { put .github/workflows/report.yml 'name: Report' 'on: push' 'job
 write_all() { put .github/workflows/report.yml 'name: Report' 'on: push' 'permissions: write-all' 'jobs:' '  r:' '    runs-on: ubuntu-latest' '    steps:' '      - run: echo'; }
 no_permissions() { put .github/workflows/release.yml 'name: Release' 'on: push' 'jobs:' '  publish:' '    runs-on: ubuntu-latest' '    steps:' '      - run: echo publish'; }
 job_permissions() { put .github/workflows/release.yml 'name: Release' 'on: push' 'jobs:' '  publish:' '    runs-on: ubuntu-latest' '    permissions: { contents: read }' '    steps:' '      - run: echo publish'; }
+# Environments (backlog #0-154). lenv <ruby on e>: changes GitHub's copy of the environment scans.
+lenv() { rb "f = \"live/environments/scans.env.json\"; e = JSON.parse(File.read(f)); $1; File.write(f, JSON.generate(e))"; }
+env_missing() { rm "$dir/live/environments/scans.env.json" "$dir/live/environments/scans.policies.json"; }
+admins_bypass_env() { lenv 'e["can_admins_bypass"] = true'; }
+reviewers_env() { lenv 'e["protection_rules"] << { "id" => 10, "type" => "required_reviewers" }'; }
+extra_policy() { rb 'f = "live/environments/scans.policies.json"; p = JSON.parse(File.read(f)); p << { "id" => 4, "name" => "feat/*", "type" => "branch" }; File.write(f, JSON.generate(p))'; }
+other_env() { rb 'File.write("live/environments/github-pages.env.json", JSON.generate("name" => "github-pages", "can_admins_bypass" => true, "protection_rules" => [], "deployment_branch_policy" => nil))'; }
+env_secret_missing() { rb 'File.write("live/environments/scans.secrets.json", JSON.generate([]))'; }
+repo_secret() { rb 'File.write("live/repo-secrets.json", JSON.generate(["OLD_TOKEN"]))'; }
+bad_env_file() { put .github/repository-settings/environments/scans.json '{ "name": "scans", "secrets": ["TOKEN"] }'; }
+# Workflows reading secrets.
+secret_no_env() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' '  publish:' \
+    '    runs-on: ubuntu-latest' '    steps:' '      - run: echo "$T"' '        env:' '          T: ${{ secrets.TOKEN }}'; }
+secret_not_held() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' '  publish:' \
+    '    runs-on: ubuntu-latest' '    environment: scans' '    steps:' '      - run: echo "$T"' '        env:' '          T: ${{ secrets.OTHER }}'; }
+secret_top_env() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'env:' '  T: ${{ secrets.TOKEN }}' \
+    'jobs:' '  publish:' '    runs-on: ubuntu-latest' '    environment: scans' '    steps:' '      - run: echo'; }
+secret_inherit() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' '  publish:' \
+    '    uses: ./.github/workflows/other.yml' '    secrets: inherit'; }
+secret_whole() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' '  publish:' \
+    '    runs-on: ubuntu-latest' '    steps:' '      - run: echo "$T"' '        env:' '          T: ${{ toJSON(secrets) }}'; }
+output_secrets() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' '  a:' \
+    '    runs-on: ubuntu-latest' '    outputs: { secrets: x }' '    steps:' '      - run: echo' '  publish:' '    needs: a' \
+    '    runs-on: ubuntu-latest' '    steps:' '      - run: echo "$T"' '        env:' '          T: ${{ needs.a.outputs.secrets.token }}'; }
+any_branch_env() { spec_env 'e["deployment_branch_policy"] = nil; e["branch_policies"] = []; e["protection_rules"] = []'; }
+bypassable_env() { spec_env 'e["can_admins_bypass"] = true'; }
+feature_branch_env() { spec_env 'e["branch_policies"] << { "name" => "feat/*", "type" => "branch" }'; }
+secret_case() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' '  publish:' \
+    '    runs-on: ubuntu-latest' '    steps:' '      - run: echo "$T"' '        env:' '          T: ${{ Secrets.TOKEN }}'; }
+env_twice() { rb 'File.write(".github/repository-settings/environments/copy.json", File.read(".github/repository-settings/environments/scans.json"))'; }
+env_no_policies() { lenv 'e["deployment_branch_policy"] = nil; e["protection_rules"] = []'; rm "$dir/live/environments/scans.policies.json"; }
+many_policies() { rb 'f = "live/environments/scans.policies.json"; File.write(f, JSON.generate((1..100).map { |i| { "id" => i, "name" => "b#{i}", "type" => "branch" } }))'; }
+many_repo_secrets() { rb 'File.write("live/repo-secrets.json", JSON.generate((1..100).map { |i| "S#{i}" }))'; }
+secret_on_pr_target() { put .github/workflows/release.yml 'name: Release' 'on: pull_request_target' 'permissions: read-all' 'jobs:' \
+    '  publish:' '    runs-on: ubuntu-latest' '    environment: scans' '    steps:' '      - run: echo "$T"' '        env:' \
+    '          T: ${{ secrets.TOKEN }}'; }
+secret_on_workflow_run() { put .github/workflows/release.yml 'name: Release' 'on:' '  workflow_run:' '    workflows: [ CI ]' \
+    'permissions: read-all' 'jobs:' '  publish:' '    runs-on: ubuntu-latest' '    environment: scans' '    steps:' \
+    '      - run: echo "$T"' '        env:' '          T: ${{ secrets.TOKEN }}'; }
+bad_env_name() { spec_env 'e["name"] = "a/b"'; }
+bad_env_rules() { spec_env 'e["protection_rules"] << "required_reviewers"'; }
+# spec_env <ruby on e>: changes the file of the environment scans.
+spec_env() { rb "f = \".github/repository-settings/environments/scans.json\"; e = JSON.parse(File.read(f)); $1; File.write(f, JSON.generate(e))"; }
+secret_index() { put .github/workflows/release.yml 'name: Release' 'on: push' 'permissions: read-all' 'jobs:' '  publish:' \
+    '    runs-on: ubuntu-latest' '    environment: scans' '    steps:' '      - run: echo "$T"' '        env:' "          T: \${{ secrets['TOKEN'] }}"; }
 unrequired_job() { printf '%s\n' '  e2e:' '    name: End to end' '    runs-on: ubuntu-latest' '    steps:' '      - run: echo e2e' >> "$dir/.github/workflows/ci.yml"; }
 some_types() { sed -i.bak 's/    branches: \[ main \]/    types: [ opened, labeled ]/' "$dir/.github/workflows/ci.yml"; }
 all_types() { sed -i.bak 's/    branches: \[ main \]/    types: [ opened, synchronize, reopened, labeled ]/' "$dir/.github/workflows/ci.yml"; }
@@ -244,9 +344,9 @@ before() {
 before_hidden() { before; hidden; }
 
 echo "repository-settings: check, what passes"
-MSG="2 ruleset\(s\), 1 setting\(s\) and the admins match \.github/repository-settings/ on o/r\.$" \
+MSG="2 ruleset\(s\), 1 environment\(s\), 1 setting\(s\), the admins and the secrets match \.github/repository-settings/ on o/r\.$" \
     case_ pass "GitHub holds the files (its own fields ignored, arrays in another order)" as_is
-MSG="not visible to this token, so not compared: the bypass actors of 'checks', the bypass actors of 'review', the repository setting delete_branch_on_merge, the repository's admins" \
+MSG="not visible to this token, so not compared: the bypass actors of 'checks', the bypass actors of 'review', the repository setting delete_branch_on_merge, the repository's admins, the secrets of environment 'scans', the repository's secrets" \
     case_ pass "a token that is not an admin's: bypass actors and settings named as not compared" hidden
 unset GH_STUB_HIDE
 MSG="not visible to this token, so not compared: the repository setting delete_branch_on_merge\)" \
@@ -296,9 +396,9 @@ MSG="git ls-tree --name-only nope -- \.github/repository-settings/rulesets/ fail
 MSG="--main is for check only" MODE=plan ARGS="--main HEAD" case_ fail "--main with plan" as_is
 MSG="checks\.json: every rule must be an object with a type, each type once" case_ fail "a rule type twice" dup_rule
 MSG="checks\.json: every rule must be an object with a type, each type once" case_ fail "a rule without a type" untyped_rule
-MSG="100 rulesets or more: this script reads one page" case_ fail "a hundred rulesets on GitHub" many_rulesets
+MSG="gh api repos/o/r/rulesets\?per_page=100: 100 entries or more" case_ fail "a hundred rulesets on GitHub" many_rulesets
 MSG="two rulesets on GitHub are named 'checks' \(ids 11 and 13\)" case_ fail "two rulesets on GitHub with one name" same_live_name
-MSG="gh api repos/o/r/rulesets: not a list" case_ fail "GitHub's list is not a list" not_a_list
+MSG="gh api repos/o/r/rulesets\?per_page=100: no list" case_ fail "GitHub's list is not a list" not_a_list
 unset GH_STUB_NOT_LIST
 MSG="required check 'lint' is the name of a job in \.github/workflows/ci\.yml and \.github/workflows/other\.yml" \
     case_ fail "a required check two workflows report" two_jobs
@@ -308,12 +408,46 @@ MSG="checks\.json must have exactly the keys name, target, enforcement, conditio
 MSG="the ruleset name 'checks' is also" case_ fail "two files with one name" same_name
 MSG="broken\.json cannot be read as JSON" case_ fail "a file that is not JSON" not_json
 MSG="no ruleset file under \.github/repository-settings/rulesets" case_ fail "no ruleset files (not run from the root)" no_rulesets
+MSG="environment 'scans' is not on GitHub: apply the file" case_ fail "an environment never applied" env_missing
+MSG="environment 'scans' differs from GitHub's: can_admins_bypass: the file says false, GitHub true" case_ fail "an environment admins may bypass" admins_bypass_env
+MSG="environment 'scans' differs from GitHub's: protection_rules: the file says \[\"branch_policy\"\], GitHub" case_ fail "required reviewers added in the UI" reviewers_env
+MSG="environment 'scans' differs from GitHub's: branch_policies: the file says" case_ fail "a branch policy added in the UI" extra_policy
+MSG="apply: update environment 'scans'.*1 environment\(s\)" MODE=apply \
+    CALLS=';PUT repos/o/r/environments/scans;POST repos/o/r/environments/scans/deployment-branch-policies;' \
+    case_ pass "apply gives an environment without branch policies its own" env_no_policies
+MSG="environment 'github-pages' is on GitHub but in no file under \.github/repository-settings/environments/: apply does not delete" \
+    case_ fail "an environment made in the UI" other_env
+MSG="environment 'scans' holds the secrets none; the file says TOKEN: set or remove them" case_ fail "an environment without its secret" env_secret_missing
+MSG="the repository holds the secrets OLD_TOKEN; the file says none: a repository secret reaches a manual dispatch" \
+    case_ fail "a repository secret" repo_secret
+MSG="scans\.json must have exactly the keys name, can_admins_bypass" case_ fail "an environment file in another form" bad_env_file
+MSG="release\.yml: job 'publish' reads secrets\.TOKEN in no environment: a repository secret reaches" NOCALLS=. \
+    case_ fail "a job reading a secret outside an environment" secret_no_env
+MSG="release\.yml: job 'publish' reads secrets\.OTHER in the environment 'scans', whose file under" \
+    case_ fail "a job reading a secret its environment does not hold" secret_not_held
+MSG="release\.yml: the workflow's env: gives secrets to every job \(TOKEN\)" case_ fail "a secret in the workflow's env" secret_top_env
+MSG="release\.yml: job 'publish' passes secrets: inherit" case_ fail "secrets: inherit" secret_inherit
+MSG="release\.yml: job 'publish' reads secrets as a whole or by index" case_ fail "a secret read by index" secret_index
+MSG="release\.yml: job 'publish' reads secrets as a whole or by index" case_ fail "every secret at once, toJSON(secrets)" secret_whole
+case_ pass "an output named secrets is no secret" output_secrets
+MSG="scans\.json: the environment 'scans' holds secrets, so it must allow the branch main alone" case_ fail "an environment with secrets open to every branch" any_branch_env
+MSG="scans\.json: the environment 'scans' holds secrets, so it must allow the branch main alone" case_ fail "an environment with secrets an admin may bypass" bypassable_env
+MSG="scans\.json: the environment 'scans' holds secrets, so it must allow the branch main alone" case_ fail "an environment with secrets open to another branch" feature_branch_env
+MSG="release\.yml: job 'publish' reads secrets\.TOKEN in no environment" case_ fail "a secret named in another case, Secrets.TOKEN" secret_case
+MSG="the environment name 'scans' is also" case_ fail "two environment files with one name" env_twice
+MSG="deployment-branch-policies\?per_page=100: 100 entries or more" case_ fail "a hundred branch policies" many_policies
+MSG="actions/secrets\?per_page=100: 100 entries or more" case_ fail "a hundred repository secrets" many_repo_secrets
+MSG="release\.yml: a job reads a secret in a workflow triggered by pull_request_target" NOCALLS=. \
+    case_ fail "a secret read on pull_request_target" secret_on_pr_target
+MSG="release\.yml: a job reads a secret in a workflow triggered by workflow_run" case_ fail "a secret read on workflow_run" secret_on_workflow_run
+MSG="scans\.json: the environment name 'a/b' must be letters" case_ fail "an environment name that would change an API path" bad_env_name
+MSG="scans\.json: protection_rules must be \[\"branch_policy\"\]: apply sets no reviewers" case_ fail "a protection rule apply cannot write" bad_env_rules
 
 echo "repository-settings: plan and apply"
 MSG="^would: create ruleset 'checks';would: create ruleset 'review';would: delete ruleset 'Protect main' \(id 7\): no file names it;would: set delete_branch_on_merge=true$" \
     MODE=plan NOCALLS='(^|;)(POST|PUT|PATCH|DELETE) ' case_ pass "plan lists the changes, creates before deletes, and writes nothing" before
 MSG="Nothing to change" MODE=apply NOCALLS='(^|;)(POST|PUT|PATCH|DELETE) ' case_ pass "apply when GitHub holds the files writes nothing" as_is
-MSG="apply: update ruleset 'review' \(id 12\).*2 ruleset\(s\), 1 setting\(s\) and the admins match" MODE=apply CALLS='PUT repos/o/r/rulesets/12' \
+MSG="apply: update ruleset 'review' \(id 12\).*2 ruleset\(s\), 1 environment\(s\), 1 setting\(s\), the admins and the secrets match" MODE=apply CALLS='PUT repos/o/r/rulesets/12' \
     case_ pass "apply updates a ruleset changed in the UI, in place" no_code_owners
 MSG="apply: delete ruleset 'Protect main'.*match \.github/repository-settings/ on o/r\.$" MODE=apply \
     CALLS=';POST repos/o/r/rulesets;POST repos/o/r/rulesets;DELETE repos/o/r/rulesets/7;PATCH repos/o/r;GET ' \
@@ -324,6 +458,14 @@ unset GH_STUB_HIDE
 MSG="this token does not see the repository setting delete_branch_on_merge: plan and apply need" MODE=plan \
     NOCALLS='(^|;)(POST|PUT|PATCH|DELETE) ' case_ fail "plan with a setting the admin's token does not see" setting_hidden
 unset GH_STUB_HIDE
+MSG="apply: create environment 'scans' and its branch policies.*1 environment\(s\)" MODE=apply \
+    CALLS=';PUT repos/o/r/environments/scans;POST repos/o/r/environments/scans/deployment-branch-policies;' \
+    case_ pass "apply creates an environment and its branch policy" env_missing
+MSG="apply: update environment 'scans'.*1 environment\(s\)" MODE=apply \
+    CALLS=';PUT repos/o/r/environments/scans;DELETE repos/o/r/environments/scans/deployment-branch-policies/4;' \
+    case_ pass "apply removes a branch policy added in the UI" extra_policy
+MSG="by hand: environment 'github-pages' is on GitHub but in no file.*nothing apply can change" MODE=apply NOCALLS='DELETE repos/o/r/environments' \
+    case_ fail "apply deletes no environment" other_env
 MSG="the admins of o/r are owner, someone; the file says owner: .*; apply does not change that" MODE=apply \
     NOCALLS='(^|;)(POST|PUT|PATCH|DELETE) ' case_ fail "apply with an admin the file does not name changes nothing" other_admin_before
 

@@ -1,0 +1,13 @@
+{
+  "name": "scans",
+  "can_admins_bypass": false,
+  "deployment_branch_policy": {
+    "protected_branches": false,
+    "custom_branch_policies": true
+  },
+  "protection_rules": ["branch_policy"],
+  "branch_policies": [
+    { "name": "main", "type": "branch" }
+  ],
+  "secrets": ["NVD_API_KEY", "SNYK_TOKEN"]
+}
