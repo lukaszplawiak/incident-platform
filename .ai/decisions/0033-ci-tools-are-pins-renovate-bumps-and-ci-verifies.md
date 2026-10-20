@@ -1,6 +1,7 @@
 # ADR-0033: Every CI tool downloaded from a GitHub release is a pin Renovate bumps and CI checks against its publisher, installed by one script; zizmor audits the workflows (backlog #0-147)
 
-- **Status:** Accepted (2026-10-17); amended by #0-149 (the one installer is enforced: `check-downloads.rb`)
+- **Status:** Accepted (2026-10-17); amended by #0-149 (the one installer is enforced: `check-downloads.rb`) and by
+  ADR-0036 (a fifth method, `release`, for betterleaks)
 - **Backlog:** #0-147 (follow-ups #0-149, #0-150)
 - **Date:** 2026-10-17
 - **Author:** human (owner chose the pattern and asked for it in all places; written up by Claude Code in the owner's session)
@@ -38,7 +39,8 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
   would check one SHA-256 and install with another; renovate.json's regex cannot say it, RE2 has no
   backreference). For each pin: the tag is a published, non-prerelease release, and one of its assets has the
   SHA-256 as GitHub's digest; then `verify=`, the strongest the publisher gives: `attestation` (`gh attestation
-  verify --repo <owner/repo> --source-ref refs/tags/<tag>`: built from that release's tag), `gpg:<fingerprint>`
+  verify --repo <owner/repo> --source-ref refs/tags/<tag>`: built from that release's tag), `release` (added by
+  ADR-0036: `gh release verify-asset <tag>`, the asset is in that immutable release's attestation), `gpg:<fingerprint>`
   (the release's `sha256sums.txt.asc` validly signed by that primary key, committed as
   `.github/keys/<fingerprint>.asc`, and listing the asset), `checksums:<file>` (the release's file lists the
   asset), or `digest` (nothing more exists). Renovate's PRs are trusted only once it passes, as
@@ -51,7 +53,7 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
   SHA-256 with the pin before anything reads it, installs one executable into `RUNNER_TEMP`, no `sudo`. The Snyk
   CLI now comes from its GitHub release (the same `snyk-linux` downloads.snyk.io serves).
 - **Today's pins**: actionlint `attestation`, zizmor `attestation`, Snyk CLI `gpg:4677…5194`, kubeconform
-  `checksums:CHECKSUMS`, shellcheck `digest`. Snyk's key was committed after its fingerprint matched in three
+  `checksums:CHECKSUMS`, shellcheck `digest`; betterleaks `release` (ADR-0036). Snyk's key was committed after its fingerprint matched in three
   places: docs.snyk.io, the snyk/cli repository and keys.openpgp.org.
 - **zizmor** (zizmorcore) audits the workflows and the composite actions in lint-workflows: v1.30.1 (five weeks
   old; 1.31.1 gives the same findings here), default persona, `--offline`, `--format github`, any finding fails.

@@ -40,6 +40,9 @@ actionlint -shellcheck="$(command -v shellcheck)"; zizmor --offline --persona re
 # shellcheck of every tracked .sh file and the composite actions' steps (new files count once `git add -N`), and no download
 # outside install-pinned-tool.sh; a meant finding is disabled at its line with its reason, never by a .shellcheckrc
 ruby .github/scripts/check-shell.rb "$(command -v shellcheck)"; ruby .github/scripts/check-downloads.rb
+# Secrets in the commits a branch adds, the way CI's secret-scan job does (backlog #0-109, ADR-0036): betterleaks at the
+# BETTERLEAKS_VERSION in ci.yml; a line that holds no secret takes `gitleaks:allow` and its reason
+.github/scripts/secret-scan.sh "$(command -v betterleaks)" "$(git merge-base origin/main HEAD)" HEAD
 # Every CI tool pin (`# renovate:` + *_VERSION + *_SHA256) against its publisher (ADR-0033); needs gh and jq, and gpg for Snyk's
 .github/scripts/check-pinned-tools.sh
 # GitHub's ruleset of main, environments, repository settings, admins and secrets against .github/repository-settings/,
