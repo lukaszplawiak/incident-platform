@@ -87,7 +87,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-66](#0-66-redis-and-kafka-in-kubernetes-have-no-authentication-and-no-data-store-uses-tls) | Redis and Kafka in Kubernetes have no authentication, and no data store uses TLS | design | Medium | Open |
 | [0-67](#0-67-all-seven-services-share-one-database-role) | All seven services share one database role | design | Medium | Open |
 | [0-68](#0-68-sast-has-never-run-snyk-code-is-not-enabled-and-codeql-is-not-set-up) | SAST has never run: Snyk Code is not enabled, and CodeQL is not set up | ci | Medium | Open |
-| [0-69](#0-69-the-snyk-dependency-scan-fails-on-every-run-so-a-new-finding-changes-nothing) | The Snyk dependency scan fails on every run, so a new finding changes nothing | ci | Medium | Open |
+| [0-69](#0-69-the-snyk-dependency-scan-fails-on-every-run-so-a-new-finding-changes-nothing) | The Snyk dependency scan fails on every run, so a new finding changes nothing | ci | High | Open |
 | [0-70](#0-70-built-images-are-not-scanned-and-no-sbom-is-produced) | Built images are not scanned, and no SBOM is produced | ci | Low | Open |
 | [0-71](#0-71-kubernetes-and-compose-images-use-mutable-tags-and-some-are-not-tracked-by-renovate) | Kubernetes and compose images use mutable tags, and some are not tracked by Renovate | tech-debt | Low | Open |
 | [0-72](#0-72-docker-compose-publishes-every-port-on-all-interfaces-with-default-credentials) | docker-compose publishes every port on all interfaces, with default credentials | tech-debt | Low | Open |
@@ -131,6 +131,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-153](#0-153-decide-which-paths-need-the-owners-review-before-auto-merge) | Decide which paths need the owner's review, before auto-merge | design | Medium | Open |
 | [0-155](#0-155-a-scan-that-cannot-run-on-main-alerts-no-one) | A scan that cannot run on `main` alerts no one | ci | Medium | Open |
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
+| [0-157](#0-157-tomcat-10155-has-unpatched-authorization-bypass-cves-in-every-service) | Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service | security | High | Open |
+| [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 
 ---
 
@@ -1073,7 +1075,8 @@ is wanted. Correct README "Security Scanning" either way.
 
 ### 0-69. The Snyk dependency scan fails on every run, so a new finding changes nothing
 
-**Type:** ci · **Priority:** Medium · **Status:** Open (found in the 2026-09-30 infrastructure security audit)
+**Type:** ci · **Priority:** High · **Status:** Open (found in the 2026-09-30 infrastructure security audit; updated
+2026-10-20)
 
 **Problem.** `snyk test --severity-threshold=high` reports 42 issues (run of 2026-09-30; 37–45 on earlier runs), so the
 dependency job is red on every push to `main` and every weekly run. A red job that is always red carries no signal: a
@@ -1091,6 +1094,25 @@ with the CVE named, per CLAUDE.md), suppress in `.snyk` with a reason and an exp
 reachable, until the job is green; then keep it green. Re-check every existing `.snyk` ignore the same way and rewrite
 the Tomcat reasons on what actually limits exposure (which Tomcat feature the CVE needs and whether the services use
 it), or drop the ignore where nothing does.
+
+**State on 2026-10-20 (run 39431317669, the first authenticated scan after #0-154).** 50–58 issues per project
+(eight projects). Tomcat is #0-157; what Snyk fixes only through Spring Boot 4 is #0-158. Fixed within the current
+line, by a version override:
+
+| Dependency | Now | Fixed in | Issues |
+|---|---|---|---|
+| `bcprov-jdk18on` | 1.84 | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offers 1.85 only |
+| `postgresql` | 42.7.12 | 42.7.14 | Not Failing Securely (`SNYK-JAVA-ORGPOSTGRESQL-20571163`) |
+| `flyway-core` | 11.7.2 | 11.8.1 | per Snyk's upgrade advice |
+| `jackson-databind` / `jackson-core` | 2.21.5 | 2.21.7 | resource exhaustion, DoS |
+| `micrometer-core` | 1.15.12 | 1.16.7 | CRLF Injection, memory not released |
+| `jaxb-core` | 4.0.9 | Snyk: only through Boot 4 (`spring-boot-starter-data-jpa` 4.0.0, #0-158); check whether a later 4.0.x `jaxb-core` override works with Hibernate 6 | XXE (`SNYK-JAVA-ORGGLASSFISHJAXB-20883142`) |
+
+The compression libraries kafka-clients brings (`zstd-jni` 1.5.6-4, `snappy-java` 1.1.10.5, `at.yawk.lz4:lz4-java`
+1.10.1; 11 issues) are separate artifacts, not shaded like the old `org.lz4` one: check whether an override works
+with kafka-clients 3.9.2 and whether any producer enables compression. OWASP Dependency-Check is green on the same
+`main` although Snyk reports Critical issues in `bcprov`: find out why (another database, a suppression, CPE
+matching) before a green OWASP run is read as clean.
 
 ---
 
@@ -2351,6 +2373,73 @@ comment must carry a reason the script checks (like `# not-a-download: <why>`, #
 AC1. An agent's push of a commit holding a secret-shaped string is refused before it reaches GitHub.
 AC2. A developer who enables the hook gets the same refusal, with the same rules and binary as CI.
 AC3. README "Infrastructure Hardening" lists the control and drops the gap.
+
+---
+
+### 0-157. Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service
+
+**Type:** security · **Priority:** High · **Status:** Open — found in the Snyk scan of `main` after #0-154 (run
+39431317669, 2026-10-20)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+
+**Problem.** The first Snyk dependency scan that authenticated again after #0-154 reports six new Tomcat issues in
+all eight scanned projects (Tomcat 10.1.55, from Spring Boot 3.5.16):
+
+| Snyk id | Severity | Title | Artifact |
+|---|---|---|---|
+| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20302843` | Critical | Incorrect Authorization | `tomcat-embed-core` |
+| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20552494` | Critical | Authentication Bypass by Alternate Name | `tomcat-embed-websocket` |
+| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20302889` | High | Authentication Bypass by Primary Weakness | `tomcat-embed-core` |
+| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20304748` | High | Allocation of Resources Without Limits or Throttling | `tomcat-embed-core` |
+| `SNYK-JAVA-ORGAPACHETOMCATEMBED-21246252` | High | Missing Release of Resource after Effective Lifetime | `tomcat-embed-websocket` |
+| `SNYK-JAVA-ORGAPACHETOMCATEMBED-21249759` | High | Denial of Service (DoS) | `tomcat-embed-websocket` |
+
+Snyk's only remedy is `spring-boot-starter-web` 4.0.0 (#0-158). `tomcat-embed-websocket` is on every service's
+classpath through `spring-boot-starter-web`, though only incident-service serves WebSocket (STOMP). A Tomcat CVE may
+be reached at the HTTP layer, before any Spring Security filter runs (step (c) decides it per id), so JWTs and API
+keys need not limit it. The four
+older Tomcat ignores in `.snyk` (`-16643259`, `-16691231`, `-17732890`, `-17733746`) rest on the false "all endpoints
+require JWT" claim (#0-69) and expire 2027-01-01.
+
+**Approach (to analyse).** (a) Which CVE each Snyk id is, and from which 10.1.x release Apache fixed it (Apache still
+maintains the 10.1 line, whatever Spring Boot's support). (b) Whether overriding `tomcat.version` in the root
+`pom.xml` (with the CVE named, like `postgresql.version`) fixes it without Spring Boot 4, and whether Spring Boot
+3.5.x had any later release. (c) Whether our configuration is exposed: which Tomcat feature each CVE needs
+(WebSocket upgrade, alternate path names, a realm or container authentication) and whether a service uses it; a
+service without WebSocket could drop `tomcat-embed-websocket`. (d) Ignore in `.snyk` only what is not reachable,
+with that reason and an expiry. If Spring Boot 4 is the only fix, the remainder waits on #0-158, with the exposure
+recorded. Human-only: accepting a Critical CVE as a known risk is the owner's decision.
+
+**Acceptance criteria.**
+AC1. None of the six ids stays in the Snyk scan of `main` without a fix, or an ignore whose reason names what makes
+the CVE unreachable here and which expires.
+AC2. The four older Tomcat ignores in `.snyk` are rewritten on the same terms or removed.
+AC3. README "Infrastructure Hardening" records the outcome (the gap removed, or the accepted exposure).
+
+---
+
+### 0-158. Spring Boot 3.5 is out of open-source support; decide the move to 4.x
+
+**Type:** design · **Priority:** High · **Status:** Open — found with #0-157 (2026-10-20)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** —
+
+**Problem.** The platform runs Spring Boot 3.5.16 (root `pom.xml`), whose open-source support ended 2026-06-30
+according to `.snyk` (to verify on spring.io). Snyk names the 4.x line (Spring Boot 4, Framework 7, Security 7,
+spring-kafka 4) as the only fix for a growing share of the findings: `spring-webmvc` `SNYK-JAVA-ORGSPRINGFRAMEWORK-19267098`
+(Critical, Arbitrary Code Injection), `spring-web` (XSS, cookie without `Secure`, two resource exhaustions),
+`spring-expression`, `spring-beans`, `spring-security-core` (Timing Attack) and `spring-security-crypto`
+(Predictable IV with CBC), `spring-kafka` `-19267472`, Tomcat (#0-157), Netty via Lettuce, lz4 and zookeeper via
+`spring-kafka-test`. Since June every such `.snyk` ignore says "tracked for the Spring Boot 4.x migration", but no
+item tracks it.
+
+**Approach (to analyse).** Commercial support for 3.5 against migrating. The migration's reach: Spring Security 7,
+Jackson 3, spring-kafka 4 with kafka-clients 4, Hibernate 7, springdoc 3, Testcontainers 2, the starters split in
+Boot 4. One parent POM means the services cannot move one at a time: decide one PR or steps (`shared` first,
+behind a branch), and what CI proves at each. Record the decision in an ADR.
+
+**Acceptance criteria.**
+AC1. An ADR decides: the migration with its plan, or a deferral with its reason and a date to revisit.
+AC2. If migrating, the steps are items in this backlog, and the `.snyk` ignores citing "the 4.x migration" name them.
 
 ---
 
