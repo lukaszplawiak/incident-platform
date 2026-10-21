@@ -871,6 +871,10 @@ Open items from the audit and earlier, most important first within each area. Ea
   - No static analysis has ever run: Snyk Code is not enabled and CodeQL is not set up: backlog #0-68.
   - The Snyk dependency scan is red on every run, so a new finding changes nothing, and the Tomcat ignores in `.snyk`
     rest on a false "all endpoints require JWT" claim: backlog #0-69.
+  - Tomcat 10.1.55, in every service, has unpatched Critical authorization-bypass CVEs (Snyk, 2026-10-20), not yet
+    analysed for exposure: backlog #0-157.
+  - Spring Boot 3.5 is out of open-source support, and the ignores in `.snyk` that wait for 4.x wait on a migration
+    no one has decided: backlog #0-158.
   - No status check is required before merging to `main`: backlog #0-2.
   - Any Marketplace action is allowed to run (`allowed_actions: all`): backlog #0-62.
   - `diff-cover` is installed by version only, its package and dependencies unchecked: backlog #0-134.
