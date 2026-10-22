@@ -130,7 +130,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-153](#0-153-decide-which-paths-need-the-owners-review-before-auto-merge) | Decide which paths need the owner's review, before auto-merge | design | Medium | Open |
 | [0-155](#0-155-a-scan-that-cannot-run-on-main-alerts-no-one) | A scan that cannot run on `main` alerts no one | ci | Medium | Open |
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
-| [0-157](#0-157-tomcat-10155-has-unpatched-authorization-bypass-cves-in-every-service) | Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service | security | High | In progress |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-160](#0-160-what-a-reviewer-could-not-verify-is-never-checked) | What a reviewer could not verify is never checked | design | High | Open |
@@ -2360,61 +2359,6 @@ comment must carry a reason the script checks (like `# not-a-download: <why>`, #
 AC1. An agent's push of a commit holding a secret-shaped string is refused before it reaches GitHub.
 AC2. A developer who enables the hook gets the same refusal, with the same rules and binary as CI.
 AC3. README "Infrastructure Hardening" lists the control and drops the gap.
-
----
-
-### 0-157. Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service
-
-**Type:** security · **Priority:** High · **Status:** In progress — found in the Snyk scan of `main` after #0-154 (run
-39431317669, 2026-10-20)
-**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
-
-**Problem.** The first Snyk dependency scan that authenticated again after #0-154 reports six new Tomcat issues in
-all eight scanned projects (Tomcat 10.1.55, from Spring Boot 3.5.16):
-
-| Snyk id | Severity | Title | Artifact |
-|---|---|---|---|
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20302843` | Critical | Incorrect Authorization | `tomcat-embed-core` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20552494` | Critical | Authentication Bypass by Alternate Name | `tomcat-embed-websocket` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20302889` | High | Authentication Bypass by Primary Weakness | `tomcat-embed-core` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20304748` | High | Allocation of Resources Without Limits or Throttling | `tomcat-embed-core` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-21246252` | High | Missing Release of Resource after Effective Lifetime | `tomcat-embed-websocket` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-21249759` | High | Denial of Service (DoS) | `tomcat-embed-websocket` |
-
-Snyk's only remedy is `spring-boot-starter-web` 4.0.0 (#0-158). `tomcat-embed-websocket` is on every service's
-classpath through `spring-boot-starter-web`, though only incident-service serves WebSocket (STOMP). A Tomcat CVE may
-be reached at the HTTP layer, before any Spring Security filter runs (step (c) decides it per id), so JWTs and API
-keys need not limit it. The four
-older Tomcat ignores in `.snyk` (`-16643259`, `-16691231`, `-17732890`, `-17733746`) rest on the false "all endpoints
-require JWT" claim (#0-69) and expire 2027-01-01.
-
-**Approach (to analyse).** (a) Which CVE each Snyk id is, and from which 10.1.x release Apache fixed it (Apache still
-maintains the 10.1 line, whatever Spring Boot's support). (b) Whether overriding `tomcat.version` in the root
-`pom.xml` (with the CVE named, like `postgresql.version`) fixes it without Spring Boot 4, and whether Spring Boot
-3.5.x had any later release. (c) Whether our configuration is exposed: which Tomcat feature each CVE needs
-(WebSocket upgrade, alternate path names, a realm or container authentication) and whether a service uses it; a
-service without WebSocket could drop `tomcat-embed-websocket`. (d) Ignore in `.snyk` only what is not reachable,
-with that reason and an expiry. If Spring Boot 4 is the only fix, the remainder waits on #0-158, with the exposure
-recorded. Human-only: accepting a Critical CVE as a known risk is the owner's decision.
-
-**Decided (owner, 2026-10-22): override `tomcat.version` to 10.1.61, ignore nothing.** (a) The six ids are
-CVE-2026-68525 (`-20302843`, FORM authentication, fixed 10.1.59), CVE-2026-76183 (`-20552494`, security constraints
-on WebSocket endpoints, 10.1.60), CVE-2026-68569 (`-20302889`, DataSourceRealm with CLIENT-CERT/SPNEGO, 10.1.59),
-CVE-2026-68763 (`-20304748`, HTTP/2, 10.1.59), CVE-2026-79677 (`-21246252`, WebSocket async write timeout, 10.1.60)
-and CVE-2026-77791 (`-21249759`, busy wait on WebSocket close, 10.1.59). The four older ignores are CVE-2026-41284
-(WebDAV) and CVE-2026-43512 (DIGEST), both fixed in 10.1.55 already, and CVE-2026-55955 (cluster EncryptInterceptor)
-and CVE-2026-53434 (FFM connector CRLs), fixed in 10.1.56. (b) Spring Boot 3.5.16 is the last 3.5 release, but
-Apache still patches 10.1 (10.1.61, 2026-10-12, on Maven Central), and `tomcat.version` drives core, el and
-websocket. (c) Not used here: Tomcat FORM/DIGEST authentication, realms, servlet security constraints, HTTP/2,
-WebDAV, clustering, the FFM connector; reached: the two WebSocket DoS in incident-service (STOMP). Exposure no longer
-matters once the version is fixed, so nothing is ignored (d). Nothing bumps the property automatically (Renovate
-sees no dependency that uses it); it goes with the move to Spring Boot 4 (#0-158).
-
-**Acceptance criteria.**
-AC1. None of the six ids stays in the Snyk scan of `main` without a fix, or an ignore whose reason names what makes
-the CVE unreachable here and which expires.
-AC2. The four older Tomcat ignores in `.snyk` are rewritten on the same terms or removed.
-AC3. README "Infrastructure Hardening" records the outcome (the gap removed, or the accepted exposure).
 
 ---
 
