@@ -116,7 +116,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
-| [0-118](#0-118-an-out-of-order-escalation-event-lowers-a-recorded-level) | An out-of-order escalation event lowers a recorded level | bug | Low | Open |
 | [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
 | [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -2000,20 +1999,6 @@ and, after #0-7, incident-service. A third level added in one place would be dea
 
 **Approach (to analyse).** One constant in `shared` next to `IncidentEscalatedEvent`, used by all three; a
 change to `shared` changes all seven services (CLAUDE.md), so it is its own item, not part of #0-7.
-
----
-
-### 0-118. An out-of-order escalation event lowers a recorded level
-
-**Type:** bug · **Priority:** Low · **Status:** Open (found by `/ready #0-7`, 2026-10-09; not verified)
-
-**Problem.** `Incident.recordEscalation(int)` assigns the level unconditionally, so an `IncidentEscalatedEvent`
-of level 1 consumed after one of level 2 (a redelivery, a replay from the dead-letter topic) sets the
-incident back to 1. Whether `incidents.lifecycle` can deliver them out of order for one incident (both keyed
-by the incident id, one partition) needs checking first.
-
-**Approach (to analyse).** Keep the higher level (never lower it from this consumer), with a test; or decide
-that ordering by key makes it impossible and close this item with that reasoning.
 
 ---
 

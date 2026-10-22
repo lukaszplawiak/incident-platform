@@ -132,16 +132,34 @@ public class IncidentCommandService {
      * returns, so the consumer acknowledges only a committed change, and no
      * database connection is held while it waits for a dead-letter copy.
      *
-     * @return whether the incident exists in this tenant
+     * <h2>Changed (backlog #0-118)</h2>
+     * A level that is not higher than the recorded one is not saved
+     * ({@link Incident#recordEscalation(int)}): no write, no version bump, so a
+     * duplicate or late event no longer races a REST change for the row.
+     *
+     * @return what happened to the incident's level
      */
     @Transactional
-    public boolean recordEscalationLevel(UUID incidentId, String tenantId, int escalationLevel) {
+    public EscalationRecording recordEscalationLevel(UUID incidentId, String tenantId, int escalationLevel) {
         final Optional<Incident> incident = incidentRepository.findByIdAndTenantId(incidentId, tenantId);
-        incident.ifPresent(found -> {
-            found.recordEscalation(escalationLevel);
-            incidentRepository.save(found);
-        });
-        return incident.isPresent();
+        if (incident.isEmpty()) {
+            return EscalationRecording.INCIDENT_NOT_FOUND;
+        }
+        if (!incident.get().recordEscalation(escalationLevel)) {
+            return EscalationRecording.NOT_HIGHER;
+        }
+        incidentRepository.save(incident.get());
+        return EscalationRecording.RAISED;
+    }
+
+    /** The outcome of {@link #recordEscalationLevel} (backlog #0-118). */
+    public enum EscalationRecording {
+        /** The incident's level was raised to the event's and saved. */
+        RAISED,
+        /** The incident already has this level or a higher one; nothing was saved. */
+        NOT_HIGHER,
+        /** No such incident in this tenant; nothing was saved. */
+        INCIDENT_NOT_FOUND
     }
 
     @Transactional

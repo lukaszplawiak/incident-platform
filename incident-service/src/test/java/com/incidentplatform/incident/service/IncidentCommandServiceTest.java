@@ -74,16 +74,32 @@ class IncidentCommandServiceTest {
     class RecordEscalationLevel {
 
         @Test
-        @DisplayName("records the level on the tenant's incident and reports it found")
+        @DisplayName("records the level on the tenant's incident and reports it raised")
         void recordsLevel() {
             final Incident incident = buildIncident(Severity.HIGH, "fp-1");
             given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
                     .willReturn(Optional.of(incident));
 
-            assertThat(commandService.recordEscalationLevel(incident.getId(), TENANT_ID, 2)).isTrue();
+            assertThat(commandService.recordEscalationLevel(incident.getId(), TENANT_ID, 2))
+                    .isEqualTo(IncidentCommandService.EscalationRecording.RAISED);
 
             assertThat(incident.getEscalationLevel()).isEqualTo(2);
             then(incidentRepository).should().save(incident);
+        }
+
+        @Test
+        @DisplayName("a level not higher than the recorded one: not lowered, nothing saved (backlog #0-118)")
+        void notHigher() {
+            final Incident incident = buildIncident(Severity.HIGH, "fp-1");
+            incident.recordEscalation(2);
+            given(incidentRepository.findByIdAndTenantId(incident.getId(), TENANT_ID))
+                    .willReturn(Optional.of(incident));
+
+            assertThat(commandService.recordEscalationLevel(incident.getId(), TENANT_ID, 1))
+                    .isEqualTo(IncidentCommandService.EscalationRecording.NOT_HIGHER);
+
+            assertThat(incident.getEscalationLevel()).isEqualTo(2);
+            then(incidentRepository).should(never()).save(any(Incident.class));
         }
 
         @Test
@@ -92,7 +108,8 @@ class IncidentCommandServiceTest {
             final UUID incidentId = UUID.randomUUID();
             given(incidentRepository.findByIdAndTenantId(incidentId, TENANT_ID)).willReturn(Optional.empty());
 
-            assertThat(commandService.recordEscalationLevel(incidentId, TENANT_ID, 1)).isFalse();
+            assertThat(commandService.recordEscalationLevel(incidentId, TENANT_ID, 1))
+                    .isEqualTo(IncidentCommandService.EscalationRecording.INCIDENT_NOT_FOUND);
 
             then(incidentRepository).should(never()).save(any(Incident.class));
         }

@@ -3,6 +3,7 @@ package com.incidentplatform.incident.kafka;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.service.IncidentCommandService;
+import com.incidentplatform.incident.service.IncidentCommandService.EscalationRecording;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.IncidentEventTypes;
 import com.incidentplatform.shared.events.SourceType;
@@ -165,7 +166,8 @@ class IncidentEscalationEventConsumerTest {
         void recordsValidEscalationLevel(int level) {
             final UUID incidentId = UUID.randomUUID();
             final ConsumerRecord<String, String> record = buildRawLevelRecord(incidentId, String.valueOf(level));
-            given(commandService.recordEscalationLevel(incidentId, TENANT_ID, level)).willReturn(true);
+            given(commandService.recordEscalationLevel(incidentId, TENANT_ID, level))
+                    .willReturn(EscalationRecording.RAISED);
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
@@ -201,7 +203,8 @@ class IncidentEscalationEventConsumerTest {
             final Incident incident = buildIncident();
             final ConsumerRecord<String, String> record =
                     buildEscalatedRecord(incident.getId(), 2);
-            given(commandService.recordEscalationLevel(incident.getId(), TENANT_ID, 2)).willReturn(true);
+            given(commandService.recordEscalationLevel(incident.getId(), TENANT_ID, 2))
+                    .willReturn(EscalationRecording.RAISED);
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
@@ -231,11 +234,27 @@ class IncidentEscalationEventConsumerTest {
             final UUID incidentId = UUID.randomUUID();
             final ConsumerRecord<String, String> record =
                     buildEscalatedRecord(incidentId, 1);
-            given(commandService.recordEscalationLevel(incidentId, TENANT_ID, 1)).willReturn(false);
+            given(commandService.recordEscalationLevel(incidentId, TENANT_ID, 1))
+                    .willReturn(EscalationRecording.INCIDENT_NOT_FOUND);
 
             consumer.consumeIncidentEvent(record, acknowledgment);
 
             then(acknowledgment).should().acknowledge();
+        }
+
+        @Test
+        @DisplayName("a level not higher than the recorded one is processed: acknowledged, not dead-lettered (backlog #0-118)")
+        void acknowledgesLevelNotHigher() {
+            final UUID incidentId = UUID.randomUUID();
+            final ConsumerRecord<String, String> record =
+                    buildEscalatedRecord(incidentId, 1);
+            given(commandService.recordEscalationLevel(incidentId, TENANT_ID, 1))
+                    .willReturn(EscalationRecording.NOT_HIGHER);
+
+            consumer.consumeIncidentEvent(record, acknowledgment);
+
+            then(acknowledgment).should().acknowledge();
+            then(deadLetterPublisher).shouldHaveNoInteractions();
         }
     }
 

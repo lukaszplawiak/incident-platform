@@ -2,6 +2,7 @@ package com.incidentplatform.incident.service;
 
 import com.incidentplatform.incident.domain.Incident;
 import com.incidentplatform.incident.repository.IncidentRepository;
+import com.incidentplatform.incident.service.IncidentCommandService.EscalationRecording;
 import com.incidentplatform.shared.audit.AuditEventPublisher;
 import com.incidentplatform.shared.domain.Severity;
 import com.incidentplatform.shared.events.SourceType;
@@ -128,14 +129,33 @@ class IncidentEscalationLevelIntegrationTest {
                 incidentId);
     }
 
+    private long versionOf(UUID incidentId) {
+        return jdbcTemplate.queryForObject("SELECT version FROM incidents WHERE id = ?", Long.class, incidentId);
+    }
+
     @Test
     @DisplayName("records the level and commits it before returning")
     void commitsBeforeReturning() {
         final Incident incident = stored("acme");
 
-        assertThat(commandService.recordEscalationLevel(incident.getId(), "acme", 2)).isTrue();
+        assertThat(commandService.recordEscalationLevel(incident.getId(), "acme", 2))
+                .isEqualTo(EscalationRecording.RAISED);
 
         assertThat(levelOf(incident.getId())).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("a level-1 event read after level 2 neither lowers the level nor writes the row (backlog #0-118)")
+    void lowerLevelReadLateChangesNothing() {
+        final Incident incident = stored("acme");
+        commandService.recordEscalationLevel(incident.getId(), "acme", 2);
+        final long version = versionOf(incident.getId());
+
+        assertThat(commandService.recordEscalationLevel(incident.getId(), "acme", 1))
+                .isEqualTo(EscalationRecording.NOT_HIGHER);
+
+        assertThat(levelOf(incident.getId())).isEqualTo(2);
+        assertThat(versionOf(incident.getId())).as("no write, no version bump").isEqualTo(version);
     }
 
     @Test
@@ -158,7 +178,8 @@ class IncidentEscalationLevelIntegrationTest {
     void otherTenant() {
         final Incident globex = stored("globex");
 
-        assertThat(commandService.recordEscalationLevel(globex.getId(), "acme", 2)).isFalse();
+        assertThat(commandService.recordEscalationLevel(globex.getId(), "acme", 2))
+                .isEqualTo(EscalationRecording.INCIDENT_NOT_FOUND);
 
         assertThat(levelOf(globex.getId())).isZero();
     }

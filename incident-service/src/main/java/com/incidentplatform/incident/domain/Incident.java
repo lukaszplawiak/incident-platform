@@ -216,10 +216,28 @@ public class Incident {
      * what escalation-service's EscalationScheduler has actually done,
      * including automatic (timeout-driven) escalations that never go through
      * the REST API.
+     *
+     * <h2>Fixed (backlog #0-118): the level is never lowered</h2>
+     * It used to be assigned unconditionally, so a level-1 event read after a
+     * level-2 one set the incident back to 1. In the ordinary flow that cannot
+     * happen (both are keyed by the incident id, and escalation-service creates
+     * level 1 once per incident and level 2 only after it), but it can when a
+     * level-1 event dead-lettered after its redelivery deadline is replayed
+     * (backlog #0-40), when the topic gains partitions, or when the consumer
+     * group's offsets are reset. Levels only ever rise, so a level that is not
+     * higher than the recorded one changes nothing, {@code updatedAt}
+     * included, the way a repeated escalation at the same level is a duplicate
+     * (ADR-0017).
+     *
+     * @return whether the level was raised
      */
-    public void recordEscalation(int escalationLevel) {
+    public boolean recordEscalation(int escalationLevel) {
+        if (escalationLevel <= this.escalationLevel) {
+            return false;
+        }
         this.escalationLevel = escalationLevel;
         this.updatedAt = Instant.now();
+        return true;
     }
 
     public void updateSeverity(Severity newSeverity) {
