@@ -130,8 +130,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-153](#0-153-decide-which-paths-need-the-owners-review-before-auto-merge) | Decide which paths need the owner's review, before auto-merge | design | Medium | Open |
 | [0-155](#0-155-a-scan-that-cannot-run-on-main-alerts-no-one) | A scan that cannot run on `main` alerts no one | ci | Medium | Open |
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
-| [0-157](#0-157-tomcat-10155-has-unpatched-authorization-bypass-cves-in-every-service) | Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service | security | High | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
+| [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
+| [0-160](#0-160-what-a-reviewer-could-not-verify-is-never-checked) | What a reviewer could not verify is never checked | design | High | Open |
 
 ---
 
@@ -1082,7 +1083,7 @@ dependency job is red on every push to `main` and every weekly run. A red job th
 new critical CVE would not change its status. OWASP Dependency-Check, by contrast, is green.
 
 The existing `.snyk` ignores are not a sound baseline either. The Tomcat entries (comment at `.snyk:22`, reasons at
-lines 30, 38 and 125) justify the risk with "All endpoints require JWT authentication. No unauthenticated access",
+lines 30, 38 and 125; all removed by #0-157) justify the risk with "All endpoints require JWT authentication. No unauthenticated access",
 which is false: login, health, Swagger (#0-73) and the Slack webhook are public, and ingestion-service takes API keys,
 not JWTs. It would not be a mitigation even if it were true, since a Tomcat CVE is reached at the HTTP layer, before
 any Spring Security filter runs. The same false claim was in `owasp-suppressions.xml`'s DOMPurify note, corrected
@@ -1095,7 +1096,7 @@ the Tomcat reasons on what actually limits exposure (which Tomcat feature the CV
 it), or drop the ignore where nothing does.
 
 **State on 2026-10-20 (run 39431317669, the first authenticated scan after #0-154).** 50–58 issues per project
-(eight projects). Tomcat is #0-157; what Snyk fixes only through Spring Boot 4 is #0-158. Fixed within the current
+(eight projects). Tomcat is #0-157 (fixed by a `tomcat.version` override, its four `.snyk` ignores removed); what Snyk fixes only through Spring Boot 4 is #0-158. Fixed within the current
 line, by a version override:
 
 | Dependency | Now | Fixed in | Issues |
@@ -2361,48 +2362,6 @@ AC3. README "Infrastructure Hardening" lists the control and drops the gap.
 
 ---
 
-### 0-157. Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service
-
-**Type:** security · **Priority:** High · **Status:** Open — found in the Snyk scan of `main` after #0-154 (run
-39431317669, 2026-10-20)
-**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
-
-**Problem.** The first Snyk dependency scan that authenticated again after #0-154 reports six new Tomcat issues in
-all eight scanned projects (Tomcat 10.1.55, from Spring Boot 3.5.16):
-
-| Snyk id | Severity | Title | Artifact |
-|---|---|---|---|
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20302843` | Critical | Incorrect Authorization | `tomcat-embed-core` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20552494` | Critical | Authentication Bypass by Alternate Name | `tomcat-embed-websocket` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20302889` | High | Authentication Bypass by Primary Weakness | `tomcat-embed-core` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-20304748` | High | Allocation of Resources Without Limits or Throttling | `tomcat-embed-core` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-21246252` | High | Missing Release of Resource after Effective Lifetime | `tomcat-embed-websocket` |
-| `SNYK-JAVA-ORGAPACHETOMCATEMBED-21249759` | High | Denial of Service (DoS) | `tomcat-embed-websocket` |
-
-Snyk's only remedy is `spring-boot-starter-web` 4.0.0 (#0-158). `tomcat-embed-websocket` is on every service's
-classpath through `spring-boot-starter-web`, though only incident-service serves WebSocket (STOMP). A Tomcat CVE may
-be reached at the HTTP layer, before any Spring Security filter runs (step (c) decides it per id), so JWTs and API
-keys need not limit it. The four
-older Tomcat ignores in `.snyk` (`-16643259`, `-16691231`, `-17732890`, `-17733746`) rest on the false "all endpoints
-require JWT" claim (#0-69) and expire 2027-01-01.
-
-**Approach (to analyse).** (a) Which CVE each Snyk id is, and from which 10.1.x release Apache fixed it (Apache still
-maintains the 10.1 line, whatever Spring Boot's support). (b) Whether overriding `tomcat.version` in the root
-`pom.xml` (with the CVE named, like `postgresql.version`) fixes it without Spring Boot 4, and whether Spring Boot
-3.5.x had any later release. (c) Whether our configuration is exposed: which Tomcat feature each CVE needs
-(WebSocket upgrade, alternate path names, a realm or container authentication) and whether a service uses it; a
-service without WebSocket could drop `tomcat-embed-websocket`. (d) Ignore in `.snyk` only what is not reachable,
-with that reason and an expiry. If Spring Boot 4 is the only fix, the remainder waits on #0-158, with the exposure
-recorded. Human-only: accepting a Critical CVE as a known risk is the owner's decision.
-
-**Acceptance criteria.**
-AC1. None of the six ids stays in the Snyk scan of `main` without a fix, or an ignore whose reason names what makes
-the CVE unreachable here and which expires.
-AC2. The four older Tomcat ignores in `.snyk` are rewritten on the same terms or removed.
-AC3. README "Infrastructure Hardening" records the outcome (the gap removed, or the accepted exposure).
-
----
-
 ### 0-158. Spring Boot 3.5 is out of open-source support; decide the move to 4.x
 
 **Type:** design · **Priority:** High · **Status:** Open — found with #0-157 (2026-10-20)
@@ -2413,7 +2372,7 @@ according to `.snyk` (to verify on spring.io). Snyk names the 4.x line (Spring B
 spring-kafka 4) as the only fix for a growing share of the findings: `spring-webmvc` `SNYK-JAVA-ORGSPRINGFRAMEWORK-19267098`
 (Critical, Arbitrary Code Injection), `spring-web` (XSS, cookie without `Secure`, two resource exhaustions),
 `spring-expression`, `spring-beans`, `spring-security-core` (Timing Attack) and `spring-security-crypto`
-(Predictable IV with CBC), `spring-kafka` `-19267472`, Tomcat (#0-157), Netty via Lettuce, lz4 and zookeeper via
+(Predictable IV with CBC), `spring-kafka` `-19267472`, Netty via Lettuce, lz4 and zookeeper via
 `spring-kafka-test`. Since June every such `.snyk` ignore says "tracked for the Spring Boot 4.x migration", but no
 item tracks it.
 
@@ -2422,9 +2381,87 @@ Jackson 3, spring-kafka 4 with kafka-clients 4, Hibernate 7, springdoc 3, Testco
 Boot 4. One parent POM means the services cannot move one at a time: decide one PR or steps (`shared` first,
 behind a branch), and what CI proves at each. Record the decision in an ADR.
 
+The migration also removes the root POM's `tomcat.version` override (#0-157), which keeps Tomcat 10.1 patched until
+then.
+
 **Acceptance criteria.**
 AC1. An ADR decides: the migration with its plan, or a deferral with its reason and a date to revisit.
 AC2. If migrating, the steps are items in this backlog, and the `.snyk` ignores citing "the 4.x migration" name them.
+
+---
+
+### 0-159. Security version overrides in the root POM are bumped and checked by hand
+
+**Type:** ci · **Priority:** Medium · **Status:** Open — found by the `/review` of #0-157 (2026-10-22)
+**Autopilot:** not-ready · **Risk:** medium · **Complexity:** low · **Depends on:** —
+
+**Problem.** The root `pom.xml` overrides versions the Spring Boot parent manages (`tomcat.version`,
+`postgresql.version`, `jackson-bom.version`, ...) to take CVE fixes. Two things nothing checks: (1) Renovate sees
+no dependency that uses `tomcat.version` (it only drives the parent's BOM), so a new Tomcat 10.1 release with a
+fix reaches us only when a person reads Apache's security page; `postgresql.version` was bumped by hand too (PR
+#305). (2) Nothing fails when an override is lower than what the parent manages, so a parent bump can be held back
+silently by a stale override (at the move to Spring Boot 4, #0-158, a leftover `tomcat.version` 10.1.x would force
+Tomcat 10.1 onto Boot 4).
+
+**Approach (to analyse).** (1) Whether Renovate's maven manager bumps these properties as they are, or a
+`customManagers` regex (a `<!-- renovate: depName=... -->` comment before the property, like the CI tools' pins,
+#0-147) is needed; limit Tomcat to the 10.1 line (`allowedVersions`). (2) A check in CI that every overridden
+property is at least the parent's managed version: `maven-enforcer-plugin` with a custom rule, or a script over
+`help:effective-pom` of the parent; consider it with #0-110 (Enforcer in the root POM).
+
+**Acceptance criteria.**
+AC1. A new Tomcat 10.1 or PostgreSQL JDBC release opens a Renovate PR for its property.
+AC2. A root POM property lower than the version the Spring Boot parent manages fails CI, with the property named.
+
+---
+
+### 0-160. What a reviewer could not verify is never checked
+
+**Type:** design · **Priority:** High · **Status:** Open — found in the `/review` of #0-157 (2026-10-22); owner's
+decision: C + D below, next after #0-157
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/agents/ (a new verifier agent),
+.claude/skills/review, review-procedure, ship-record, .claude/settings.autopilot.json, .claude/hooks/), rules
+(.ai/rules/review/_common.md), root (README.md "Infrastructure Hardening", docs/ai-factory.md, an ADR in
+.ai/decisions/)
+
+**Problem.** The review agents are read-only on purpose (`readonly-bash.sh`: git only, no Maven, no network), so
+every claim that depends on the build or on the outside goes to the verdict's `unverified` list
+(`_common.md`). Nothing reads it: in the autopilot `unverified` exists only in the verdict schema
+(`backlog-autopilot.js`), and neither the acceptance reviewer, the shipper nor the PR record sees it; in a manual
+`/review` only the session closes it, if it does. In the review of #0-157 all six reviewers marked the core of the
+change unverified (that Tomcat 10.1.61 exists, fixes the six CVEs and is resolved in every service): checked by the
+session, by `dependency:tree`, `verify` and Apache's security page, not by the pipeline. Reviewers also see only
+"the test gate passed", not what it produced.
+
+**Decided (owner, 2026-10-22).** Reviewers stay without Maven and network (running `mvn` runs the plugins a
+reviewed POM declares; a reviewer reads untrusted text, so a fetch could leak). Instead:
+- **D. The test gate's artifacts for the reviewers:** the gate writes what it ran and produced (modules, test
+  counts and failures, JaCoCo per module, `dependency:tree` of the affected modules) to a file under the run's work
+  directory; the review prompt names it and reviewers read it with Read.
+- **C. A verification stage after the panel:** a new agent receives only the panel's `unverified` items (never the
+  diff, so the change cannot steer it), closes the local ones from D's artifacts and the external ones with
+  WebFetch restricted to an allow-list of domains (to decide: tomcat.apache.org, security.snyk.io,
+  repo1.maven.org, nvd.nist.gov, github.com/advisories, docs.spring.io ...), and answers per item: verified (with
+  the source), refuted (becomes a blocking finding for the next round) or not verifiable (the item stops as
+  `NEEDS_HUMAN`, or the owner accepts it in the PR). The result goes into the PR's review record (`ship-record`);
+  the manual `/review` runs the same stage.
+
+**Approach (to analyse).** How the allow-list is enforced (permission rules `WebFetch(domain:...)` in the
+verifier's frontmatter/settings, or a PreToolUse hook; `settings.autopilot.json` denies WebFetch for everyone
+today), that the verifier has no Bash and no write outside its result, what an item it cannot classify does, and
+the cost (one agent per round, skipped when no item is unverified). An ADR records it.
+
+**Acceptance criteria.**
+AC1. Every reviewer of a round gets the test gate's artifacts for that exact HEAD.
+AC2. No `unverified` item of the final round reaches a PR without a verdict (verified with a source, refuted, or
+not verifiable), and the PR's review record lists them.
+AC3. A refuted item blocks like a blocking finding; a not verifiable one stops the item as `NEEDS_HUMAN` unless the
+owner accepts it.
+AC4. The verifier fetches only from the allow-list (a fetch outside it is refused, shown by a test of the hook or
+rule) and never receives the diff.
+AC5. README "Infrastructure Hardening" (AI factory) and `docs/ai-factory.md` describe the stage and its network
+access.
 
 ---
 

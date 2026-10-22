@@ -60,6 +60,12 @@
         <commons-compress.version>1.28.0</commons-compress.version>
         <!-- CVE-2026-42198 — fix in 42.7.11 -->
         <postgresql.version>42.7.12</postgresql.version>
+        <!-- Backlog #0-157: Spring Boot 3.5.16, the last 3.5 release, brings Tomcat 10.1.55; Apache still
+             patches the 10.1 line. 10.1.61 fixes CVE-2026-68525, -68569, -68763, -76183, -77791, -79677 (Snyk,
+             2026-10-20) and every later 10.1 CVE up to 2026-10-12 (HTTP/2, AJP, WebSocket). Drives
+             tomcat-embed-core, -el and -websocket. Nothing bumps it but a person: check
+             https://tomcat.apache.org/security-10.html; removed with the move to Spring Boot 4 (#0-158). -->
+        <tomcat.version>10.1.61</tomcat.version>
     </properties>
 
     <dependencyManagement>

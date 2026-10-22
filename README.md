@@ -533,6 +533,11 @@ where only the session-level hooks apply. Layers and their limits: docs/ai-facto
   source, `.env` or local configuration can reach an image. In CI the jar is the one Job 1's `verify` tested.
 - **No local secrets in a jar** (backlog #0-100): the root POM excludes `application-local.*` and
   `application-secrets.*` from every jar, `shared`'s included, and CI checks it with planted files (Job 1).
+- **Tomcat patched past Spring Boot's BOM** (backlog #0-157): Spring Boot 3.5 gets no more releases, but Apache
+  still patches Tomcat 10.1, so the root POM sets `tomcat.version` (10.1.61) for every service's embedded
+  Tomcat. No Tomcat CVE is ignored in `.snyk` or suppressed in `owasp-suppressions.xml`. Nothing bumps the
+  property automatically (#0-159): a person checks Apache's 10.1 security page, until the move to Spring Boot 4
+  (#0-158) removes it.
 - **Non-root, code not writable**: every image creates `appuser` and runs as `USER appuser`; the application's
   files are owned by root and not writable by that user, so the service cannot change its own code (until
   #0-141 the jar was owned by `appuser`).
@@ -869,12 +874,11 @@ Open items from the audit and earlier, most important first within each area. Ea
     allows them: backlog #0-79.
 - **GitHub and CI**
   - No static analysis has ever run: Snyk Code is not enabled and CodeQL is not set up: backlog #0-68.
-  - The Snyk dependency scan is red on every run, so a new finding changes nothing, and the Tomcat ignores in `.snyk`
-    rest on a false "all endpoints require JWT" claim: backlog #0-69.
-  - Tomcat 10.1.55, in every service, has unpatched Critical authorization-bypass CVEs (Snyk, 2026-10-20), not yet
-    analysed for exposure: backlog #0-157.
+  - The Snyk dependency scan is red on every run, so a new finding changes nothing: backlog #0-69.
   - Spring Boot 3.5 is out of open-source support, and the ignores in `.snyk` that wait for 4.x wait on a migration
     no one has decided: backlog #0-158.
+  - The root POM's security version overrides (`tomcat.version`, `postgresql.version`, ...) are bumped by hand, and
+    nothing fails when one is lower than what the Spring Boot parent manages: backlog #0-159.
   - No status check is required before merging to `main`: backlog #0-2.
   - Any Marketplace action is allowed to run (`allowed_actions: all`): backlog #0-62.
   - `diff-cover` is installed by version only, its package and dependencies unchecked: backlog #0-134.

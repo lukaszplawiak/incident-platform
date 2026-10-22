@@ -261,54 +261,9 @@
         <ghsaId>GHSA-39q2-94rc-95cp</ghsaId>
     </suppress>
 
-    <!-- ═══════════════════════════════════════════════════════════════════════
-         tomcat-embed-* — CVE-2026-41284, CVE-2026-41293, CVE-2026-42498,
-                          CVE-2026-43512, CVE-2026-43513, CVE-2026-43514,
-                          CVE-2026-43515
-         VERDICT: NO LONGER MATCHES (kept for traceability)
-
-         These suppressions were added while CVEs were reported against Tomcat
-         10.1.54. After the Spring Boot 3.5.15 upgrade they no longer match
-         anything ("Suppression Rule had zero matches" for all 7 CVEs).
-         Safe to remove at the next review if still zero matches.
-         ═══════════════════════════════════════════════════════════════════════ -->
-    <suppress until="2026-09-30Z">
-        <notes>
-            NO LONGER MATCHES as of 2026-06-13 (zero matches after Spring Boot
-            3.5.15 upgrade). Kept for traceability — safe to remove at next review.
-        </notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
-        <cve>CVE-2026-41284</cve>
-    </suppress>
-    <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
-        <cve>CVE-2026-41293</cve>
-    </suppress>
-    <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
-        <cve>CVE-2026-42498</cve>
-    </suppress>
-    <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
-        <cve>CVE-2026-43512</cve>
-    </suppress>
-    <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
-        <cve>CVE-2026-43513</cve>
-    </suppress>
-    <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
-        <cve>CVE-2026-43514</cve>
-    </suppress>
-    <suppress until="2026-09-30Z">
-        <notes>See tomcat-embed-* suppression note for CVE-2026-41284.</notes>
-        <packageUrl regex="true">^pkg:maven/org\.apache\.tomcat\.embed/tomcat\-embed\-.*$</packageUrl>
-        <cve>CVE-2026-43515</cve>
-    </suppress>
+    <!-- tomcat-embed-*: no suppressions (backlog #0-157). The seven left from Tomcat 10.1.54
+         (CVE-2026-41284 ... CVE-2026-43515) matched nothing since Spring Boot 3.5.15 and expired
+         2026-09-30; they were removed when the root pom.xml began setting tomcat.version. A new
+         Tomcat CVE is fixed there, not suppressed here. -->
 
 </suppressions>
