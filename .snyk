@@ -16,27 +16,11 @@ version: v1.25.0
 
 ignore:
 
-  # ── Tomcat (via Spring Boot 3.x) ──────────────────────────────────────────
-  # Fix requires upgrade to Spring Boot 4.0 (tomcat 11.x).
-  # Breaking major version change — not viable without full Spring Boot 4.x migration.
-  # Mitigated by: network-level access control, JWT authentication on all endpoints.
-
-  SNYK-JAVA-ORGAPACHETOMCATEMBED-16643259:
-    - '*':
-        reason: >
-          Tomcat CVE requires upgrade to Spring Boot 4.0 which is a breaking
-          major version change. Tracked for resolution during Spring Boot 4.x
-          migration. Application does not expose affected Tomcat internals
-          directly to untrusted user input. All endpoints require JWT auth.
-        expires: '2027-01-01T00:00:00.000Z'
-
-  SNYK-JAVA-ORGAPACHETOMCATEMBED-16691231:
-    - '*':
-        reason: >
-          Tomcat CVE requires upgrade to Spring Boot 4.0 which is a breaking
-          major version change. Tracked for resolution during Spring Boot 4.x
-          migration. All endpoints require JWT authentication.
-        expires: '2027-01-01T00:00:00.000Z'
+  # ── Tomcat: no ignores (backlog #0-157) ──────────────────────────────────
+  # The four Tomcat ignores (-16643259, -16691231, -17732890, -17733746) said only Spring Boot 4 fixes them
+  # and that "all endpoints require JWT" (false, and no mitigation: Tomcat parses a request before any
+  # Spring Security filter). Apache still patches the 10.1 line: the root pom.xml sets tomcat.version,
+  # which fixes them and the 2026-10-20 findings. A new Tomcat finding is fixed there, not ignored here.
 
   # ── Netty (via Spring Boot 3.x / Lettuce / Redis) ─────────────────────────
   # Fix requires upgrade to Spring Boot 4.0 (lettuce-core 6.x -> 7.x -> netty 4.2.x).
@@ -109,27 +93,6 @@ ignore:
         reason: >
           Fixed in kafka-clients 3.9.2 / 4.0.1. kafka.version updated to 3.9.1
           in pom.xml — partial fix only. Full fix requires spring-kafka 4.x migration.
-          Tracked for resolution during Spring Boot 4.x migration.
-        expires: '2027-01-01T00:00:00.000Z'
-
-  # ── Tomcat (new CVEs, July 2026) ───────────────────────────────────────────
-  # Fix requires upgrade to Spring Boot 4.0 (Tomcat 11.x).
-  # Spring Boot 3.5.x is EOL — no patch available on 3.x line.
-
-  SNYK-JAVA-ORGAPACHETOMCATEMBED-17732890:
-    - '*':
-        reason: >
-          Tomcat Improper Authentication CVE requires Spring Boot 4.0 (Tomcat 11.x).
-          Spring Boot 3.5.x reached EOL 2026-06-30 — no 3.x patch available.
-          Tracked for resolution during Spring Boot 4.x migration.
-          All endpoints require JWT authentication. No unauthenticated access.
-        expires: '2027-01-01T00:00:00.000Z'
-
-  SNYK-JAVA-ORGAPACHETOMCATEMBED-17733746:
-    - '*':
-        reason: >
-          Tomcat Error Condition CVE requires Spring Boot 4.0 (Tomcat 11.x).
-          Spring Boot 3.5.x reached EOL 2026-06-30 — no 3.x patch available.
           Tracked for resolution during Spring Boot 4.x migration.
         expires: '2027-01-01T00:00:00.000Z'
 

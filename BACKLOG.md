@@ -130,8 +130,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-153](#0-153-decide-which-paths-need-the-owners-review-before-auto-merge) | Decide which paths need the owner's review, before auto-merge | design | Medium | Open |
 | [0-155](#0-155-a-scan-that-cannot-run-on-main-alerts-no-one) | A scan that cannot run on `main` alerts no one | ci | Medium | Open |
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
-| [0-157](#0-157-tomcat-10155-has-unpatched-authorization-bypass-cves-in-every-service) | Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service | security | High | Open |
+| [0-157](#0-157-tomcat-10155-has-unpatched-authorization-bypass-cves-in-every-service) | Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service | security | High | In progress |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
+| [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 
 ---
 
@@ -1082,7 +1083,7 @@ dependency job is red on every push to `main` and every weekly run. A red job th
 new critical CVE would not change its status. OWASP Dependency-Check, by contrast, is green.
 
 The existing `.snyk` ignores are not a sound baseline either. The Tomcat entries (comment at `.snyk:22`, reasons at
-lines 30, 38 and 125) justify the risk with "All endpoints require JWT authentication. No unauthenticated access",
+lines 30, 38 and 125; all removed by #0-157) justify the risk with "All endpoints require JWT authentication. No unauthenticated access",
 which is false: login, health, Swagger (#0-73) and the Slack webhook are public, and ingestion-service takes API keys,
 not JWTs. It would not be a mitigation even if it were true, since a Tomcat CVE is reached at the HTTP layer, before
 any Spring Security filter runs. The same false claim was in `owasp-suppressions.xml`'s DOMPurify note, corrected
@@ -1095,7 +1096,7 @@ the Tomcat reasons on what actually limits exposure (which Tomcat feature the CV
 it), or drop the ignore where nothing does.
 
 **State on 2026-10-20 (run 39431317669, the first authenticated scan after #0-154).** 50–58 issues per project
-(eight projects). Tomcat is #0-157; what Snyk fixes only through Spring Boot 4 is #0-158. Fixed within the current
+(eight projects). Tomcat is #0-157 (fixed by a `tomcat.version` override, its four `.snyk` ignores removed); what Snyk fixes only through Spring Boot 4 is #0-158. Fixed within the current
 line, by a version override:
 
 | Dependency | Now | Fixed in | Issues |
@@ -2363,7 +2364,7 @@ AC3. README "Infrastructure Hardening" lists the control and drops the gap.
 
 ### 0-157. Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service
 
-**Type:** security · **Priority:** High · **Status:** Open — found in the Snyk scan of `main` after #0-154 (run
+**Type:** security · **Priority:** High · **Status:** In progress — found in the Snyk scan of `main` after #0-154 (run
 39431317669, 2026-10-20)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 
@@ -2395,6 +2396,19 @@ service without WebSocket could drop `tomcat-embed-websocket`. (d) Ignore in `.s
 with that reason and an expiry. If Spring Boot 4 is the only fix, the remainder waits on #0-158, with the exposure
 recorded. Human-only: accepting a Critical CVE as a known risk is the owner's decision.
 
+**Decided (owner, 2026-10-22): override `tomcat.version` to 10.1.61, ignore nothing.** (a) The six ids are
+CVE-2026-68525 (`-20302843`, FORM authentication, fixed 10.1.59), CVE-2026-76183 (`-20552494`, security constraints
+on WebSocket endpoints, 10.1.60), CVE-2026-68569 (`-20302889`, DataSourceRealm with CLIENT-CERT/SPNEGO, 10.1.59),
+CVE-2026-68763 (`-20304748`, HTTP/2, 10.1.59), CVE-2026-79677 (`-21246252`, WebSocket async write timeout, 10.1.60)
+and CVE-2026-77791 (`-21249759`, busy wait on WebSocket close, 10.1.59). The four older ignores are CVE-2026-41284
+(WebDAV) and CVE-2026-43512 (DIGEST), both fixed in 10.1.55 already, and CVE-2026-55955 (cluster EncryptInterceptor)
+and CVE-2026-53434 (FFM connector CRLs), fixed in 10.1.56. (b) Spring Boot 3.5.16 is the last 3.5 release, but
+Apache still patches 10.1 (10.1.61, 2026-10-12, on Maven Central), and `tomcat.version` drives core, el and
+websocket. (c) Not used here: Tomcat FORM/DIGEST authentication, realms, servlet security constraints, HTTP/2,
+WebDAV, clustering, the FFM connector; reached: the two WebSocket DoS in incident-service (STOMP). Exposure no longer
+matters once the version is fixed, so nothing is ignored (d). Nothing bumps the property automatically (Renovate
+sees no dependency that uses it); it goes with the move to Spring Boot 4 (#0-158).
+
 **Acceptance criteria.**
 AC1. None of the six ids stays in the Snyk scan of `main` without a fix, or an ignore whose reason names what makes
 the CVE unreachable here and which expires.
@@ -2413,7 +2427,7 @@ according to `.snyk` (to verify on spring.io). Snyk names the 4.x line (Spring B
 spring-kafka 4) as the only fix for a growing share of the findings: `spring-webmvc` `SNYK-JAVA-ORGSPRINGFRAMEWORK-19267098`
 (Critical, Arbitrary Code Injection), `spring-web` (XSS, cookie without `Secure`, two resource exhaustions),
 `spring-expression`, `spring-beans`, `spring-security-core` (Timing Attack) and `spring-security-crypto`
-(Predictable IV with CBC), `spring-kafka` `-19267472`, Tomcat (#0-157), Netty via Lettuce, lz4 and zookeeper via
+(Predictable IV with CBC), `spring-kafka` `-19267472`, Netty via Lettuce, lz4 and zookeeper via
 `spring-kafka-test`. Since June every such `.snyk` ignore says "tracked for the Spring Boot 4.x migration", but no
 item tracks it.
 
@@ -2422,9 +2436,37 @@ Jackson 3, spring-kafka 4 with kafka-clients 4, Hibernate 7, springdoc 3, Testco
 Boot 4. One parent POM means the services cannot move one at a time: decide one PR or steps (`shared` first,
 behind a branch), and what CI proves at each. Record the decision in an ADR.
 
+The migration also removes the root POM's `tomcat.version` override (#0-157), which keeps Tomcat 10.1 patched until
+then.
+
 **Acceptance criteria.**
 AC1. An ADR decides: the migration with its plan, or a deferral with its reason and a date to revisit.
 AC2. If migrating, the steps are items in this backlog, and the `.snyk` ignores citing "the 4.x migration" name them.
+
+---
+
+### 0-159. Security version overrides in the root POM are bumped and checked by hand
+
+**Type:** ci · **Priority:** Medium · **Status:** Open — found by the `/review` of #0-157 (2026-10-22)
+**Autopilot:** not-ready · **Risk:** medium · **Complexity:** low · **Depends on:** —
+
+**Problem.** The root `pom.xml` overrides versions the Spring Boot parent manages (`tomcat.version`,
+`postgresql.version`, `jackson-bom.version`, ...) to take CVE fixes. Two things nothing checks: (1) Renovate sees
+no dependency that uses `tomcat.version` (it only drives the parent's BOM), so a new Tomcat 10.1 release with a
+fix reaches us only when a person reads Apache's security page; `postgresql.version` was bumped by hand too (PR
+#305). (2) Nothing fails when an override is lower than what the parent manages, so a parent bump can be held back
+silently by a stale override (at the move to Spring Boot 4, #0-158, a leftover `tomcat.version` 10.1.x would force
+Tomcat 10.1 onto Boot 4).
+
+**Approach (to analyse).** (1) Whether Renovate's maven manager bumps these properties as they are, or a
+`customManagers` regex (a `<!-- renovate: depName=... -->` comment before the property, like the CI tools' pins,
+#0-147) is needed; limit Tomcat to the 10.1 line (`allowedVersions`). (2) A check in CI that every overridden
+property is at least the parent's managed version: `maven-enforcer-plugin` with a custom rule, or a script over
+`help:effective-pom` of the parent; consider it with #0-110 (Enforcer in the root POM).
+
+**Acceptance criteria.**
+AC1. A new Tomcat 10.1 or PostgreSQL JDBC release opens a Renovate PR for its property.
+AC2. A root POM property lower than the version the Spring Boot parent manages fails CI, with the property named.
 
 ---
 
