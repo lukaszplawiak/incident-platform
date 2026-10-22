@@ -85,8 +85,13 @@ import java.util.UUID;
  * into {@code 0} and so overwrote a recorded level (2 became 0). It is now
  * validated: it must be a JSON integer in {@code 1..MAX_ESCALATION_LEVEL}, and
  * anything else is a poison pill that goes to the dead-letter topic through
- * the catch below. Lowering a level on an out-of-order event is backlog #0-118
- * and is not handled here.
+ * the catch below.
+ *
+ * <h2>Fixed (backlog #0-118)</h2>
+ * A valid level that is not higher than the recorded one (a duplicate, or a
+ * lower level read late: a replayed dead letter, a reset offset) no longer
+ * lowers the incident's level: {@link Incident#recordEscalation(int)} ignores
+ * it, and the record is acknowledged as processed.
  */
 @Component
 public class IncidentEscalationEventConsumer {
@@ -210,15 +215,23 @@ public class IncidentEscalationEventConsumer {
         // Backlog #0-7: validated, not coerced; an invalid level is a poison pill.
         final int escalationLevel = extractEscalationLevel(event);
 
-        if (commandService.recordEscalationLevel(incidentId, tenantId, escalationLevel)) {
-            log.info("Escalation level recorded: incidentId={}, " +
+        // A switch expression, not a statement: an outcome added later is a
+        // compile error here, not a record acknowledged with no log line.
+        final Runnable logOutcome = switch (
+                commandService.recordEscalationLevel(incidentId, tenantId, escalationLevel)) {
+            case RAISED -> () -> log.info("Escalation level recorded: incidentId={}, " +
                             "level={}, tenant={}",
                     incidentId, escalationLevel, tenantId);
-        } else {
-            log.warn("Escalated incident not found locally — " +
+            // Backlog #0-118: a duplicate, or a lower level read late (a
+            // replayed dead letter); processed, so acknowledged, not a failure.
+            case NOT_HIGHER -> () -> log.info("Escalation level not higher than the recorded one — " +
+                            "ignored: incidentId={}, level={}, tenant={}",
+                    incidentId, escalationLevel, tenantId);
+            case INCIDENT_NOT_FOUND -> () -> log.warn("Escalated incident not found locally — " +
                             "skipping: incidentId={}, tenant={}",
                     incidentId, tenantId);
-        }
+        };
+        logOutcome.run();
     }
 
     private int extractEscalationLevel(JsonNode event) {

@@ -1943,8 +1943,9 @@ There is no `make` target for auth-service or oncall-service — start those wit
 | Test class | What it covers |
 |---|---|
 | `IncidentFsmTest` | 25 parameterized cases — all allowed and forbidden state transitions |
-| `IncidentCommandServiceTest` | Deduplication, severity escalation, optimistic lock, FSM validation; the escalation level recorded in a transaction of its own (backlog #0-96) |
-| `IncidentEscalationLevelIntegrationTest` (incident-service, Postgres) | `recordEscalationLevel` commits before it returns, a REST change committed between its read and commit is thrown from the call, another tenant's incident is untouched (backlog #0-96) |
+| `IncidentTest` | `recordEscalation` raises the level and moves `updatedAt`; the same or a lower level read late changes neither (backlog #0-118) |
+| `IncidentCommandServiceTest` | Deduplication, severity escalation, optimistic lock, FSM validation; the escalation level recorded in a transaction of its own (backlog #0-96), a level not higher is not saved (backlog #0-118) |
+| `IncidentEscalationLevelIntegrationTest` (incident-service, Postgres) | `recordEscalationLevel` commits before it returns, a REST change committed between its read and commit is thrown from the call, another tenant's incident is untouched (backlog #0-96), a lower level read late neither lowers it nor writes the row (backlog #0-118) |
 | `AlertIngestionServiceTest` (ingestion-service) | Dead-letter copies awaited together from the wait, none started after a failed one, the payload copied once, dedup keys released when a copy is not stored and kept when it is (backlog #0-96) |
 | `AlertIngestionControllerSecurityTest` (ingestion-service) | Roles per endpoint; 503 with `Retry-After: 10` and `INGESTION_UNAVAILABLE` when a dead-letter copy is not stored (backlog #0-96) |
 | `IncidentQueryServiceTest` | Filter routing (Specification vs simple query), tenant scoping |
