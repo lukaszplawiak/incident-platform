@@ -133,6 +133,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-157](#0-157-tomcat-10155-has-unpatched-authorization-bypass-cves-in-every-service) | Tomcat 10.1.55 has unpatched authorization-bypass CVEs in every service | security | High | In progress |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
+| [0-160](#0-160-what-a-reviewer-could-not-verify-is-never-checked) | What a reviewer could not verify is never checked | design | High | Open |
 
 ---
 
@@ -2467,6 +2468,56 @@ property is at least the parent's managed version: `maven-enforcer-plugin` with 
 **Acceptance criteria.**
 AC1. A new Tomcat 10.1 or PostgreSQL JDBC release opens a Renovate PR for its property.
 AC2. A root POM property lower than the version the Spring Boot parent manages fails CI, with the property named.
+
+---
+
+### 0-160. What a reviewer could not verify is never checked
+
+**Type:** design · **Priority:** High · **Status:** Open — found in the `/review` of #0-157 (2026-10-22); owner's
+decision: C + D below, next after #0-157
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/agents/ (a new verifier agent),
+.claude/skills/review, review-procedure, ship-record, .claude/settings.autopilot.json, .claude/hooks/), rules
+(.ai/rules/review/_common.md), root (README.md "Infrastructure Hardening", docs/ai-factory.md, an ADR in
+.ai/decisions/)
+
+**Problem.** The review agents are read-only on purpose (`readonly-bash.sh`: git only, no Maven, no network), so
+every claim that depends on the build or on the outside goes to the verdict's `unverified` list
+(`_common.md`). Nothing reads it: in the autopilot `unverified` exists only in the verdict schema
+(`backlog-autopilot.js`), and neither the acceptance reviewer, the shipper nor the PR record sees it; in a manual
+`/review` only the session closes it, if it does. In the review of #0-157 all six reviewers marked the core of the
+change unverified (that Tomcat 10.1.61 exists, fixes the six CVEs and is resolved in every service): checked by the
+session, by `dependency:tree`, `verify` and Apache's security page, not by the pipeline. Reviewers also see only
+"the test gate passed", not what it produced.
+
+**Decided (owner, 2026-10-22).** Reviewers stay without Maven and network (running `mvn` runs the plugins a
+reviewed POM declares; a reviewer reads untrusted text, so a fetch could leak). Instead:
+- **D. The test gate's artifacts for the reviewers:** the gate writes what it ran and produced (modules, test
+  counts and failures, JaCoCo per module, `dependency:tree` of the affected modules) to a file under the run's work
+  directory; the review prompt names it and reviewers read it with Read.
+- **C. A verification stage after the panel:** a new agent receives only the panel's `unverified` items (never the
+  diff, so the change cannot steer it), closes the local ones from D's artifacts and the external ones with
+  WebFetch restricted to an allow-list of domains (to decide: tomcat.apache.org, security.snyk.io,
+  repo1.maven.org, nvd.nist.gov, github.com/advisories, docs.spring.io ...), and answers per item: verified (with
+  the source), refuted (becomes a blocking finding for the next round) or not verifiable (the item stops as
+  `NEEDS_HUMAN`, or the owner accepts it in the PR). The result goes into the PR's review record (`ship-record`);
+  the manual `/review` runs the same stage.
+
+**Approach (to analyse).** How the allow-list is enforced (permission rules `WebFetch(domain:...)` in the
+verifier's frontmatter/settings, or a PreToolUse hook; `settings.autopilot.json` denies WebFetch for everyone
+today), that the verifier has no Bash and no write outside its result, what an item it cannot classify does, and
+the cost (one agent per round, skipped when no item is unverified). An ADR records it.
+
+**Acceptance criteria.**
+AC1. Every reviewer of a round gets the test gate's artifacts for that exact HEAD.
+AC2. No `unverified` item of the final round reaches a PR without a verdict (verified with a source, refuted, or
+not verifiable), and the PR's review record lists them.
+AC3. A refuted item blocks like a blocking finding; a not verifiable one stops the item as `NEEDS_HUMAN` unless the
+owner accepts it.
+AC4. The verifier fetches only from the allow-list (a fetch outside it is refused, shown by a test of the hook or
+rule) and never receives the diff.
+AC5. README "Infrastructure Hardening" (AI factory) and `docs/ai-factory.md` describe the stage and its network
+access.
 
 ---
 
