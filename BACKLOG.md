@@ -132,7 +132,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-160](#0-160-what-a-reviewer-could-not-verify-is-never-checked) | What a reviewer could not verify is never checked | design | High | Open |
+| [0-160](#0-160-what-a-reviewer-could-not-verify-is-never-checked) | What a reviewer could not verify is never checked | design | High | In progress |
 
 ---
 
@@ -2417,12 +2417,13 @@ AC2. A root POM property lower than the version the Spring Boot parent manages f
 
 ### 0-160. What a reviewer could not verify is never checked
 
-**Type:** design · **Priority:** High · **Status:** Open — found in the `/review` of #0-157 (2026-10-22); owner's
-decision: C + D below, next after #0-157
+**Type:** design · **Priority:** High · **Status:** In progress — found in the `/review` of #0-157 (2026-10-22); owner's
+decision: C + D below; in two PRs (2026-10-23): D first, then C
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/agents/ (a new verifier agent),
-.claude/skills/review, review-procedure, ship-record, .claude/settings.autopilot.json, .claude/hooks/), rules
-(.ai/rules/review/_common.md), root (README.md "Infrastructure Hardening", docs/ai-factory.md, an ADR in
+.claude/skills/review, review-procedure, ship-record, .claude/settings.autopilot.json, .claude/settings.json,
+.claude/hooks/, scripts/factory/run-tests.sh), ci (.github/workflows/factory-guards.yml, .github/scripts/ tests and a
+structural check), .devcontainer/init-firewall.sh, rules (.ai/rules/review/_common.md), root (README.md "Infrastructure Hardening", docs/ai-factory.md, an ADR in
 .ai/decisions/)
 
 **Problem.** The review agents are read-only on purpose (`readonly-bash.sh`: git only, no Maven, no network), so
@@ -2451,6 +2452,34 @@ reviewed POM declares; a reviewer reads untrusted text, so a fetch could leak). 
 verifier's frontmatter/settings, or a PreToolUse hook; `settings.autopilot.json` denies WebFetch for everyone
 today), that the verifier has no Bash and no write outside its result, what an item it cannot classify does, and
 the cost (one agent per round, skipped when no item is unverified). An ADR records it.
+
+**Decided (owner, 2026-10-23, after the analysis).** The Approach above assumed rules could be set per agent;
+Claude Code's documentation says otherwise, and the decisions follow from it:
+- **Enforcement — a session-level hook keyed on the agent (E2).** A bare `deny: WebFetch` removes the tool for the
+  whole session, subagents included, and no allow rule or hook overrides it; a subagent has no permission rules
+  of its own (only `tools`, `disallowedTools`, `permissionMode`, `hooks`); frontmatter hooks do not run in
+  `claude -p`; session-level hooks do run in subagents and their input carries `agent_type`. So the bare deny
+  goes from `settings.autopilot.json`, and a PreToolUse hook on `WebFetch` lets only the verifier through, only
+  to `https` URLs under an allow-listed host and path prefix, without a query string (a `domain:` rule matches
+  the host only, so `github.com/search?q=<data>` would pass it; and in `dontAsk` WebFetch's built-in preapproved
+  documentation domains need no approval). Rejected: rules only (E1: host-only, every agent, preapproved
+  domains); a separate `claude -p` process for the verifier with its own settings (E3: keeps the bare deny, but
+  the verdicts live in the workflow's memory and would need a new path to a file, a nested authenticated
+  `claude`, and a cost cap outside the agent budget) — the fallback if the first step below fails. The weaker
+  layer (a hook instead of an absent tool) is named in the ADR and in README "Infrastructure Hardening".
+- **First step of C:** confirm that `agent_type` reaches the hook for an agent the `Workflow` runtime spawns (the
+  documentation says so for subagents; Workflow is another path). If it does not, E3.
+- **The manual `/review` runs the gate too:** `run-tests.sh --working-tree` tests the uncommitted changes (the
+  modules of the committed and the uncommitted files), records `dirty: true`, and is refused while an autopilot
+  run holds the lock.
+- **Allow-list, minimal:** `api.osv.dev/v1/`, `osv.dev/vulnerability/` (OSV aggregates GHSA, NVD and vendor
+  advisories with fixed-version ranges), `github.com/advisories/`, `repo1.maven.org/maven2/`, and vendor pages
+  by path prefix (`tomcat.apache.org/security-`, `spring.io/security/`). Every host beyond Maven Central and
+  GitHub is also opened in the devcontainer firewall, for the whole container: that is why the list is short.
+- **D's artifact** (`.ai/runs/<item>/gate-r<round>-<attempt>.json`; `.ai/runs/manual/gate-r1.json` for `/review`): the HEAD, per module the counts of surefire's
+  `TEST-*.xml` and the line coverage of `jacoco.csv`, only from reports this run wrote (verify does not clean),
+  and a `dependency:tree` file; a report the gate cannot read stops it, since missing numbers would read as
+  "0 tests". The acceptance reviewer gets the path too.
 
 **Acceptance criteria.**
 AC1. Every reviewer of a round gets the test gate's artifacts for that exact HEAD.

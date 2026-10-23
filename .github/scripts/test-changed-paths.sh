@@ -109,6 +109,14 @@ coverage_case "coverage narrowed by an include" true "$(jacoco_pom 0.8.12 verify
 coverage_case "inherited rule wiped by combine.self" true "$(jacoco_pom 0.8.12 verify 0.60 | sed 's#</configuration>#\n<rules combine.self="override"/>\n</configuration>#')"
 coverage_case "jacoco version bump only" false "$(jacoco_pom 0.8.13 verify 0.60)"
 
+echo "changed-paths: the modules the test gate builds (modules_of / needs_all_modules, _common.sh)"
+case_ "a service change builds that module only" '.modules == ["notification-service"] and .allModules == false' -- \
+      'notification-service/src/main/java/n/B.java=class B {}'
+case_ "a change to shared builds every module" '(.modules | index("shared")) and .allModules == true' -- 'shared/src/main/java/s/S.java=class S {}'
+case_ "a change to service-parent builds every module" '.allModules == true' -- 'service-parent/pom.xml=<project/>'
+case_ "a change to the root POM builds every module" '.modules == [] and .allModules == true' -- 'pom.xml=<project/>'
+case_ "a nested pom.xml is not the root POM" '.allModules == false' -- 'docs/pom.xml=<project/>'
+
 echo "changed-paths: the protected-path list (.ai/rules/protected-paths.md)"
 case_ "audit decisions are human-owned" '.needsHuman and (.protectedTouched | index(".ai/audit/decisions.md"))' -- \
       '.ai/audit/decisions.md=decided'

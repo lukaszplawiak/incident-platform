@@ -124,7 +124,8 @@ const IMPL = {
 const TESTS = {
   type: 'object', required: ['status'],
   properties: { status: { type: 'string', enum: ['pass', 'fixable', 'stop'] }, exitCode: { type: 'number' },
-    modules: { type: 'string' }, log: { type: 'string' }, head: { type: 'string' }, summary: { type: 'array', items: { type: 'string' } } },
+    modules: { type: 'string' }, log: { type: 'string' }, head: { type: 'string' }, artifact: { type: ['string', 'null'] },
+    summary: { type: 'array', items: { type: 'string' } } },
 }
 const PATHS = {
   type: 'object', required: ['needsHuman', 'files', 'areas', 'ruleFiles'],
@@ -256,8 +257,10 @@ async function testGate(item, round) {
     if (t.status === 'stop') return { ok: false, reason: `test gate stopped (log ${t.log}): ${(t.summary ?? []).slice(-3).join(' | ')}` }
     const head = await ops('changed-paths.sh', [base.ref], PATHS, 'head check')
     if (!head || !t.head || t.head !== head.head) return { ok: false, reason: `the tested commit (${t.head}) is not the branch HEAD (${head?.head}): something changed the tree during the gate` }
-    record.tests.push({ round, attempt, status: t.status, modules: t.modules })
-    if (t.status === 'pass') return { ok: true, head: t.head }
+    record.tests.push({ round, attempt, status: t.status, modules: t.modules, artifact: t.artifact ?? null })
+    // A pass without its artifact would send the reviewers back to "the gate passed" (backlog #0-160).
+    if (t.status === 'pass' && !t.artifact) return { ok: false, reason: `the test gate passed without its artifact (log ${t.log})` }
+    if (t.status === 'pass') return { ok: true, head: t.head, artifact: t.artifact }
     if (attempt === MAX_TEST_FIXES) break
     const fix = await as(IMPL_TYPE, [
       `Mode: fix-tests. Item ${item.itemId}, branch ${item.branch}, round ${round}.`,
@@ -288,12 +291,13 @@ async function pathGate(previousSha) {
   return { ok: true, paths: p }
 }
 
-async function reviewRound(item, round, dimensions, mergeBase, previousSha, previous) {
+async function reviewRound(item, round, dimensions, mergeBase, previousSha, previous, gateArtifact) {
   const answers = await runAll(dimensions.map((dim) => () => as(`review-${dim}`, [
     `Autopilot review. Item ${item.itemId} ("${item.title}"), branch ${item.branch}.`,
     `mergeBase: ${mergeBase}. round: ${round}.`,
     round > 1 ? `previousRoundSha: ${previousSha}. Your blocking findings of the previous round: ${JSON.stringify(previous[dim] ?? [])}` : '',
-    `The test gate passed for this exact HEAD (./mvnw verify, affected modules, JaCoCo check).`,
+    // The gate's artifact, not only its verdict (backlog #0-160): tests, coverage and dependency tree of this HEAD.
+    `The test gate passed (./mvnw verify, affected modules, JaCoCo check). Its artifact: ${gateArtifact} — read it, check its head equals \`git rev-parse HEAD\`, and use its numbers and dependency tree instead of marking them unverified.`,
     `Acceptance criteria of the item:\n${(item.acceptanceCriteria ?? []).join('\n')}`,
     `Answer with the verdict JSON only.`,
   ].filter(Boolean).join('\n'), { schema: VERDICT, label: `${dim} r${round}` })))
@@ -426,6 +430,7 @@ let mergeBase = null
 let dimensions = null
 let approved = false
 let lastPaths = null          // the path gate's view of the last reviewed HEAD
+let lastGate = null           // the test gate of the last reviewed HEAD (its artifact goes to acceptance)
 
 for (let round = 1; round <= MAX_ROUNDS; round++) {
   // Path gate first: a plugin or build change on the branch must be flagged before `mvn verify` runs it.
@@ -447,7 +452,8 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
   }
 
   lastHead = head
-  const verdicts = await reviewRound(item, round, dimensions, mergeBase, previousSha, previous)
+  lastGate = gate
+  const verdicts = await reviewRound(item, round, dimensions, mergeBase, previousSha, previous, gate.artifact)
   if (verdicts.some((v) => !valid(v))) return stopItem(item, `a reviewer returned no valid verdict in round ${round} (fail closed)`)
   verdicts.forEach((v) => {
     record.nonBlocking.push(...(v.nonBlocking ?? []).map((f) => ({ dimension: v.dimension, ...f })))
@@ -486,7 +492,8 @@ if (!approved) return stopItem(item, `review did not converge in ${MAX_ROUNDS} r
 enterPhase('Acceptance')
 let acc = await as('acceptance-reviewer', [
   `Autopilot acceptance. Item ${item.itemId} ("${item.title}"), branch ${item.branch}, mergeBase ${mergeBase}, base ref ${base.ref}.`,
-  `Risk: ${item.risk}. Answer with the acceptance JSON only.`,
+  `Risk: ${item.risk}. The test gate's artifact of this HEAD: ${lastGate?.artifact}.`,
+  `Answer with the acceptance JSON only.`,
 ].join('\n'), { schema: ACCEPT })
 if (!acc) return stopItem(item, 'acceptance-reviewer gave no answer')
 
@@ -504,9 +511,10 @@ if (acc.verdict === 'REJECT') {
   // The fix changed code after the panel approved: every reviewer of round 1 sees that delta once,
   // under round-3 rules (only correctness and security can still block).
   const round1 = record.rounds[0]?.verdicts?.map((v) => v.dimension) ?? PANEL_ALWAYS
-  const delta = await reviewRound(item, 3, round1, mergeBase, lastHead, {})
+  const delta = await reviewRound(item, 3, round1, mergeBase, lastHead, {}, gate.artifact)
+  lastGate = gate
   if (delta.some((v) => !valid(v) || v.verdict !== 'APPROVE')) return stopItem(item, 'the acceptance fix did not pass a final review round')
-  acc = await as('acceptance-reviewer', `Autopilot acceptance, second and last time. Item ${item.itemId}, branch ${item.branch}, mergeBase ${mergeBase}. Answer with the acceptance JSON only.`, { schema: ACCEPT })
+  acc = await as('acceptance-reviewer', `Autopilot acceptance, second and last time. Item ${item.itemId}, branch ${item.branch}, mergeBase ${mergeBase}. The test gate's artifact of this HEAD: ${lastGate.artifact}. Answer with the acceptance JSON only.`, { schema: ACCEPT })
   if (!acc || acc.verdict === 'REJECT') return stopItem(item, 'acceptance rejected twice')
 }
 record.acceptance = acc

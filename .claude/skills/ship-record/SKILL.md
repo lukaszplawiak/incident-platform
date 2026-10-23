@@ -22,7 +22,7 @@ Backlog: #<item> — <title>. Autopilot run <runId>. Mode: <ship | shadow | risk
 
 ## Review
 <one line per dimension: verdict per round, e.g. "security: CHANGES_REQUESTED (r1) → APPROVE (r2)">
-Rounds: <n>. Tests: <PASS, modules, log path is local-only>.
+Rounds: <n>. Tests: <PASS, modules, the totals of the last gate's artifact (`tests`/`failures`/`skipped`, read from `record.tests[].artifact`); the log and artifact paths are local-only>.
 Scope: <`scope.category`> — Touches <`scope.touches`> · plan <`scope.plan`> · diff <`scope.actual`>
 <· outside the plan: `scope.outsidePlan`, if any>. A measurement for the audit, not a verdict.
 Picked: <`source` from the record: queue row N | follow-up of #P | priority | manual>. Implementer:

@@ -70,8 +70,8 @@ pom_supply=$(git diff "$mb"...HEAD -- '*pom.xml' | grep -E '^\+.*<(plugin|reposi
 deleted_tests=$(git diff --no-renames --name-only --diff-filter=D "$mb"...HEAD | grep -E '/src/test/' || true)
 disabled_added=$(git diff "$mb"...HEAD -- '*.java' | grep -cE '^\+.*@Disabled' || true)
 docs=$(match '(\.md$|/src/main/resources/application[^/]*\.ya?ml$)')
-mods=$(printf '%s\n' "$files" | cut -d/ -f1 | sort -u | grep -E '^(shared|service-parent|[a-z]+-service)$' || true)
-root_pom=$(match '^pom\.xml$')
+mods=$(modules_of "$files")
+all_modules=false; needs_all_modules "$files" && all_modules=true
 # Areas: Maven modules by their directory; the rest by path. Process files (.ai/ except context/, the
 # backlog) are not part of an item's reach.
 areas=$(printf '%s\n' "$files" | sed '/^$/d' | awk -F/ '
@@ -106,7 +106,7 @@ jq -n --argjson files "$(json_list "$files")" --argjson protected "$(json_list "
       --argjson migrations "$(json_list "$migrations")" --argjson editedApplied "$(json_list "$edited_applied")" \
       --arg entities "$entities" --argjson k8s "$(json_list "$k8s")" --arg pomSupply "$pom_supply" \
       --argjson deletedTests "$(json_list "$deleted_tests")" --argjson disabledAdded "${disabled_added:-0}" \
-      --argjson docs "$(json_list "$docs")" --argjson modules "$(json_list "$mods")" --arg rootPom "$root_pom" --arg readyFlag "$ready_flag" \
+      --argjson docs "$(json_list "$docs")" --argjson modules "$(json_list "$mods")" --argjson allModules "$all_modules" --arg readyFlag "$ready_flag" \
       --argjson buildConfig "$(json_list "$build_config")" --argjson claudeMd "$claude_md" \
       --argjson delta "$delta" --arg base "$base" --arg mb "$mb" --arg head "$(git rev-parse HEAD)" \
       --argjson areas "$(json_list "$areas")" --argjson ruleFiles "$(json_list "$rule_files")" '
@@ -117,7 +117,7 @@ jq -n --argjson files "$(json_list "$files")" --argjson protected "$(json_list "
   editedAppliedMigrations:$editedApplied,
   k8sOrBuildTouched:(($k8s|length)>0),
   pomSupplyChainChange:(($pomSupply|length)>0), pomSupplyChainLines:$pomSupply,
-  allModules:(($rootPom|length)>0 or ($modules|index("shared"))!=null or ($modules|index("service-parent"))!=null),
+  allModules:$allModules,
   deletedTests:$deletedTests, disabledTestsAdded:$disabledAdded,
   docsTouched:(($docs|length)>0), readyFlagAdded:(($readyFlag|length)>0),
   buildConfigChanged:$buildConfig, claudeMdOutsideBlocks:$claudeMd,

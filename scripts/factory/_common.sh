@@ -33,6 +33,16 @@ state_init() {
     fi
 }
 
+# The Maven modules a list of files reaches (one path per line), and whether it reaches all of them. One
+# rule for both gates — changed-paths.sh on the branch's commits, run-tests.sh --working-tree also on the
+# uncommitted files — so the manual /review and the autopilot build the same modules for the same change.
+# modules_of <files> — the modules, one per line, by top-level directory
+modules_of() { printf '%s\n' "$1" | cut -d/ -f1 | sort -u | grep -E '^(shared|service-parent|[a-z]+-service)$' || true; }
+# needs_all_modules <files> — true when they change what every module builds: the root POM, shared or
+# service-parent (CLAUDE.md: changing shared changes all 7 services). A here-string, not a pipe into
+# `grep -q`: under pipefail an early match would SIGPIPE the printf and read as false.
+needs_all_modules() { grep -qE '^(pom\.xml|(shared|service-parent)/.*)$' <<<"$1"; }
+
 # is_int <value> — true for a non-negative integer
 is_int() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
