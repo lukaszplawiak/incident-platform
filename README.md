@@ -458,7 +458,9 @@ security boundary, so every rule that matters is also enforced outside the model
   #477; backlog #0-122). Follow-ups an agent proposes enter as `proposed` and run only after the owner's
   `/ready`.
 - **Skipping verification is refused** in autopilot sessions (`guard-tests.sh`: `-DskipTests`, `--no-verify`,
-  `-fn`, `exec:` goals, another `settings.xml`, …), the test gate tests the committed HEAD of a clean tree with
+  `-fn`, `exec:` goals, another `settings.xml`, …), the test gate tests the committed HEAD of a clean tree (its
+  `--working-tree` mode, which the manual `/review` uses on uncommitted changes, is refused while an autopilot
+  run holds the lock) with
   its own Maven settings (`scripts/factory/maven-settings.xml`, no `~/.mavenrc`, no `MAVEN_OPTS`: nothing an
   agent's code can write in the home directory decides what runs), the file tools of an autopilot session
   write only inside the repository (`guard-write-in-repo.sh`), and applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`).

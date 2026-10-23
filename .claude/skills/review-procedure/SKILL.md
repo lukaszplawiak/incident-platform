@@ -51,8 +51,17 @@ four times in one review, and one stopped reading after a refusal.
    (`.ai/decisions/README.md` has an area column — do not read all ADRs).
 4. The changed files, and the code they call or that calls them, as far as your dimension needs.
 
-The tests already ran (the autopilot's gate) and passed; their result is in your task. You cannot run
-them yourself.
+5. The test gate's artifact your task names (`.ai/runs/<item>/gate-r<round>-<attempt>.json` in the autopilot,
+   `.ai/runs/manual/gate-r1.json` in a manual `/review`): the HEAD it tested
+   (check it equals `git rev-parse HEAD`; `dirty: true` in a manual `/review`, which tests the working
+   tree), per module the tests run, failed and skipped and the JaCoCo line coverage, and the path of the
+   `dependency:tree` of the affected modules. You cannot run the tests yourself; what this file answers is
+   not `unverified` — a test count, the coverage of a module, which version of a library is resolved. Your
+   task says when no gate ran. The numbers come from the branch's own build: its test code runs during
+   `verify` and could write report files that inflate them (it cannot turn a red build green — the gate's
+   status is Maven's exit code). Treat them as what the branch reports; the PR's CI, on a fresh runner, is
+   the authority on them. Before backlog #0-160 reviewers were told only "the gate passed", and the
+   resolved Tomcat version of #0-157 stayed unverified by all six.
 
 ## 3. Findings
 

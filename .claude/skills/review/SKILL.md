@@ -54,13 +54,34 @@ If `4` or `5` was explicitly typed but its check finds no match, note it as skip
 
 **Final set = (reviewers from Step 1) ∪ (review-migration and/or review-k8s, whichever gates matched).**
 
-## Step 3: Dispatch the final set
+## Step 3: Run the test gate on the working tree
+
+Run `scripts/factory/run-tests.sh --working-tree manual 1` — the autopilot's gate (`./mvnw verify` of the
+affected modules), on the uncommitted changes. It prints JSON; on `pass` its `artifact` is
+`.ai/runs/manual/gate-r1.json`: the tested HEAD, per module the tests and the JaCoCo line coverage, and the
+`dependency:tree` file. The reviewers have no Maven and no network, so this file is how they check a claim
+about a test, the coverage or a resolved version instead of marking it unverified (backlog #0-160).
+
+- `pass` → go on, and give the artifact's path to every reviewer (Step 4).
+- `fixable` → show its `summary` and stop: the change does not build or a test fails, and a reviewer never
+  judges code that does not build. Say which modules and the log path.
+- `stop` → show the reason (Docker not running, a report that could not be read, the build changed the
+  tree) and ask the owner whether to fix that first or to run the panel without the gate; without it, tell
+  every reviewer "no test gate ran" instead of naming an artifact.
+
+It runs every time, for the whole set: one `verify` costs minutes, a review built on "unverified" costs a
+round. The gate runs the change's build and tests — its test code and POM plugins — on this machine, before
+any reviewer has read them, so it is not in `allowed-tools`: Claude Code asks the owner for every run, and on
+code the owner did not write (a bot's branch checked out) that prompt is the moment to read it first.
+
+## Step 4: Dispatch the final set
 
 Invoke every reviewer in the final set in the same turn, so they run in parallel. Tell each one: "Manual
-review of the uncommitted changes (`git diff HEAD`); round 1; write the readable report and end with the
-verdict JSON." Don't summarize the diff for them — they read it themselves.
+review of the uncommitted changes (`git diff HEAD`); round 1; the test gate passed on this working tree, its
+artifact: <path> (read it); write the readable report and end with the verdict JSON." Don't summarize the
+diff for them — they read it themselves.
 
-## Step 4: Report results
+## Step 5: Report results
 
 Present each reviewer's findings under its own heading (`## General review`, `## Security review`,
 `## Performance review`, `## Migration review`, `## Kubernetes/build review`, `## Docs review`,

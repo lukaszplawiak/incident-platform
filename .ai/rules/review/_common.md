@@ -111,10 +111,16 @@ Your tools are Read, and Bash for read-only git (`diff`, `log`, `show`, `status`
 The hook allows only its listed options (`-n -i -w -l -L -c -h -H -E -F -P -v -o -e -A/-B/-C`, their long
 names, `--count`, `--name-only`…, written out in full: git's abbreviations are refused), no `$`, and no
 unquoted `*`/`?`/`[` before `--` — quote a regex pattern, put paths after `--`.
-the Grep and Glob tools your definition names do not exist in every Claude Code version, and a review that
+The Grep and Glob tools your definition names do not exist in every Claude Code version, and a review that
 cannot find the other uses of what the diff changes is guessing. `ls-files` lists files by pattern. You have no
 network, no `gh` or GitHub API, no `git ls-remote`, no interpreter (python, ruby, awk, jq) and no Maven,
-Docker or test runner. The autopilot runs the tests before you are called, and gives you the result.
+Docker or test runner. The test gate runs the tests before you are called (the autopilot's on the commit,
+the manual `/review`'s on the working tree), and your task names its artifact
+(`.ai/runs/<item>/gate-r<round>-<attempt>.json`, or `.ai/runs/manual/gate-r1.json`): the tested HEAD — check
+it equals `git rev-parse HEAD` — per module the tests run, failed and skipped, the JaCoCo line coverage, and
+the `dependency:tree` file. Read it: a test count, a coverage or a resolved version it shows is not
+`unverified`. Its numbers come from the branch's own build (test code can inflate them; it cannot turn a red
+build green), so the PR's CI stays the authority on them (backlog #0-160).
 In both review rounds of backlog #0-60, three of four reviewers reported runs of exactly these tools, so:
 
 - **Never report a check you could not run.** Don't write "I ran", "verified upstream" or "the test

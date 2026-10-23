@@ -14,6 +14,8 @@ next-item.sh (code: ready follow-up → approved queue .ai/plan/queue.md, strict
                                                                                  build config, deleted/disabled tests, ready flag,
                                                                                  CLAUDE.md outside its blocks → BLOCKED
   → test gate (scripts/factory/run-tests.sh: ./mvnw verify of HEAD, clean tree)  fixable → implementer (≤2) · env failure → BLOCKED
+       pass → artifact .ai/runs/<item>/gate-r<round>-<attempt>.json (HEAD, tests and JaCoCo per module, dependency:tree)
+       for the reviewers and the acceptance reviewer; an unreadable report → BLOCKED (#0-160)
   → review panel, in parallel: general · architecture · security · performance · docs (+ migration, k8s when touched)
        invalid verdict → BLOCKED (fail closed) · NEEDS_HUMAN → BLOCKED · upheld dispute → BLOCKED
        blocking → implementer → test gate → the reviewers that blocked + security + general, on the delta
@@ -32,7 +34,7 @@ from it.
 | Phase | What | Done when |
 |---|---|---|
 | 0 | Prepare items: `/ready #0-N` per item (numbered acceptance criteria, risk, complexity, `ready`) | ~10 items `ready` on `main` |
-| 1 | Use the panel by hand: `/review` (same agents and rules as the autopilot) | you trust its findings on your own changes |
+| 1 | Use the panel by hand: `/review` (same agents and rules as the autopilot; it runs the same test gate on the working tree first) | you trust its findings on your own changes |
 | 1b | Plan the order: `/plan-backlog` proposes `.ai/plan/queue.md` (order, Touches, why); you edit and merge it | a queue you agree with is on `main` |
 | 2 | **Shadow mode** (default): `/backlog-autopilot` opens PRs, never merges; you merge, and label the bot's PRs from your own account (#0-126) (`human:agree`, `human:fp-<dim>`, `human:missed-<dim>`; optionally `human:introduced-<stage>`) | ~10 PRs, and you agreed with the merge decision in ≥ 9 |
 | 3 | Auto-merge, after #0-116 (code an agent runs must not be able to drop the devcontainer's firewall) and the decision on which paths need the owner's review (#0-153: `.dockerignore`, `.ai/context/`, `.ai/decisions/`); #0-113's bot account and rulesets are in place: set `allow_auto_merge` to `true` in `.github/repository-settings/repository.json`, set `required_approving_review_count` to 0 in `rulesets/main.json`, and remove the shadow-mode `*` line of `.github/CODEOWNERS` (#0-153 decides which paths stay owned; a PR touching none then merges on green checks), and `apply` them (Setup step 3), after checking that the bot's token still has no `workflow` scope (`gh auth status` as the bot: with it, the bot could push a workflow whose token reports a required check, ADR-0034), in `.claude/settings.autopilot.json` remove `Bash(gh pr merge *)` from `deny` (keep the `--admin` deny) and add `Bash(gh pr merge * --squash --auto)` to `allow`; run with `{"shadow": false}` | — |
