@@ -5,11 +5,14 @@
 # its hands for deterministic steps (preflight, tests, changed paths, state). Fails closed.
 # ============================================================
 set -uo pipefail
-. "$(dirname "$0")/_lib.sh"
+# Fails closed (backlog #0-162): Claude Code runs the call after any exit status but 2, so a crash (an unset
+# variable under set -u, a missing command) and a helper that does not load refuse it here.
+trap 'case $? in 0|2) ;; *) echo "BLOCKED by ${0##*/}: the guard failed (exit $?), so the call is refused" >&2; exit 2 ;; esac' EXIT
+. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED by ${0##*/}: cannot load _lib.sh" >&2; exit 2; }
 
 input=$(cat)
 cmd=$(json_get "$input" '.tool_input.command'); rc=$?
-[ "$rc" -eq 3 ] && block "jq or python3 is required for factory-ops"
+json_checked "$rc" "factory-ops"
 # '$(' is the literal text of a substitution, matched, not run (backlog #0-149).
 # shellcheck disable=SC2016
 case "$cmd" in

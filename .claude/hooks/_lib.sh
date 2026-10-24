@@ -4,21 +4,36 @@
 # A hook gets the tool call as JSON on stdin (tool_name, tool_input.command / file_path, cwd). Exit 0 lets
 # the call go through the normal permission flow, exit 2 blocks it and shows stderr to the agent.
 
-# json_get <json> <jq path> — prints the value or nothing. Uses jq, falls back to python3.
+# json_get <json> <jq path> — prints the value, or nothing when the field is absent (exit 0). Uses jq, falls back
+# to python3. Exit 3: neither is installed; exit 4: the parser failed or the input is empty. Callers check with json_checked: before
+# backlog #0-162 a parser that failed printed nothing with a status no hook looked at, and the Bash hooks read
+# that empty command as "nothing to check" and let the call through.
 json_get() {
     local json=$1 path=$2
+    # jq reads empty input as no input at all and prints nothing with exit 0, which would read as "no such
+    # field"; python3 refuses it. A tool call is never empty, so both refuse it (security review of #0-162).
+    [ -n "$json" ] || return 4
     if command -v jq >/dev/null 2>&1; then
-        printf '%s' "$json" | jq -r "$path // empty" 2>/dev/null
+        printf '%s' "$json" | jq -r "$path // empty" 2>/dev/null || return 4
     elif command -v python3 >/dev/null 2>&1; then
         printf '%s' "$json" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 for key in sys.argv[1].lstrip(".").split("."):
     d = d.get(key) if isinstance(d, dict) else None
-print("" if d is None else d)' "$path" 2>/dev/null
+print("" if d is None else d)' "$path" 2>/dev/null || return 4
     else
         return 3
     fi
+}
+
+# json_checked <json_get's exit status> <what reads the call> — refuses unless json_get read the tool call.
+json_checked() {
+    case "$1" in
+        0) return 0 ;;
+        3) block "jq or python3 is required for $2" ;;
+        *) block "$2 could not read the tool call (the JSON parser failed, exit $1), so the call is refused" ;;
+    esac
 }
 
 block() {

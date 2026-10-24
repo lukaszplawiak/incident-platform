@@ -100,7 +100,7 @@ first, for a safety check (`data-usage.md`), and the page's content to a model c
 - **A weaker layer, named**: before, WebFetch was absent from autopilot sessions; now a hook decides who uses it.
   A bug in the hook would let any agent fetch from the six hosts (any path, any query), since the allow rules
   are by host, and so would a hook that fails with any exit code but 2 (a non-blocking error): both new hooks
-  refuse with 2 when they cannot load their helper (the older hooks do not yet: #0-162); `test-hooks.sh` (AC4 cases) and `check-web-access.sh` are what keep it, and README
+  refuse with 2 when they cannot load their helper (the older hooks did not; since #0-162 every hook does); `test-hooks.sh` (AC4 cases) and `check-web-access.sh` are what keep it, and README
   "Infrastructure Hardening" says so.
 - **Still a channel**: a URL path can carry data to an allowed host (`osv.dev/vulnerability/<data>`). The
   verifier reads only the gate's artifact and dependency tree (no secret, as long as the gate wrote them: the

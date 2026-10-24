@@ -18,11 +18,14 @@
 # Fails closed without jq or python3, and when the git grep or gh label check itself fails (backlog #0-130).
 # ============================================================
 set -uo pipefail
-. "$(dirname "$0")/_lib.sh"
+# Fails closed (backlog #0-162): Claude Code runs the call after any exit status but 2, so a crash (an unset
+# variable under set -u, a missing command) and a helper that does not load refuse it here.
+trap 'case $? in 0|2) ;; *) echo "BLOCKED by ${0##*/}: the guard failed (exit $?), so the call is refused" >&2; exit 2 ;; esac' EXIT
+. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED by ${0##*/}: cannot load _lib.sh" >&2; exit 2; }
 
 input=$(cat)
 cmd=$(json_get "$input" '.tool_input.command'); rc=$?
-[ "$rc" -eq 3 ] && block "jq or python3 is required for the autopilot's hooks"
+json_checked "$rc" "the autopilot's hooks"
 [ -n "$cmd" ] || exit 0
 
 secrets='(docker/\.env|docker/secrets|application-local|\.credentials|\.claude\.json|config/gh|\.ssh/|\.netrc|\.git-credentials|settings-security\.xml|--no-index)'

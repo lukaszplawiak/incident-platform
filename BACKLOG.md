@@ -132,7 +132,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | Open |
+| [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | In progress |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
@@ -2578,25 +2578,69 @@ of the Owner-only list (`_common.md`, their definitions, `review-procedure`), an
 
 ### 0-162. A hook that cannot load its helper lets the call through
 
-**Type:** ci · **Priority:** Medium · **Status:** Open — found by review-security in round 2 of the `/review` of
-#0-160 (2026-10-24); the two hooks #0-160 added are already fixed
-**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
-**Touches:** factory (.claude/hooks/*.sh, .claude/hooks/test-hooks.sh)
+**Type:** ci · **Priority:** Medium · **Status:** In progress — found by review-security in round 2 of the `/review`
+of #0-160 (2026-10-24); the two hooks #0-160 added are already fixed; owner's decision: C below, in two PRs (2026-10-24)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/hooks/*.sh, .claude/hooks/test-hooks.sh, .claude/settings.json,
+.claude/settings.autopilot.json, .claude/agents/*.md (hook entries), scripts/factory/preflight.sh,
+.github/scripts/test-preflight.sh, .github/scripts/ (a check of the hook entries), .github/workflows/factory-guards.yml),
+.ai/decisions/ (an ADR), docs (README.md "Infrastructure Hardening", docs/ai-factory.md, .ai/rules/review/factory.md
+`FAC-S04` if its wording changes, owner)
 
 **Problem.** Every hook in `.claude/hooks/` starts with `. "$(dirname "$0")/_lib.sh"`. When that fails (the file
 missing or unreadable), `block` is undefined and the hook ends with an exit code other than 2 — which Claude Code
 treats as a non-blocking error: "The action goes ahead" (code.claude.com/docs/en/hooks.md, read 2026-10-24). The
 guard then lets through what it exists to stop (a skipped test run, a protected-path write, a push). The same
 for any other crash before `block` (an unset variable under `set -u`).
+Shown by the research (2026-10-24), each hook copied without `_lib.sh`: `guard-tests.sh` passes `-DskipTests`,
+`guard-git-push.sh` a force push to `main`, `guard-write-in-repo.sh` a Write of `.claude/settings.json`, and
+`readonly-bash.sh` (13 agents' frontmatter) and `write-scope.sh` let everything through (exit 0);
+`factory-ops-bash.sh` exits 1. Two more ways to the same end, found then:
+- **`jq` fails** (installed, but exits non-zero — moved here from #0-132 by the owner): `json_get` returns 3 only
+  when neither `jq` nor `python3` exists, so a parser that fails gives an empty value, which the Bash hooks answer
+  with `[ -n "$cmd" ] || exit 0` (`guard-tests`, `guard-protected-bash`, `readonly-bash`: exit 0, with a `jq` stub
+  that exits 5) and on which `factory-ops-bash.sh` crashes under `set -u` (exit 1). The write hooks refuse (an empty
+  path is outside the repository). Already against `FAC-S04` ("the input does not parse").
+- **The hook does not start** (the script missing, not executable, no `bash`) or times out: no change inside a
+  script can catch that. Claude Code has a field for it, `"onFailure": "block"` on a `command` hook: a hook that
+  cannot start, exits other than 0 or 2, times out or prints invalid JSON then blocks the call ("Requires Claude
+  Code v2.1.295 or later", same page). The devcontainer installs whatever version is current when the image is
+  built (`DISABLE_AUTOUPDATER`), and no check requires one; what an older version does with the field is not
+  documented, nor whether a subagent's frontmatter hooks honour it.
 
-**Approach.** The pattern of `webfetch-allowlist.sh` and `read-scope.sh`:
-`. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED: …" >&2; exit 2; }`, and a trap or a final check that turns an
-unexpected exit into 2 where a hook can crash after loading; a case per hook in `test-hooks.sh` (the hook copied
-without `_lib.sh` exits 2), and a check that every hook in the directory has one.
+**Decided (owner, 2026-10-24).** Option C of the research, both layers (a hook that fails exits 2 itself, and
+Claude Code blocks a hook that fails), in two PRs:
+- **PR 1, the scripts** (no dependency on the Claude Code version): each hook loads `_lib.sh` with
+  `|| { echo "BLOCKED: …" >&2; exit 2; }` and sets, before it, a `trap … EXIT` that turns any exit status other
+  than 0 or 2 into 2 (verified on bash 3.2 and 5: an unset variable, a missing command at the end, `exit 1`);
+  `json_get` tells "no such field" (empty, 0) from "the parser failed" (non-zero), and the hooks refuse on the
+  latter; a test per hook without `_lib.sh`, with an unset variable and with `jq` failing; Factory guards fails a
+  hook in `.claude/hooks/` without a row in `test-hooks.sh`'s fail-closed table, whose cases (no `_lib.sh`, an
+  abort while loading, `jq` failing) fail a hook without the guarded load or the trap — a behavioural check, not
+  one of the text. From the review (round 1): `guard-migrations.sh` refuses when git fails on a migration's path,
+  and lets the edit through with a warning only without `jq`/`python3` or without its base ref (`FAC-S04` names
+  both); `json_get` refuses empty input (jq reads it as "no field"); the python3 fallback is tested too. Round 2:
+  `guard-migrations.sh` asks `git ls-tree` (literal pathspec, exact name) instead of `cat-file -e`, which read
+  any git failure as "not on the base".
+- **PR 2, Claude Code's layer**: `"onFailure": "block"` on every hook entry of both settings and of every agent's
+  frontmatter, checked by Factory guards (like `check-web-access.sh` reads the wiring); `preflight.sh` refuses a
+  Claude Code older than 2.1.295; Factory guards also fails a hook command wired in either settings file or an
+  agent's frontmatter that is not a `.claude/hooks/*.sh` with a row in the fail-closed table (security review of
+  PR 1: today only the directory's files are enumerated); a spike first — does a frontmatter hook honour the field, and what does an older
+  version do with it — recorded in an ADR, and a negative answer named as a weaker layer (README "Infrastructure
+  Hardening", `FAC-A05`).
 
 **Acceptance criteria.**
 AC1. Every hook in `.claude/hooks/` exits 2 when it cannot load `_lib.sh`, shown by a test per hook.
 AC2. A new hook without that pattern fails Factory guards.
+AC3. Every hook exits 2 when it aborts after loading (an unset variable under `set -u`) and when `jq` fails on its
+input, shown by a test per hook; `json_get`'s callers never read a parser failure as an empty value.
+AC4. Every hook entry in `.claude/settings.json`, `.claude/settings.autopilot.json` and the agents' frontmatter has
+`"onFailure": "block"`, and Factory guards fails one without it, or one whose command is not a hook of the
+fail-closed table.
+AC5. The autopilot does not start on a Claude Code older than 2.1.295 (`preflight.sh`, with a test).
+AC6. The spike's result (frontmatter hooks, older versions) is in an ADR; a layer it shows not to hold is named in
+README "Infrastructure Hardening".
 
 ---
 
@@ -2878,11 +2922,11 @@ their own PR before merging. Remove the known limit from README and `audit.md` w
 still read a failure as "nothing found": `printf … | grep -Eq "$secrets"` (a secret file), the `mvnw` write check,
 `grep -Eq "$protected" || exit 0` (no protected path, so allowed) and the `writes` check take grep's error (2) for
 "no match", and `json_get` returns an empty command when jq fails on the input, which the hooks answer with
-`exit 0`. Other hooks (`readonly-bash.sh`, `guard-git-push.sh`, `guard-factory-scripts.sh`, `factory-ops-bash.sh`)
+`exit 0` (that part moved to #0-162 by the owner, 2026-10-24). Other hooks (`readonly-bash.sh`, `guard-git-push.sh`, `guard-factory-scripts.sh`, `factory-ops-bash.sh`)
 read the command the same way. Bounded like #0-130: the deny rules, the commit gates and the PR checks stay.
 
 **Approach.** The same contract as #0-130: matching with bash's own `[[ =~ ]]` / `case` where it can, a tool's
-failure is a refusal, and `json_get` tells "no such field" from "could not parse" (a parse error blocks). A test
+failure is a refusal (`json_get` telling "no such field" from "could not parse": #0-162). A test
 per check with the tool broken, as in #0-130's. `shell_words` moves to the same three-way contract (refused = exit 0
 and a reason, failed = non-zero), which removes `shell_words_refusal`, the shim that tells the two apart by the text
 `REFUSE` (architecture review of #0-130), and refuses a newline inside a quoted word itself, as both its callers now

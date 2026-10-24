@@ -24,9 +24,12 @@
 # Every refusal says what the agent can do instead (backlog #0-123). Fails closed.
 # ============================================================
 set -uo pipefail
-# A hook that fails without exit 2 does not block (Claude Code treats it as a non-blocking error), and the
-# autopilot's WebFetch allow rules are by host: so a missing helper refuses here (review round 2 of #0-160).
-. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED: the WebFetch guard cannot load _lib.sh" >&2; exit 2; }
+# Fails closed (backlog #0-162): Claude Code runs the call after any exit status but 2, so a crash (an unset
+# variable under set -u, a missing command) and a helper that does not load refuse it here.
+trap 'case $? in 0|2) ;; *) echo "BLOCKED by ${0##*/}: the guard failed (exit $?), so the call is refused" >&2; exit 2 ;; esac' EXIT
+. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED by ${0##*/}: cannot load _lib.sh" >&2; exit 2; }
+# (Here first, in review round 2 of #0-160: the autopilot's WebFetch allow rules are by host, so this hook
+# failing open would let any agent reach the six hosts.)
 
 # Host + path prefix. OSV aggregates GHSA, NVD and vendor advisories with fixed-version ranges; Maven Central
 # answers "does this version exist"; the vendor pages by path prefix only. A host other than github.com and
@@ -50,13 +53,14 @@ esac
 
 input=$(cat)
 agent=$(json_get "$input" '.agent_type'); rc=$?
-[ "$rc" -eq 3 ] && block "jq or python3 is required for the WebFetch guard"
+json_checked "$rc" "the WebFetch guard"
 if [ "$agent" != "$VERIFIER" ]; then
     [ "$mode" = --interactive ] && exit 0
     block "WebFetch is for the $VERIFIER agent only (this is ${agent:-the session itself}): an agent that reads untrusted text must not be able to send data out. Mark the claim unverified instead; the verifier checks it after the panel."
 fi
 
-url=$(json_get "$input" '.tool_input.url')
+url=$(json_get "$input" '.tool_input.url'); rc=$?
+json_checked "$rc" "the WebFetch guard"
 [ -n "$url" ] || block "no url in the WebFetch call. $HINT"
 case "$url" in
     https://*) ;;

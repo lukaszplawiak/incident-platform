@@ -464,7 +464,15 @@ security boundary, so every rule that matters is also enforced outside the model
   its own Maven settings (`scripts/factory/maven-settings.xml`, no `~/.mavenrc`, no `MAVEN_OPTS`: nothing an
   agent's code can write in the home directory decides what runs), the file tools of an autopilot session
   write only inside the repository (`guard-write-in-repo.sh`), and applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`).
-  Hook tests: `.claude/hooks/test-hooks.sh`.
+  Every hook fails closed (backlog #0-162), because Claude Code runs a call after any exit status but 2: a helper
+  (`_lib.sh`) that does not load, a crash (an `EXIT` trap turns any status but 0 and 2 into 2) and a JSON parser
+  that fails or empty input (`json_get`/`json_checked`) refuse the call. Two exceptions, both in
+  `guard-migrations.sh` and named in rule `FAC-S04`: without `jq` and `python3`, and with a base ref that does not
+  exist, it warns and lets the edit through so that the owner's sessions do not break (CI's edited-migration
+  check still compares with the PR's base). A hook
+  that cannot start at all (missing, not executable) or times out is still a non-blocking error until
+  `onFailure: "block"` (#0-162 PR 2).
+  Hook tests: `.claude/hooks/test-hooks.sh`, with every hook in a fail-closed table (a hook without a row fails Factory guards).
 - **Least privilege per agent**: reviewers, the architect and the auditors run read-only Bash allow-lists
   and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); they read files with the Read tool and
   search with `git grep`, and each refusal of the hook that a reading agent can hit names that alternative,
@@ -546,7 +554,8 @@ commands but not code they run, as Docker access (needed by Testcontainers) is r
 (#0-116, accepted for shadow mode, required before auto-merge); secrets are scanned only after the push, when a
 branch is already public, and an allow comment passes whatever its line holds (#0-156, ADR-0036); no Maven Enforcer
 (#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines, and most of
-their checks still let a command through when the check itself fails (a grep or jq error, #0-132);
+their checks still let a command through when the check itself fails (a grep error, #0-132); a hook that cannot
+start or times out does not block (#0-162 PR 2);
 subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
 where only the session-level hooks apply, and Claude Code does not promise them to agents the `Workflow`
 runtime spawns either (they ran there in #0-160's spike): only the verifier's read scope is also

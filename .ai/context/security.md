@@ -69,7 +69,10 @@ on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are w
   (`check-pinned-tools.sh`).
 - **Layers, and what each one is worth.** Permission rules in the settings files match a tool and a host,
   for every agent alike. Hooks are code: they can tell agents apart (`agent_type`), and they block only by
-  exiting 2 — any other exit is a non-blocking error and the call runs. Frontmatter hooks are documented
+  exiting 2 — any other exit is a non-blocking error and the call runs, so every hook starts with an `EXIT`
+  trap and a guarded load of `_lib.sh`, and reads the call through `json_checked` (#0-162; a new hook gets a row
+  in `test-hooks.sh`'s fail-closed table). A hook that cannot start or times out still does not block until
+  `onFailure: "block"` (#0-162 PR 2). Frontmatter hooks are documented
   for agents of the Agent tool, an @-mention or `--agent`, not for the agents a `Workflow` spawns and never
   in `claude -p`; session-level hooks are documented for every subagent (#0-164). The devcontainer's
   firewall opens hosts by IP for every process in it, and binds the agents' commands, not the code they run

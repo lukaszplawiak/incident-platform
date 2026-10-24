@@ -20,9 +20,10 @@
 # their input, are documented for every subagent (review round 2 of #0-160). Fails closed.
 # ============================================================
 set -uo pipefail
-# A hook that fails without exit 2 does not block (Claude Code treats it as a non-blocking error), and the
-# autopilot's WebFetch allow rules are by host: so a missing helper refuses here (review round 2 of #0-160).
-. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED: the read guard cannot load _lib.sh" >&2; exit 2; }
+# Fails closed (backlog #0-162): Claude Code runs the call after any exit status but 2, so a crash (an unset
+# variable under set -u, a missing command) and a helper that does not load refuse it here.
+trap 'case $? in 0|2) ;; *) echo "BLOCKED by ${0##*/}: the guard failed (exit $?), so the call is refused" >&2; exit 2 ;; esac' EXIT
+. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED by ${0##*/}: cannot load _lib.sh" >&2; exit 2; }
 
 only=""
 names=()
@@ -40,11 +41,11 @@ done
 input=$(cat)
 if [ -n "$only" ]; then
     agent=$(json_get "$input" '.agent_type'); rc=$?
-    [ "$rc" -eq 3 ] && block "jq or python3 is required for the read guard"
+    json_checked "$rc" "the read guard"
     [ "$agent" = "$only" ] || exit 0
 fi
 file=$(json_get "$input" '.tool_input.file_path'); rc=$?
-[ "$rc" -eq 3 ] && block "jq or python3 is required for this agent's read guard"
+json_checked "$rc" "this agent's read guard"
 SCOPE_VERB='read' require_in_repo "$file" "$@"
 if [ "${#names[@]}" -gt 0 ]; then
     base=${file##*/} ok=0

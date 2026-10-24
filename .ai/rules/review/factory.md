@@ -37,10 +37,13 @@ and the ADRs of the area "AI factory" (`.ai/decisions/README.md`). Most of the w
   and `git diff *` take `--output=<file>`, `--ext-diff`), unless a hook of that session refuses the option:
   pre-approved means no prompt, in a session that reads the change (review round 2 of #0-161; #0-165).
 - **FAC-S04 A guard fails closed.** Every way a PreToolUse guard can fail ends in `exit 2`: its helper does
-  not load, `jq`/`python3` is missing, the input does not parse, an argument is unknown, an unset variable
-  under `set -u`. Claude Code treats any other exit code as a non-blocking error and runs the call (#0-162,
-  ADR-0037). A new or changed failure path that exits otherwise is blocking; `impact` is the call it lets
-  through.
+  not load, `jq`/`python3` is missing, the input does not parse or is empty, an argument is unknown, an unset
+  variable under `set -u`, a tool it runs fails. Claude Code treats any other exit code as a non-blocking error
+  and runs the call (#0-162, ADR-0037). The two exceptions are `guard-migrations.sh`'s, the one guard of
+  the owner's own edits in every session: without `jq` and `python3`, and with a base ref that does not exist, it
+  warns and lets the edit through, so that a session on a machine or clone without them does not break (CI's
+  edited-migration check still compares with the PR's base). A new or changed failure path that exits
+  otherwise is blocking; `impact` is the call it lets through.
 - **FAC-S05 No secret within reach of an agent that can send.** The secret-file deny rules of both settings
   files apply to it, its read scope excludes them, and a path check counts as no check for a file the
   branch's own code could have written: a symlink, a second hard link, a file under `.ai/runs/` before the
