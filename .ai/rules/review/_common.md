@@ -60,6 +60,10 @@ The autopilot runs at most 3 review rounds per item. What you judge depends on t
      fixed? Put fixed ids in `resolved`; keep unfixed ones in `blocking` with the **same id**;
   2. the **delta** since the previous round (`git diff <previous-round-sha>...HEAD`): did the fix introduce
      a regression? Mark such a finding `isRegression: true`.
+  A finding with a `ver-` id is a claim the verifier refuted, handed to you as yours (`ruleId: VERIFY`): put it
+  in `resolved` when the change no longer rests on the refuted claim (the code or the text that asserted it
+  changed), and list the fact the fix now rests on in `unverified` for the verifier to check; keep it in
+  `blocking` with the same id only when the change still rests on the claim as refuted.
   Code that did not change since round 1 is frozen: something you missed there is not a reason for a new
   round. Mention it as non-blocking, so the audit can count it.
 - **Round 3** — blocking only for correctness and security (`impact` names wrong behaviour or a breach).
@@ -128,7 +132,10 @@ In both review rounds of backlog #0-60, three of four reviewers reported runs of
   installed, say it did not run.
 - **Mark as unverified anything that depends on what is outside the repository**: an upstream commit
   SHA or tag, a repository or GitHub setting, a CI result, a test result, a library's runtime behaviour.
-  Say what would verify it.
+  Say what would verify it. After the panel the verifier agent checks each claim without the diff or the
+  code (backlog #0-160): write it as one fact it can check alone, with names and versions
+  ("tomcat-embed-core 10.1.61 fixes CVE-2026-1234"). A refuted claim blocks; one it cannot settle stops
+  the item for the owner.
 - **Count by listing.** When a finding states a number ("10 checkouts"), list the `file:line` of each
   occurrence. A count from skimming was wrong in the #0-60 review (9 instead of 10).
 - **Do not fix anything yourself.** You never edit files.

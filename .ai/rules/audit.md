@@ -179,7 +179,7 @@ more than one review round, had a scope category that points at a stage (`backlo
 | `pick` | `next-item.sh`, `check-queue.sh`, picker | the run's start; the gates' refusals |
 | `plan` | architect | `.ai/work/<item>/progress.md` (the plan line, the rules listed), a Proposed ADR |
 | `implement` | implementer | the diff, `handoff.md`, the self-check, the test gate |
-| `review` | the panel | the verdicts and rounds in the PR |
+| `review` | the panel, the verifier | the verdicts and rounds in the PR, its "Unverified claims" |
 | `acceptance` | acceptance-reviewer | the acceptance JSON |
 | `ship` | shipper, the owner's merge | the PR body, labels, what reached `main` |
 

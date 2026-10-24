@@ -8,8 +8,8 @@
 # owner (or an organisation member) counts. Detection: .github/scripts/check-factory-guards.sh.
 # Also runs the tests of the autopilot's hooks, of this check and of the queue, state, preflight and test gate scripts, validates the
 # execution queue (.ai/plan/queue.md) against the backlog, checks that the deny rules, the shell-write
-# hook and CODEOWNERS still cover .ai/rules/protected-paths.md, and that every escape marker in the backlog is one
-# the audits can read (backlog #0-128).
+# hook and CODEOWNERS still cover .ai/rules/protected-paths.md, that every escape marker in the backlog is one
+# the audits can read (backlog #0-128), and that only the verifier agent can fetch from the web (backlog #0-160).
 #
 # A required check of main (its ruleset, .github/repository-settings/rulesets/main.json, backlog #0-113,
 # ADR-0034). On its own it binds nobody who can change check-factory-guards.sh, since a pull request runs its
@@ -73,11 +73,19 @@ jobs:
       - name: Escape marker check tests
         run: .github/scripts/test-escape-markers.sh
 
+      - name: Web access check tests
+        run: .github/scripts/test-web-access.sh
+
       # .ai/rules/protected-paths.md is the one list; the autopilot's deny rules, its shell-write hook and
       # CODEOWNERS keep literal copies on purpose, and this fails when one stops covering an entry
       # (backlog #0-122).
       - name: Protected paths are covered
         run: .github/scripts/check-protected-paths.sh
+
+      # Only the verifier agent reaches the web, through webfetch-allowlist.sh: every agent declares its tools,
+      # the settings run the hook and allow only its hosts, and the firewall opens them (backlog #0-160, ADR-0037).
+      - name: Only the verifier fetches
+        run: .github/scripts/check-web-access.sh
 
       # A line with `**Escaped from:** <stage>` but no `**Fixes:** #0-<digits>` would vanish from both audits
       # (backlog #0-128); the pattern is scripts/factory/_marker.sh, the one audit-data.sh reads.

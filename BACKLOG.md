@@ -133,6 +133,10 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-160](#0-160-what-a-reviewer-could-not-verify-is-never-checked) | What a reviewer could not verify is never checked | design | High | In progress |
+| [0-161](#0-161-no-review-rule-covers-the-ai-factory-itself) | No review rule covers the AI factory itself | design | Medium | Open |
+| [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | Open |
+| [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
+| [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
 
 ---
 
@@ -2468,7 +2472,16 @@ Claude Code's documentation says otherwise, and the decisions follow from it:
   `claude`, and a cost cap outside the agent budget) — the fallback if the first step below fails. The weaker
   layer (a hook instead of an absent tool) is named in the ADR and in README "Infrastructure Hardening".
 - **First step of C:** confirm that `agent_type` reaches the hook for an agent the `Workflow` runtime spawns (the
-  documentation says so for subagents; Workflow is another path). If it does not, E3.
+  documentation says so for subagents; Workflow is another path). If it does not, E3. **Done 2026-10-23, positive**:
+  a session-level PreToolUse hook logged `agent_type` `"review-docs"` for a Workflow agent with
+  `agentType: 'review-docs'`, `"workflow-subagent"` for one without, `"Explore"` for an Agent-tool agent, and none for
+  the session's own call. E2 stands (ADR-0037). **Second spike, 2026-10-24** (review round 2): the `verifier` run
+  from a Workflow logged `agent_type` `"verifier"`, and its frontmatter `read-scope.sh` refused `README.md` and let
+  `.ai/runs/…` through; the documentation promises frontmatter hooks only to agents spawned through the Agent tool,
+  an @-mention or `--agent`, so the read scope is also session-level (`read-scope.sh --agent verifier`). Review
+  round 3 narrowed it to the files the gate writes (`--name 'gate-r*.json' --name 'dependency-tree-r*.txt'`, no
+  file with a second hard link): the rest of `.ai/runs/` holds the branch's test output; the other agents' guards
+  are still frontmatter-only (#0-164).
 - **The manual `/review` runs the gate too:** `run-tests.sh --working-tree` tests the uncommitted changes (the
   modules of the committed and the uncommitted files), records `dirty: true`, and is refused while an autopilot
   run holds the lock.
@@ -2491,6 +2504,125 @@ AC4. The verifier fetches only from the allow-list (a fetch outside it is refuse
 rule) and never receives the diff.
 AC5. README "Infrastructure Hardening" (AI factory) and `docs/ai-factory.md` describe the stage and its network
 access.
+
+---
+
+### 0-161. No review rule covers the AI factory itself
+
+**Type:** design · **Priority:** Medium · **Status:** Open — `ruleGap` of review-security, review-architecture and
+review-general in both rounds of the `/review` of #0-160 (2026-10-23/24); owner's decision: B′ below (2026-10-24)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** rules (.ai/rules/review/factory.md (new), security.md, architecture.md, _common.md), factory
+(.claude/workflows/backlog-autopilot.js `RULE_FILE_OF`), .ai/context/security.md
+
+**Problem.** `.ai/rules/review/security.md`, `architecture.md` and `general.md` are about the services' code
+(tenant isolation, the security chain, decided patterns); nothing in them covers the factory: which agent has the
+network, which hosts the firewall opens, that a hook refuses with exit 2 (any other exit code does not block),
+that every agent declares its tools and scopes, that a control's list lives once and Factory guards checks its
+copies. A finding needs a rule of its dimension by id to block (`_common.md`), so a real defect in a change to
+`.claude/`, `.github/`, `scripts/factory/` or `.devcontainer/` (a hook that fails open) can only be
+non-blocking, and reviewers report the gap as `ruleGap` every round.
+
+**Decided (owner, 2026-10-24).** Not in `security.md`/`architecture.md`/`general.md` themselves (the implementer reads
+them in full for every item, and no autopilot item can change the factory: protected paths), not in
+`.ai/context/security.md` with ids (agents may edit `.ai/context/` — a rule that blocks must not live in a file the
+judged change can rewrite, #0-153 — and the ids would map to no rule file), and not a new dimension `factory`
+(an agent, a gate and an audit dimension for changes that reach only the owner's manual `/review`, too few for the
+audit's ≥3 cases). **B′**: a rule file `.ai/rules/review/factory.md` with ids of the existing dimensions —
+`FAC-S…` read by review-security, `FAC-A…` by review-architecture — read only when the diff touches the factory's
+paths (one sentence in `security.md` and `architecture.md`; `_common.md` says the two prefixes belong to those
+dimensions); `RULE_FILE_OF` in `backlog-autopilot.js` maps `FAC` to `factory`, so audits address the file. Plus a
+section "AI factory" in `.ai/context/security.md`, without ids, as knowledge for the reader (why the verifier has
+the network, where the allow-list is), like "CI workflows".
+
+**Acceptance criteria.**
+AC1. A finding on a change to the factory's paths can cite a `FAC-S`/`FAC-A` rule by id and block.
+AC2. A change that touches no factory path costs the reviewers and the implementer nothing new to read.
+AC3. The rules cover at least: network tools per agent and the allow-list's one source, firewall hosts (by IP),
+tools and read/write scopes per agent, hooks that refuse with exit 2 on any failure, no secret readable by an agent
+that can send, one list per control with its copies checked in CI, fail-closed agent answers, every new stage in
+the PR record.
+
+---
+
+### 0-162. A hook that cannot load its helper lets the call through
+
+**Type:** ci · **Priority:** Medium · **Status:** Open — found by review-security in round 2 of the `/review` of
+#0-160 (2026-10-24); the two hooks #0-160 added are already fixed
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/hooks/*.sh, .claude/hooks/test-hooks.sh)
+
+**Problem.** Every hook in `.claude/hooks/` starts with `. "$(dirname "$0")/_lib.sh"`. When that fails (the file
+missing or unreadable), `block` is undefined and the hook ends with an exit code other than 2 — which Claude Code
+treats as a non-blocking error: "The action goes ahead" (code.claude.com/docs/en/hooks.md, read 2026-10-24). The
+guard then lets through what it exists to stop (a skipped test run, a protected-path write, a push). The same
+for any other crash before `block` (an unset variable under `set -u`).
+
+**Approach.** The pattern of `webfetch-allowlist.sh` and `read-scope.sh`:
+`. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED: …" >&2; exit 2; }`, and a trap or a final check that turns an
+unexpected exit into 2 where a hook can crash after loading; a case per hook in `test-hooks.sh` (the hook copied
+without `_lib.sh` exits 2), and a check that every hook in the directory has one.
+
+**Acceptance criteria.**
+AC1. Every hook in `.claude/hooks/` exits 2 when it cannot load `_lib.sh`, shown by a test per hook.
+AC2. A new hook without that pattern fails Factory guards.
+
+---
+
+### 0-163. The autopilot workflow's logic has no tests
+
+**Type:** ci · **Priority:** Medium · **Status:** Open — `nonBlocking` GEN-01 and `ruleGap` of review-general in both
+rounds of the `/review` of #0-160 (2026-10-23/24)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/workflows/backlog-autopilot.js), ci (.github/scripts/ (a new test),
+.github/workflows/factory-guards.yml)
+
+**Problem.** `backlog-autopilot.js` decides every branch of a run in code — `scopeOf`, `valid`, `openClaims`,
+`claimId`, `verifyClaims` (the fail-closed downgrade of an unsourced answer), `refutedFindings`, `unsettledReason`,
+the checks of `args` — and none of it is tested: the reviews of #0-160 checked it by reading, and the session by an
+ad-hoc script outside the repository. A regression there passes Factory guards.
+
+**Approach (to analyse).** The workflow is a script the runtime evaluates with `agent`, `parallel`, `phase`, `log`
+and `args` in scope, not a module: either move the pure functions to a file the workflow and a `node` test both
+load (if the runtime allows an import), or evaluate the script's helper section with stubs (what the ad-hoc check
+of #0-160 did) — then the test breaks when the section's markers move, which is acceptable if it fails loudly.
+Node is on the runner; mutation-check the cases.
+
+**Acceptance criteria.**
+AC1. Factory guards runs tests of the workflow's pure functions, among them the verification functions' fail-closed
+paths and `acceptUnverifiable`'s id matching.
+AC2. Inverting a decision in any of them turns a test red.
+
+### 0-164. The agents' guards rely on frontmatter hooks that Workflow agents are not promised
+
+**Type:** security · **Priority:** Medium · **Status:** Open — `nonBlocking` ARC-02 of review-architecture in round 3
+of the `/review` of #0-160 (2026-10-24); the verifier's read scope is already session-level
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/hooks/readonly-bash.sh, .claude/hooks/write-scope.sh, .claude/hooks/test-hooks.sh,
+.claude/settings.json, .claude/settings.autopilot.json), ci (.github/scripts/ (a structural check),
+.github/workflows/factory-guards.yml), docs (README.md "Infrastructure Hardening", docs/ai-factory.md)
+
+**Problem.** Every read-only or write-scoped agent is guarded by a hook in its own frontmatter: `readonly-bash.sh`
+for the seven reviewers, acceptance-reviewer, ready-checker, planner, the architect and the audit analysts;
+`write-scope.sh` for the architect (`.ai/decisions/ .ai/work/`), the planner (`.ai/plan/ BACKLOG.md`) and
+audit-synthesis (`.ai/audit/`). Claude Code documents frontmatter hooks only for an agent spawned through the
+Agent tool, an @-mention or `--agent`, in a trusted workspace, never in `claude -p` (`sub-agents.md`, read
+2026-10-24); the autopilot spawns them through the `Workflow` runtime. They ran there in the spike of 2026-10-24
+(ADR-0037), but nothing promises it, and a release that stops running them would leave a reviewer with the
+session's Bash and every agent's writes scoped only by the session-wide guards. README "Known gaps" names only
+the `-p` case.
+
+**Approach.** What #0-160 did for the verifier (ADR-0037): the same hooks once more at session level, keyed on
+`agent_type` (`--agent <name>`, passing every other agent), in both settings files, next to the frontmatter ones;
+a structural check that every agent with a frontmatter guard has its session-level twin with the same arguments.
+`readonly-bash.sh` is called per agent with different options (`--architect`, `--k8s`, `--gh-read`), so one
+session hook per option, or `--agent` taking a list.
+
+**Acceptance criteria.**
+AC1. For every agent whose frontmatter runs `readonly-bash.sh` or `write-scope.sh`, both settings files run the same
+hook with the same arguments for that `agent_type`, shown by test cases (the agent refused, another agent passed).
+AC2. Factory guards fails when an agent's frontmatter guard has no session-level twin, or a different one.
+AC3. README "Infrastructure Hardening" names the session-level guards and no longer lists this gap.
 
 ---
 

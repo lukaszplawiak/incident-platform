@@ -477,10 +477,26 @@ security boundary, so every rule that matters is also enforced outside the model
   `command`, ...), and a glob where the subcommand goes (`git gr?p`, which a file named `grep` turns into grep). An interpreter run by its path or off that list (`/bin/sh -c "git grep …"`) and a git alias are
   not seen by the check (#0-132): there the allow-list below is the control. The
   autopilot session is `dontAsk`
-  with an explicit allow-list; `WebFetch`/`WebSearch` are denied (an agent that reads untrusted text must not
-  be able to send data out).
+  with an explicit allow-list; `WebSearch` is denied, and `WebFetch` only the verifier agent may use (an agent that
+  reads untrusted text must not be able to send data out; backlog #0-160, ADR-0037).
+- **The verifier**: what the reviewers could not check (their `unverified` claims) goes, after the panel
+  approves, to a `verifier` agent that never sees the diff: it reads only the test gate's
+  artifacts in `.ai/runs/` (not its logs, nor a file with a second hard link; `read-scope.sh`, in its definition and
+  session-wide on its `agent_type`) and fetches only `https` URLs under six path prefixes (OSV, GitHub advisories, Maven
+  Central, Tomcat's and Spring's security pages), with no query string — `.claude/hooks/webfetch-allowlist.sh`,
+  a session-level hook keyed on the agent's `agent_type`, refuses every other agent and URL in autopilot
+  sessions; in the owner's sessions (`/review`, `--interactive`) it checks the verifier's fetches only, and every
+  other fetch is the owner's to approve, as before. A refuted claim blocks like a finding; one it cannot settle stops the item for the
+  owner, who accepts it by its id; every verdict is in the PR. **Weaker than before, knowingly**: WebFetch used to be absent from
+  autopilot sessions; now a hook decides who uses it, and the autopilot's allow rules (by host, as Claude Code's
+  rules match) would let any agent reach those six hosts if the hook failed open. Its tests and Factory
+  guards' `check-web-access.sh` (only the verifier has WebFetch, every agent declares its tools, both settings
+  run the hook, the hosts are allowed and open in the firewall) are what hold it; a URL path to an allowed
+  host is still a channel, for the little the verifier can read.
 - **Network**: autopilot runs happen in the devcontainer (`.devcontainer/`), whose firewall allows only its
-  own DNS resolver, the Anthropic API, GitHub, Maven Central and the Docker host over IPv4, closes IPv6 to all
+  own DNS resolver, the Anthropic API, GitHub, Maven Central, the verifier's advisory hosts (`osv.dev`,
+  `api.osv.dev`, `tomcat.apache.org`, `spring.io`: open to the whole container, and by the IPs they resolve to,
+  which a CDN or Google's front end shares with other sites — hence a short list) and the Docker host over IPv4, closes IPv6 to all
   but loopback, and blocks all traffic if its own setup fails (`FIREWALL SETUP FAILED`). It narrows exfiltration, it
   does not prevent it: the host's Docker (needed by Testcontainers) and GitHub itself remain channels.
 - **Merge**: shadow mode does not rely on the agents — `gh pr merge` is denied to autopilot sessions and the
@@ -524,7 +540,9 @@ branch is already public, and an allow comment passes whatever its line holds (#
 (#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines, and most of
 their checks still let a command through when the check itself fails (a grep or jq error, #0-132);
 subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
-where only the session-level hooks apply. Layers and their limits: docs/ai-factory.md, "What isolates what".
+where only the session-level hooks apply, and Claude Code does not promise them to agents the `Workflow`
+runtime spawns either (they ran there in #0-160's spike): only the verifier's read scope is also
+session-level (#0-164). Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images
 

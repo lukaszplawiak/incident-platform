@@ -8,9 +8,14 @@
 # this, a container with an IPv6 route would bypass the whole allow-list). If the container has IPv6 and
 # ip6tables cannot be set, the script fails rather than leave IPv6 open.
 # Allowed: DNS to the container's own resolver only (no direct queries to outside resolvers); the
-# Anthropic API and login; GitHub (its published IP ranges); Maven Central; the Docker host (Testcontainers'
-# mapped ports, and Ollama on the host for the optional local model); extra hosts given as arguments (the
-# ntfy server, when notifications are on). Everything else from this container is rejected.
+# Anthropic API and login; GitHub (its published IP ranges); Maven Central; the advisory hosts the verifier
+# agent may fetch from (OSV, Tomcat's and Spring's security pages: backlog #0-160, ADR-0037); the Docker host
+# (Testcontainers' mapped ports, and Ollama on the host for the optional local model); extra hosts given as
+# arguments (the ntfy server, when notifications are on). Everything else from this container is rejected.
+# The advisory hosts are open to every process in the container, not only to the verifier (whose WebFetch a hook
+# narrows to a path prefix), and by IP: a CDN or Google's front end serves other sites from the same addresses,
+# reachable by their own name (SNI/Host) once the IP is open. That is why its allow-list is short. .github/scripts/check-web-access.sh fails when
+# a host of that list (.claude/hooks/webfetch-allowlist.sh) is missing here.
 #
 # Not covered, by design of this setup: the host's Docker daemon is reachable (Testcontainers), and a
 # container it starts has the host's network, not this firewall. Data can also leave through DNS queries
@@ -53,6 +58,7 @@ trap fail_closed EXIT
 ALLOWED_DOMAINS=(
     api.anthropic.com claude.ai platform.claude.com console.anthropic.com
     repo.maven.apache.org repo1.maven.org
+    api.osv.dev osv.dev tomcat.apache.org spring.io
 )
 # Optional (telemetry): allowed when they resolve, skipped with a warning when not.
 OPTIONAL_DOMAINS=(statsig.anthropic.com)

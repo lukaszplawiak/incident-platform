@@ -177,7 +177,7 @@ Who writes and who reads each file. One writer per file per stage; `progress.md`
 | `.ai/work/<item>/progress.md` | every stage, append-only | autopilot on resume, every stage |
 | `.ai/work/<item>/handoff.md` | implementer | reviewers, acceptance-reviewer |
 | `.ai/work/<item>/proofs.md` | implementer | acceptance-reviewer |
-| `.ai/runs/<item>/` (gitignored) | the test gate (`run-tests.sh`: test logs, the gate's artifact `gate-r*.json` and `dependency-tree-r*.txt`, also under `.ai/runs/manual/` for `/review`), autopilot | reviewers and acceptance-reviewer (the artifact their task names, #0-160); owner when debugging |
+| `.ai/runs/<item>/` (gitignored) | the test gate (`run-tests.sh`: test logs, the gate's artifact `gate-r*.json` and `dependency-tree-r*.txt`, also under `.ai/runs/manual/` for `/review`), autopilot | reviewers, acceptance-reviewer and the verifier (the artifact their task names, #0-160; the verifier reads nothing else, not even the logs, `read-scope.sh --name`); owner when debugging |
 | `.ai/audit/<date>-<target>.md` (`reviewers`, `pipeline`) | audit workflow | owner |
 | `.ai/audit/decisions.md` | `/apply-audit` (owner-run) | auditors |
 | `.ai/audit/benchmark/patterns.md` | owner | `seed-bugs` workflow |

@@ -449,5 +449,95 @@ expect 2 "dot-dot out of the repository"  "$WR" -- "$(file_call Write ../outside
 expect 2 "notebook outside"               "$WR" -- '{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"/tmp/n.ipynb"}}'
 expect 2 "no path"                        "$WR" -- '{"tool_name":"Write","tool_input":{}}'
 
+F="$HOOKS/webfetch-allowlist.sh"
+# fetch_call <agent_type or ""> <url> — a WebFetch call as a session-level hook sees it; "" = the session itself (no key).
+fetch_call() {
+    if [ -n "$1" ]; then
+        jq -cn --arg a "$1" --arg u "$2" '{agent_type: $a, tool_name: "WebFetch", tool_input: {url: $u, prompt: "p"}}'
+    else
+        jq -cn --arg u "$2" '{tool_name: "WebFetch", tool_input: {url: $u, prompt: "p"}}'
+    fi
+}
+echo "webfetch-allowlist (backlog #0-160, AC4)"
+expect 0 "verifier: an OSV advisory"                 "$F" -- "$(fetch_call verifier https://osv.dev/vulnerability/GHSA-abcd-efgh-ijkl)"
+expect 0 "verifier: the OSV API"                     "$F" -- "$(fetch_call verifier https://api.osv.dev/v1/vulns/CVE-2026-1234)"
+expect 0 "verifier: Maven Central metadata"          "$F" -- "$(fetch_call verifier https://repo1.maven.org/maven2/org/apache/tomcat/embed/tomcat-embed-core/maven-metadata.xml)"
+expect 0 "verifier: a GitHub advisory"               "$F" -- "$(fetch_call verifier https://github.com/advisories/GHSA-abcd-efgh-ijkl)"
+expect 0 "verifier: Tomcat's security page"          "$F" -- "$(fetch_call verifier https://tomcat.apache.org/security-10.html)"
+expect 0 "verifier: Spring's advisories"             "$F" -- "$(fetch_call verifier https://spring.io/security/cve-2026-1234)"
+expect 2 "verifier: another host"                    "$F" -- "$(fetch_call verifier https://example.com/vulnerability/x)"
+expect 2 "verifier: allowed host, other path"        "$F" -- "$(fetch_call verifier https://github.com/search/x)"
+expect 2 "verifier: a query string"                  "$F" -- "$(fetch_call verifier 'https://osv.dev/vulnerability/x?q=secret')"
+expect 2 "verifier: a fragment"                      "$F" -- "$(fetch_call verifier 'https://osv.dev/vulnerability/x#secret')"
+expect 2 "verifier: http"                            "$F" -- "$(fetch_call verifier http://osv.dev/vulnerability/x)"
+expect 2 "verifier: user info before the host"       "$F" -- "$(fetch_call verifier https://osv.dev@example.com/vulnerability/x)"
+expect 2 "verifier: a port"                          "$F" -- "$(fetch_call verifier https://osv.dev:8443/vulnerability/x)"
+expect 2 "verifier: a host that only starts allowed" "$F" -- "$(fetch_call verifier https://osv.dev.example.com/vulnerability/x)"
+expect 2 "verifier: an uppercase host"               "$F" -- "$(fetch_call verifier https://OSV.dev/vulnerability/x)"
+expect 2 "verifier: .. out of the prefix"            "$F" -- "$(fetch_call verifier https://github.com/advisories/../search)"
+expect 2 "verifier: %-encoded .."                    "$F" -- "$(fetch_call verifier https://github.com/advisories/%2e%2e/search)"
+expect 2 "verifier: // in the path"                  "$F" -- "$(fetch_call verifier https://github.com/advisories//x)"
+expect 2 "verifier: a backslash"                     "$F" -- "$(fetch_call verifier 'https://github.com/advisories/\..\search')"
+expect 2 "verifier: a space in the path"             "$F" -- "$(fetch_call verifier 'https://osv.dev/vulnerability/a b')"
+expect 2 "verifier: no path"                         "$F" -- "$(fetch_call verifier https://osv.dev)"
+expect 2 "verifier: no url"                          "$F" -- '{"agent_type":"verifier","tool_name":"WebFetch","tool_input":{"prompt":"p"}}'
+expect 2 "a reviewer, allowed URL"                   "$F" -- "$(fetch_call review-security https://osv.dev/vulnerability/x)"
+expect 2 "a name that only contains verifier"        "$F" -- "$(fetch_call not-verifier https://osv.dev/vulnerability/x)"
+expect 2 "the session itself (no agent_type)"        "$F" -- "$(fetch_call '' https://osv.dev/vulnerability/x)"
+expect 2 "an unknown option"                         "$F" --strict -- "$(fetch_call verifier https://osv.dev/vulnerability/x)"
+expect 0 "interactive: the owner's session"          "$F" --interactive -- "$(fetch_call '' https://example.com/x)"
+expect 0 "interactive: another agent"                "$F" --interactive -- "$(fetch_call Explore https://example.com/x?q=1)"
+expect 2 "interactive: the verifier is still checked" "$F" --interactive -- "$(fetch_call verifier https://example.com/x)"
+expect 0 "interactive: the verifier, allowed URL"    "$F" --interactive -- "$(fetch_call verifier https://osv.dev/vulnerability/x)"
+if [ "$("$F" --list | grep -c .)" -ge 1 ]; then echo "  ok: --list prints the allow-list"; else echo "::error::--list printed nothing"; failures=$((failures+1)); fi
+
+# Without its helper a hook would end in "command not found", which Claude Code does not treat as a block.
+mkdir -p "$WORK/nolib"; cp "$F" "$HOOKS/read-scope.sh" "$WORK/nolib/"
+expect 2 "webfetch-allowlist without _lib.sh"  "$WORK/nolib/webfetch-allowlist.sh" -- "$(fetch_call verifier https://osv.dev/vulnerability/x)"
+expect 2 "read-scope without _lib.sh"          "$WORK/nolib/read-scope.sh" .ai/runs/ -- "$(file_call Read .ai/runs/x.json)"
+
+RS="$HOOKS/read-scope.sh"
+echo "read-scope"
+expect 0 "read the gate's artifact"              "$RS" .ai/runs/ -- "$(file_call Read .ai/runs/0-25/gate-r1-0.json)"
+expect 0 "read it by absolute path"              "$RS" .ai/runs/ -- "$(file_call Read "$WORK/repo/.ai/runs/0-25/gate-r1-0.json")"
+expect 2 "read a source file"                    "$RS" .ai/runs/ -- "$(file_call Read svc/src/main/java/A.java)"
+expect 2 "read outside the repository"           "$RS" .ai/runs/ -- "$(file_call Read "$HOME/.ssh/id_ed25519")"
+expect 2 "read through .."                       "$RS" .ai/runs/ -- "$(file_call Read .ai/runs/../../docker/.env)"
+expect 2 "read with no path"                     "$RS" .ai/runs/ -- '{"tool_name":"Read","tool_input":{}}'
+expect 2 "no prefix given"                       "$RS" -- "$(file_call Read .ai/runs/x.json)"
+# read_call <agent_type or ""> <path> — a Read as a session-level hook sees it.
+read_call() {
+    if [ -n "$1" ]; then jq -cn --arg a "$1" --arg f "$2" '{agent_type: $a, tool_name: "Read", tool_input: {file_path: $f}}'
+    else jq -cn --arg f "$2" '{tool_name: "Read", tool_input: {file_path: $f}}'; fi
+}
+echo "read-scope --agent (session-level, review round 2 of #0-160)"
+expect 0 "the verifier reads the gate's artifact" "$RS" --agent verifier .ai/runs/ -- "$(read_call verifier .ai/runs/0-25/gate-r1-0.json)"
+expect 2 "the verifier reads a source file"       "$RS" --agent verifier .ai/runs/ -- "$(read_call verifier svc/src/main/java/A.java)"
+expect 2 "the verifier reads outside the repo"    "$RS" --agent verifier .ai/runs/ -- "$(read_call verifier "$HOME/.ssh/id_ed25519")"
+expect 0 "another agent reads a source file"      "$RS" --agent verifier .ai/runs/ -- "$(read_call review-security svc/src/main/java/A.java)"
+expect 0 "the session reads a source file"        "$RS" --agent verifier .ai/runs/ -- "$(read_call '' svc/src/main/java/A.java)"
+expect 2 "a name that only contains verifier"     "$RS" --agent not-verifier .ai/runs/ -- "$(read_call not-verifier svc/x)"
+expect 2 "--agent without a name"                 "$RS" --agent -- "$(read_call verifier .ai/runs/x.json)"
+expect 2 "--agent without a prefix"               "$RS" --agent verifier -- "$(read_call verifier .ai/runs/x.json)"
+
+# The verifier's own scope: only the files the gate writes, and no second name of another file (review round 3).
+echo "read-scope --name, hard links (review round 3 of #0-160)"
+GATE=(--name 'gate-r*.json' --name 'dependency-tree-r*.txt' .ai/runs/)
+(cd "$WORK/repo" && mkdir -p .ai/runs/0-25 docker && echo '{}' > .ai/runs/0-25/gate-r1-0.json \
+    && echo tree > .ai/runs/0-25/dependency-tree-r1-0.txt && echo log > .ai/runs/0-25/tests-r1-0.log \
+    && echo 'DB_PASSWORD=x' > docker/.env && ln docker/.env .ai/runs/0-25/gate-r9-0.json)
+expect 0 "the gate's artifact"                    "$RS" "${GATE[@]}" -- "$(file_call Read .ai/runs/0-25/gate-r1-0.json)"
+expect 0 "the gate's dependency tree"             "$RS" "${GATE[@]}" -- "$(file_call Read .ai/runs/0-25/dependency-tree-r1-0.txt)"
+expect 0 "the manual review's artifact"           "$RS" "${GATE[@]}" -- "$(file_call Read .ai/runs/manual/gate-r1.json)"
+expect 2 "the gate's test log"                    "$RS" "${GATE[@]}" -- "$(file_call Read .ai/runs/0-25/tests-r1-0.log)"
+expect 2 "the run's LOCK"                         "$RS" "${GATE[@]}" -- "$(file_call Read .ai/runs/LOCK)"
+expect 2 "an artifact's name outside .ai/runs/"   "$RS" "${GATE[@]}" -- "$(file_call Read svc/gate-r1.json)"
+expect 2 "a name with a matching directory"       "$RS" "${GATE[@]}" -- "$(file_call Read .ai/runs/gate-r1.json/x.log)"
+expect 2 "an artifact hard-linked to docker/.env" "$RS" "${GATE[@]}" -- "$(file_call Read .ai/runs/0-25/gate-r9-0.json)"
+expect 2 "--name without a pattern"               "$RS" --name -- "$(file_call Read .ai/runs/0-25/gate-r1-0.json)"
+expect 0 "session-level: the verifier, the artifact" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call verifier .ai/runs/0-25/gate-r1-0.json)"
+expect 2 "session-level: the verifier, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call verifier .ai/runs/0-25/tests-r1-0.log)"
+expect 0 "session-level: another agent, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call review-general .ai/runs/0-25/tests-r1-0.log)"
+
 if [ "$failures" -gt 0 ]; then echo "$failures hook test(s) failed"; exit 1; fi
 echo "All hook tests passed."
