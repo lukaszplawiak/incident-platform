@@ -4,8 +4,11 @@ Owned by the maintainer; agents never edit it. Moved from `.claude/agents/securi
 tenant-isolation section of `.claude/agents/code-reviewer.md` on 2026-10-05; the checks are unchanged,
 each now has an id so a blocking finding can cite it.
 
-Read by `review-security` (the whole file, for every change) and by the implementer, which reads this
-file in full for every item; the architect's plan only adds emphasis to the rules at risk.
+Read by `review-security` (the whole file, for every change) and by the implementer, which reads this file in
+full for every item; the architect's plan only adds emphasis to the rules at risk. When the diff touches a path
+of the Owner-only list of `.ai/rules/protected-paths.md` (e.g. the AI factory, CI, the devcontainer, the rules
+themselves), `review-security` also reads `factory.md` and judges that part by its `FAC-S` rules (backlog
+#0-161).
 
 Think offensively: for each piece of new or changed code, ask "how would I break this?" rather than "does
 this look reasonable?" Think as an attacker with an account in another tenant, or with a lower role in

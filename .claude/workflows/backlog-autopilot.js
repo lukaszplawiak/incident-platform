@@ -50,7 +50,11 @@ const MAX_AGENT_CALLS = 45        // budget per item; a runaway item stops inste
 
 const PANEL_ALWAYS = ['general', 'architecture', 'security', 'performance', 'docs']
 const CORE_RULE_FILES = ['general', 'architecture', 'security']          // the implementer always reads these in full
-const RULE_FILE_OF = { GEN: 'general', ARC: 'architecture', SEC: 'security', PERF: 'performance', MIG: 'migration', K8S: 'k8s', DOC: 'docs' }
+const RULE_FILE_OF = { GEN: 'general', ARC: 'architecture', SEC: 'security', PERF: 'performance', MIG: 'migration', K8S: 'k8s', DOC: 'docs',
+  // factory.md (FAC-S for security, FAC-A for architecture; backlog #0-161). No plan lists one today: the architect
+  // does not read factory.md, as no item reaches its paths. Mapped so that an FAC- id that ever reaches a plan is
+  // counted as its file, not dropped by ruleFilesOf (review of #0-161).
+  FAC: 'factory' }
 
 let calls = 0                     // work agents only; ops, shipper and notifications are not budgeted
 let budgetExceeded = false

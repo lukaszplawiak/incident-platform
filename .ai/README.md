@@ -147,9 +147,9 @@ Existing decisions are respected unless a new ADR changes them.
 | Role | Read |
 |---|---|
 | implementer | `.ai/rules/implementation.md`, `.ai/rules/protected-paths.md`, the item's acceptance criteria; `.ai/rules/review/general.md`, `architecture.md`, `security.md` in full and `_common.md` (blocking criteria); from the other review files, the rules the plan lists, or the whole file when the autopilot asks for a self-check |
-| reviewer of dimension D | `.ai/rules/review/_common.md` (with `.ai/rules/protected-paths.md`), `.ai/rules/review/<D>.md` |
+| reviewer of dimension D | `.ai/rules/review/_common.md` (with `.ai/rules/protected-paths.md`), `.ai/rules/review/<D>.md`; security and architecture also `factory.md` when the diff touches an Owner-only path (#0-161) |
 | acceptance reviewer | `.ai/rules/acceptance.md` |
-| architect | `.ai/rules/ready.md`, `.ai/rules/protected-paths.md`, all of `.ai/rules/review/` (it selects the rules the implementer gets), `.ai/rules/planning.md` ("Touches") |
+| architect | `.ai/rules/ready.md`, `.ai/rules/protected-paths.md`, all of `.ai/rules/review/` but `factory.md` (it selects the rules the implementer gets; no item reaches the factory's paths), `.ai/rules/planning.md` ("Touches") |
 | planner | `.ai/rules/planning.md`, `.ai/rules/ready.md`, `.ai/rules/protected-paths.md`, `.ai/plan/queue.md` |
 | ready-checker (`/ready`) | `.ai/rules/ready.md`, `.ai/rules/protected-paths.md` |
 | auditor | `.ai/rules/audit.md` (the pipeline auditor: its "Pipeline audit"), `.ai/audit/decisions.md` |

@@ -132,10 +132,11 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-161](#0-161-no-review-rule-covers-the-ai-factory-itself) | No review rule covers the AI factory itself | design | Medium | Open |
+| [0-161](#0-161-no-review-rule-covers-the-ai-factory-itself) | No review rule covers the AI factory itself | design | Medium | In progress |
 | [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | Open |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
+| [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
 
 ---
 
@@ -2111,6 +2112,14 @@ ClusterRole or ClusterRoleBinding added to one environment would act across the 
 rule is written, decide whether the check should also refuse every cluster-scoped kind other than Namespace in an
 overlay's render; that part touches `.github/scripts/check-k8s-environments.rb` and its test as well.
 
+**Also (the research of #0-161, 2026-10-24).** `.ai/context/security.md` "CI workflows" (privileged triggers,
+secrets only in an environment `main` may use, a step holding a secret relying on nothing that ran after the
+build, `permissions:` per job) is knowledge without ids, so none of it can be cited as blocking either. #0-161
+left CI out of `factory.md` on purpose (a different domain: GitHub's tokens and the supply chain, not agents),
+but its form is the precedent: a file read only when the diff touches `.github/workflows/` or `.github/actions/`
+(or rules in `security.md`, read by the implementer for every item — which no autopilot item needs, as
+`.github/` is Owner-only); decide here which.
+
 ---
 
 ### 0-139. The HPAs scale the JVM services on memory
@@ -2509,11 +2518,14 @@ access.
 
 ### 0-161. No review rule covers the AI factory itself
 
-**Type:** design · **Priority:** Medium · **Status:** Open — `ruleGap` of review-security, review-architecture and
+**Type:** design · **Priority:** Medium · **Status:** In progress — `ruleGap` of review-security, review-architecture and
 review-general in both rounds of the `/review` of #0-160 (2026-10-23/24); owner's decision: B′ below (2026-10-24)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
-**Touches:** rules (.ai/rules/review/factory.md (new), security.md, architecture.md, _common.md), factory
-(.claude/workflows/backlog-autopilot.js `RULE_FILE_OF`), .ai/context/security.md
+**Touches:** rules (.ai/rules/review/factory.md (new), security.md, architecture.md, _common.md,
+.ai/rules/audit.md, .ai/rules/implementation.md, .ai/rules/protected-paths.md "Who uses it"), factory
+(.claude/workflows/backlog-autopilot.js `RULE_FILE_OF`, .claude/agents/architect.md, review-security.md,
+review-architecture.md, .claude/skills/review-procedure/SKILL.md, .claude/skills/review/SKILL.md), .ai/decisions/
+(ADR-0038), .ai/context/security.md, docs (README.md "Infrastructure Hardening", docs/ai-factory.md, .ai/README.md)
 
 **Problem.** `.ai/rules/review/security.md`, `architecture.md` and `general.md` are about the services' code
 (tenant isolation, the security chain, decided patterns); nothing in them covers the factory: which agent has the
@@ -2535,13 +2547,32 @@ dimensions); `RULE_FILE_OF` in `backlog-autopilot.js` maps `FAC` to `factory`, s
 section "AI factory" in `.ai/context/security.md`, without ids, as knowledge for the reader (why the verifier has
 the network, where the allow-list is), like "CI workflows".
 
+**Decided (owner, 2026-10-24, after the research).** The factory's paths are the **Owner-only list** of
+`protected-paths.md`, not a list of `factory.md`'s own (a second copy would drift, #0-122; every reviewer reads
+that file already). The architect reads every rule file but `factory.md` (`architect.md` said "all": without the
+exception AC2 fails for it), and `_common.md`'s "nothing else from `.ai/rules/review/`" names the exception, as do
+the two reviewers' definitions and `review-procedure`. `FAC-S01` is the rule of two (an agent reading untrusted
+text never both reaches a secret and sends data out), the general case the other rules spell out; a section
+"Enforced by checks" names what Factory guards and Lint Workflows already check, like `architecture.md` §4. CI
+workflows stay out (`.github/workflows/` rules are #0-136's). The review of this change found that no audit reads
+`RULE_FILE_OF` (only `ruleFilesOf`, for the architect's plan): its `FAC` entry is kept so that an `FAC-` id never
+goes uncounted, not for the audits; `/review` decides whether `factory.md` applies (Step 2, from the list on
+`main`) and tells the two reviewers, and ADR-0038 records the layout. Review round 2 (security, `FAC-S03`, blocking):
+the first version pre-approved `Bash(git show *)`, which takes `--output=<file>` in a session with no Bash hook;
+`/review` now pre-approves only `git show origin/main:.ai/rules/protected-paths.md`, an unreadable list means the
+rules apply, and the report says whether they did; the older `git diff *` and the rules read from the branch are
+#0-165.
+
 **Acceptance criteria.**
 AC1. A finding on a change to the factory's paths can cite a `FAC-S`/`FAC-A` rule by id and block.
-AC2. A change that touches no factory path costs the reviewers and the implementer nothing new to read.
+AC2. A change that touches no factory path costs the reviewers, the implementer and the architect nothing new to
+read.
 AC3. The rules cover at least: network tools per agent and the allow-list's one source, firewall hosts (by IP),
 tools and read/write scopes per agent, hooks that refuse with exit 2 on any failure, no secret readable by an agent
 that can send, one list per control with its copies checked in CI, fail-closed agent answers, every new stage in
 the PR record.
+AC4. `review-security` and `review-architecture` are told to read `factory.md` exactly when the diff touches a path
+of the Owner-only list (`_common.md`, their definitions, `review-procedure`), and no other agent is.
 
 ---
 
@@ -2623,6 +2654,38 @@ AC1. For every agent whose frontmatter runs `readonly-bash.sh` or `write-scope.s
 hook with the same arguments for that `agent_type`, shown by test cases (the agent refused, another agent passed).
 AC2. Factory guards fails when an agent's frontmatter guard has no session-level twin, or a different one.
 AC3. README "Infrastructure Hardening" names the session-level guards and no longer lists this gap.
+
+### 0-165. The owner's `/review` session trusts the branch it reviews
+
+**Type:** security · **Priority:** Medium · **Status:** Open — `nonBlocking` of review-security in round 2 of the
+`/review` of #0-161 (2026-10-24), whose blocking finding (`allowed-tools: Bash(git show *)`) that change fixed
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/skills/review/SKILL.md, .claude/settings.json, .claude/hooks/ (a session-level Bash
+guard), .claude/hooks/test-hooks.sh, .claude/agents/review-*.md, .claude/skills/review-procedure/SKILL.md), docs
+(README.md "Infrastructure Hardening", docs/ai-factory.md)
+
+**Problem.** `/review` is meant for a branch the owner did not write too (its Step 3 names "a bot's branch
+checked out"), but the session trusts it in two ways:
+1. `allowed-tools: Bash(git diff *)` pre-approves every `git diff`, including `--output=<file>` (writes the diff
+   anywhere: verified for `git show` with git 2.54, 2026-10-24), `--ext-diff` and `--textconv` (run a program the
+   repository's config names). The session has no Bash hook (`readonly-bash.sh` guards the reviewers,
+   `guard-protected-bash.sh` autopilot sessions), so text from the change under review that steers it into
+   `git diff --output=~/.zshenv …` writes a file the owner's shell runs, without a prompt.
+2. The reviewers read the rules they judge by — `_common.md`, their dimension's file, `factory.md` — from the
+   working tree, so the branch under review can rewrite them. Only `factory.md`'s trigger list is read from
+   `origin/main` (#0-161).
+
+**Approach (to analyse).** For 1: a session-level PreToolUse hook on Bash for the owner's sessions that refuses
+`--output`, `--ext-diff`, `--textconv` and `-c` on `git diff`/`git show`/`git log` (the parser of
+`readonly-bash.sh` already splits the words; reuse it), or exact `allowed-tools` entries only. For 2: the
+reviewers read `.ai/rules/review/` from `origin/main` (`git show`, which their `readonly-bash.sh` allows) when the
+diff touches `.ai/rules/`, or `/review` refuses to run on a branch that changes `.ai/rules/` unless the owner says
+it is theirs. Check whether Claude Code documents `allowed-tools` matching for options.
+
+**Acceptance criteria.**
+AC1. In the owner's `/review`, no pre-approved command can write a file outside the scratchpad or run a program
+named by the repository's config, shown by test cases (`--output`, `--ext-diff`, `--textconv`, `-c`).
+AC2. A branch under `/review` that changes a rule file is judged by the rules on `origin/main`.
 
 ---
 

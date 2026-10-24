@@ -51,3 +51,29 @@ Read before changing anything under `.github/workflows/` or `.github/actions/`.
   and **actions** are pinned by commit SHA (backlog #0-60). A secret reaches only the step that uses it, as an
   environment variable, not inline in a `run:` script, and is read by the tool itself, never passed as an
   argument (the OWASP plugin reads `NVD_API_KEY` through `nvdApiKeyEnvironmentVariable`, backlog #0-150).
+
+## AI factory
+
+Read before changing anything under `.claude/`, `scripts/factory/` or `.devcontainer/`. The rules a review blocks
+on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are what they are.
+
+- **The rule of two.** An agent that reads text someone else controls (a diff, a PR, a web page) is assumed to
+  follow it. It may then have at most one of: reading something secret, sending data out. The reviewers read
+  the diff and have neither network nor secrets (`readonly-bash.sh`: git only); the verifier has the network
+  and therefore reads only the files the test gate wrote, never the diff (ADR-0037).
+- **Where each list lives.** The protected paths: `.ai/rules/protected-paths.md` (copies in the autopilot's
+  deny rules, `guard-protected-bash.sh` and CODEOWNERS, checked by `check-protected-paths.sh`). The WebFetch
+  allow-list: `.claude/hooks/webfetch-allowlist.sh --list` (its copies — the autopilot's
+  `WebFetch(domain:…)` rules, the firewall's `ALLOWED_DOMAINS`, the prefixes in `verifier.md` — checked by
+  `check-web-access.sh`). The pinned CI tools: their `# renovate:` comments in the workflows
+  (`check-pinned-tools.sh`).
+- **Layers, and what each one is worth.** Permission rules in the settings files match a tool and a host,
+  for every agent alike. Hooks are code: they can tell agents apart (`agent_type`), and they block only by
+  exiting 2 — any other exit is a non-blocking error and the call runs. Frontmatter hooks are documented
+  for agents of the Agent tool, an @-mention or `--agent`, not for the agents a `Workflow` spawns and never
+  in `claude -p`; session-level hooks are documented for every subagent (#0-164). The devcontainer's
+  firewall opens hosts by IP for every process in it, and binds the agents' commands, not the code they run
+  through Docker (#0-116).
+- **Shadow mode is a set of denies.** A session cannot merge past the ruleset, approve a PR, or change the
+  rulesets, environments, secrets or collaborators (ADR-0034, `.claude/settings.json`); the autopilot cannot
+  merge at all until phase 3 (`docs/ai-factory.md`).
