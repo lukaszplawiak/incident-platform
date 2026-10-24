@@ -53,6 +53,21 @@ expect 2 "edit it through a symlinked path"        "$M" -- "$(file_call Edit "$W
 expect 0 "edit a migration only on this branch"    "$M" -- "$(file_call Edit svc/src/main/resources/db/migration/V2__b.sql)"
 expect 0 "write a new migration"                   "$M" -- "$(file_call Write svc/src/main/resources/db/migration/V3__c.sql)"
 expect 0 "edit a Java file"                        "$M" -- "$(file_call Edit svc/src/main/java/A.java)"
+# A git that fails on a migration's path refuses the edit; a base that does not exist lets it through with a
+# warning, the second of the hook's two exceptions to FAC-S04 (security review of #0-162).
+expect 2 "git cannot find the repository"          env GIT_DIR="$WORK/no-such-git-dir" "$M" -- "$(file_call Edit "$WORK/repo/svc/src/main/resources/db/migration/V2__b.sql")"
+expect 0 "control: no git needed for a Java file"  env GIT_DIR="$WORK/no-such-git-dir" "$M" -- "$(file_call Edit "$WORK/repo/svc/src/main/java/A.java")"
+expect 0 "a base that does not exist (warned)"     env FACTORY_BASE_REF=refs/heads/no-such-base "$M" -- "$(file_call Edit svc/src/main/resources/db/migration/V1__a.sql)"
+# A git that fails only when it lists the base: a migration that is not on the base would pass if a failure read
+# as "not there" (security review round 2 of #0-162).
+mkdir -p "$WORK/git-ls-tree-fails"
+printf '#!/bin/sh\ncase " $* " in *" ls-tree "*) exit 128 ;; esac\nexec %s "$@"\n' "$(command -v git)" >"$WORK/git-ls-tree-fails/git"
+chmod +x "$WORK/git-ls-tree-fails/git"
+expect 2 "git fails listing the base"              env PATH="$WORK/git-ls-tree-fails:$PATH" "$M" -- "$(file_call Edit svc/src/main/resources/db/migration/V2__b.sql)"
+expect 0 "a name with a glob character, not on the base" "$M" -- "$(file_call Write 'svc/src/main/resources/db/migration/V*__a.sql')"
+warn=$(cd "$WORK/repo" && file_call Edit svc/src/main/resources/db/migration/V1__a.sql | FACTORY_BASE_REF=refs/heads/no-such-base "$M" 2>&1 >/dev/null)
+case "$warn" in *"base refs/heads/no-such-base not found"*) echo "  ok: the missing base is named" ;;
+    *) echo "::error::a base that does not exist: no warning naming it (got '$warn')"; failures=$((failures+1)) ;; esac
 
 T="$HOOKS/guard-tests.sh"
 echo "guard-tests"
@@ -538,6 +553,84 @@ expect 2 "--name without a pattern"               "$RS" --name -- "$(file_call R
 expect 0 "session-level: the verifier, the artifact" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call verifier .ai/runs/0-25/gate-r1-0.json)"
 expect 2 "session-level: the verifier, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call verifier .ai/runs/0-25/tests-r1-0.log)"
 expect 0 "session-level: another agent, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call review-general .ai/runs/0-25/tests-r1-0.log)"
+
+echo "every hook fails closed (backlog #0-162)"
+# Claude Code runs the call after any exit status but 2, so each way a hook can fail must end in 2. One row per
+# hook in this directory: its arguments and a call it allows, so that a 2 below can only come from the failure.
+# A hook without a row fails here, and so in Factory guards: a new hook gets these cases or does not merge.
+FAILS_CLOSED=(
+    "guard-migrations.sh||$(file_call Edit svc/src/main/java/A.java)"
+    "guard-tests.sh||$(bash_call './mvnw test -pl incident-service')"
+    "guard-protected-bash.sh||$(bash_call 'git status')"
+    "readonly-bash.sh||$(bash_call 'git status')"
+    "write-scope.sh|.ai/audit/|$(file_call Write .ai/audit/2026-11-03.md)"
+    "factory-ops-bash.sh||$(bash_call 'scripts/factory/preflight.sh')"
+    "guard-git-push.sh||$(bash_call 'git status')"
+    "guard-factory-scripts.sh||$(bash_call 'git status')"
+    "guard-write-in-repo.sh||$(file_call Write svc/src/main/java/A.java)"
+    "webfetch-allowlist.sh||$(fetch_call verifier https://osv.dev/vulnerability/x)"
+    "read-scope.sh|.ai/runs/|$(file_call Read .ai/runs/x.json)"
+)
+# Three broken copies of the directory: no helper; a helper that aborts the hook while it loads (an unset variable
+# under set -u ends the shell, which `|| exit 2` on the load line cannot see: only the EXIT trap turns it into 2);
+# and a jq that fails, on PATH (installed, so json_get does not fall back to python3).
+mkdir -p "$WORK/fc-nolib" "$WORK/fc-abort" "$WORK/fc-jq"
+for f in "$HOOKS"/*.sh; do
+    case "${f##*/}" in _lib.sh|test-hooks.sh) continue ;; esac
+    cp "$f" "$WORK/fc-nolib/"; cp "$f" "$WORK/fc-abort/"
+done
+cp "$HOOKS/_lib.sh" "$WORK/fc-abort/"
+printf ': "$no_such_variable_0_162"\n' >>"$WORK/fc-abort/_lib.sh"
+printf '#!/bin/sh\nexit 5\n' >"$WORK/fc-jq/jq"; chmod +x "$WORK/fc-jq/jq"
+for row in "${FAILS_CLOSED[@]}"; do
+    hook=${row%%|*} rest=${row#*|}
+    arg=${rest%%|*} json=${rest#*|}
+    set -f
+    # shellcheck disable=SC2206
+    args=($arg)
+    set +f
+    expect 0 "$hook: control, the call is allowed"   "$HOOKS/$hook" ${args[@]+"${args[@]}"} -- "$json"
+    expect 2 "$hook: without _lib.sh"                "$WORK/fc-nolib/$hook" ${args[@]+"${args[@]}"} -- "$json"
+    expect 2 "$hook: aborts while loading"           "$WORK/fc-abort/$hook" ${args[@]+"${args[@]}"} -- "$json"
+    expect 2 "$hook: jq fails"                       env PATH="$WORK/fc-jq:$PATH" "$HOOKS/$hook" ${args[@]+"${args[@]}"} -- "$json"
+done
+for f in "$HOOKS"/*.sh; do
+    name=${f##*/}
+    case "$name" in _lib.sh|test-hooks.sh) continue ;; esac
+    found=0
+    for row in "${FAILS_CLOSED[@]}"; do [ "${row%%|*}" = "$name" ] && found=1; done
+    if [ "$found" = 1 ]; then echo "  ok: $name has fail-closed cases"
+    else echo "::error::$name has no row in FAILS_CLOSED (test-hooks.sh): add one, with a call it allows"; failures=$((failures+1)); fi
+done
+# The guarded load also refuses when the helper is unreadable, not only missing (a trap cannot see that one: `.`
+# fails, the hook goes on and ends in exit 0). Skipped as root, who reads the file anyway.
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$WORK/fc-unreadable"; cp "$HOOKS/_lib.sh" "$HOOKS/guard-tests.sh" "$WORK/fc-unreadable/"
+    chmod 000 "$WORK/fc-unreadable/_lib.sh"
+    expect 2 "guard-tests.sh: _lib.sh unreadable"    "$WORK/fc-unreadable/guard-tests.sh" -- "$(bash_call './mvnw test -pl incident-service')"
+    chmod 644 "$WORK/fc-unreadable/_lib.sh"
+else
+    echo "  skip: _lib.sh unreadable (running as root)"
+fi
+# One layer down: json_get tells an absent field (empty, 0) from a parser that failed or empty input (4) and from
+# no parser at all (3), with jq and with the python3 fallback (a PATH that holds only the python3 given).
+JG="$WORK/jg"
+mkdir -p "$JG/none" "$JG/py-ok" "$JG/py-fails"
+ln -s "$(command -v python3)" "$JG/py-ok/python3"
+printf '#!/bin/sh\nexit 1\n' >"$JG/py-fails/python3"; chmod +x "$JG/py-fails/python3"
+# jg_rc <PATH or empty for the normal one> <json> <path>
+jg_rc() {
+    local path=${1:-$PATH}
+    env PATH="$path" "$BASH" -c '. "$1"/_lib.sh; json_get "$2" "$3" >/dev/null' _ "$HOOKS" "$2" "$3"; echo $?
+}
+for case_ in "0||{\"a\":1}|.b|jq: an absent field" "4||not json|.a|jq: input that does not parse" \
+             "4|||.a|jq: empty input" "0|$JG/py-ok|{\"a\":1}|.a|python3: a field" \
+             "4|$JG/py-ok|not json|.a|python3: input that does not parse" "4|$JG/py-ok||.a|python3: empty input" \
+             "4|$JG/py-fails|{\"a\":1}|.a|python3 fails" "3|$JG/none|{\"a\":1}|.a|no parser at all"; do
+    want=${case_%%|*} r=${case_#*|}; pth=${r%%|*} r=${r#*|}; in=${r%%|*} r=${r#*|}; path=${r%%|*} name=${r#*|}
+    got=$(jg_rc "$pth" "$in" "$path")
+    if [ "$got" = "$want" ]; then echo "  ok: json_get: $name"; else echo "::error::json_get: $name: expected $want, got $got"; failures=$((failures+1)); fi
+done
 
 if [ "$failures" -gt 0 ]; then echo "$failures hook test(s) failed"; exit 1; fi
 echo "All hook tests passed."

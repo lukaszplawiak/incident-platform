@@ -20,7 +20,10 @@
 # run the session-level hooks in settings.autopilot.json are the guard.
 # ============================================================
 set -uo pipefail
-. "$(dirname "$0")/_lib.sh"
+# Fails closed (backlog #0-162): Claude Code runs the call after any exit status but 2, so a crash (an unset
+# variable under set -u, a missing command) and a helper that does not load refuse it here.
+trap '_rc=$?; [ "$_rc" -eq 0 ] || [ "$_rc" -eq 2 ] || { echo "BLOCKED by ${0##*/}: the guard failed (exit $_rc), so the call is refused" >&2; exit 2; }' EXIT
+. "$(dirname "$0")/_lib.sh" || { echo "BLOCKED by ${0##*/}: cannot load _lib.sh" >&2; exit 2; }
 
 mode=${1:-}
 HINT="Read a file with the Read tool. Search with git grep -n -e <pattern> -e <other> -- <paths> (each alternative its own -e, not a|b) and list files with git ls-files; one command per call, from the repository root (no git -C)."
@@ -31,7 +34,7 @@ case "$mode" in
 esac
 input=$(cat)
 cmd=$(json_get "$input" '.tool_input.command'); rc=$?
-[ "$rc" -eq 3 ] && block "jq or python3 is required for this agent's Bash guard"
+json_checked "$rc" "this agent's Bash guard"
 [ -n "$cmd" ] || exit 0
 
 # '$(' is the literal text of a substitution, matched, not run (backlog #0-149).
