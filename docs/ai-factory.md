@@ -140,7 +140,9 @@ list; the "Factory guards" check fails when one stops covering it.
 nothing can start, the run ends with `NOTHING_TO_DO` and names the row and why.
 
 **Which rules the implementer reads.** The panel judges every change against the full files of
-`.ai/rules/review/`. The implementer reads `general.md`, `architecture.md` and `security.md` in full for
+`.ai/rules/review/` (but `factory.md`, the rules for the factory itself: security and architecture read it only
+when a diff touches an Owner-only path of `protected-paths.md`, which no autopilot item does — in practice the
+owner's `/review`, backlog #0-161). The implementer reads `general.md`, `architecture.md` and `security.md` in full for
 every item; from `performance.md`, `migration.md`, `k8s.md` and `docs.md` it reads the rules the architect
 listed in the plan, each with why it applies. After implementing, `changed-paths.sh` maps the diff onto
 rule files (a migration → `migration.md`, a Kafka listener or a repository → `performance.md`, an endpoint

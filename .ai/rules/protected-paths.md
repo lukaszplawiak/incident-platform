@@ -14,6 +14,10 @@ work (`ready.md` point 3): it is `human-only`, or split so the owner does that p
 - **Agents** read this file: `ready-checker` and `/ready` (the item is not autopilot work), the planner
   (not queued), the architect (stop before the implementer), the implementer (out of scope, stop), every
   reviewer (`NEEDS_HUMAN`, `.ai/rules/review/_common.md`).
+- **`/review`** reads the Owner-only list as it is on `main` (its Step 2, `git show
+  origin/main:.ai/rules/protected-paths.md`): a diff that touches one of its paths has `review-security` and
+  `review-architecture` also read `.ai/rules/review/factory.md` (backlog #0-161, ADR-0038); when the list
+  cannot be read, those rules apply.
 - **Three copies stay**, because the last line of defence must not depend on parsing this file: the
   Edit/Write deny rules of `.claude/settings.autopilot.json`, the shell-write check of
   `.claude/hooks/guard-protected-bash.sh`, and `.github/CODEOWNERS` (the owner's review on a PR, for the

@@ -17,7 +17,9 @@ are in `CLAUDE.md` and `.ai/context/`; this file says how an unattended implemen
 
 ## The rules you are judged by
 
-The panel reviews every change against the full rule files of `.ai/rules/review/`. You read:
+The panel reviews every change against the full rule files of `.ai/rules/review/` (but `factory.md`, which judges
+only the paths of the Owner-only list of `protected-paths.md`: a change you may not make, so you never read it;
+backlog #0-161). You read:
 
 - **always, in full**: `general.md`, `architecture.md`, `security.md` (they judge every change), and the
   blocking criteria in `_common.md` ("When a finding is blocking");

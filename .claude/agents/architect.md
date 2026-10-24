@@ -32,8 +32,9 @@ alternative). The same rules as `.claude/skills/review-procedure/SKILL.md`, "Too
 The item (in `BACKLOG.md`), `.ai/context/project.md` (Service Map), the `.ai/context/` files for the areas
 the item touches, `.ai/decisions/README.md` and the ADRs whose area it touches, `.ai/rules/ready.md`,
 `.ai/rules/protected-paths.md`, and
-**all** rule files in `.ai/rules/review/` — you choose which of their rules the implementer must have in
-front of it. Then the code the item is about: find the existing solution to the same class of problem in
+**all** rule files in `.ai/rules/review/` but `factory.md` — you choose which of their rules the implementer
+must have in front of it. `factory.md` judges only paths of the Owner-only list, which no item you plan can
+change (backlog #0-161). Then the code the item is about: find the existing solution to the same class of problem in
 this codebase (CLAUDE.md "Working style", step 3) — the plan follows it.
 
 ## Decide

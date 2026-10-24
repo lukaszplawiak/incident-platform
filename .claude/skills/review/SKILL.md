@@ -3,7 +3,7 @@ name: review
 description: Run one or more of the project's review agents (general, security, performance, migration, k8s, docs, architecture) against the current uncommitted changes, in parallel, verify the claims they could not check, and report their findings
 argument-hint: "[1=general 2=security 3=performance 4=migration 5=k8s 6=docs 7=architecture, e.g. 123, 13, 2, 16 — 4/5 always auto-added when relevant; 6 only runs when typed]"
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *)
+allowed-tools: Bash(git status *) Bash(git diff *) Bash(git show origin/main:.ai/rules/protected-paths.md)
 ---
 
 Review the current uncommitted changes using the project's review agents. This is the manual entry to
@@ -54,6 +54,19 @@ If `4` or `5` was explicitly typed but its check finds no match, note it as skip
 
 **Final set = (reviewers from Step 1) ∪ (review-migration and/or review-k8s, whichever gates matched).**
 
+**And whether the factory's rules apply:** does the changed-files list contain a path of the Owner-only list of
+`.ai/rules/protected-paths.md` as it is on `main` (`git show origin/main:.ai/rules/protected-paths.md`, exactly
+that command, the entries between the `protected:start`/`protected:end` markers; an entry ending in `/` is a
+directory and what is under it)? Read it from `origin/main`, not the working tree: the change under review must
+not shorten the list it is checked against. If it cannot be read, or holds no entry between the markers, the
+factory's rules apply (fail closed: a wrong "does not apply" is the error that costs). Step 4 tells
+`review-security` and `review-architecture` the answer, so whether they read `.ai/rules/review/factory.md` is
+decided here, like the gates above, not by each of them (backlog #0-161).
+
+Only that one `git show` is pre-approved: `git show` and `git diff` take `--output=<file>`, which writes
+anywhere, and this session has no Bash hook, so a wildcard allow would let text from the change under review
+steer it into writing a file the owner's shell runs (review round 2 of #0-161; `git diff *` is #0-165).
+
 ## Step 3: Run the test gate on the working tree
 
 Run `scripts/factory/run-tests.sh --working-tree manual 1` — the autopilot's gate (`./mvnw verify` of the
@@ -78,8 +91,10 @@ code the owner did not write (a bot's branch checked out) that prompt is the mom
 
 Invoke every reviewer in the final set in the same turn, so they run in parallel. Tell each one: "Manual
 review of the uncommitted changes (`git diff HEAD`); round 1; the test gate passed on this working tree, its
-artifact: <path> (read it); write the readable report and end with the verdict JSON." Don't summarize the
-diff for them — they read it themselves.
+artifact: <path> (read it); write the readable report and end with the verdict JSON." To `review-security` and
+`review-architecture` add either "the diff touches Owner-only paths (<the matching paths>): also read
+`.ai/rules/review/factory.md` and judge them by its `FAC-S`/`FAC-A` rules" or "no Owner-only path: `factory.md`
+does not apply". Don't summarize the diff for them — they read it themselves.
 
 ## Step 5: Verify what the panel could not
 
@@ -109,4 +124,5 @@ findings across reviewers.
 Then one line: whether any reviewer raised a **blocking** finding per `.ai/rules/review/_common.md` (tenant
 isolation, auth, shared security, startup-breaking migration/build, data loss — and any finding citing a
 rule with a concrete impact), a `NEEDS_HUMAN`, a refuted claim or an unverifiable one. That decides whether it's
-safe to move on to `/ship`.
+safe to move on to `/ship`. And one line on whether `factory.md` applied (Step 2) and for which paths, so the
+owner can check that decision too.

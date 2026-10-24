@@ -45,7 +45,9 @@ four times in one review, and one stopped reading after a refusal.
 
 ## 2. What to read, and only that
 
-1. `_common.md` and your dimension's file.
+1. `_common.md` and your dimension's file; for security and architecture also `factory.md` when the diff
+   touches a path of the Owner-only list of `.ai/rules/protected-paths.md` (`_common.md` says which of its
+   rules are yours).
 2. `.ai/work/<item>/handoff.md` when it exists: facts to verify, not arguments to accept.
 3. The `.ai/context/` file your criteria file names, and the ADRs whose area the change touches
    (`.ai/decisions/README.md` has an area column — do not read all ADRs).

@@ -16,7 +16,9 @@ hooks:
 
 You are the architecture reviewer: you judge the change as part of the whole system. You are one dimension of a review panel: dimension `architecture`.
 
-- Criteria (what you check, each with a rule id): `.ai/rules/review/architecture.md`
+- Criteria (what you check, each with a rule id): `.ai/rules/review/architecture.md`; and the `FAC-A` rules
+  of `.ai/rules/review/factory.md` when the diff touches a path of the Owner-only list of
+  `.ai/rules/protected-paths.md` (backlog #0-161)
 - Common rules (when a finding is blocking, rounds, NEEDS_HUMAN, verdict JSON, your limits):
   `.ai/rules/review/_common.md`
 - Procedure (how to get the diff and what to read): the preloaded `review-procedure` skill

@@ -1,15 +1,18 @@
 # Review rules common to every dimension
 
 Owned by the maintainer. Agents read this file and never edit it. Every reviewer reads this file and
-the file of its own dimension, nothing else from `.ai/rules/review/`.
+the file of its own dimension, nothing else from `.ai/rules/review/` — except `factory.md`, which
+`review-security` and `review-architecture` also read when the diff touches a path of the Owner-only list
+of `.ai/rules/protected-paths.md`: its `FAC-S` rules are security's, its `FAC-A` rules architecture's
+(backlog #0-161).
 
 ## Dimensions and who owns what
 
 | Dimension | Agent | Criteria | Runs |
 |---|---|---|---|
 | general | `review-general` | `general.md` — correctness, tests, conventions | always |
-| architecture | `review-architecture` | `architecture.md` — boundaries, decided patterns, ADRs | always |
-| security | `review-security` | `security.md` — tenant isolation, auth, secrets, injection | always |
+| architecture | `review-architecture` | `architecture.md` — boundaries, decided patterns, ADRs; `factory.md` (`FAC-A`) when the diff touches an Owner-only path | always |
+| security | `review-security` | `security.md` — tenant isolation, auth, secrets, injection; `factory.md` (`FAC-S`) when the diff touches an Owner-only path | always |
 | performance | `review-performance` | `performance.md` — hot paths, queries, Kafka, memory | always (may answer "not performance-sensitive") |
 | migration | `review-migration` | `migration.md` — Flyway | the diff touches `*/src/main/resources/db/migration/*.sql` or an `@Entity` |
 | k8s | `review-k8s` | `k8s.md` — Dockerfile, `.dockerignore`, `k8s/`, module POMs | the diff touches `k8s/`, a `Dockerfile`, a `pom.xml`, the root `.dockerignore` or a `Dockerfile.dockerignore` |
@@ -23,7 +26,7 @@ isolation is owned by `security`, even when you find it while checking something
 
 A finding is **blocking** only if all three hold:
 
-1. It cites a rule of your dimension by id (`ruleId`, e.g. `SEC-03`). No rule, no blocking finding: write
+1. It cites a rule of your dimension by id (`ruleId`, e.g. `SEC-03`, or `FAC-S04` for security). No rule, no blocking finding: write
    it as non-blocking and, if it should have been a rule, say so in `ruleGap`.
 2. It names a concrete failure: which tenant, which request, which data, which startup, which CI job —
    `impact` is a scenario, not a category ("could be a security risk" is not an impact).

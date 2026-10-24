@@ -154,7 +154,8 @@ self-check did not cover is a **selection miss** of the architect (the self-chec
 when the plan listed no rule from it, so a file with one listed rule and a missed second one shows up
 here). A blocking finding on a listed rule, or on a
 core rule (`GEN-`, `ARC-`, `SEC-`), is an **implementation miss**: the implementer had the rule in front
-of it. Rules missed repeatedly are candidates for the architect's calibration, or for a test (a rule a
+of it. `FAC-` rules (`factory.md`) are neither: they judge only paths no autopilot item reaches, so they appear
+in the owner's manual `/review` alone (backlog #0-161). Rules missed repeatedly are candidates for the architect's calibration, or for a test (a rule a
 check enforces needs no one to remember it).
 
 ## Pipeline audit

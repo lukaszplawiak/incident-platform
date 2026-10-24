@@ -4,8 +4,11 @@ Owned by the maintainer; agents never edit it. Sections 2 and 3 were moved from
 `.claude/agents/code-reviewer.md` on 2026-10-05 (unchanged, now with ids); section 1 and 4 are new. The
 `architect` agent reads this file too, before it plans an item.
 
-Read by `review-architecture` (the whole file, for every change) and by the implementer, which reads this
-file in full for every item; the architect's plan only adds emphasis to the rules at risk.
+Read by `review-architecture` (the whole file, for every change) and by the implementer, which reads this file
+in full for every item; the architect's plan only adds emphasis to the rules at risk. When the diff touches a
+path of the Owner-only list of `.ai/rules/protected-paths.md` (e.g. the AI factory, CI, the devcontainer, the
+rules themselves), `review-architecture` also reads `factory.md` and judges that part by its `FAC-A` rules
+(backlog #0-161).
 
 Read `.ai/context/architecture.md`, the "Service Map" in `.ai/context/project.md`, and the ADRs whose area
 the change touches (`.ai/decisions/README.md`). Judge the change as a part of the whole system: a change

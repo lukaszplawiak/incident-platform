@@ -493,6 +493,14 @@ security boundary, so every rule that matters is also enforced outside the model
   guards' `check-web-access.sh` (only the verifier has WebFetch, every agent declares its tools, both settings
   run the hook, the hosts are allowed and open in the firewall) are what hold it; a URL path to an allowed
   host is still a channel, for the little the verifier can read.
+- **Review rules for the factory itself** (backlog #0-161): a change to a path of the Owner-only list is
+  judged by the security and architecture reviewers also against `.ai/rules/review/factory.md` — `FAC-S` (no
+  agent that reads untrusted text may both reach a secret and send data out, the network and the allow-list,
+  tools and scopes per agent, guards that fail closed, no secret within reach of an agent that can send, the
+  owner's denies) and `FAC-A` (one list per control, agents' answers that fail closed, every stage in the PR
+  record, guards at session level, a weakened layer named) — so a defect there can block like any `SEC-`
+  finding. No autopilot item reaches those paths: in practice they judge the owner's `/review`. The rules for
+  CI workflows (`.ai/context/security.md`, "CI workflows") still carry no ids (#0-136).
 - **Network**: autopilot runs happen in the devcontainer (`.devcontainer/`), whose firewall allows only its
   own DNS resolver, the Anthropic API, GitHub, Maven Central, the verifier's advisory hosts (`osv.dev`,
   `api.osv.dev`, `tomcat.apache.org`, `spring.io`: open to the whole container, and by the IPs they resolve to,
@@ -542,7 +550,8 @@ their checks still let a command through when the check itself fails (a grep or 
 subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
 where only the session-level hooks apply, and Claude Code does not promise them to agents the `Workflow`
 runtime spawns either (they ran there in #0-160's spike): only the verifier's read scope is also
-session-level (#0-164). Layers and their limits: docs/ai-factory.md, "What isolates what".
+session-level (#0-164); the owner's `/review` pre-approves every `git diff` (whose `--output`
+writes any file) and its reviewers read the rules from the branch under review (#0-165). Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images
 
