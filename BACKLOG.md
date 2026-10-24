@@ -132,7 +132,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-160](#0-160-what-a-reviewer-could-not-verify-is-never-checked) | What a reviewer could not verify is never checked | design | High | In progress |
 | [0-161](#0-161-no-review-rule-covers-the-ai-factory-itself) | No review rule covers the AI factory itself | design | Medium | Open |
 | [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | Open |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
@@ -2421,8 +2420,9 @@ AC2. A root POM property lower than the version the Spring Boot parent manages f
 
 ### 0-160. What a reviewer could not verify is never checked
 
-**Type:** design · **Priority:** High · **Status:** In progress — found in the `/review` of #0-157 (2026-10-22); owner's
-decision: C + D below; in two PRs (2026-10-23): D first, then C
+**Type:** design · **Priority:** High · **Status:** Done, PRs #513 (D) and #514 (C) — found in the `/review` of #0-157
+(2026-10-22); owner's decision: C + D below; in two PRs (2026-10-23): D first, then C. Kept in full for the decisions
+(E2, the allow-list, the read scope) and the spikes
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/agents/ (a new verifier agent),
 .claude/skills/review, review-procedure, ship-record, .claude/settings.autopilot.json, .claude/settings.json,
