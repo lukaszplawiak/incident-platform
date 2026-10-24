@@ -132,7 +132,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-161](#0-161-no-review-rule-covers-the-ai-factory-itself) | No review rule covers the AI factory itself | design | Medium | In progress |
 | [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | Open |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
@@ -2518,8 +2517,9 @@ access.
 
 ### 0-161. No review rule covers the AI factory itself
 
-**Type:** design · **Priority:** Medium · **Status:** In progress — `ruleGap` of review-security, review-architecture and
-review-general in both rounds of the `/review` of #0-160 (2026-10-23/24); owner's decision: B′ below (2026-10-24)
+**Type:** design · **Priority:** Medium · **Status:** Done, PR #515 — `ruleGap` of review-security, review-architecture
+and review-general in both rounds of the `/review` of #0-160 (2026-10-23/24); owner's decision: B′ below (2026-10-24).
+Kept in full for the decisions (the trigger, the architect's exception, the `git show` pre-approval)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 **Touches:** rules (.ai/rules/review/factory.md (new), security.md, architecture.md, _common.md,
 .ai/rules/audit.md, .ai/rules/implementation.md, .ai/rules/protected-paths.md "Who uses it"), factory
