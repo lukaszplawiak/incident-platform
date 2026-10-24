@@ -64,21 +64,21 @@ repo_rel() {
 
 # require_in_repo <path> [prefix ...] — blocks unless the path is a file of this repository (and, with
 # prefixes, under one of them, relative to the root). The one check behind every write guard
-# (guard-write-in-repo.sh, write-scope.sh), so a fix lands in all of them. Refused: any `..` (no legitimate
-# write needs one), a final component that is a symlink (the write would follow it out of the repository),
-# and a path outside the repository.
+# (guard-write-in-repo.sh, write-scope.sh) and of read-scope.sh, so a fix lands in all of them. Refused: any `..`
+# (no legitimate write needs one), a final component that is a symlink (the write would follow it out of the
+# repository), and a path outside the repository. $SCOPE_VERB names the access in the refusal (default: write).
 require_in_repo() {
     local file=$1 rel prefix; shift
     [ -n "$file" ] || block "no file path in the tool call"
     case "/$file/" in */../*) block "path with '..' refused: $file" ;; esac
-    [ -L "$file" ] && block "the file is a symlink, a write would follow it: $file"
+    [ -L "$file" ] && block "the file is a symlink, a ${SCOPE_VERB:-write} would follow it: $file"
     rel=$(repo_rel "$file") || block "not in a git repository"
-    case "$rel" in /*) block "writes outside the repository are refused: $rel" ;; esac
+    case "$rel" in /*) block "${SCOPE_VERB:-write}s outside the repository are refused: $rel" ;; esac
     [ "$#" -eq 0 ] && return 0
     for prefix in "$@"; do
         case "$rel" in "$prefix"*) return 0 ;; esac
     done
-    block "this agent may write only under: $* (tried $rel)"
+    block "this agent may ${SCOPE_VERB:-write} only under: $* (tried $rel)"
 }
 
 # shell_words <command> — splits a command into words the way bash would, one per line, quotes and

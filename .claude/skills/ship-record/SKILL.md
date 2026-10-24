@@ -1,6 +1,6 @@
 ---
 name: ship-record
-description: The format of an autopilot pull request description — summary, acceptance evidence, the full review record in details blocks, non-blocking findings and proposed backlog items. Preloaded into the shipper; not a command.
+description: The format of an autopilot pull request description — summary, acceptance evidence, the full review record in details blocks, the verifier's verdict on every claim the panel could not check, non-blocking findings and proposed backlog items. Preloaded into the shipper; not a command.
 user-invocable: false
 ---
 
@@ -41,6 +41,14 @@ Picked: <`source` from the record: queue row N | follow-up of #P | priority | ma
 { …acceptance verdict… }
 ```
 </details>
+
+## Unverified claims
+<from `record.verification` (backlog #0-160): for each verifier run (round, commit) one line per claim the panel
+could not check — its `id` (`ver-…`), the verdict, the claim, the dimensions that raised it, and the source
+with its quote (`verified`/`refuted`) or why it could not be settled (`unverifiable`; "accepted by the owner"
+when `acceptedByOwner`). In a blocked draft PR, end the section with the line the owner resumes with to accept
+the unsettled ones they read: `acceptUnverifiable: ["ver-…", …]` (with the branch). "None: the panel verified everything itself" when every run had no items. Never drop
+or merge a claim: the audit and the owner read this list.>
 
 ## Non-blocking findings
 <grouped by dimension; each one line with rule id and file:line. The owner decides which become items.>

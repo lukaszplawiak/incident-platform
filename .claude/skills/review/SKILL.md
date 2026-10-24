@@ -1,6 +1,6 @@
 ---
 name: review
-description: Run one or more of the project's review agents (general, security, performance, migration, k8s, docs, architecture) against the current uncommitted changes, in parallel, and report their findings
+description: Run one or more of the project's review agents (general, security, performance, migration, k8s, docs, architecture) against the current uncommitted changes, in parallel, verify the claims they could not check, and report their findings
 argument-hint: "[1=general 2=security 3=performance 4=migration 5=k8s 6=docs 7=architecture, e.g. 123, 13, 2, 16 — 4/5 always auto-added when relevant; 6 only runs when typed]"
 disable-model-invocation: true
 allowed-tools: Bash(git status *) Bash(git diff *)
@@ -81,13 +81,32 @@ review of the uncommitted changes (`git diff HEAD`); round 1; the test gate pass
 artifact: <path> (read it); write the readable report and end with the verdict JSON." Don't summarize the
 diff for them — they read it themselves.
 
-## Step 5: Report results
+## Step 5: Verify what the panel could not
+
+Collect the `unverified` lists of every reviewer's verdict JSON, drop duplicates (same claim, any case or
+spacing), and if any claim is left, invoke the `verifier` agent once with: the claims as a numbered JSON list
+(`[{"index": 0, "claim": "…"}]`), the commit (`git rev-parse HEAD`, and that the gate ran on the working tree on
+top of it) and the gate's artifact path — **never the diff, a file list or your own summary of the change**: it
+must not be steerable by the change it checks (backlog #0-160, ADR-0037). No claim → skip it and say so. No
+test gate ran → tell it so: every claim that rests on the artifact is then unverifiable.
+
+It reads only `.ai/runs/` and fetches only from its allow-list (`webfetch-allowlist.sh --interactive` refuses
+anything else); this session has no allow rule for WebFetch, so Claude Code asks the owner for each fetch, as
+for any other. Its answer per claim:
+- `verified` — show the source and quote;
+- `refuted` — a **blocking** finding, as if a reviewer had raised it (dimension `verification`);
+- `unverifiable`, or no answer for a claim, or `verified`/`refuted` without a source and a quote — the owner
+  decides (check it, or accept it knowingly), as for a `NEEDS_HUMAN`.
+
+## Step 6: Report results
 
 Present each reviewer's findings under its own heading (`## General review`, `## Security review`,
 `## Performance review`, `## Migration review`, `## Kubernetes/build review`, `## Docs review`,
-`## Architecture review` — only for the ones that ran). Say in one line which gated reviewers were added
-or skipped. Don't merge or re-rank findings across reviewers.
+`## Architecture review` — only for the ones that ran), then `## Verification` (one line per claim: verdict,
+claim, source or why). Say in one line which gated reviewers were added or skipped. Don't merge or re-rank
+findings across reviewers.
 
 Then one line: whether any reviewer raised a **blocking** finding per `.ai/rules/review/_common.md` (tenant
 isolation, auth, shared security, startup-breaking migration/build, data loss — and any finding citing a
-rule with a concrete impact), or a `NEEDS_HUMAN`. That decides whether it's safe to move on to `/ship`.
+rule with a concrete impact), a `NEEDS_HUMAN`, a refuted claim or an unverifiable one. That decides whether it's
+safe to move on to `/ship`.

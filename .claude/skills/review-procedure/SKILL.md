@@ -63,6 +63,12 @@ four times in one review, and one stopped reading after a refusal.
    the authority on them. Before backlog #0-160 reviewers were told only "the gate passed", and the
    resolved Tomcat version of #0-157 stayed unverified by all six.
 
+What stays in `unverified` is checked after the panel by the verifier agent, which gets only your claims —
+not the diff, not the code (backlog #0-160): write each one as a single fact it can check alone, with names
+and versions in it ("tomcat-embed-core 10.1.61 fixes CVE-2026-1234", "org.example:lib 2.4.1 exists on Maven
+Central"), never "the version bump above is safe". A claim it refutes comes back to the next round as a
+blocking finding; one it cannot settle stops the item for the owner.
+
 ## 3. Findings
 
 For each problem: the rule id from your criteria file, file and line, what is wrong, the concrete

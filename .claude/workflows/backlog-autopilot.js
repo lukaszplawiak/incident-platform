@@ -1,6 +1,6 @@
 export const meta = {
   name: 'backlog-autopilot',
-  description: 'Takes one ready backlog item from pick to pull request: plan, implement, test gate, review panel, acceptance, ship. Shadow mode by default.',
+  description: 'Takes one ready backlog item from pick to pull request: plan, implement, test gate, review panel, verification, acceptance, ship. Shadow mode by default.',
   phases: ['Preflight', 'Pick', 'Plan', 'Implement', 'Review', 'Acceptance', 'Ship'],
 }
 
@@ -24,6 +24,11 @@ export const meta = {
 //                               after backlog #0-116 and #0-153).
 //   maxRounds: 3                review rounds before the item is BLOCKED
 //   localReview: false          advisory second opinion from a local model (scripts/factory/local-review.sh)
+//   acceptUnverifiable: ['ver-1a2b3c4d']   with branch only: the ids of the claims the verifier could not settle
+//                               that the owner read in the draft PR ("Unverified claims") and accepts; they ship
+//                               listed as accepted by the owner, never as verified. Ids, not a flag: a resume
+//                               runs the panel again, and a claim it raises for the first time stops the item
+//                               again instead of passing unread (backlog #0-160, review round 1)
 //
 // The script decides; agents only do. Every branch below is code, every limit is a constant, and a
 // missing or malformed answer from an agent stops the item (fail closed) instead of counting as "OK".
@@ -51,8 +56,10 @@ let calls = 0                     // work agents only; ops, shipper and notifica
 let budgetExceeded = false
 let runId = 'unknown'
 const base = { ref: 'origin/main', sha: null }
+const CLAIM_ID = /^ver-[0-9a-f]{8}$/
+const ACCEPT_UNVERIFIABLE = new Set(Array.isArray(args?.acceptUnverifiable) && args?.branch ? args.acceptUnverifiable : [])
 const record = { item: null, source: null, implementer: null, plannedRules: [], selfCheck: null, scope: null,
-  rounds: [], acceptance: null, tests: [], nonBlocking: [], adrs: [], local: null }
+  rounds: [], acceptance: null, tests: [], nonBlocking: [], adrs: [], local: null, verification: [] }
 
 // ---------------------------------------------------------------- helpers
 
@@ -152,6 +159,13 @@ const VERDICT = {
     outOfScope: { type: 'array', items: { type: 'string' } }, ruleGap: { type: 'array', items: { type: 'string' } },
     unverified: { type: 'array', items: { type: 'string' } },
   },
+}
+// The verifier's answer: one entry per claim, by its index (.claude/agents/verifier.md).
+const VERIFICATION = {
+  type: 'object', required: ['items'],
+  properties: { items: { type: 'array', items: { type: 'object', required: ['index', 'verdict', 'why'],
+    properties: { index: { type: 'number' }, verdict: { type: 'string', enum: ['verified', 'refuted', 'unverifiable'] },
+      source: { type: ['string', 'null'] }, quote: { type: ['string', 'null'] }, why: { type: 'string' } } } } },
 }
 const ACCEPT = {
   type: 'object', required: ['verdict', 'criteria'],
@@ -307,6 +321,75 @@ async function reviewRound(item, round, dimensions, mergeBase, previousSha, prev
   return verdicts
 }
 
+// Verification (backlog #0-160): what the panel could not check is checked, not dropped. The claims are the
+// `unverified` lists of each dimension's latest verdict (a dimension not asked again in a later round keeps its
+// last word), deduplicated; the verifier gets only them, the commit and the gate's artifact — never the diff —
+// and may fetch from an allow-list only (webfetch-allowlist.sh, ADR-0037). An answer missing for a claim, or a
+// verified/refuted one without its source and quote, counts as unverifiable (fail closed).
+function openClaims() {
+  const last = {}
+  for (const r of record.rounds) for (const v of r.verdicts) if (v) last[v.dimension] = v
+  const claims = new Map()
+  for (const v of Object.values(last)) {
+    for (const raw of v.unverified ?? []) {
+      const claim = String(raw).trim()
+      if (!claim) continue
+      const key = claimKey(claim)
+      if (claims.has(key)) claims.get(key).dimensions.push(v.dimension)
+      else claims.set(key, { claim, dimensions: [v.dimension] })
+    }
+  }
+  return [...claims.values()]
+}
+
+// The one normal form of a claim: deduplication and the id use it both, so the same claim respaced in a later
+// round keeps its id (review round 2: the id hashed the raw spelling, and acceptUnverifiable then missed it).
+const claimKey = (claim) => String(claim).trim().toLowerCase().replace(/\s+/g, ' ')
+
+// A stable id for a claim, so the same refutation in the next round reads as "no progress" and the owner's
+// acceptUnverifiable matches the claim they read.
+function claimId(claim) {
+  let h = 5381
+  for (const ch of claimKey(claim)) h = ((h * 33) ^ ch.codePointAt(0)) >>> 0
+  return `ver-${h.toString(16).padStart(8, '0').slice(0, 8)}`
+}
+
+async function verifyClaims(item, round, head, artifact) {
+  const claims = openClaims()
+  if (!claims.length) { record.verification.push({ round, head, items: [] }); return { ok: true, items: [] } }
+  const answer = await as('verifier', [
+    `Verify the claims the review panel could not check. Item ${item.itemId}, round ${round}, commit ${head}.`,
+    `The test gate's artifact of this commit: ${artifact}.`,
+    `Claims (JSON; answer each by its index):`,
+    JSON.stringify(claims.map((c, index) => ({ index, claim: c.claim }))),
+    `Answer with the verification JSON only.`,
+  ].join('\n'), { schema: VERIFICATION, label: `verify r${round}` })
+  if (!answer) return { ok: false, reason: 'verifier gave no answer' }
+  const byIndex = new Map(answer.items.map((a) => [a.index, a]))
+  const items = claims.map((c, index) => {
+    const a = byIndex.get(index)
+    const sourced = Boolean(a?.source && a?.quote)
+    const verdict = a && (a.verdict === 'unverifiable' || sourced) ? a.verdict : 'unverifiable'
+    const why = !a ? 'the verifier gave no answer for this claim'
+      : verdict !== a.verdict ? `answered ${a.verdict} without a source and a quote` : a.why
+    return { index, id: claimId(c.claim), claim: c.claim, dimensions: c.dimensions, verdict, source: a?.source ?? null, quote: a?.quote ?? null, why }
+  })
+  items.filter((i) => i.verdict === 'unverifiable' && ACCEPT_UNVERIFIABLE.has(i.id)).forEach((i) => { i.acceptedByOwner = true })
+  record.verification.push({ round, head, items })
+  return { ok: true, items }
+}
+
+const refutedFindings = (items) => items.filter((i) => i.verdict === 'refuted').map((i) => ({
+  dimension: 'verification', id: i.id, ruleId: 'VERIFY', issue: `refuted: ${i.claim}`, raisedBy: i.dimensions,
+  impact: i.why, fix: `the source says otherwise: ${i.source} — "${i.quote}"`,
+}))
+const unsettledReason = (items) => {
+  const open = items.filter((i) => i.verdict === 'unverifiable' && !i.acceptedByOwner)
+  return open.length
+    ? `NEEDS_HUMAN — the verifier could not settle ${open.length} claim(s) of the panel (the owner accepts them by resuming with acceptUnverifiable: [ids]): ${open.map((i) => `${i.id} ${i.claim} (${i.why})`).join(' | ').slice(0, 900)}`
+    : null
+}
+
 // ---------------------------------------------------------------- run
 
 enterPhase('Preflight')
@@ -338,6 +421,7 @@ enterPhase('Pick')
 if (!args?.branch) {
   // The choice is code: next-item.sh reads the queue, the backlog and the locks on the base commit.
   const wanted = args?.item ? String(args.item).replace(/^#/, '') : null
+  if (args?.acceptUnverifiable !== undefined) return notStarted(['acceptUnverifiable needs branch: the owner accepts claims of a draft PR they read'])
   if (wanted !== null && !/^0-\d+$/.test(wanted)) return notStarted([`args.item must look like #0-25, got ${String(args.item).slice(0, 40)}`])
   next = await ops('next-item.sh', wanted ? [base.sha, wanted] : [base.sha], NEXT, 'next item')
   if (!next) return notStarted(['next-item returned no result'])
@@ -351,6 +435,10 @@ if (!args?.branch) {
   log(`next item ${next.item} (${record.source})`)
 }
 if (args?.branch) {
+  const accepted = args?.acceptUnverifiable
+  if (accepted !== undefined && (!Array.isArray(accepted) || !accepted.length || !accepted.every((id) => CLAIM_ID.test(String(id))))) {
+    return notStarted([`acceptUnverifiable must be a list of claim ids from the draft PR (ver-<8 hex>), got ${JSON.stringify(accepted).slice(0, 80)}`])
+  }
   item = await as('picker', [
     `Resume mode: do not create a branch. Switch to the existing branch ${args.branch} (git switch ${args.branch}) for item ${args.item ?? '(read it from .ai/work/*/progress.md on that branch)'}.`,
     `Validate the item exactly as in "Choose the item" except the lock check (its own draft PR may be open), and answer the same JSON with that branch.`,
@@ -466,9 +554,23 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
   if (upheld.length) return stopItem(item, `dispute upheld by ${upheld.map((v) => v.dimension).join(', ')}: the owner decides`)
 
   const failing = verdicts.filter((v) => v.verdict === 'CHANGES_REQUESTED' || v.blocking.length)
-  if (failing.length === 0) { approved = true; break }
+  const findings = failing.flatMap((v) => v.blocking.map((f) => ({ dimension: v.dimension, ...f })))
+  let refuted = []
+  if (failing.length === 0) {
+    // The panel approved: its unverified claims are checked before the item goes on (backlog #0-160).
+    const ver = await verifyClaims(item, round, head, gate.artifact)
+    if (!ver.ok) return stopItem(item, ver.reason)
+    refuted = refutedFindings(ver.items)
+    if (!refuted.length) {
+      const why = unsettledReason(ver.items)
+      if (why) return stopItem(item, why)
+      approved = true; break
+    }
+    // A refuted claim blocks like a blocking finding; the dimensions that raised it review the fix.
+    findings.push(...refuted)
+  }
 
-  const ids = failing.flatMap((v) => v.blocking.map((f) => f.id)).sort().join(',')
+  const ids = findings.map((f) => f.id).sort().join(',')
   if (ids === lastIds) return stopItem(item, `no progress: the same blocking findings (${ids}) came back after a fix round`)
   lastIds = ids
   if (round === MAX_ROUNDS) break
@@ -476,18 +578,20 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
   const fix = await as(IMPL_TYPE, [
     `Mode: fix-review. Item ${item.itemId}, branch ${item.branch}, round ${round}.`,
     `Fix exactly these blocking findings, by id, nothing else (dispute in handoff.md if you disagree):`,
-    JSON.stringify(failing.flatMap((v) => v.blocking.map((f) => ({ dimension: v.dimension, ...f })))),
+    JSON.stringify(findings),
   ].join('\n'), { schema: IMPL, label: `fix r${round}` })
   if (!fix) return stopItem(item, 'implementer gave no answer to the review findings')
   if (fix.blocked) return stopItem(item, `implementer: ${fix.reason}`)
 
   previousSha = head
-  previous = Object.fromEntries(failing.map((v) => [v.dimension, v.blocking]))
+  previous = Object.fromEntries(failing.map((v) => [v.dimension, [...v.blocking]]))
+  // A refuted claim goes back to the dimensions that raised it, as their own finding to resolve (review round 1).
+  for (const f of refuted) for (const d of f.raisedBy) (previous[d] ??= []).push(f)
   // Round 2+: the reviewers that blocked, plus security and general on every delta — a fix for one
   // dimension can break another, and a tenant leak in a fix must not ship as an outOfScope sentence.
-  dimensions = [...new Set([...failing.map((v) => v.dimension), 'security', 'general'])]
+  dimensions = [...new Set([...failing.map((v) => v.dimension), ...refuted.flatMap((f) => f.raisedBy), 'security', 'general'])]
 }
-if (!approved) return stopItem(item, `review did not converge in ${MAX_ROUNDS} rounds`)
+if (!approved) return stopItem(item, `review did not converge in ${MAX_ROUNDS} rounds${lastIds?.includes('ver-') ? ' (a claim of the panel was refuted by the verifier)' : ''}`)
 
 enterPhase('Acceptance')
 let acc = await as('acceptance-reviewer', [
@@ -514,6 +618,12 @@ if (acc.verdict === 'REJECT') {
   const delta = await reviewRound(item, 3, round1, mergeBase, lastHead, {}, gate.artifact)
   lastGate = gate
   if (delta.some((v) => !valid(v) || v.verdict !== 'APPROVE')) return stopItem(item, 'the acceptance fix did not pass a final review round')
+  // No fix round is left: a refuted claim stops the item, an unsettled one waits for the owner.
+  const ver = await verifyClaims(item, 'acc', gate.head, gate.artifact)
+  if (!ver.ok) return stopItem(item, ver.reason)
+  if (refutedFindings(ver.items).length) return stopItem(item, `the verifier refuted a claim of the final review round: ${refutedFindings(ver.items).map((f) => f.issue).join(' | ').slice(0, 900)}`)
+  const unsettled = unsettledReason(ver.items)
+  if (unsettled) return stopItem(item, unsettled)
   acc = await as('acceptance-reviewer', `Autopilot acceptance, second and last time. Item ${item.itemId}, branch ${item.branch}, mergeBase ${mergeBase}. The test gate's artifact of this HEAD: ${lastGate.artifact}. Answer with the acceptance JSON only.`, { schema: ACCEPT })
   if (!acc || acc.verdict === 'REJECT') return stopItem(item, 'acceptance rejected twice')
 }
