@@ -120,7 +120,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
-| [0-176](#0-176-seed-bugs-reads-the-panels-verdicts-untyped-and-an-error-strands-the-tree-on-the-seed-branch) | `/seed-bugs` reads the panel's verdicts untyped, and an error strands the tree on the seed branch | ci | High | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3225,7 +3224,7 @@ AC2. Every factory-ops answer a workflow reads has a typed schema, and a test fa
 
 ### 0-176. `/seed-bugs` reads the panel's verdicts untyped, and an error strands the tree on the seed branch
 
-**Type:** ci · **Priority:** High · **Status:** In progress — found by `/seed-bugs` P-12 on `47b95294` (run
+**Type:** ci · **Priority:** High · **Status:** Done, PR #531 (AC4 is shown by the owner's P-10 or P-11 rerun) — found by `/seed-bugs` P-12 on `47b95294` (run
 `perf-after-p12`, 2026-10-25), the first run after #0-174 that reached the panel
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-174
 **Touches:** factory (.claude/workflows/seed-bugs.js), ci (.github/scripts/test-autopilot-workflow.mjs), docs
