@@ -3323,18 +3323,20 @@ recorded in an ADR in the same PR. Check: a new rule in a check script points to
 **Decided (owner, 2026-10-25, after `/research`).** One file per PR (A), the pilot first: `performance.md` (13
 rules, outside the core files the implementer reads on every item, benchmark patterns P-10…P-12). The form (F1 with a
 title, like `factory.md`): `**<ID> <the invariant as a title>.** <what is true of the code>. Check: <what to look for in
-a diff>.`; `factory.md` gets its "Check:" lines last. The measure (M2): `/seed-bugs` on the dimension's patterns before
-and after, not the audit — with four autopilot PRs so far, an audit's before and after would be noise. The reviewers
-read the rules from `refs/remotes/origin/main` (#0-165), so "after" runs once the file is on main. An agent drafts
+a diff>.`; `factory.md` gets its "Check:" lines last. The measure (M2): `/seed-bugs` on the dimension's patterns once the
+file is on main (the reviewers read the rules from `refs/remotes/origin/main`, #0-165), not the audit — with four
+autopilot PRs so far, an audit's before and after would be noise. No "before" run (the owner, 2026-10-25): one sample
+per pattern compares little, and the question is whether the new rules catch, not whether they catch more. An agent drafts
 each file, the owner decides and copies it (`.ai/rules/` is the owner's). Then: `security`, `architecture` (with the ADR rule
 above), `general`, `migration`, `docs`, `k8s` (ids first), `factory.md`.
 
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
-  validation named where they live). `/seed-bugs` P-10…P-12: before —, after —.
+  validation named where they live). `/seed-bugs` P-10…P-12 on main: —.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
 AC2. No id was reused or renumbered.
-AC3. `/seed-bugs` on the patterns of each rewritten file's dimension catches at least as many of them after the
-rewrite as before it (reworded by the owner, 2026-10-25: the audit had too few autopilot PRs to compare).
+AC3. Once each rewritten file is on main, `/seed-bugs` on its dimension's patterns has the panel catch each of them
+(reworded by the owner, 2026-10-25: the audit had too few autopilot PRs to compare, and a before-and-after of one
+sample per pattern compares little).
