@@ -10,6 +10,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh"
+          onFailure: "block"
 ---
 
 You check one backlog item against `.ai/rules/ready.md`, point by point, and draft what is missing. You

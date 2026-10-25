@@ -12,10 +12,12 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --architect"
+          onFailure: "block"
     - matcher: "Edit|Write|MultiEdit|NotebookEdit"
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/write-scope.sh .ai/decisions/ .ai/work/"
+          onFailure: "block"
 ---
 
 You plan one backlog item so that an implementer can build it and the reviewers can judge it, without a

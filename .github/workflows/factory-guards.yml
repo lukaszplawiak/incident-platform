@@ -9,7 +9,8 @@
 # Also runs the tests of the autopilot's hooks, of this check and of the queue, state, preflight and test gate scripts, validates the
 # execution queue (.ai/plan/queue.md) against the backlog, checks that the deny rules, the shell-write
 # hook and CODEOWNERS still cover .ai/rules/protected-paths.md, that every escape marker in the backlog is one
-# the audits can read (backlog #0-128), and that only the verifier agent can fetch from the web (backlog #0-160).
+# the audits can read (backlog #0-128), that only the verifier agent can fetch from the web (backlog #0-160), and
+# that every hook entry blocks the call when its hook fails (backlog #0-162).
 #
 # A required check of main (its ruleset, .github/repository-settings/rulesets/main.json, backlog #0-113,
 # ADR-0034). On its own it binds nobody who can change check-factory-guards.sh, since a pull request runs its
@@ -76,6 +77,9 @@ jobs:
       - name: Web access check tests
         run: .github/scripts/test-web-access.sh
 
+      - name: Hook entry check tests
+        run: .github/scripts/test-hook-entries.sh
+
       # .ai/rules/protected-paths.md is the one list; the autopilot's deny rules, its shell-write hook and
       # CODEOWNERS keep literal copies on purpose, and this fails when one stops covering an entry
       # (backlog #0-122).
@@ -86,6 +90,15 @@ jobs:
       # the settings run the hook and allow only its hosts, and the firewall opens them (backlog #0-160, ADR-0037).
       - name: Only the verifier fetches
         run: .github/scripts/check-web-access.sh
+
+      # A hook that cannot start or times out lets the call through unless its entry says `onFailure: "block"`:
+      # every entry of both settings files and of the agents' frontmatter must, and must run a hook of the
+      # fail-closed table of test-hooks.sh (backlog #0-162, ADR-0039). The runner's own Ruby, as in lint-workflows.
+      - name: Hook entries block when their hook fails
+        run: |
+          set -euo pipefail
+          ruby --version
+          ruby .github/scripts/check-hook-entries.rb
 
       # A line with `**Escaped from:** <stage>` but no `**Fixes:** #0-<digits>` would vanish from both audits
       # (backlog #0-128); the pattern is scripts/factory/_marker.sh, the one audit-data.sh reads.

@@ -132,10 +132,10 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | In progress |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
+| [0-166](#0-166-checking-cis-linux-steps-locally-takes-seven-minutes) | Checking CI's Linux steps locally takes seven minutes | ci | Low | Open |
 
 ---
 
@@ -2578,8 +2578,9 @@ of the Owner-only list (`_common.md`, their definitions, `review-procedure`), an
 
 ### 0-162. A hook that cannot load its helper lets the call through
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress — found by review-security in round 2 of the `/review`
-of #0-160 (2026-10-24); the two hooks #0-160 added are already fixed; owner's decision: C below, in two PRs (2026-10-24)
+**Type:** ci · **Priority:** Medium · **Status:** Done, PRs #516, #517 — found by review-security in round 2 of the
+`/review` of #0-160 (2026-10-24); the two hooks #0-160 added are already fixed; owner's decision: C below, in two PRs
+(2026-10-24). Kept in full for the decisions (both layers, the spikes, the version floor)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/hooks/*.sh, .claude/hooks/test-hooks.sh, .claude/settings.json,
 .claude/settings.autopilot.json, .claude/agents/*.md (hook entries), scripts/factory/preflight.sh,
@@ -2629,6 +2630,13 @@ Claude Code blocks a hook that fails), in two PRs:
   PR 1: today only the directory's files are enumerated); a spike first — does a frontmatter hook honour the field, and what does an older
   version do with it — recorded in an ADR, and a negative answer named as a weaker layer (README "Infrastructure
   Hardening", `FAC-A05`).
+
+**PR 1 merged** (PR #516, 2026-10-24). **PR 2 (2026-10-25).** Spikes, each with an entry pointing at a missing
+script: on 2.1.310 the field blocks in `claude -p --settings` (B) and in an Agent-tool agent's frontmatter (A); on
+2.1.294 (C) it is ignored without a word while the rest of the file still applies. Owner's choices: the check in
+Ruby, parsing the YAML and JSON (`.github/scripts/check-hook-entries.rb`, also refusing shell syntax in a hook's
+arguments and `disableAllHooks`); the version is the running binary's (`$CLAUDE_CODE_EXECPATH`, else `claude` on
+PATH, an unreadable one refuses); Workflow agents' frontmatter left untested, named in ADR-0039 with #0-164.
 
 **Acceptance criteria.**
 AC1. Every hook in `.claude/hooks/` exits 2 when it cannot load `_lib.sh`, shown by a test per hook.
@@ -2693,11 +2701,21 @@ a structural check that every agent with a frontmatter guard has its session-lev
 `readonly-bash.sh` is called per agent with different options (`--architect`, `--k8s`, `--gh-read`), so one
 session hook per option, or `--agent` taking a list.
 
+**Also (security review, round 2 of #0-162 PR 2, 2026-10-25).** `check-hook-entries.rb` (ADR-0039) checks every
+hook entry that exists, not that one exists: a change that deletes `guard-tests.sh`, `guard-protected-bash.sh`,
+`guard-git-push.sh`, `guard-factory-scripts.sh`, `guard-write-in-repo.sh` or `guard-migrations.sh` from
+`settings.autopilot.json`, or `guard-migrations.sh` from `settings.json`, passes Factory guards (only the
+verifier's hooks are checked to be wired, by `check-web-access.sh`). The structural check of this item is the
+place for it: one list of which guard each settings file must run, on which matcher (not a second list per
+check, `FAC-A01`).
+
 **Acceptance criteria.**
 AC1. For every agent whose frontmatter runs `readonly-bash.sh` or `write-scope.sh`, both settings files run the same
 hook with the same arguments for that `agent_type`, shown by test cases (the agent refused, another agent passed).
 AC2. Factory guards fails when an agent's frontmatter guard has no session-level twin, or a different one.
 AC3. README "Infrastructure Hardening" names the session-level guards and no longer lists this gap.
+AC4. Factory guards fails when a session-level guard of `settings.autopilot.json` or `settings.json` is removed or
+moved to another matcher, shown by a test case per guard.
 
 ### 0-165. The owner's `/review` session trusts the branch it reviews
 
@@ -2730,6 +2748,58 @@ it is theirs. Check whether Claude Code documents `allowed-tools` matching for o
 AC1. In the owner's `/review`, no pre-approved command can write a file outside the scratchpad or run a program
 named by the repository's config, shown by test cases (`--output`, `--ext-diff`, `--textconv`, `-c`).
 AC2. A branch under `/review` that changes a rule file is judged by the rules on `origin/main`.
+
+---
+
+### 0-166. Checking CI's Linux steps locally takes seven minutes
+
+**Type:** ci · **Priority:** Low · **Status:** Open — measured during #0-162 PR 2 (2026-10-25)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** ci (.github/scripts/ (a script that runs CI's lint and factory steps in Docker), .github/workflows/ (if
+Ruby is pinned)), .ai/decisions/ (if Ruby is pinned), docs (CLAUDE.md "Commands", README.md if it lists local checks)
+
+**Problem.** CI's Lint Workflows and Factory guards steps are Linux-only in practice (the pinned actionlint,
+shellcheck and zizmor are x86_64 Linux binaries; macOS has no gpg, an older Ruby and BSD tools), so before a push
+they are run by hand in a throwaway `ubuntu:24.04` container (memory note "Linux CI checks in Docker"; the script
+lives only in a session's scratchpad and is rewritten every session). On the owner's Apple Silicon Mac one full run
+took 428 s, measured per step on 2026-10-25:
+- the whole container runs as `--platform linux/amd64`, emulated, because the linters exist only for x86_64;
+- `test-hooks.sh` (128 s) and `test-web-access.sh` (122 s) start thousands of small processes (hook, jq, grep,
+  sed per case), which is what emulation makes slow; `test-preflight.sh` 32 s, `test-factory-guards.sh` 33 s,
+  shellcheck with its tests 32 s;
+- every run starts from a clean image: `apt-get` 48 s and the tools' download 6 s, each time.
+
+On GitHub's runners (native x86) the same steps take well under a minute, so this costs only the local loop, but
+it costs it on every review round of a factory change.
+
+**Approach.** One script in the repository (not a scratchpad copy) that:
+1. builds once, and reuses, a local image with the apt packages and the pinned tools, installed with
+   `install-pinned-tool.sh` at the versions and SHA-256 of `ci.yml`'s `env` (the image is rebuilt when those pins
+   change, e.g. tagged with a hash of them);
+2. runs the linters (actionlint, shellcheck through `check-shell.rb`, `check-downloads.rb`, zizmor) in the amd64
+   image, and every `test-*.sh`/`check-*` of Factory guards in a native arm64 container (bash, jq, ruby and git
+   exist for both);
+3. takes a list of steps, so a review round runs only the affected ones, and runs all of them by default;
+4. mounts the working tree read-only and copies it, as today (uncommitted files included).
+
+**Also (PR #517, 2026-10-25).** The container must reproduce the runner's gems, not only its Ruby version: Ruby
+3.2.3 in `ubuntu:24.04` has the json gem 2.6.3, the runner a newer one, and a check that relied on how `JSON.parse`
+fills an `object_class` passed locally and failed on the runner (it fails from json 2.12, reproduced). The runner's
+Ruby is not pinned at all: the nine `.github/scripts/*.rb` run on whatever Ruby and gems `ubuntu-latest` brings,
+while every other CI tool is pinned (ADR-0033). **To decide:** pin Ruby in CI (e.g. `ruby/setup-ruby` with a
+version, itself pinned by SHA) for every job that runs a `.rb`, and build the local image from the same version;
+or keep the runner's Ruby and only have the local image read the runner's versions (`ruby --version`, `gem list`
+in a CI step).
+
+**Acceptance criteria.**
+AC1. One command runs every step of Lint Workflows and Factory guards that needs no secret, with the tools pinned in
+`ci.yml`, and prints one line per step with its exit code and time.
+AC2. A second full run on the owner's Mac takes at most a third of the 428 s measured on 2026-10-25 (the
+measurement is in the PR).
+AC3. A change of a tool pin in `ci.yml` rebuilds the image; nothing else does.
+AC4. CLAUDE.md "Commands" names the command.
+AC5. Whether CI pins Ruby is decided (an ADR if it does), and the local image runs the same Ruby and json/psych gems
+as the CI job that runs the `.rb` checks, shown by both printing their versions.
 
 ---
 

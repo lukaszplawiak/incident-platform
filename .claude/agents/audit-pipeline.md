@@ -10,6 +10,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --gh-read"
+          onFailure: "block"
 ---
 
 You audit how the autopilot pipeline as a whole contains its problems (backlog #0-121). You do not take part
