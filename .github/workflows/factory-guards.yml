@@ -11,7 +11,8 @@
 # hook and CODEOWNERS still cover .ai/rules/protected-paths.md, that every escape marker in the backlog is one
 # the audits can read (backlog #0-128), that only the verifier agent can fetch from the web (backlog #0-160), and
 # that every hook entry blocks the call when its hook fails (backlog #0-162); and the tests of ci-local.sh's step
-# runner, the owner's local run of this job and of lint-workflows (backlog #0-166).
+# runner, the owner's local run of this job and of lint-workflows (backlog #0-166), and the tests of the autopilot
+# workflow's logic against a fake agent(), on the Node of .node-version (backlog #0-163, ADR-0043).
 #
 # A required check of main (its ruleset, .github/repository-settings/rulesets/main.json, backlog #0-113,
 # ADR-0034). On its own it binds nobody who can change check-factory-guards.sh, since a pull request runs its
@@ -95,6 +96,12 @@ jobs:
       # (backlog #0-166): it must run these steps as the runner does, or a local green means nothing.
       - name: Local CI runner tests
         run: .github/scripts/test-ci-local.sh
+
+      # The autopilot workflow decides every branch of a run in code (backlog #0-163): its helpers one by one, and
+      # whole runs against a fake agent() (the verifier's fail-closed paths, acceptUnverifiable, the checks of args,
+      # the stops of every stage), on the Node of .node-version (ADR-0043).
+      - name: Autopilot workflow tests
+        run: node .github/scripts/test-autopilot-workflow.mjs
 
       # .ai/rules/protected-paths.md is the one list; the autopilot's deny rules, its shell-write hook and
       # CODEOWNERS keep literal copies on purpose, and this fails when one stops covering an entry

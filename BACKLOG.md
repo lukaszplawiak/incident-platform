@@ -132,7 +132,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | In progress |
 | [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Open |
 | [0-168](#0-168-a-copy-of-the-protected-paths-can-run-ahead-of-the-one-list) | A copy of the protected paths can run ahead of the one list | ci | Medium | Open |
 
@@ -2664,8 +2663,8 @@ README "Infrastructure Hardening".
 
 ### 0-163. The autopilot workflow's logic has no tests
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-25) — `nonBlocking` GEN-01 and `ruleGap` of review-general in both
-rounds of the `/review` of #0-160 (2026-10-23/24)
+**Type:** ci · **Priority:** Medium · **Status:** Done, PRs #522, #523 — from review-general, `/review` of #0-160
+(2026-10-23/24); owner's decision below. Kept in full for the decisions (Node pinned like Ruby, how the test reads the script)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/settings.autopilot.json, .claude/hooks/), ci
 (.github/scripts/ (a new test, check-runtime-setup.rb, ci-local.sh), .github/workflows/, .github/actions/setup-node/,
