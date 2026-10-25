@@ -28,7 +28,7 @@
 #
 # A shellcheck that cannot run, a file that cannot be read and an action that is not YAML all fail the check.
 # Usage: ruby check-shell.rb <shellcheck> [<repository root>] (CI: lint-workflows, after its own cases in
-# test-check-shell.sh). Portable to Ruby 2.6.
+# test-check-shell.sh). Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require 'json'
 require 'open3'

@@ -135,7 +135,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
-| [0-166](#0-166-checking-cis-linux-steps-locally-takes-seven-minutes) | Checking CI's Linux steps locally takes seven minutes | ci | Low | In progress |
 
 ---
 
@@ -2764,7 +2763,7 @@ AC2. A branch under `/review` that changes a rule file is judged by the rules on
 
 ### 0-166. Checking CI's Linux steps locally takes seven minutes
 
-**Type:** ci · **Priority:** Low · **Status:** In progress — measured during #0-162 PR 2 (2026-10-25); owner's decision below
+**Type:** ci · **Priority:** Low · **Status:** Done, PRs #518, #519 — measured during #0-162 PR 2 (2026-10-25); owner's decision below. Kept in full for the decisions (Ruby pinned in CI, the local runner's design)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** ci (.github/scripts/ (a script that runs CI's lint and factory steps in Docker), .github/workflows/,
 .github/actions/setup-ruby/, .ruby-version), factory (.claude/settings.autopilot.json, .claude/hooks/guard-protected-bash.sh,
@@ -2813,19 +2812,40 @@ in a CI step).
   Whether the checks stay portable to Ruby 2.6 (CI no longer tests it) is decided in PR 2. Round 2: #0-135 and #0-153
   got an "Also"; the required "Changes that need the owner" step of Factory guards stays last (moving it first would
   skip the job's tests whenever it fails, and protects nothing the PR's own scripts could not reach before it).
-  Left for PR 2 (or later): a per-job step iterator in `run-blocks.rb`, so that `check-ruby-setup.rb` stops walking
-  the workflows itself beside `RunBlocks.of` (architecture, round 2, ARC-02).
+  Left for later: a per-job step iterator in `run-blocks.rb`, so that `check-ruby-setup.rb` stops walking the
+  workflows itself beside `RunBlocks.of` (architecture, round 2, ARC-02); PR 2 does not need it (it reads the jobs
+  with `safe_load`).
 - **PR 2, the script (S1 + S4):** two images built once and reused (`FROM ruby:<.ruby-version>-slim`), the linters in
   amd64 (exactly CI's binaries, through `install-pinned-tool.sh` and `ci.yml`'s pins), the tests native (arm64 on the
   owner's Mac), both at once; a list of steps, all by default. Measured before deciding (2026-10-25): natively on
   arm64 `test-hooks.sh` takes 8 s (128 s emulated), `test-web-access.sh` 4 s (122 s), `apt-get` 10 s (48 s).
+- **PR 2, decided after its analysis (owner, 2026-10-25): A2 + B1 + C2 + D2.** A2: no list of steps of its own:
+  `ci-local-steps.rb` runs the `run:` steps of the lint-workflows and factory-guards jobs from the workflows, skipping
+  (and naming) `uses:`, `if:` and `${{ }}` steps; B1: the image is `ruby:<.ruby-version>-slim` with packages only,
+  the linters come from the job's own install step (AC3 reworded); C2: every step runs after a failure, one line per
+  step; D2: no more promise for Ruby 2.6 (ADR-0040 amended). No `--with-gh`: the two token steps need `gh`, which the
+  image does not have; they stay on the host.
+  Review round 1 (owner: proposals 1-8): the tree reaches the container as a tar on stdin, not a mount (security: a
+  mounted tree let every step, with network, read the ignored `docker/.env` and `application-local.yml`), a file
+  that cannot be read fails the run, a git worktree is refused; the runner prints Ruby's, json's and psych's
+  versions (AC5) and removes its RUNNER_TEMP; `test-repository-settings.sh` is a step of its own in `ci.yml`, so it
+  runs locally; the base image stays a tag (ADR-0040 says why). Measured then: run as linux/amd64 whole,
+  lint-workflows took minutes (the newly local `test-repository-settings.sh`, bash and Ruby emulated); both jobs now
+  run native and only the three x86_64 linters are emulated (Docker Desktop's Rosetta runs them in an arm64
+  container; zizmor's glibc build needs `libc6:amd64` in the image): a full run 52 s with the image cached (AC2:
+  428 s before, at most 143 s).
+  Review round 2 (owner: proposals 1-6): the run is refused while `.git` could carry more than the tree (a stash, or
+  credentials in the repository's git config) and inside a container (the devcontainer's Docker is the host's, its
+  network outside the firewall); factory-guards runs with `--network none`; each image is built once before the
+  jobs start; YAML anchors are read (`aliases: true`).
 
 **Acceptance criteria.**
 AC1. One command runs every step of Lint Workflows and Factory guards that needs no secret, with the tools pinned in
 `ci.yml`, and prints one line per step with its exit code and time.
 AC2. A second full run on the owner's Mac takes at most a third of the 428 s measured on 2026-10-25 (the
 measurement is in the PR).
-AC3. A change of a tool pin in `ci.yml` rebuilds the image; nothing else does.
+AC3. The image is rebuilt only when `.ruby-version` or its own definition changes; the tools always come from
+`ci.yml`'s pins, through the job's own install step (reworded by the owner, 2026-10-25: the pins never enter the image).
 AC4. CLAUDE.md "Commands" names the command.
 AC5. Whether CI pins Ruby is decided (an ADR if it does), and the local image runs the same Ruby and json/psych gems
 as the CI job that runs the `.rb` checks, shown by both printing their versions.

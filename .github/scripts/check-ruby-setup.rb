@@ -17,7 +17,8 @@
 # It is a check against the honest mistake of a new step in a job without the setup, not a boundary.
 #
 # A file that cannot be read as YAML fails the check. Run from the repository root (CI: lint-workflows, after its
-# own cases in test-ruby-setup.sh), or with the root as the only argument. Portable to Ruby 2.6.
+# own cases in test-ruby-setup.sh), or with the root as the only argument.
+# Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require_relative 'run-blocks'
 

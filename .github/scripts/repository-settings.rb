@@ -55,7 +55,7 @@
 # Usage: ruby repository-settings.rb check|plan|apply [--repo <owner/name>] [--root <repository root>]
 #        [--main <commit>] (check only)
 # (repo: $GITHUB_REPOSITORY, else `gh repo view`). Needs gh with a token (GH_TOKEN in CI); apply needs the
-# owner's (admin). Portable to Ruby 2.6.
+# owner's (admin). Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require 'json'
 require 'open3'

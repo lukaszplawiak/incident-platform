@@ -20,7 +20,8 @@
 # the honest mistake of a download the pins do not cover, not a boundary.
 #
 # A file that cannot be read as YAML fails the check. Run from the repository root (CI: lint-workflows,
-# after its own cases in test-check-downloads.sh), or with the root as the only argument. Portable to Ruby 2.6.
+# after its own cases in test-check-downloads.sh), or with the root as the only argument.
+# Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require_relative 'run-blocks'
 

@@ -7,7 +7,7 @@
 # The YAML is read as a node tree (Psych.parse), not as data (safe_load): only the nodes know their line.
 # Psych counts lines from 0 and puts a block scalar (`run: |`, `run: >`) on the line of its indicator; its
 # text starts on the next one. A folded block (`>`) joins its lines, so only its first line maps back.
-# Also how both checkers print a finding (Annotation, below). Portable to Ruby 2.6.
+# Also how the checkers print a finding (Annotation, below). Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require 'psych'
 
