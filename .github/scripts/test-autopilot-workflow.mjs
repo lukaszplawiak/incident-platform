@@ -1,6 +1,7 @@
 // ============================================================
 // Tests the logic of .claude/workflows/backlog-autopilot.js (backlog #0-163): its helper functions one by one, and
 // whole runs with a fake agent() that answers each agent and factory script as a scenario says.
+// And how .claude/workflows/seed-bugs.js turns the seeder's answer into an outcome (backlog #0-170).
 //
 // The workflow is not a module: Claude Code's workflow runtime evaluates its text as the body of an async function,
 // with agent, parallel, phase, log and args in scope, and has no import (the workflow-authoring reference: "No
@@ -586,4 +587,56 @@ test('the agent budget: past 45 work-agent calls an agent answers nothing, and t
   const stopped = await h.stopItem(null, 'implementer gave no answer')
   assert.equal(stopped.outcome, 'BLOCKED')
   assert.match(stopped.reason, /^agent budget of 45 calls exceeded — split the item \(last step: implementer gave no answer\)$/)
+})
+
+// ---------------------------------------------------------------- seed-bugs.js (backlog #0-170)
+
+const SEED = readFileSync(join(dirname(FILE), 'seed-bugs.js'), 'utf8')
+const SEED_ARGS = { pattern: 'P-10', commit: 'abc1234', runId: 'r1' }
+async function seed(answers) {
+  const fake = fakeAgent({ 'audit-synthesis': {}, ...answers })
+  const outcome = await evaluate(strip(SEED), { args: SEED_ARGS, agent: fake.agent, logs: [] })
+  return { outcome, calls: fake.calls }
+}
+const TRUTH = { branch: 'seed/P-10-r1', pattern: 'P-10', dimension: 'performance', rule: 'PERF-01',
+  file: 'svc/src/main/java/A.java', line: 40, baseCommit: 'abc1234def0' }
+
+test('seed-bugs: a blocked seeder is a failed run with its reason, not a skip', async () => {
+  const { outcome, calls } = await seed({ 'defect-seeder': { blocked: true, reason: 'git -C /workspace show: refused' } })
+  assert.equal(outcome.outcome, 'FAILED')
+  assert.match(outcome.reason, /defect-seeder was blocked: git -C \/workspace show: refused/)
+  assert.ok(!calls.some((c) => c.key.startsWith('review-')), 'no panel runs on a branch that was never made')
+  const long = await seed({ 'defect-seeder': { blocked: true, reason: 'x'.repeat(5000) } })
+  assert.ok(long.outcome.reason.length < 400, 'the reason is cut short')
+})
+
+test('seed-bugs: a skip says why, or the run failed', async () => {
+  const fits = await seed({ 'defect-seeder': { skipped: true, reason: 'no repository loop in this change' } })
+  assert.deepEqual(fits.outcome, { outcome: 'SKIPPED', reason: 'no repository loop in this change' })
+  const silent = await seed({ 'defect-seeder': { skipped: true } })
+  assert.equal(silent.outcome.outcome, 'FAILED')
+  assert.match(silent.outcome.reason, /skipped without a reason/)
+})
+
+test('seed-bugs: a ground truth the Record phase cannot use fails the run', async () => {
+  for (const truth of [{ ...TRUTH, branch: undefined }, { ...TRUTH, branch: 'main' }, { ...TRUTH, branch: 'seed/P-10-old' },
+    { ...TRUTH, file: '' }, { ...TRUTH, line: undefined }, { ...TRUTH, rule: '' }, { ...TRUTH, dimension: 'k8s' },
+    { ...TRUTH, baseCommit: 'fff0000' }]) {
+    const { outcome } = await seed({ 'defect-seeder': truth })
+    assert.equal(outcome.outcome, 'FAILED', JSON.stringify(truth))
+    assert.match(outcome.reason, /ground truth is incomplete/)
+  }
+  assert.equal((await seed({ 'defect-seeder': null })).outcome.outcome, 'FAILED')
+})
+
+test('seed-bugs: a planted defect is measured and recorded', async () => {
+  const caught = approve('performance', { verdict: 'CHANGES_REQUESTED',
+    blocking: [{ id: 'p-1', ruleId: 'PERF-01', file: TRUTH.file, line: 42, impact: 'N+1 per request' }] })
+  const { outcome, calls } = await seed({ 'defect-seeder': TRUTH, 'review-performance': caught })
+  assert.equal(outcome.outcome, 'MEASURED')
+  assert.equal(outcome.caughtByExpected, true)
+  assert.equal(outcome.blockingByExpected, true)
+  assert.ok(calls.some((c) => c.key === 'audit-synthesis'), 'the row is recorded')
+  const missed = await seed({ 'defect-seeder': TRUTH })
+  assert.equal(missed.outcome.caughtByExpected, false)
 })

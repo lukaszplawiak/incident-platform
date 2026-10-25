@@ -23,10 +23,26 @@ if (![args?.pattern, args?.commit, args?.runId].every((v) => typeof v === 'strin
 
 phase('Seed')
 const truth = await as('defect-seeder', `Pattern ${args.pattern}. Merged change: commit ${args.commit}. Run id ${args.runId}.`, {
-  schema: { type: 'object', properties: { skipped: { type: 'boolean' }, branch: { type: 'string' }, dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' }, line: { type: 'number' }, baseCommit: { type: 'string' } } },
+  schema: { type: 'object', properties: { skipped: { type: 'boolean' }, blocked: { type: 'boolean' }, reason: { type: 'string' },
+    branch: { type: 'string' }, pattern: { type: 'string' }, dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' },
+    line: { type: 'number' }, description: { type: 'string' }, baseCommit: { type: 'string' } } },
 })
+// Fixed (backlog #0-170): the first run on record came back SKIPPED with no reason, measuring nothing: the seeder's
+// commands had been refused (`git -C …` matches none of the session's allow rules), and a blocked tool and "this
+// pattern does not fit" were one answer. Now they are two, a skip without its reason counts as a failure, and so does
+// a ground truth the Record phase could not use.
 if (!truth) return { outcome: 'FAILED', reason: 'defect-seeder gave no answer' }
-if (truth.skipped) return { outcome: 'SKIPPED', reason: truth.reason }
+const why = (r) => String(r ?? 'no reason given').slice(0, 300)
+if (truth.blocked) return { outcome: 'FAILED', reason: `defect-seeder was blocked: ${why(truth.reason)}` }
+if (truth.skipped) {
+  return truth.reason ? { outcome: 'SKIPPED', reason: why(truth.reason) } : { outcome: 'FAILED', reason: 'defect-seeder skipped without a reason (blocked?)' }
+}
+// The Record phase matches findings to the file and line, and the panel reviews the branch: both must be this run's
+// (review round 1: without a line every catch read as a miss; another seed/ branch would be a stale one).
+if (truth.branch !== `seed/${args.pattern}-${args.runId}` || !truth.file || typeof truth.line !== 'number' || !truth.rule
+    || !PANEL.includes(truth.dimension) || !String(truth.baseCommit ?? '').startsWith(args.commit)) {
+  return { outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` }
+}
 
 phase('Review')
 // The reviewers see the merged change plus the planted defect, as one change: base = the merged commit's parent.
