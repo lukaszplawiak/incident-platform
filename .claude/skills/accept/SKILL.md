@@ -3,7 +3,7 @@ name: accept
 description: Check your own change against a backlog item's acceptance criteria with the acceptance-reviewer agent, before /ship
 argument-hint: "[backlog item, e.g. #0-58]"
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *)
+allowed-tools: Bash(git status) Bash(git status --short) Bash(git diff HEAD --name-only) Bash(git diff HEAD)
 ---
 
 Run the `acceptance-reviewer` agent on the current change for backlog item $ARGUMENTS.

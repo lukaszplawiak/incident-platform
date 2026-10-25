@@ -67,7 +67,8 @@ owner's manual `/review`.
   `security.md`, `architecture.md`, `factory.md`, the two reviewers' definitions, `review-procedure`,
   `/review`), and nothing but review keeps them alike.
 - `/review` pre-approves exactly the one `git show` it needs, never `git show *`: `--output=<file>` writes
-  anywhere, and the owner's session has no Bash hook (review round 2; the older `git diff *` is #0-165).
+  anywhere, and the owner's session has no Bash hook (review round 2; the older `git diff *` is #0-165). Since
+  #0-165 (ADR-0042) `/review` pre-approves exact commands only; a hook for every session is #0-167.
 - A reviewer recognises a violation as: a second list of the factory's paths, `factory.md` read by an agent
   other than security and architecture or its trigger decided elsewhere than `/review` Step 2, a `FAC-` rule
   that repeats a check of section 3, or a factory rule with an id outside `factory.md`.

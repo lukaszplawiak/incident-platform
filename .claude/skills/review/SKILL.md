@@ -3,7 +3,7 @@ name: review
 description: Run one or more of the project's review agents (general, security, performance, migration, k8s, docs, architecture) against the current uncommitted changes, in parallel, verify the claims they could not check, and report their findings
 argument-hint: "[1=general 2=security 3=performance 4=migration 5=k8s 6=docs 7=architecture, e.g. 123, 13, 2, 16 — 4/5 always auto-added when relevant; 6 only runs when typed]"
 disable-model-invocation: true
-allowed-tools: Bash(git status *) Bash(git diff *) Bash(git show origin/main:.ai/rules/protected-paths.md)
+allowed-tools: Bash(git status) Bash(git status --short) Bash(git diff --name-only) Bash(git diff --cached --name-only) Bash(git diff HEAD --name-only) Bash(git diff HEAD) Bash(git rev-parse HEAD) Bash(git fetch origin main) Bash(git show refs/remotes/origin/main:.ai/rules/protected-paths.md)
 ---
 
 Review the current uncommitted changes using the project's review agents. This is the manual entry to
@@ -35,8 +35,16 @@ reviewer(s) were meant instead of guessing.
 
 ## Step 2: Confirm there's something to review, and always gate-check 4/5
 
-Run `git status` and `git diff --name-only` (also `git diff --cached --name-only` if anything is staged)
-to get the list of changed files. If there are no changes at all, say so and stop.
+Run `git fetch origin main` first: the Owner-only list below and the reviewers' rules are read from `origin/main`,
+which must be main as it is now. If the fetch fails, say so and stop: `refs/remotes/origin/main` would still be
+there, only stale, and no reviewer could tell (backlog #0-165). Then `git status` and `git diff --name-only` (also `git diff --cached --name-only`
+if anything is staged) to get the list of changed files. If there are no changes at all, say so and stop.
+
+**A branch you did not write** (a bot's, a contributor's): before running this skill, read what it changes in the files
+that steer this session yourself (`git diff --stat refs/remotes/origin/main...<branch> -- .claude/ CLAUDE.md
+.ai/context/`, then the files it lists; you run it yourself, it is not pre-approved). Its skills, agent definitions and `CLAUDE.md` are the ones that would
+review it: Claude Code picks up a changed skill or agent while a session runs, so starting the session on `main`
+does not keep them out (backlog #0-165, ADR-0042).
 
 **Run this check every time, no matter what $ARGUMENTS was:**
 
@@ -55,17 +63,19 @@ If `4` or `5` was explicitly typed but its check finds no match, note it as skip
 **Final set = (reviewers from Step 1) ∪ (review-migration and/or review-k8s, whichever gates matched).**
 
 **And whether the factory's rules apply:** does the changed-files list contain a path of the Owner-only list of
-`.ai/rules/protected-paths.md` as it is on `main` (`git show origin/main:.ai/rules/protected-paths.md`, exactly
-that command, the entries between the `protected:start`/`protected:end` markers; an entry ending in `/` is a
+`.ai/rules/protected-paths.md` as it is on `main` (`git show refs/remotes/origin/main:.ai/rules/protected-paths.md`, exactly
+that command, the full ref name, since a local branch or tag called `origin/main` would win over the short one; the entries between the `protected:start`/`protected:end` markers; an entry ending in `/` is a
 directory and what is under it)? Read it from `origin/main`, not the working tree: the change under review must
 not shorten the list it is checked against. If it cannot be read, or holds no entry between the markers, the
 factory's rules apply (fail closed: a wrong "does not apply" is the error that costs). Step 4 tells
 `review-security` and `review-architecture` the answer, so whether they read `.ai/rules/review/factory.md` is
 decided here, like the gates above, not by each of them (backlog #0-161).
 
-Only that one `git show` is pre-approved: `git show` and `git diff` take `--output=<file>`, which writes
-anywhere, and this session has no Bash hook, so a wildcard allow would let text from the change under review
-steer it into writing a file the owner's shell runs (review round 2 of #0-161; `git diff *` is #0-165).
+Only the exact commands of `allowed-tools` are pre-approved, no wildcard: `git show` and `git diff` take
+`--output=<file>`, which writes anywhere, so a wildcard would let text from the change under review steer this
+session into writing a file the owner's shell runs (review round 2 of #0-161, backlog #0-165); the session
+cannot add an option to an exact entry, so none runs a program the branch can name, and any other command asks the
+owner, as it should.
 
 ## Step 3: Run the test gate on the working tree
 

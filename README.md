@@ -503,6 +503,13 @@ security boundary, so every rule that matters is also enforced outside the model
   autopilot session is `dontAsk`
   with an explicit allow-list; `WebSearch` is denied, and `WebFetch` only the verifier agent may use (an agent that
   reads untrusted text must not be able to send data out; backlog #0-160, ADR-0037).
+- **The owner's review trusts nothing of the branch it reviews** (backlog #0-165): `/review` and `/accept`
+  pre-approve exact commands only, since `git diff`/`git show` take `--output` (writes any file) and
+  `--ext-diff`/`--textconv` (run a program) and text in a diff could steer the session into one; the reviewers read
+  `.ai/rules/review/` from main (`git show refs/remotes/origin/main:…`, the full name, which a local branch called
+  `origin/main` cannot shadow), never from the branch, which must not set the rules it is judged by; and before
+  reviewing a branch someone else wrote, the owner reads its changes to `.claude/`, `CLAUDE.md` and `.ai/context/`
+  (Claude Code picks up changed skills and agents during a session).
 - **The verifier**: what the reviewers could not check (their `unverified` claims) goes, after the panel
   approves, to a `verifier` agent that never sees the diff: it reads only the test gate's
   artifacts in `.ai/runs/` (not its logs, nor a file with a second hard link; `read-scope.sh`, in its definition and
@@ -575,8 +582,10 @@ session on a Claude Code older than 2.1.295 ignores the hooks' `onFailure` witho
 cannot start or times out does not block (only the autopilot's preflight checks the version; ADR-0039);
 an agent guard's session-level twin passes everything if Claude Code stops sending `agent_type` (its frontmatter
 hook stays for that, ADR-0041), and an agent that should have a guard but has none in its frontmatter is left to
-review; the owner's `/review` pre-approves every `git diff` (whose `--output`
-writes any file) and its reviewers read the rules from the branch under review (#0-165). Layers and their limits: docs/ai-factory.md, "What isolates what".
+review; the reviewers read the rules from `origin/main` by instruction (`review-procedure`), which no hook
+enforces (#0-165); `/research` and `/ship` still pre-approve `git diff *` (and `/research` `git log/show *`), and no
+hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167).
+Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images
 

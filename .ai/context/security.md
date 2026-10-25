@@ -79,7 +79,10 @@ on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are w
   in `claude -p`; session-level hooks are documented for every subagent, so every agent's guard runs in both:
   its frontmatter and a twin in both settings files keyed on `agent_type` (`--agent`, `applies_to_agent` in
   `_lib.sh`), kept equal by `check-hook-entries.rb`, which also checks that the session-wide guards are wired
-  (#0-164, ADR-0041). The devcontainer's
+  (#0-164, ADR-0041). `/review` and `/accept` pre-approve exact commands only (git's `--output`, `--ext-diff`,
+  `--textconv` write or run; a hook for the skills that keep wildcards is #0-167), and reviewers read
+  `.ai/rules/review/` from `refs/remotes/origin/main` (the full name: a local branch called `origin/main`
+  would win), never from the branch under review (#0-165). The devcontainer's
   firewall opens hosts by IP for every process in it, and binds the agents' commands, not the code they run
   through Docker (#0-116).
 - **Shadow mode is a set of denies.** A session cannot merge past the ruleset, approve a PR, or change the
