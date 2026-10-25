@@ -35,7 +35,8 @@ and the ADRs of the area "AI factory" (`.ai/decisions/README.md`). Most of the w
   or a scope dropped from one of its places, is a finding. So is an allow rule or a skill's `allowed-tools`
   entry that is a wildcard over a command with an option that writes a file or runs a program (`git show *`
   and `git diff *` take `--output=<file>`, `--ext-diff`), unless a hook of that session refuses the option:
-  pre-approved means no prompt, in a session that reads the change (review round 2 of #0-161; #0-165).
+  pre-approved means no prompt, in a session that reads the change (review round 2 of #0-161; #0-165 removed
+  them from `/review` and `/accept`, #0-167 is the rest).
 - **FAC-S04 A guard fails closed.** Every way a PreToolUse guard can fail ends in `exit 2`: its helper does
   not load, `jq`/`python3` is missing, the input does not parse or is empty, an argument is unknown, an unset
   variable under `set -u`, a tool it runs fails. Claude Code treats any other exit code as a non-blocking error

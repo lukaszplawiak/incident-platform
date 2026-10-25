@@ -133,7 +133,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
-| [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
+| [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Open |
 
 ---
 
@@ -2740,8 +2740,8 @@ moved to another matcher, shown by a test case per guard.
 
 ### 0-165. The owner's `/review` session trusts the branch it reviews
 
-**Type:** security · **Priority:** Medium · **Status:** Open — `nonBlocking` of review-security in round 2 of the
-`/review` of #0-161 (2026-10-24), whose blocking finding (`allowed-tools: Bash(git show *)`) that change fixed
+**Type:** security · **Priority:** Medium · **Status:** Done, PR #521 — from review-security, `/review` of #0-161
+(2026-10-24); owner's decision below. Kept in full for the decisions (hook moved to #0-167, the session rule)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/skills/review/SKILL.md, .claude/settings.json, .claude/hooks/ (a session-level Bash
 guard), .claude/hooks/test-hooks.sh, .claude/agents/review-*.md, .claude/skills/review-procedure/SKILL.md), docs
@@ -2765,9 +2765,20 @@ reviewers read `.ai/rules/review/` from `origin/main` (`git show`, which their `
 diff touches `.ai/rules/`, or `/review` refuses to run on a branch that changes `.ai/rules/` unless the owner says
 it is theirs. Check whether Claude Code documents `allowed-tools` matching for options.
 
+**Decided (owner, 2026-10-25, after `/research`; ADR-0042).** 1C + 2A + a written session rule: `/review` and
+`/accept` pre-approve exact commands, `/review` fetches `origin/main` first; reviewers read `.ai/rules/review/` with
+`git show refs/remotes/origin/main:…` (round 2: the short name loses to a local branch called `origin/main`). Two changes after round 1 of the review: the hook of 1C (a session-level Bash guard
+refusing git's `--output`, `--ext-diff`, `--textconv`) moved to #0-167, since its first version could be passed and
+a parser that reads a command as bash does is an item of its own; and the session rule is "read a foreign branch's
+`.claude/`, `CLAUDE.md` and `.ai/context/` changes before `/review`", not "start the session on `main`": Claude Code's docs say it picks up changed
+skills and agents during a session. AC1 is met by the exact commands (none carries an option); its test cases go
+with the hook to #0-167. Not done: a Read hook enforcing the rules from main (README names it).
+
 **Acceptance criteria.**
-AC1. In the owner's `/review`, no pre-approved command can write a file outside the scratchpad or run a program
-named by the repository's config, shown by test cases (`--output`, `--ext-diff`, `--textconv`, `-c`).
+AC1. In the owner's `/review` and `/accept`, no pre-approved command can write a file outside the scratchpad or run
+a program the branch names: every `allowed-tools` entry is an exact command without an option (reworded in round 2
+of the review, 2026-10-25: the test cases for `--output`, `--ext-diff`, `--textconv`, `-c` went with the hook to
+#0-167).
 AC2. A branch under `/review` that changes a rule file is judged by the rules on `origin/main`.
 
 ---
@@ -2860,6 +2871,51 @@ AC3. The image is rebuilt only when `.ruby-version` or its own definition change
 AC4. CLAUDE.md "Commands" names the command.
 AC5. Whether CI pins Ruby is decided (an ADR if it does), and the local image runs the same Ruby and json/psych gems
 as the CI job that runs the `.rb` checks, shown by both printing their versions.
+
+---
+
+### 0-167. No hook of the owner's session refuses git's writing options
+
+**Type:** security · **Priority:** Medium · **Status:** Open — moved out of #0-165 (2026-10-25), whose round-1
+review found the first version of the hook passable
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-165
+**Touches:** factory (.claude/hooks/ (a session-level Bash guard, `_lib.sh`), .claude/hooks/readonly-bash.sh,
+scripts/factory/local-review.sh,
+.claude/hooks/test-hooks.sh, .claude/settings.json, .claude/settings.autopilot.json, .claude/skills/research/SKILL.md,
+.claude/skills/ship/SKILL.md, .github/scripts/check-hook-entries.rb, .github/scripts/test-hook-entries.sh),
+.ai/rules/review/factory.md (owner, FAC-S03), .ai/decisions/, docs (README.md "Infrastructure Hardening",
+.ai/context/security.md, docs/ai-factory.md)
+
+**Problem.** `git diff`, `git show` and `git log` take `--output=<file>` (writes anywhere) and `--ext-diff`/
+`--textconv` (run a program git's configuration names). `/research` pre-approves `git log *`, `git diff *` and
+`git show *`, `/ship` `git diff *`, and the owner's session has no Bash hook, so text the session reads (a
+diff, a backlog item, a web page) that steers it into such a command runs without a prompt. #0-165 removed the
+wildcards from `/review` and `/accept` only. `readonly-bash.sh` refuses the options for the reviewers by matching
+the raw text, which quoting inside a word or a line continuation can split.
+
+**What round 1 of #0-165 found in the first version** (a word split as bash splits it, then compared): an option
+spliced with empty quotes or a backslash, a backslash-newline continuation, a quote spanning lines (a newline
+reset the quote state), a word built at run time from variables set in the same command, and a hook that ignored
+its check's exit status. Claude Code's own permission check refused brace expansion, `$( )` and `$'…'` but
+pre-approved the variable case under `Bash(git log *)` (spike, 2026-10-25).
+
+**Approach (to analyse).** Either a guard that reads a command as bash does (continuations, quotes, heredocs,
+expansions; failing closed on what it cannot read) with mutation-tested cases for each shape above, or exact
+`allowed-tools` in `/research` and `/ship` too (cheaper; `/research` then prompts for most git reads). Also decide
+`readonly-bash.sh`'s raw-text match.
+
+**Also (round 2 of the review of #0-165, 2026-10-25; non-blocking there).** `scripts/factory/local-review.sh` reads
+`_common.md` and `general.md` from the working tree (`cat`), not from main; the autopilot's reviewers could read
+the rules at the recorded `mergeBase` instead of `refs/remotes/origin/main`; `docs/ai-factory.md` "What isolates
+what" does not describe #0-165 yet; and `factory.md` has no rule that a control reading the base names an
+unambiguous ref, nor one listing the files of a branch that steer the owner's session (`.claude/`, `CLAUDE.md`,
+`.ai/context/`).
+
+**Acceptance criteria.**
+AC1. No skill of the owner's session pre-approves a git command that can carry `--output`, `--ext-diff` or
+`--textconv`, or a hook of every session refuses them, shown by test cases for each shape of round 1 of #0-165.
+AC2. `readonly-bash.sh` refuses those options however the word is quoted or continued, shown by test cases.
+AC3. README "Infrastructure Hardening" no longer lists this gap.
 
 ---
 

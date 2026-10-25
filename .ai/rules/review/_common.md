@@ -4,7 +4,10 @@ Owned by the maintainer. Agents read this file and never edit it. Every reviewer
 the file of its own dimension, nothing else from `.ai/rules/review/` — except `factory.md`, which
 `review-security` and `review-architecture` also read when the diff touches a path of the Owner-only list
 of `.ai/rules/protected-paths.md`: its `FAC-S` rules are security's, its `FAC-A` rules architecture's
-(backlog #0-161).
+(backlog #0-161). Every reviewer reads them as they are on main
+(`git show refs/remotes/origin/main:.ai/rules/review/<file>`, the full name: a local branch or tag called
+`origin/main` would win over the short one), not from the branch under review, which must not set the rules it is
+judged by; one it cannot read leaves it without rules, and its answer is then `NEEDS_HUMAN` (backlog #0-165).
 
 ## Dimensions and who owns what
 
