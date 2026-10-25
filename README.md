@@ -326,7 +326,15 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   that would bypass the pins: curl, wget, a release asset's URL or `gh release download` in any workflow's or
   composite action's `run:` block, unless the line says why it is not one (`# not-a-download: <why>`, today the
   smoke test's health probe). It catches the honest mistake, not a determined one (another program, a script the
-  step calls), which the owner's review of `.github/` still has to see.
+  step calls), which the owner's review of `.github/` still has to see. The runtimes are pinned too: Java 21 and
+  Python 3.13 by their setup actions, and since #0-166 Ruby (ADR-0040): the nine `.github/scripts/*.rb` checks (and
+  `run-blocks.rb`, the library three of them load) run on the version in `.ruby-version`, set up by
+  `.github/actions/setup-ruby` (`ruby/setup-ruby`, pinned by SHA; Renovate bumps both), no longer on the runner's own
+  Ruby, whose json gem once made a check pass a repeated key that it failed locally (PR #517). lint-workflows'
+  `check-ruby-setup.rb` fails a step that runs Ruby before that action in its job, and any other use of
+  `ruby/setup-ruby`; `.ruby-version` is on the build-config list (a PR changing it needs the owner). Pinned is the
+  version, not the binary: `setup-ruby` downloads a prebuilt Ruby and verifies nothing, so, as for Java and Python,
+  its integrity rests on the action.
 - **Scan tools pinned and verified before they receive a secret** (backlog #0-61): the Snyk CLI is
   the standalone binary at the version pinned in `snyk.yml`, checked against the SHA-256 kept next to
   it. A different binary stops the job before `SNYK_TOKEN` exists in any process. The token reaches

@@ -135,7 +135,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
-| [0-166](#0-166-checking-cis-linux-steps-locally-takes-seven-minutes) | Checking CI's Linux steps locally takes seven minutes | ci | Low | Open |
+| [0-166](#0-166-checking-cis-linux-steps-locally-takes-seven-minutes) | Checking CI's Linux steps locally takes seven minutes | ci | Low | In progress |
 
 ---
 
@@ -2066,6 +2066,12 @@ and the expected identity checked against the Kubernetes release documentation r
 certificate. The `.sha256` next to the binary is from the same host, so on its own it is the weaker check
 ADR-0021 refused for Snyk.
 
+**Also (review round 2 of #0-166 PR 1, 2026-10-25).** The runtimes' setup actions have the same gap: `setup-java`,
+`setup-python` and, since #0-166 (ADR-0040), `ruby/setup-ruby` (all pinned by SHA) download a prebuilt runtime and
+verify nothing (`setup-ruby` v1.335.0's `downloadAndExtract`: download, then `tar -xz`), and every check of their
+jobs runs on it. Ruby's builds (`ruby/ruby-builder`) publish no signature; decide per runtime what can be checked
+(a published digest, an attestation) and what stays the action's word, in the same pass as kubectl.
+
 ---
 
 ### 0-136. The security review rules have no rule for the CI supply chain
@@ -2309,6 +2315,11 @@ on the protected list. A PR that changes only Markdown skips the build (`detect-
 Harmless while the owner reads every PR (shadow mode); decide before phase 3 whether they become code-owned (the
 autopilot's own knowledge updates, `.ai/rules/implementation.md`, then wait for the owner) or stay open with
 another check.
+
+**Also (review round 2 of #0-166 PR 1, 2026-10-25).** The build-config list (`mvnw`, `mvnw.cmd`, `.mvn/`, and
+`.ruby-version` since #0-166) is code-owned today only through the shadow-mode catch-all (point 3): `check-protected-paths.sh` asks
+CODEOWNERS lines of the owner-only list alone, and Factory guards rule 6 is what holds the build-config list. When
+phase 3 removes `*`, decide whether those paths get lines of their own.
 
 **3. The shadow-mode catch-all (#0-113, 2026-10-18).** Until phase 3 `.github/CODEOWNERS` opens with `* @lukaszplawiak`,
 so every PR needs the owner's approval (the machine account's own approval would otherwise count). Phase 3
@@ -2753,10 +2764,12 @@ AC2. A branch under `/review` that changes a rule file is judged by the rules on
 
 ### 0-166. Checking CI's Linux steps locally takes seven minutes
 
-**Type:** ci · **Priority:** Low · **Status:** Open — measured during #0-162 PR 2 (2026-10-25)
+**Type:** ci · **Priority:** Low · **Status:** In progress — measured during #0-162 PR 2 (2026-10-25); owner's decision below
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** ci (.github/scripts/ (a script that runs CI's lint and factory steps in Docker), .github/workflows/ (if
-Ruby is pinned)), .ai/decisions/ (if Ruby is pinned), docs (CLAUDE.md "Commands", README.md if it lists local checks)
+**Touches:** ci (.github/scripts/ (a script that runs CI's lint and factory steps in Docker), .github/workflows/,
+.github/actions/setup-ruby/, .ruby-version), factory (.claude/settings.autopilot.json, .claude/hooks/guard-protected-bash.sh,
+.claude/hooks/test-hooks.sh), .ai/rules/protected-paths.md (owner), .ai/decisions/, docs (CLAUDE.md "Commands",
+README.md "Infrastructure Hardening", .ai/context/infrastructure.md)
 
 **Problem.** CI's Lint Workflows and Factory guards steps are Linux-only in practice (the pinned actionlint,
 shellcheck and zizmor are x86_64 Linux binaries; macOS has no gpg, an older Ruby and BSD tools), so before a push
@@ -2790,6 +2803,22 @@ while every other CI tool is pinned (ADR-0033). **To decide:** pin Ruby in CI (e
 version, itself pinned by SHA) for every job that runs a `.rb`, and build the local image from the same version;
 or keep the runner's Ruby and only have the local image read the runner's versions (`ruby --version`, `gem list`
 in a CI step).
+
+**Decided (owner, 2026-10-25, after `/research`).** S1 + S4 + R2, in two PRs:
+- **PR 1, Ruby pinned in CI (R2, ADR-0040):** `.ruby-version` 4.0.9 (the owner chose the 4.0 branch over 3.4), set
+  up by one local action, `.github/actions/setup-ruby` (`ruby/setup-ruby` pinned by SHA, then the versions of Ruby,
+  json and psych), in the five jobs that run Ruby. From the review (round 1, owner: all proposals): lint-workflows'
+  `check-ruby-setup.rb` refuses a step that runs Ruby before that action in its job, and any other `ruby/setup-ruby`;
+  `.ruby-version` joins the build-config list (owner); ADR and README say the binary's integrity rests on the action.
+  Whether the checks stay portable to Ruby 2.6 (CI no longer tests it) is decided in PR 2. Round 2: #0-135 and #0-153
+  got an "Also"; the required "Changes that need the owner" step of Factory guards stays last (moving it first would
+  skip the job's tests whenever it fails, and protects nothing the PR's own scripts could not reach before it).
+  Left for PR 2 (or later): a per-job step iterator in `run-blocks.rb`, so that `check-ruby-setup.rb` stops walking
+  the workflows itself beside `RunBlocks.of` (architecture, round 2, ARC-02).
+- **PR 2, the script (S1 + S4):** two images built once and reused (`FROM ruby:<.ruby-version>-slim`), the linters in
+  amd64 (exactly CI's binaries, through `install-pinned-tool.sh` and `ci.yml`'s pins), the tests native (arm64 on the
+  owner's Mac), both at once; a list of steps, all by default. Measured before deciding (2026-10-25): natively on
+  arm64 `test-hooks.sh` takes 8 s (128 s emulated), `test-web-access.sh` 4 s (122 s), `apt-get` 10 s (48 s).
 
 **Acceptance criteria.**
 AC1. One command runs every step of Lint Workflows and Factory guards that needs no secret, with the tools pinned in

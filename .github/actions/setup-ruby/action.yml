@@ -1,0 +1,28 @@
+# ============================================================
+# Sets up the Ruby every .github/scripts/*.rb check runs on (backlog #0-166, ADR-0040): the exact version in
+# .ruby-version, like setup-java and setup-python pin Java and Python.
+#
+# The only place ruby/setup-ruby is used, pinned by SHA (Renovate bumps it with the other actions), and without a
+# `ruby-version` input, so .ruby-version alone decides the version. .github/scripts/check-ruby-setup.rb refuses a
+# step that runs Ruby before this action in its job, and any other use of ruby/setup-ruby. Until #0-166 the checks
+# ran on the runner's own Ruby and gems, which once changed a check's result (PR #517, the json gem).
+#
+# setup-ruby downloads a prebuilt Ruby from ruby/ruby-builder and checks no SHA-256 or attestation: the binary's
+# integrity rests on that action, as Java's and Python's rest on setup-java and setup-python (ADR-0040). No
+# Bundler: the checks load default gems only (json, psych, open3). Needs the repository checked out.
+# ============================================================
+name: Set up Ruby
+description: Installs the Ruby of .ruby-version and prints the versions of Ruby, json and psych
+
+runs:
+  using: composite
+  steps:
+    - name: Ruby from .ruby-version
+      uses: ruby/setup-ruby@7f797815d8adceb1c412e7abefdd1ab4abc47a5f # v1.335.0
+
+    # What ran, in the log: the same Ruby version is not the same Ruby when its gems differ (PR #517). A block, not a
+    # plain scalar: there ` #` starts a YAML comment and would cut the line short.
+    - name: Ruby, json and psych versions
+      shell: bash
+      run: |
+        ruby -rjson -rpsych -e 'puts "#{RUBY_DESCRIPTION}; json #{JSON::VERSION}, psych #{Psych::VERSION}"'
