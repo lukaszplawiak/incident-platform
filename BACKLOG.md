@@ -132,7 +132,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-162](#0-162-a-hook-that-cannot-load-its-helper-lets-the-call-through) | A hook that cannot load its helper lets the call through | ci | Medium | In progress |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
@@ -2579,8 +2578,9 @@ of the Owner-only list (`_common.md`, their definitions, `review-procedure`), an
 
 ### 0-162. A hook that cannot load its helper lets the call through
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress — found by review-security in round 2 of the `/review`
-of #0-160 (2026-10-24); the two hooks #0-160 added are already fixed; owner's decision: C below, in two PRs (2026-10-24)
+**Type:** ci · **Priority:** Medium · **Status:** Done, PRs #516, #517 — found by review-security in round 2 of the
+`/review` of #0-160 (2026-10-24); the two hooks #0-160 added are already fixed; owner's decision: C below, in two PRs
+(2026-10-24). Kept in full for the decisions (both layers, the spikes, the version floor)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/hooks/*.sh, .claude/hooks/test-hooks.sh, .claude/settings.json,
 .claude/settings.autopilot.json, .claude/agents/*.md (hook entries), scripts/factory/preflight.sh,
