@@ -120,6 +120,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
+| [0-177](#0-177-seed-bugs-asks-for-a-commit-on-main-between-runs-which-the-ruleset-of-main-refuses) | `/seed-bugs` asks for a commit on `main` between runs, which the ruleset of `main` refuses | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3258,6 +3259,35 @@ AC2. A verdict that is not one counts as no answer and the run still records, sh
 AC3. An error after the branch exists ends the run on main and names the branch, shown by a test.
 AC4. A `/seed-bugs` run that reaches the panel records its row (the owner's P-10 or P-11 rerun).
 
+---
+
+### 0-177. `/seed-bugs` asks for a commit on `main` between runs, which the ruleset of `main` refuses
+
+**Type:** ci · **Priority:** Medium · **Status:** Open — found by the owner's measure of #0-115's `performance.md`
+(P-10 and P-11 run back to back, 2026-10-25)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-176
+**Touches:** factory (.claude/workflows/seed-bugs.js, scripts/factory/seed-branch.sh), ci
+(.github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh), docs (docs/ai-factory.md, ADR-0044),
+scripts/factory/audit-data.sh (reads `results.md`)
+
+**Problem.** The Record phase appends its row to `.ai/audit/benchmark/results.md` on `main`, and both the run's
+`cleanup` and `seed-branch.sh`'s refusal tell the owner to commit that file before the next run (#0-173). But `main`
+takes changes only through a pull request (its ruleset), and `seed-branch.sh` starts only on a clean `main` equal to
+`origin/main`: a local commit on `main` makes it refuse ("main is not at origin/main"), and a pull request per run
+means a merge between every two runs. On 2026-10-25 the session parked the P-10 row in its scratchpad, restored the
+file, ran P-11, and merged both rows on a branch by hand.
+
+**Approach (to analyse).** Keep the rows out of the tree while a series runs and land them in one pull request after
+it: e.g. the Record phase appends to `.ai/runs/benchmark/results.md` (gitignored, like the other run artifacts), and the
+owner copies the new rows into `.ai/audit/benchmark/results.md` with the series' PR; `seed-branch.sh` then no longer
+needs to name `results.md`, and `audit-data.sh` keeps reading the tracked file. Or let `seed-branch.sh` accept a tree
+whose only change is that file and carry it aside itself (more moving parts).
+
+**Acceptance criteria.**
+AC1. Two `/seed-bugs` runs in a row need no commit and no pull request between them, shown by tests of the scripts.
+AC2. The rows of a series reach `.ai/audit/benchmark/results.md` through one pull request, and `docs/ai-factory.md`
+says so.
+
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
@@ -3615,8 +3645,13 @@ above), `general`, `migration`, `docs`, `k8s` (ids first), `factory.md`.
   validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
   (`perf-after-p12` on `47b95294`, under PERF-30, not PERF-02; general, architecture, security and docs blocked too;
   row recorded by hand, #0-176). P-10 skipped on `76379e806fb4` (no lazy collection in the change; the pattern's
-  wording predates the rewritten PERF-01). P-10 on `47b95294` and P-11 on `fc368943`: — (after the owner rewords
-  both patterns in `.ai/audit/benchmark/patterns.md`).
+  wording predated the rewritten PERF-01, reworded with #0-176). P-10 on `47b95294` (`perf-after-p10`): caught and
+  blocked by performance under PERF-01 at the planted line (a repository call per element in
+  `OncallScheduleService.getAllCurrentOncall`). P-11 on `fc368943` (`perf-after-p11`): caught and blocked by
+  performance under PERF-23 (a direct `KafkaTemplate.send` inside `@Transactional` `recordEscalationLevel`), also
+  blocked by general, architecture (ARC-20) and security. AC3 holds for `performance.md`: each of P-10…P-12 caught
+  by its dimension. Both runs recorded their rows themselves, which also shows #0-173's and #0-174's AC3 and #0-176's
+  AC4.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
