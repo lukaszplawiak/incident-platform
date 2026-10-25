@@ -119,7 +119,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
-| [0-173](#0-173-seed-bugs-switches-the-shared-working-tree-to-an-old-commit) | `/seed-bugs` switches the shared working tree to an old commit | security | High | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3082,7 +3081,7 @@ AC3. The defect-seeder cannot switch or create a branch, shown by a test case.
 
 ### 0-173. `/seed-bugs` switches the shared working tree to an old commit
 
-**Type:** security · **Priority:** High · **Status:** In progress (owner's decision below, 2026-10-25) — found by the rerun of
+**Type:** security · **Priority:** High · **Status:** Done, PR #529 (AC3 is shown by the owner's rerun of #0-115's "after" measure on `76379e806fb4`) — found by the rerun of
 #0-115's pilot measure, after #0-170
 (P-10 on `253e5b2a3a06`, run `perf-after-p10`, 2026-10-25)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-170
