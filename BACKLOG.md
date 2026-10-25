@@ -133,7 +133,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Open |
-| [0-168](#0-168-a-copy-of-the-protected-paths-can-run-ahead-of-the-one-list) | A copy of the protected paths can run ahead of the one list | ci | Medium | In progress |
 
 ---
 
@@ -2931,8 +2930,8 @@ AC3. README "Infrastructure Hardening" no longer lists this gap.
 
 ### 0-168. A copy of the protected paths can run ahead of the one list
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-25) — `ruleGap` of review-security
-and review-architecture in round 1 of the `/review` of #0-163 PR 1 (2026-10-25)
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #524 — from review-security and review-architecture, `/review` of
+#0-163 PR 1 (2026-10-25); owner's decision below. Kept in full for the decisions (the runtime list, the flat hook line)
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** —
 **Touches:** ci (.github/scripts/check-protected-paths.sh, .github/scripts/test-protected-paths.sh), factory
 (.claude/settings.autopilot.json, .claude/hooks/guard-protected-bash.sh), .ai/rules/protected-paths.md (owner),
