@@ -71,6 +71,11 @@ jobs:
       - name: State script tests
         run: .github/scripts/test-factory-state.sh
 
+      # The seed branch of /seed-bugs starts from main, never the merged commit, and is checked after the seeder
+      # (seed-branch.sh, seed-check.sh; backlog #0-173, ADR-0044).
+      - name: Seed branch script tests
+        run: .github/scripts/test-seed-branch.sh
+
       - name: Preflight tests
         run: .github/scripts/test-preflight.sh
 

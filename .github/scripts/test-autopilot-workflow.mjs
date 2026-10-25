@@ -593,13 +593,16 @@ test('the agent budget: past 45 work-agent calls an agent answers nothing, and t
 
 const SEED = readFileSync(join(dirname(FILE), 'seed-bugs.js'), 'utf8')
 const SEED_ARGS = { pattern: 'P-10', commit: 'abc1234', runId: 'r1' }
+const SEEDED = { ok: true, branch: 'seed/P-10-r1', base: 'b'.repeat(40), head: 'c'.repeat(40), files: ['svc/src/main/java/A.java'] }
+const CHECKED = { ok: true, commit: 'd'.repeat(40), files: ['svc/src/main/java/A.java'] }
 async function seed(answers) {
-  const fake = fakeAgent({ 'audit-synthesis': {}, ...answers })
+  const fake = fakeAgent({ 'audit-synthesis': {}, 'ops:seed-branch.sh': SEEDED, 'ops:seed-check.sh': CHECKED,
+    'ops:return-to-main.sh': { onMain: true }, ...answers })
   const outcome = await evaluate(strip(SEED), { args: SEED_ARGS, agent: fake.agent, logs: [] })
   return { outcome, calls: fake.calls }
 }
 const TRUTH = { branch: 'seed/P-10-r1', pattern: 'P-10', dimension: 'performance', rule: 'PERF-01',
-  file: 'svc/src/main/java/A.java', line: 40, baseCommit: 'abc1234def0' }
+  file: 'svc/src/main/java/A.java', line: 40 }
 
 test('seed-bugs: a blocked seeder is a failed run with its reason, not a skip', async () => {
   const { outcome, calls } = await seed({ 'defect-seeder': { blocked: true, reason: 'git -C /workspace show: refused' } })
@@ -612,7 +615,7 @@ test('seed-bugs: a blocked seeder is a failed run with its reason, not a skip', 
 
 test('seed-bugs: a skip says why, or the run failed', async () => {
   const fits = await seed({ 'defect-seeder': { skipped: true, reason: 'no repository loop in this change' } })
-  assert.deepEqual(fits.outcome, { outcome: 'SKIPPED', reason: 'no repository loop in this change' })
+  assert.deepEqual(fits.outcome, { outcome: 'SKIPPED', reason: 'no repository loop in this change', cleanup: 'git branch -D seed/P-10-r1' })
   const silent = await seed({ 'defect-seeder': { skipped: true } })
   assert.equal(silent.outcome.outcome, 'FAILED')
   assert.match(silent.outcome.reason, /skipped without a reason/)
@@ -620,8 +623,8 @@ test('seed-bugs: a skip says why, or the run failed', async () => {
 
 test('seed-bugs: a ground truth the Record phase cannot use fails the run', async () => {
   for (const truth of [{ ...TRUTH, branch: undefined }, { ...TRUTH, branch: 'main' }, { ...TRUTH, branch: 'seed/P-10-old' },
-    { ...TRUTH, file: '' }, { ...TRUTH, line: undefined }, { ...TRUTH, rule: '' }, { ...TRUTH, dimension: 'k8s' },
-    { ...TRUTH, baseCommit: 'fff0000' }]) {
+    { ...TRUTH, file: '' }, { ...TRUTH, file: 'svc/src/main/java/Other.java' }, { ...TRUTH, line: undefined },
+    { ...TRUTH, rule: '' }, { ...TRUTH, dimension: 'k8s' }]) {
     const { outcome } = await seed({ 'defect-seeder': truth })
     assert.equal(outcome.outcome, 'FAILED', JSON.stringify(truth))
     assert.match(outcome.reason, /ground truth is incomplete/)
@@ -639,4 +642,81 @@ test('seed-bugs: a planted defect is measured and recorded', async () => {
   assert.ok(calls.some((c) => c.key === 'audit-synthesis'), 'the row is recorded')
   const missed = await seed({ 'defect-seeder': TRUTH })
   assert.equal(missed.outcome.caughtByExpected, false)
+})
+
+test('seed-bugs: the branch comes from seed-branch.sh, never from the seeder, and the run ends on main (#0-173)', async () => {
+  const { outcome, calls } = await seed({ 'defect-seeder': TRUTH })
+  assert.equal(outcome.outcome, 'MEASURED')
+  const at = (k) => calls.findIndex((c) => c.key === k)
+  assert.ok(at('ops:seed-branch.sh') >= 0 && at('ops:seed-branch.sh') < at('defect-seeder'), 'the branch is made before the seeder runs')
+  assert.match(calls[at('ops:seed-branch.sh')].prompt, /seed-branch\.sh 'P-10' 'r1' 'abc1234'/)
+  assert.match(calls[at('defect-seeder')].prompt, /seed\/P-10-r1 is checked out[\s\S]*svc\/src\/main\/java\/A\.java/)
+  const review = calls.find((c) => c.key === 'review-performance')
+  assert.match(review.prompt, new RegExp(`mergeBase: ${SEEDED.base}`), 'the panel diffs against the seed base, not the old commit')
+  assert.ok(at('defect-seeder') < at('ops:seed-check.sh') && at('ops:seed-check.sh') < at('review-performance'),
+    'the tree is checked after the seeder, before the panel')
+  assert.match(calls[at('ops:seed-check.sh')].prompt, new RegExp(`seed-check\\.sh 'P-10' 'r1' '${SEEDED.base}' '${SEEDED.head}'`))
+  assert.ok(at('ops:return-to-main.sh') > at('review-performance') && at('ops:return-to-main.sh') < at('audit-synthesis'),
+    'back on main before the row is written, so the row never rides onto a seed branch')
+  assert.equal(calls.at(-1).key, 'audit-synthesis')
+  assert.equal(outcome.recorded, true)
+  assert.match(outcome.cleanup, /git branch -D seed\/P-10-r1; commit \.ai\/audit\/benchmark\/results\.md/)
+})
+
+test('seed-bugs: the panel runs only on a tree seed-check.sh confirmed (#0-173, review round 1)', async () => {
+  for (const answer of [null, { ok: false, reason: 'the tree is on main, not on seed/P-10-r1' },
+    { ok: true, files: ['svc/src/main/java/Other.java'] }, { ok: true }]) {
+    const { outcome, calls } = await seed({ 'defect-seeder': TRUTH, 'ops:seed-check.sh': answer })
+    assert.equal(outcome.outcome, 'FAILED', JSON.stringify(answer))
+    assert.match(outcome.reason, /the seed branch is not as the seeder says/)
+    assert.ok(!calls.some((c) => c.key.startsWith('review-')), 'no panel on an unconfirmed tree')
+    assert.equal(calls.at(-1).key, 'ops:return-to-main.sh')
+  }
+})
+
+test('seed-bugs: a run that cannot get back to main says where it left the tree (#0-173, review round 1)', async () => {
+  const stuck = { onMain: false, branch: 'seed/P-10-r1', reason: 'working tree not clean: left as it is for the owner' }
+  const measured = await seed({ 'defect-seeder': TRUTH, 'ops:return-to-main.sh': stuck })
+  assert.equal(measured.outcome.outcome, 'MEASURED')
+  assert.equal(measured.outcome.recorded, false)
+  assert.equal(measured.outcome.leftOn, 'seed/P-10-r1')
+  assert.match(measured.outcome.returnToMain, /not clean/)
+  assert.ok(!measured.calls.some((c) => c.key === 'audit-synthesis'), 'no row written on the seed branch')
+  const failed = await seed({ 'defect-seeder': { blocked: true, reason: 'x' }, 'ops:return-to-main.sh': stuck })
+  assert.equal(failed.outcome.outcome, 'FAILED')
+  assert.equal(failed.outcome.leftOn, 'seed/P-10-r1')
+  const silent = await seed({ 'defect-seeder': TRUTH, 'ops:return-to-main.sh': null })
+  assert.equal(silent.outcome.recorded, false, 'no answer is not "on main"')
+  const ok = await seed({ 'defect-seeder': { blocked: true, reason: 'x' } })
+  assert.ok(!('leftOn' in ok.outcome), 'nothing to say when it is back on main')
+})
+
+test('seed-bugs: a failed run that made the branch says how to delete it (#0-173, review round 2)', async () => {
+  for (const answers of [{ 'defect-seeder': { blocked: true, reason: 'x' } }, { 'defect-seeder': { skipped: true, reason: 'y' } },
+    { 'defect-seeder': TRUTH, 'ops:seed-check.sh': { ok: false, reason: 'z' } }, { 'ops:seed-branch.sh': { ...SEEDED, base: 'abc' } }]) {
+    const { outcome } = await seed(answers)
+    assert.equal(outcome.cleanup, 'git branch -D seed/P-10-r1', JSON.stringify(answers))
+  }
+  for (const answer of [null, { ok: false, reason: 'the working tree is not clean' }]) {
+    const { outcome } = await seed({ 'ops:seed-branch.sh': answer })
+    assert.ok(!('cleanup' in outcome), 'no branch, nothing to delete')
+  }
+  const named = await seed({ 'ops:seed-branch.sh': { ...SEEDED, branch: 'seed/P-10-r1 x; rm' } })
+  assert.equal(named.outcome.cleanup, 'git branch -D seed/P-10-r1', 'the name the run asked for, never the answer\'s')
+})
+
+test('seed-bugs: no seed branch, no seeder; every outcome ends on main', async () => {
+  for (const answer of [null, { ok: false, reason: 'the working tree is not clean' }, { ok: true, branch: 'seed/x' },
+    { ...SEEDED, branch: 'seed/P-10-other' }, { ...SEEDED, base: 'abc' }, { ...SEEDED, head: undefined }, { ...SEEDED, files: [] }]) {
+    const { outcome, calls } = await seed({ 'ops:seed-branch.sh': answer })
+    assert.equal(outcome.outcome, 'FAILED', JSON.stringify(answer))
+    assert.ok(!calls.some((c) => c.key === 'defect-seeder'))
+    assert.equal(calls.at(-1).key, 'ops:return-to-main.sh')
+  }
+  const notClean = await seed({ 'ops:seed-branch.sh': { ok: false, reason: 'the working tree is not clean' } })
+  assert.match(notClean.outcome.reason, /no seed branch: the working tree is not clean/)
+  for (const answer of [{ blocked: true, reason: 'x' }, { skipped: true, reason: 'y' }, { skipped: true }, { ...TRUTH, line: undefined }]) {
+    const { calls } = await seed({ 'defect-seeder': answer })
+    assert.equal(calls.at(-1).key, 'ops:return-to-main.sh', JSON.stringify(answer))
+  }
 })

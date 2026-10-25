@@ -119,6 +119,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
+| [0-173](#0-173-seed-bugs-switches-the-shared-working-tree-to-an-old-commit) | `/seed-bugs` switches the shared working tree to an old commit | security | High | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3067,9 +3068,88 @@ change's files.
 (`check-hook-entries.rb` keeps them equal), with a scope the workflow can name per run (the merged change's paths) or a
 fixed one (the services' `src/main/`).
 
+**Also (review round 2 of #0-173, security FAC-S03).** The seeder's ban on `git switch`, `git checkout` and a new
+branch is only a prompt. Since #0-173, `scripts/factory/seed-check.sh` detects it, but only after the fact: between a
+switch and the check, the seeder's calls run on another tree's hooks. A guard keyed on its `agent_type` would refuse
+those commands before they run. It belongs with this item's guard (the same places, the same entry check).
+
 **Acceptance criteria.**
 AC1. The defect-seeder cannot write outside its scope, shown by a test case.
 AC2. Factory guards fails when its guard is missing from one of its places.
+AC3. The defect-seeder cannot switch or create a branch, shown by a test case.
+
+---
+
+### 0-173. `/seed-bugs` switches the shared working tree to an old commit
+
+**Type:** security · **Priority:** High · **Status:** In progress (owner's decision below, 2026-10-25) — found by the rerun of
+#0-115's pilot measure, after #0-170
+(P-10 on `253e5b2a3a06`, run `perf-after-p10`, 2026-10-25)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-170
+**Touches:** factory (.claude/agents/defect-seeder.md, .claude/workflows/seed-bugs.js, scripts/factory/seed-branch.sh,
+scripts/factory/seed-check.sh), ci (.github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh,
+.github/workflows/factory-guards.yml), docs (docs/ai-factory.md, ADR-0044), .ai/audit/benchmark/patterns.md (owner, if
+the choice of commit changes)
+
+**Problem.** The seeder builds its branch on the merged change itself (`git switch -c seed/<pattern>-<run id>
+<commit>`), in the working tree the session runs in. That tree is the one the devcontainer mounts and the owner's own
+sessions use. Claude Code reads hook scripts from disk on every call and reloads agents, skills and `CLAUDE.md` when they
+change (ADR-0042), so from the switch on the session ran on the definitions of that old commit: the run of 2026-10-25
+switched to `253e5b2a` (about two weeks old) and got that commit's `guard-protected-bash.sh`, which refused the seeder's
+reads, settings that named a `read-scope.sh` the old tree did not have (so every file read failed), and an older
+`CLAUDE.md`; the owner's session on the host lost its `verifier` agent until the tree was switched back. A run that had
+gone through would have had the panel review under the old agents and, worse, older and weaker guards. Nothing was
+committed or pushed; the tree was clean and was switched back to `main` by hand.
+
+**Approach (to analyse).**
+- **F1.** Branch from the current base (`main`) and plant the defect in a file the merged change touched, as that file is
+  now; the panel reviews the defect alone against `main`. Simple; the tree stays current; the measure is easier than
+  intended (a small diff, not a defect hidden in a real change).
+- **F2.** Branch from `main`, commit the merged change reverted (the base), then commit it back with the defect (the
+  change under review, `mergeBase` = the revert commit): the panel sees the real change with the defect inside it, as
+  the benchmark meant, while the tree keeps `main`'s hooks, agents and rules. A change that touched `.claude/` or the
+  rules themselves is not a valid target.
+- Either way: the run refuses to start unless the tree is on a clean `main`, and returns to `main` at its end, also when
+  it fails.
+
+**Decided (owner, 2026-10-25, after `/research`).** F2, through a factory script: `scripts/factory/seed-branch.sh` (run
+by `factory-ops`) checks a clean `main` at `origin/main` and no `.ai/runs/LOCK` (no lock of its own: `preflight.sh`
+also wants Docker and a green CI, which a measure does not need), refuses a change that touches a protected path or
+`CLAUDE.md`, and builds `seed/<pattern>-<run id>` from `main`: the change's code reverted (the base the panel diffs
+against), then back under the change's subject; Markdown is not replayed. The seeder only plants and commits on it,
+in one of the change's files; the workflow ends on `main` in every outcome (`return-to-main.sh`). Tried on a copy of
+the repository: `253e5b2a` no longer applies (refused, back on a clean `main`); `76379e80` (PR #472) does.
+
+**Review round 1 (owner accepted every proposal, 2026-10-25).** Architecture found two blocking gaps (FAC-A02):
+- the panel ran on the seeder's word for its branch. Now `scripts/factory/seed-check.sh` confirms the tree before the
+  panel runs: on the seed branch, clean, one commit on top of the change, touching only the change's files;
+- `finish()` ignored `return-to-main.sh`'s answer, and the Record phase wrote `results.md` while the seed branch was
+  still checked out, so every measured run stayed on `seed/…` and the next run was refused. Now the run goes back to
+  `main` before Record and an outcome that could not says where it left the tree (`leftOn`). The owner commits
+  `results.md` between runs, and `seed-branch.sh` names that file when it refuses.
+
+Also done in that round:
+- `$files` became an array, read with `--literal-pathspecs`;
+- `--no-renames` in both diffs, and the plantable files leave out the deleted ones;
+- tests for a merge commit, a Markdown-only change and a rename or deletion;
+- the workflow checks `seed.branch` against `seed/<pattern>-<run id>` and the two shas;
+- ADR-0044 records the decision.
+
+**Review round 2 (owner accepted the proposals, 2026-10-25).** Every reviewer approved. The non-blocking notes the
+owner took:
+- `seed-branch.sh` reads the two protected lists one at a time, each with its own refusal;
+- `seed-check.sh` leaves the change's deleted files out of what the seeder may touch;
+- a failed run that made the branch carries `cleanup`;
+- ADR-0044 no longer says `patterns.md` names the commits.
+
+A guard that refuses the seeder's `git switch` before the call went to #0-172.
+
+**Acceptance criteria.**
+AC1. During a `/seed-bugs` run the working tree's `.claude/`, `CLAUDE.md` and `.ai/rules/` are those of `main`, shown by
+a test of the workflow's commands (no switch to the merged commit).
+AC2. The run refuses to start on a tree that is not a clean `main`, and ends on `main`, shown by tests.
+AC3. `/seed-bugs` P-10 on a commit whose code still applies to `main` (`76379e806fb4`) plants the pattern and records a
+row (with #0-170's AC3).
 
 ---
 
