@@ -44,6 +44,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
+      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      - name: Set up Ruby
+        uses: ./.github/actions/setup-ruby
+
       - name: Hook tests
         run: .claude/hooks/test-hooks.sh
 
@@ -93,11 +98,10 @@ jobs:
 
       # A hook that cannot start or times out lets the call through unless its entry says `onFailure: "block"`:
       # every entry of both settings files and of the agents' frontmatter must, and must run a hook of the
-      # fail-closed table of test-hooks.sh (backlog #0-162, ADR-0039). The runner's own Ruby, as in lint-workflows.
+      # fail-closed table of test-hooks.sh (backlog #0-162, ADR-0039).
       - name: Hook entries block when their hook fails
         run: |
           set -euo pipefail
-          ruby --version
           ruby .github/scripts/check-hook-entries.rb
 
       # A line with `**Escaped from:** <stage>` but no `**Fixes:** #0-<digits>` would vanish from both audits

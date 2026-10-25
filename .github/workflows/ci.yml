@@ -67,6 +67,11 @@ jobs:
           # `cond && 0 || 1` always yields 1; the string '0' is truthy.
           fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
+      # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
+      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      - name: Set up Ruby
+        uses: ./.github/actions/setup-ruby
+
       # Backlog #0-81: no Spring profile configuration is committed under
       # src/main/resources, where it would ship in every jar and image (the
       # test profiles that sat there hard-coded a JWT secret and an MFA key).
@@ -112,7 +117,6 @@ jobs:
       # as above.
       - name: The Maven caches go through their two actions
         run: |
-          ruby --version
           .github/scripts/test-maven-caches.sh
           ruby .github/scripts/check-maven-caches.rb
 
@@ -481,6 +485,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
+      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      - name: Set up Ruby
+        uses: ./.github/actions/setup-ruby
+
       - name: Set up kubectl (bundles kustomize)
         uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4.0.1
         with:
@@ -576,7 +585,6 @@ jobs:
       - name: Mail manifests (Mailpit in dev only)
         run: |
           set -euo pipefail
-          ruby --version
           .github/scripts/test-k8s-mail.sh
           ruby .github/scripts/check-k8s-mail.rb /tmp
 
@@ -664,6 +672,11 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
+      # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
+      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      - name: Set up Ruby
+        uses: ./.github/actions/setup-ruby
+
       - name: Pinned tool script tests
         run: |
           set -euo pipefail
@@ -720,7 +733,6 @@ jobs:
       - name: Shellcheck the scripts and the composite actions' steps
         run: |
           set -euo pipefail
-          ruby --version
           SHELLCHECK="${RUNNER_TEMP}/lint-tools/shellcheck" .github/scripts/test-check-shell.sh
           ruby .github/scripts/check-shell.rb "${RUNNER_TEMP}/lint-tools/shellcheck"
 
@@ -734,6 +746,16 @@ jobs:
           set -euo pipefail
           .github/scripts/test-check-downloads.sh
           ruby .github/scripts/check-downloads.rb
+
+      # Backlog #0-166, ADR-0040: a step that runs Ruby (the `ruby` command, a .rb file, or a .github/scripts or
+      # .claude/hooks script that does) comes after `uses: ./.github/actions/setup-ruby` in its job, and nothing
+      # but that action uses ruby/setup-ruby: otherwise the step runs on the runner's own Ruby and gems, and
+      # still passes. The checker's own cases run first, as above.
+      - name: Ruby steps run on the Ruby of .ruby-version
+        run: |
+          set -euo pipefail
+          .github/scripts/test-ruby-setup.sh
+          ruby .github/scripts/check-ruby-setup.rb
 
       # Backlog #0-147: one ::error/::warning annotation per finding
       # (--format github); exits non-zero on any finding not suppressed. Reads
@@ -856,6 +878,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
+      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      - name: Set up Ruby
+        uses: ./.github/actions/setup-ruby
+
       - name: Init script, guard and migration
         run: .github/scripts/test-postgres-roles.sh
 
@@ -872,7 +899,6 @@ jobs:
       - name: No service has a default database password
         run: |
           set -euo pipefail
-          ruby --version
           .github/scripts/test-db-password-config.sh
           ruby .github/scripts/check-db-password-config.rb
 

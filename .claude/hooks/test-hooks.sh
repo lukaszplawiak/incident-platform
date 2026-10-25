@@ -94,6 +94,9 @@ expect 2 "python writes AGENTS.md"       "$P" -- "$(bash_call 'python3 -c "open(
 expect 2 "redirect into audit decisions" "$P" -- "$(bash_call 'echo accept >> .ai/audit/decisions.md')"
 expect 0 "read audit decisions"          "$P" -- "$(bash_call 'cat .ai/audit/decisions.md')"
 expect 0 "unrelated write"               "$P" -- "$(bash_call 'echo x > /tmp/y')"
+# Backlog #0-166 (ADR-0040): .ruby-version decides the Ruby every .rb check of CI runs on (build-config list).
+expect 2 "redirect into .ruby-version"   "$P" -- "$(bash_call 'echo 3.2.0 > .ruby-version')"
+expect 0 "read .ruby-version"            "$P" -- "$(bash_call 'cat .ruby-version')"
 # Labels (backlog #0-126): the audits count a `human:*` label as the owner's word, so an autopilot session may
 # add or remove only the shipper's own labels, on both commands that set them, in every form gh accepts.
 expect 0 "shipper creates a labelled PR"        "$P" -- "$(bash_call 'gh pr create --draft --base main --head fix/0-1-x --label autopilot --label blocked --body-file /tmp/b')"

@@ -56,6 +56,7 @@ What every verification runs; a change could make a failing build pass.
 - `.mvn/` — the Maven wrapper's configuration
 - `mvnw` — the Maven wrapper
 - `mvnw.cmd` — the Maven wrapper (Windows)
+- `.ruby-version` — the Ruby every `.github/scripts/*.rb` check of CI runs on (ADR-0040)
 <!-- build-config:end -->
 
 ## Partly protected
