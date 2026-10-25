@@ -120,6 +120,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
+| [0-176](#0-176-seed-bugs-reads-the-panels-verdicts-untyped-and-an-error-strands-the-tree-on-the-seed-branch) | `/seed-bugs` reads the panel's verdicts untyped, and an error strands the tree on the seed branch | ci | High | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3045,6 +3046,10 @@ been written.
 **Approach (to analyse).** Record every run, its outcome and reason included (a row with `FAILED`/`SKIPPED`), and have
 the audit count the attempts per dimension next to the catches.
 
+**Also (review round 2 of #0-176, architecture FAC-A02).** A MEASURED run reports `recorded: true` once `audit-synthesis`
+answers without an error, whatever it answered: nothing checks that the row was written. A typed answer
+(`{ appended: boolean }`, FAC-A06) and `recorded` only on `appended === true` would close it, with the same row writer.
+
 **Acceptance criteria.**
 AC1. A FAILED or SKIPPED run leaves a row with its outcome and reason, shown by a test.
 AC2. The audit's benchmark section reports, per dimension, runs that measured nothing.
@@ -3215,6 +3220,44 @@ every such call's schema types what it reads (a structural check, so FAC-A06 mov
 **Acceptance criteria.**
 AC1. Each of `/audit` and `/docs-audit` starts from its command's words, and refuses a wrong count, shown by tests.
 AC2. Every factory-ops answer a workflow reads has a typed schema, and a test fails when one does not.
+
+---
+
+### 0-176. `/seed-bugs` reads the panel's verdicts untyped, and an error strands the tree on the seed branch
+
+**Type:** ci · **Priority:** High · **Status:** In progress — found by `/seed-bugs` P-12 on `47b95294` (run
+`perf-after-p12`, 2026-10-25), the first run after #0-174 that reached the panel
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-174
+**Touches:** factory (.claude/workflows/seed-bugs.js), ci (.github/scripts/test-autopilot-workflow.mjs), docs
+(docs/ai-factory.md), .ai/audit/benchmark/results.md, .ai/rules/review/factory.md (owner: FAC-A06 widened),
+.ai/audit/benchmark/patterns.md (owner: P-10 and P-11 reworded to the rewritten PERF-01 and PERF-23, #0-115)
+
+**Problem.** #0-174's class of defect, one stage later. The panel's schema in `seed-bugs.js` named only its required
+keys (`{ type: 'object', required: ['dimension', 'verdict', 'blocking'] }`), so all six verdicts came back with every
+value a string (`"blocking": "[{…}]"`, `"round": "1"`), and the Record phase threw (`(v.blocking ?? []).some is not a
+function`). The script stopped there: the tree stayed on `seed/P-12-perf-after-p12`, no row was written, no cleanup
+was named (the owner's session switched back and deleted the branch). The panel had caught the defect: five
+dimensions blocked it, performance under PERF-30. `backlog-autopilot.js` is not affected: its `VERDICT` and `FINDING`
+are typed.
+
+**Decided (owner, 2026-10-25).** The panel gets a typed `VERDICT`/`FINDING`, copied from `backlog-autopilot.js` (a
+workflow cannot import), with `file` and `line` typed on non-blocking findings too (the Record phase matches them)
+and only `issue` required of a finding (a measure must not lose a catch over a missing id). A verdict that still is
+not one (no `blocking` or `nonBlocking` array) counts as no answer. Every step after the branch is made runs in
+`measure()`, and an error there ends the run as `FAILED`, back on main, with the branch named for deletion. FAC-A06
+covers any agent's answer a workflow reads, not only `factory-ops`'. The P-12 row is recorded by hand from the run's
+journal. Review round 1 (owner, 2026-10-25): `backToMain()` never throws (a failure reads as "not on main"), so an error
+in the catch of `measure()` cannot escape; a measure whose row cannot be written ends `MEASURED`, `recorded: false`, with
+its data; and a test keeps the panel's schema typed as `backlog-autopilot.js`'s `VERDICT`, but for the relaxations named
+in its comment. Review round 2: that test compares both ways (a key only `seed-bugs.js` types fails it too), and a
+MEASURED run not back on main names the branch to delete; the unchecked `audit-synthesis` answer went to #0-171.
+
+**Acceptance criteria.**
+AC1. The panel's schema accepts a verdict as reviewers write it and refuses the answers of the 2026-10-25 run, shown by
+a test.
+AC2. A verdict that is not one counts as no answer and the run still records, shown by a test.
+AC3. An error after the branch exists ends the run on main and names the branch, shown by a test.
+AC4. A `/seed-bugs` run that reaches the panel records its row (the owner's P-10 or P-11 rerun).
 
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
@@ -3570,7 +3613,11 @@ above), `general`, `migration`, `docs`, `k8s` (ids first), `factory.md`.
 
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
-  validation named where they live). `/seed-bugs` P-10…P-12 on main: —.
+  validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
+  (`perf-after-p12` on `47b95294`, under PERF-30, not PERF-02; general, architecture, security and docs blocked too;
+  row recorded by hand, #0-176). P-10 skipped on `76379e806fb4` (no lazy collection in the change; the pattern's
+  wording predates the rewritten PERF-01). P-10 on `47b95294` and P-11 on `fc368943`: — (after the owner rewords
+  both patterns in `.ai/audit/benchmark/patterns.md`).
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.

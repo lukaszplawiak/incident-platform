@@ -238,7 +238,9 @@ The agents' instructions are not a boundary; these are, each with its limit:
 - **Pipeline cases** are derived by `scripts/factory/audit-data.sh` from what the pipeline records (BLOCKED,
   extra rounds, scope off, acceptance, owner labels, BLOCKED runs without a PR) — nobody logs them by hand.
 - **Seeded defects**: `/seed-bugs P-01 <merged sha> <run id>` (or args `{"pattern": "P-01", "commit": "<merged
-  sha>", "runId": "<id>"}`; the command passes its words as one string, #0-174) plants a known defect from
+  sha>", "runId": "<id>"}`; the command passes its words as one string, #0-174; a session runs the version of the
+  workflow it loaded at its start, so after a change to `seed-bugs.js` start a new session, or pass the file as
+  `scriptPath`) plants a known defect from
   `.ai/audit/benchmark/patterns.md` on a throwaway `seed/` branch and records who caught it in
   `.ai/audit/benchmark/results.md`. Start it from a clean `main` at `origin/main`, with no
   autopilot run: `scripts/factory/seed-branch.sh` builds the branch from `main` (the change's code reverted as its base,
