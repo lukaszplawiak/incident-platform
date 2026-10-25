@@ -8,7 +8,8 @@
 #   4. a Flyway migration that exists in <base> and was modified or deleted;
 #   5. a backlog item whose `**Autopilot:** ready` line was added (only the owner marks items ready);
 #   6. build configuration that decides what verification runs: a path of the build-config list of
-#      .ai/rules/protected-paths.md as it is on the merge base (`.mvn/`, `mvnw`, `mvnw.cmd`, `.ruby-version`;
+#      .ai/rules/protected-paths.md as it is on the merge base (its entries are named there
+#      only, not here, so this comment cannot drift from it;
 #      read through scripts/factory/_protected.sh, not copied here — backlog #0-122; an unreadable list is a
 #      finding),
 #      a POM line that skips or excludes tests or coverage, or any added or removed line of the coverage

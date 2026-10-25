@@ -1,0 +1,29 @@
+# ============================================================
+# Sets up the Node every JavaScript test of CI runs on (backlog #0-163, ADR-0043): the exact version in
+# .node-version, like setup-ruby pins Ruby (ADR-0040) and setup-java and setup-python pin Java and Python.
+#
+# The only place actions/setup-node is used, pinned by SHA (Renovate bumps it with the other actions), and without a
+# `node-version` input, so .node-version alone decides the version. .github/scripts/check-runtime-setup.rb refuses a
+# step that runs Node before this action in its job, and any other use of actions/setup-node. No package manager
+# cache and no package.json: the tests load Node's built-in modules only (node:test, node:assert), so nothing is
+# installed from npm.
+#
+# setup-node downloads Node from actions/node-versions or nodejs.org and checks no SHA-256 or signature here: the
+# binary's integrity rests on that action, as Ruby's rests on setup-ruby (ADR-0040, ADR-0043). Needs the repository
+# checked out.
+# ============================================================
+name: Set up Node
+description: Installs the Node of .node-version and prints its version
+
+runs:
+  using: composite
+  steps:
+    - name: Node from .node-version
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version-file: .node-version
+        package-manager-cache: false
+
+    - name: Node version
+      shell: bash
+      run: node --version

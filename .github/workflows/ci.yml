@@ -68,7 +68,7 @@ jobs:
           fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
 
       # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
-      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      # (check-runtime-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
       - name: Set up Ruby
         uses: ./.github/actions/setup-ruby
 
@@ -486,7 +486,7 @@ jobs:
           persist-credentials: false
 
       # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
-      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      # (check-runtime-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
       - name: Set up Ruby
         uses: ./.github/actions/setup-ruby
 
@@ -673,9 +673,15 @@ jobs:
           persist-credentials: false
 
       # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
-      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      # (check-runtime-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
       - name: Set up Ruby
         uses: ./.github/actions/setup-ruby
+
+      # Backlog #0-163 (ADR-0043): Node from .node-version. This job runs no JavaScript itself, but
+      # test-runtime-setup.sh names `node` in its cases, and check-runtime-setup.rb reads a script one level down
+      # without telling a case's text from a command: the setup costs a download, an exception would be a way past it.
+      - name: Set up Node
+        uses: ./.github/actions/setup-node
 
       - name: Pinned tool script tests
         run: |
@@ -747,15 +753,16 @@ jobs:
           .github/scripts/test-check-downloads.sh
           ruby .github/scripts/check-downloads.rb
 
-      # Backlog #0-166, ADR-0040: a step that runs Ruby (the `ruby` command, a .rb file, or a .github/scripts or
-      # .claude/hooks script that does) comes after `uses: ./.github/actions/setup-ruby` in its job, and nothing
-      # but that action uses ruby/setup-ruby: otherwise the step runs on the runner's own Ruby and gems, and
-      # still passes. The checker's own cases run first, as above.
-      - name: Ruby steps run on the Ruby of .ruby-version
+      # Backlog #0-166, ADR-0040 (Node: #0-163, ADR-0043): a step that runs Ruby (the `ruby` command, a .rb file,
+      # or a .github/scripts or .claude/hooks script that does) comes after `uses: ./.github/actions/setup-ruby` in
+      # its job, one that runs Node (`node`, an .mjs file) after `uses: ./.github/actions/setup-node`, and nothing
+      # but those actions uses ruby/setup-ruby or actions/setup-node: otherwise the step runs on the runner's own
+      # runtime, and still passes. The checker's own cases run first, as above.
+      - name: Ruby and Node steps run on their pinned versions
         run: |
           set -euo pipefail
-          .github/scripts/test-ruby-setup.sh
-          ruby .github/scripts/check-ruby-setup.rb
+          .github/scripts/test-runtime-setup.sh
+          ruby .github/scripts/check-runtime-setup.rb
 
       # Backlog #0-147: one ::error/::warning annotation per finding
       # (--format github); exits non-zero on any finding not suppressed. Reads
@@ -883,7 +890,7 @@ jobs:
           persist-credentials: false
 
       # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
-      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      # (check-runtime-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
       - name: Set up Ruby
         uses: ./.github/actions/setup-ruby
 

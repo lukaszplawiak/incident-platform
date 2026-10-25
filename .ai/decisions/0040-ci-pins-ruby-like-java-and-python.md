@@ -37,7 +37,8 @@ could only copy versions by hand.
 3. `check-ruby-setup.rb` (lint-workflows, with its cases in `test-ruby-setup.sh`) holds that: it refuses a step that
    runs Ruby (the `ruby` command, a `.rb` file, or a `.github/scripts`/`.claude/hooks` script that does) before
    `uses: ./.github/actions/setup-ruby` in its job, any other use of `ruby/setup-ruby`, and a `ruby-version` input.
-   The list of jobs is the workflows themselves, not a list kept beside them (`FAC-A01`).
+   The list of jobs is the workflows themselves, not a list kept beside them (`FAC-A01`). Since #0-163 (ADR-0043)
+   the check is `check-runtime-setup.rb` (`test-runtime-setup.sh`), with Ruby and Node as rows of one table.
 4. `.ruby-version` is on the build-config list of `.ai/rules/protected-paths.md`, beside `mvnw` and `.mvn/`: it
    decides what every `.rb` check runs on, so a PR that changes it needs the owner (`check-factory-guards.sh` rule
    6), and the autopilot denies writing it (`settings.autopilot.json`, `guard-protected-bash.sh`).

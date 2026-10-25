@@ -132,8 +132,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
+| [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | In progress |
 | [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Open |
+| [0-168](#0-168-a-copy-of-the-protected-paths-can-run-ahead-of-the-one-list) | A copy of the protected paths can run ahead of the one list | ci | Medium | Open |
 
 ---
 
@@ -2663,11 +2664,13 @@ README "Infrastructure Hardening".
 
 ### 0-163. The autopilot workflow's logic has no tests
 
-**Type:** ci · **Priority:** Medium · **Status:** Open — `nonBlocking` GEN-01 and `ruleGap` of review-general in both
+**Type:** ci · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-25) — `nonBlocking` GEN-01 and `ruleGap` of review-general in both
 rounds of the `/review` of #0-160 (2026-10-23/24)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
-**Touches:** factory (.claude/workflows/backlog-autopilot.js), ci (.github/scripts/ (a new test),
-.github/workflows/factory-guards.yml)
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/settings.autopilot.json, .claude/hooks/), ci
+(.github/scripts/ (a new test, check-runtime-setup.rb, ci-local.sh), .github/workflows/, .github/actions/setup-node/,
+.node-version), .ai/rules/protected-paths.md (owner), .ai/decisions/, docs (CLAUDE.md "Commands", README.md
+"Infrastructure Hardening", .ai/context/infrastructure.md)
 
 **Problem.** `backlog-autopilot.js` decides every branch of a run in code — `scopeOf`, `valid`, `openClaims`,
 `claimId`, `verifyClaims` (the fail-closed downgrade of an unsourced answer), `refutedFindings`, `unsettledReason`,
@@ -2679,6 +2682,14 @@ and `args` in scope, not a module: either move the pure functions to a file the 
 load (if the runtime allows an import), or evaluate the script's helper section with stubs (what the ad-hoc check
 of #0-160 did) — then the test breaks when the section's markers move, which is acceptable if it fails loudly.
 Node is on the runner; mutation-check the cases.
+
+**Decided (owner, 2026-10-25, after `/research`).** B + R1, in two PRs. Tests of the helper functions and scenario
+tests of the whole run (the checks of `args`, the fail-closed stops), with a fake `agent()`: the workflow runtime
+has no import, so a test evaluates the script's text with stubs. Node pinned like Ruby (ADR-0043, PR 1):
+`.node-version`, `.github/actions/setup-node`, Node's built-in modules only (no npm); `check-ruby-setup.rb` becomes
+`check-runtime-setup.rb` with Ruby and Node as rows of one table; `ci-local.sh` copies the same Node from the
+official `node` image (not a tarball through `install-pinned-tool.sh`); `.node-version` on the build-config list.
+PR 2: the tests, a Factory guards step, a one-off mutation run recorded in the PR.
 
 **Acceptance criteria.**
 AC1. Factory guards runs tests of the workflow's pure functions, among them the verification functions' fail-closed
@@ -2916,6 +2927,37 @@ AC1. No skill of the owner's session pre-approves a git command that can carry `
 `--textconv`, or a hook of every session refuses them, shown by test cases for each shape of round 1 of #0-165.
 AC2. `readonly-bash.sh` refuses those options however the word is quoted or continued, shown by test cases.
 AC3. README "Infrastructure Hardening" no longer lists this gap.
+
+---
+
+### 0-168. A copy of the protected paths can run ahead of the one list
+
+**Type:** ci · **Priority:** Medium · **Status:** Open — `ruleGap` of review-security and review-architecture in round 1
+of the `/review` of #0-163 PR 1 (2026-10-25)
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** —
+**Touches:** ci (.github/scripts/check-protected-paths.sh, .github/scripts/test-protected-paths.sh), factory
+(.claude/settings.autopilot.json, .claude/hooks/guard-protected-bash.sh), .ai/rules/protected-paths.md (owner),
+.ai/rules/review/factory.md (owner, if a rule is added)
+
+**Problem.** `.ai/rules/protected-paths.md` is the one list of protected and build-config paths (#0-122); its copies
+that cannot read it, the autopilot's Edit/Write denies and `guard-protected-bash.sh`'s regex, are checked by
+`check-protected-paths.sh` in one direction only: every entry of the list must be in every copy. A copy that holds an
+entry the list lacks passes. In #0-163 PR 1 `.node-version` was added to both copies, and five documents said it was
+on the build-config list, before the list had it: `check-factory-guards.sh` rule 6 (which reads the list from the merge
+base) would have let a PR changing it through without the owner, and `changed-paths.sh`, `next-item.sh` and
+`check-queue.sh` would not have treated it as protected. Three reviewers found it by reading; no check would have.
+
+**Approach (to analyse).** The other direction for the denies: each `Edit(./…)`/`Write(./…)` deny is an entry of the
+list or of a named set of other denies (`.git/**`, `.ai/runs/LOCK`, `.ai/runs/state.json`, `.ai/STOP`, which are not
+paths of the list on purpose). For the hook: its regex is tested by running it, not parsed (#0-122), so the other
+direction there needs either the regex built from the list at a known place or a list of the hook's alternatives
+kept next to it and compared. Decide whether a `FAC-S`/`FAC-A` rule should say so for review.
+
+**Acceptance criteria.**
+AC1. Factory guards fails when `settings.autopilot.json` denies writing a path that is neither on the list nor in the
+named set of other denies, shown by a test case.
+AC2. Factory guards fails when `guard-protected-bash.sh` protects a path the list does not hold, or the decision why it
+cannot is recorded, with the case shown either way.
 
 ---
 

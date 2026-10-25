@@ -54,6 +54,22 @@ expect 0 "every step ran" 'j: 3 step\(s\) run, 0 failed, 0 skipped\.'
 expect_not "a step's env does not leak into the next" 'STEP_VAR'
 
 expect 0 "the versions of Ruby, json and psych come first" '^ruby [0-9]+\.[0-9]+.*; json [0-9]+\.[0-9]+.*, psych [0-9]+\.[0-9]+'
+expect 0 "then the version of Node" '^node v[0-9]+\.[0-9]+'
+# No node on PATH (an image built without it): the runner stops before any step, instead of a Node step failing later.
+n=$((n + 1))
+ruby_bin=$(command -v ruby)
+mkdir -p "$WORK/no-node"
+for tool in uname bash sh; do ln -sf "$(command -v "$tool")" "$WORK/no-node/$tool"; done   # what Ruby itself needs
+out=$(cd "$WORK" && PATH="$WORK/no-node" "$ruby_bin" "$STEPS" "$W" j 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'no node in this image' <<<"$out" && ! grep -q '^\[' <<<"$out"; then ok "no node: exit 2, no step run"
+else fail "no node: expected exit 2, 'no node in this image' and no step, got $rc: $out"; fi
+# A node that does not answer with a version (a broken binary): exit 2 too, before any step.
+n=$((n + 1))
+printf '#!/bin/sh\necho "cannot run" >&2\nexit 1\n' > "$WORK/no-node/node" && chmod +x "$WORK/no-node/node"
+out=$(cd "$WORK" && PATH="$WORK/no-node" "$ruby_bin" "$STEPS" "$W" j 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && grep -q 'node --version. failed' <<<"$out" && ! grep -q '^\[' <<<"$out"; then ok "a node that fails: exit 2, no step run"
+else fail "a node that fails: expected exit 2, 'node --version failed' and no step, got $rc: $out"; fi
+rm -f "$WORK/no-node/node"
 workflow '      - name: Where' '        run: echo "$RUNNER_TEMP" > "$GITHUB_WORKSPACE_RT"'
 n=$((n + 1))
 (cd "$WORK" && GITHUB_WORKSPACE_RT=$WORK/rt ruby "$STEPS" "$W" j >/dev/null 2>&1)
