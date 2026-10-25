@@ -1,10 +1,12 @@
 # Review dimension: performance
 
 Owned by the maintainer; agents never edit it. Moved from `.claude/agents/performance-reviewer.md` on
-2026-10-05; the checks are unchanged, each now has an id.
+2026-10-05, each check with an id; rewritten as invariants on 2026-10-25 (backlog #0-115): each rule says what
+is true of the code, and its "Check:" line what to look for in a diff. The ids did not change.
 
 Read by `review-performance` (the whole file, whenever it runs) and by the implementer: the rules the
-architect's plan lists, or the whole file when the change reaches this area (self-check).
+architect's plan lists, or the whole file when the change reaches this area (self-check). For the implementer
+a rule is what the code must be; for the reviewer, its "Check:" line is where a violation shows.
 
 Read `.ai/context/architecture.md` first — virtual threads, the Kafka event flow and the shared Postgres
 database are what this review depends on. Not every change needs this review: if the diff only touches
@@ -19,47 +21,59 @@ names the condition under which it bites (data volume, request rate, tenant coun
 
 ## 1. Database access patterns
 
-- **PERF-01** N+1 queries: a loop that issues one query per iteration instead of a batched/joined fetch.
-  Check new repository methods and any code iterating over a collection and calling a repository or
-  `@Query` method per element.
-- **PERF-02** Missing pagination on a query that could return an unbounded result set as the dataset grows
-  (especially anything not obviously tenant- and time-scoped).
-- **PERF-03** New queries without an index to support them — check migration files for a matching index
-  when a new query filters or sorts on a column that previously had none (a partial index where the
-  query has a fixed predicate).
+- **PERF-01 One query for a collection, not one per element.** Code that goes over a collection fetches what
+  it needs in one batched or joined query (`findAllById`, an `IN` predicate, a fetch join), never with a
+  repository call, a lazy association or a client call per element. Check: a new loop, stream or `forEach`
+  over entities or ids whose body reaches a repository, a lazy getter or an HTTP client.
+- **PERF-02 A query that grows with the data is bounded.** It is paged, limited, or scoped to a tenant and a
+  time window. Check: a new repository method returning a `List` or `Stream` without a `Pageable`, a limit or
+  such a predicate, on a table that grows (incidents, alerts, audit events, the outbox).
+- **PERF-03 A new filter or sort has an index.** A query that filters or sorts on a column has an index that
+  serves it, a partial one when its predicate is fixed. Check: a new `WHERE` or `ORDER BY` column against the
+  indexes in that service's migrations.
 
 ## 2. Kafka consumers
 
-- **PERF-10** Per-record work that does a blocking synchronous call (DB, HTTP) inside the consumer loop
-  without regard for consumer lag — could this stall the partition under load? A consumer's
-  `max.poll.records` × 5 s must fit in half its `max.poll.interval.ms` (checked at startup).
-- **PERF-11** Batch size and commit strategy: does a change affect how many records are processed per
-  poll, and is that intentional?
-- **PERF-12** Anything that could turn a single bad record into a poison-pill loop instead of going to the
-  dead-letter path.
+- **PERF-10 A consumer keeps up with its partition.** A whole poll's work finishes inside
+  `max.poll.interval.ms`: the dead-letter copies of a whole poll (`max.poll.records` × the 5 s dead-letter
+  timeout) fit in half of it, which each consuming service's `KafkaConfig` checks at startup
+  (`DeadLetterPublisher.requireFitsPollInterval`), and the per-record blocking work (a query, an HTTP call) fits in
+  the rest. Check: a new blocking call per record, or a change to either setting.
+- **PERF-11 How many records a poll takes, and when they commit, changes only on purpose.** Check: a change to
+  `max.poll.records`, a batch listener or the ack mode, without a reason in the PR or a Javadoc.
+- **PERF-12 A bad record leaves the partition once.** A record that keeps failing goes to the dead-letter
+  topic (`DeadLetterPublisher.deadLetterThenAcknowledge`) after a bounded retry, so it never loops. Check: a new
+  catch, rethrow or retry in a listener, and whether every way out ends in an acknowledge or a dead letter.
 
 ## 3. Concurrency & virtual threads
 
-- **PERF-20** Blocking calls wrapped correctly for virtual-thread execution — flag anything that looks
-  like it could pin a carrier thread (synchronized blocks around blocking I/O being the classic case).
-- **PERF-21** Async work: is `TenantAwareTaskDecorator`/the configured executor used instead of unbounded
-  thread creation?
-- **PERF-22** New `@Scheduled` jobs: reasonable frequency, a batch cap, and fast enough to finish before
-  the next trigger, given ShedLock's lock duration (a processing budget validated against the lock, as
-  the existing schedulers do).
-- **PERF-23** A remote call (HTTP, Kafka send, email) inside a `@Transactional` method: it holds a
-  connection and row locks for the duration of the call.
+- **PERF-20 No blocking I/O while a carrier thread is pinned.** On Java 21 a virtual thread inside a
+  `synchronized` block or method pins its carrier, so no database, HTTP, Kafka or file call runs inside one
+  (`ReentrantLock` instead). Check: a new or changed `synchronized` whose body reaches I/O.
+- **PERF-21 Async work runs on a bounded executor.** The configured executor (with `TenantAwareTaskDecorator`),
+  never a thread per task. Check: `new Thread`, `Executors.new…`, or a `CompletableFuture.*Async` without the
+  executor. (The tenant context is SEC-05's.)
+- **PERF-22 A scheduled job finishes inside its lock.** It takes a capped batch and stops at a processing
+  budget validated against its ShedLock `lockAtMostFor`, as the existing schedulers do (`AuthEmailScheduler`).
+  Check: a new `@Scheduled` without a batch cap, a budget or the validation, or a frequency shorter than a run;
+  a job that is one bounded statement (a purge by date, `AuthEmailScheduler`'s) needs no cap or budget.
+- **PERF-23 No remote call inside a transaction.** An HTTP call, a Kafka send or an email runs outside
+  `@Transactional`, where it would hold a connection and row locks for its duration; an event on
+  `incidents.lifecycle` or `audit.events` goes through the outbox (the other topics are sent directly). Check: a
+  new remote call reachable from a `@Transactional` method.
 
 ## 4. Memory & collections
 
-- **PERF-30** Loading an entire table or Kafka topic's worth of data into memory where a streaming or
-  paginated approach would do.
-- **PERF-31** Caching that has no eviction/expiry, or that grows per-tenant without bound.
+- **PERF-30 Nothing loads a whole table or topic into memory.** Data that grows is streamed or paged. Check:
+  a new `findAll()`, a collect over an unbounded stream, a topic read from its beginning into a collection.
+- **PERF-31 A cache is bounded.** A size limit or an expiry bounds it, and a per-tenant key cannot make it grow
+  without bound. Check: a new cache with neither `maximumSize` nor `expireAfter…`, or keyed by a value that grows.
 
 ## 5. External calls
 
-- **PERF-40** For postmortem-service's Gemini calls or any outbound HTTP: timeout configured, no
-  retry-without-backoff that could amplify load during an outage.
+- **PERF-40 An outbound call has a timeout and a bounded retry.** A connect and a read timeout, and retries with
+  backoff and a deadline, so an outage of the other side is not amplified (postmortem-service's Gemini calls
+  included). Check: a new client or call without timeouts, a retry loop without backoff or deadline.
 
 ## Output notes
 
