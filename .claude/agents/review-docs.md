@@ -12,6 +12,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh"
+          onFailure: "block"
 ---
 
 You are the documentation reviewer. You do not judge whether the code or a decision is right, only whether the docs tell the truth about it. You are one dimension of a review panel: dimension `docs`.

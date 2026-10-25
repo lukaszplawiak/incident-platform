@@ -183,8 +183,9 @@ an exit criterion (`.ai/rules/planning.md`): if it never teaches anything, it go
 **Stopping it**: create `.ai/STOP` (local), or open an issue labelled `autopilot-stop` (works from a
 phone). The preflight also refuses to start when: main's CI is red (the latest run of a push to main; a
 fork pull request's run from a branch named `main` does not count, backlog #0-148), the working tree is
-dirty, 2 items in a row were BLOCKED, an audit is due, the daily merge limit (5) is reached, or another run
-holds the lock (`scripts/factory/state.sh unlock` clears a stale one).
+dirty, 2 items in a row were BLOCKED, an audit is due, the daily merge limit (5) is reached, another run
+holds the lock (`scripts/factory/state.sh unlock` clears a stale one), or Claude Code is older than 2.1.295
+(the hooks' `onFailure: "block"`, backlog #0-162, ADR-0039).
 
 The breaker and the audit counter are reset only by the owner, outside the autopilot session (which may
 not run `scripts/factory-admin/`): after resolving the BLOCKED items, delete `.ai/STOP` and run
@@ -245,7 +246,8 @@ The agents' instructions are not a boundary; these are, each with its limit:
 ## Pinned versions
 
 Agent models are full ids in `.claude/agents/*.md`; Claude Code is pinned to the version the
-devcontainer image was built with (`DISABLE_AUTOUPDATER=1`); the devcontainer's docker-outside-of-docker
+devcontainer image was built with (`DISABLE_AUTOUPDATER=1`). The preflight refuses one older than 2.1.295, the
+first that honours the hooks' `onFailure: "block"` (an older one ignores the field silently, ADR-0039). The devcontainer's docker-outside-of-docker
 feature is pinned by digest in `.devcontainer/devcontainer-lock.json` (`devcontainer upgrade` moves it).
 Treat an upgrade of any of them like a dependency
 upgrade: change it on purpose, then run a few seeded defects and compare `results.md` before trusting it.

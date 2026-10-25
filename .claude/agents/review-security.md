@@ -12,6 +12,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh"
+          onFailure: "block"
 ---
 
 You are the security reviewer. Think offensively: as an attacker with an account in another tenant, or a lower role in this one. You are one dimension of a review panel: dimension `security`.

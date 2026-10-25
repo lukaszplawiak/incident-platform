@@ -9,7 +9,8 @@
 # tripped (FACTORY_MAX_BLOCKED consecutive BLOCKED items, default 2); an audit is due
 # (FACTORY_AUDIT_EVERY shipped items since the last one, default 10); the daily merge limit is reached
 # (FACTORY_MAX_MERGES_PER_DAY, default 5); another run holds the lock (younger than FACTORY_LOCK_HOURS,
-# default 3); Docker is not reachable (the tests need it).
+# default 3); Docker is not reachable (the tests need it); Claude Code is older than 2.1.295, or does not say
+# its version (the hooks' onFailure, backlog #0-162).
 # The breaker and the audit trigger create .ai/STOP, so the owner has to clear them on purpose.
 # ============================================================
 set -uo pipefail
@@ -30,6 +31,52 @@ run_id=$(date -u +%Y%m%d-%H%M%S)
 [ -f .ai/STOP ] && add "STOP file present: $(head -c 300 .ai/STOP | tr '\n' ' ')"
 # Personal allow rules would merge into the dontAsk session and widen what agents may run.
 [ -f .claude/settings.local.json ] && add ".claude/settings.local.json exists: its allow rules would apply to the autopilot; move it out of the workspace (it is personal, see docs/ai-factory.md)"
+
+# Fixed (backlog #0-162 PR 2, ADR-0039): every hook entry says `"onFailure": "block"`, so that a hook that cannot
+# start or times out refuses the call instead of letting it through. Claude Code honours the field from 2.1.295;
+# 2.1.294 ignores it without a word (spike of 2026-10-25), and the devcontainer installs whatever version is
+# current when its image is built. The version is the running binary's (CLAUDE_CODE_EXECPATH, which Claude Code
+# sets for its commands), or the one on PATH when that is unset; one that cannot say its version refuses. A field
+# has at most six digits: a longer one is not a version, and would reach `[ -gt ]` past what bash compares (review
+# round 1).
+MIN_CLAUDE_CODE=2.1.295
+# version_at_least <x.y.z> <x.y.z> — the first is the second or newer, field by field as numbers.
+version_at_least() {
+    local IFS=.
+    # shellcheck disable=SC2206
+    local a=($1) b=($2) i
+    for i in 0 1 2; do
+        [ "${a[i]}" -gt "${b[i]}" ] && return 0
+        [ "${a[i]}" -lt "${b[i]}" ] && return 1
+    done
+    return 0
+}
+# claude_version <binary> — the first line its --version prints, or nothing when it has not answered within
+# FACTORY_CLAUDE_VERSION_WAIT tenths of a second (default 100): a binary that hangs must refuse, not hang the
+# preflight (review round 2). Bash only, as macOS has no timeout(1).
+claude_version() {
+    local out pid i
+    out=$(mktemp) || return 1
+    "$1" --version >"$out" 2>/dev/null &
+    pid=$!
+    for ((i = 0; i < ${FACTORY_CLAUDE_VERSION_WAIT:-100}; i++)); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; rm -f "$out"; return 1
+    fi
+    wait "$pid" 2>/dev/null
+    head -1 "$out"; rm -f "$out"
+}
+claude_bin=${CLAUDE_CODE_EXECPATH:-$(command -v claude 2>/dev/null)}
+claude_out=$([ -n "$claude_bin" ] && claude_version "$claude_bin")
+if [[ "$claude_out" =~ ^([0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6})([^0-9.]|$) ]]; then
+    version_at_least "${BASH_REMATCH[1]}" "$MIN_CLAUDE_CODE" \
+        || add "Claude Code ${BASH_REMATCH[1]} is older than $MIN_CLAUDE_CODE: it ignores the hooks' onFailure, so a hook that cannot start would let the call through (backlog #0-162)"
+else
+    add "cannot read the version of Claude Code (${claude_bin:-no claude on PATH}): it must be $MIN_CLAUDE_CODE or newer (backlog #0-162)"
+fi
 
 [ -z "$(git status --porcelain)" ] || add "working tree is not clean"
 branch=$(git rev-parse --abbrev-ref HEAD)

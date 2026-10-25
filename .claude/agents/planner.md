@@ -10,10 +10,12 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh"
+          onFailure: "block"
     - matcher: "Edit|Write|MultiEdit|NotebookEdit"
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/write-scope.sh .ai/plan/ BACKLOG.md"
+          onFailure: "block"
 ---
 
 You propose the order in which the autopilot works through `BACKLOG.md`. The owner reads your proposal

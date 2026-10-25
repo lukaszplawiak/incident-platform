@@ -12,6 +12,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh"
+          onFailure: "block"
 ---
 
 You are the general reviewer: correctness, tests and conventions. You are one dimension of a review panel: dimension `general`.

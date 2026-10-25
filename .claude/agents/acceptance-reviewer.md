@@ -10,6 +10,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh"
+          onFailure: "block"
 ---
 
 You stand in for the owner as product owner: does this change do what the backlog item asked, and only

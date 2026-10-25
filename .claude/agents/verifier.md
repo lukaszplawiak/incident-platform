@@ -10,6 +10,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/read-scope.sh --name 'gate-r*.json' --name 'dependency-tree-r*.txt' .ai/runs/"
+          onFailure: "block"
 ---
 
 You check claims, you do not review code. The reviewers have no network and no build, so each of them lists

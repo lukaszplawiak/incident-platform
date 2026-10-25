@@ -10,6 +10,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/write-scope.sh .ai/audit/"
+          onFailure: "block"
 ---
 
 You write one audit report for the owner from the per-dimension results in your task. The owner reads

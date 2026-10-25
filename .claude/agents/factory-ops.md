@@ -10,6 +10,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/factory-ops-bash.sh"
+          onFailure: "block"
 ---
 
 You run exactly one command from `scripts/factory/`, the one your task names, with the arguments it

@@ -470,8 +470,13 @@ security boundary, so every rule that matters is also enforced outside the model
   `guard-migrations.sh` and named in rule `FAC-S04`: without `jq` and `python3`, and with a base ref that does not
   exist, it warns and lets the edit through so that the owner's sessions do not break (CI's edited-migration
   check still compares with the PR's base). A hook
-  that cannot start at all (missing, not executable) or times out is still a non-blocking error until
-  `onFailure: "block"` (#0-162 PR 2).
+  that cannot start at all (missing, not executable) or times out is caught by Claude Code itself: every hook entry,
+  in both settings files and in the agents' frontmatter, says `"onFailure": "block"` (ADR-0039), and Factory guards
+  (`check-hook-entries.rb`, also skills' and commands' frontmatter) fails an entry without it, one in the background
+  (`async`, which the field does not cover), one that is not a command hook of `.claude/hooks/` with plain
+  arguments, or one whose hook has no row in the fail-closed table, and a file that repeats a key. The field needs
+  Claude Code 2.1.295 or newer (an older one ignores it silently, spike of 2026-10-25): the autopilot's preflight
+  refuses an older one.
   Hook tests: `.claude/hooks/test-hooks.sh`, with every hook in a fail-closed table (a hook without a row fails Factory guards).
 - **Least privilege per agent**: reviewers, the architect and the auditors run read-only Bash allow-lists
   and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); they read files with the Read tool and
@@ -554,8 +559,9 @@ commands but not code they run, as Docker access (needed by Testcontainers) is r
 (#0-116, accepted for shadow mode, required before auto-merge); secrets are scanned only after the push, when a
 branch is already public, and an allow comment passes whatever its line holds (#0-156, ADR-0036); no Maven Enforcer
 (#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines, and most of
-their checks still let a command through when the check itself fails (a grep error, #0-132); a hook that cannot
-start or times out does not block (#0-162 PR 2);
+their checks still let a command through when the check itself fails (a grep error, #0-132); an owner's
+session on a Claude Code older than 2.1.295 ignores the hooks' `onFailure` without a word, so there a hook that
+cannot start or times out does not block (only the autopilot's preflight checks the version; ADR-0039);
 subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
 where only the session-level hooks apply, and Claude Code does not promise them to agents the `Workflow`
 runtime spawns either (they ran there in #0-160's spike): only the verifier's read scope is also

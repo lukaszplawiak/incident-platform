@@ -43,7 +43,9 @@ and the ADRs of the area "AI factory" (`.ai/decisions/README.md`). Most of the w
   the owner's own edits in every session: without `jq` and `python3`, and with a base ref that does not exist, it
   warns and lets the edit through, so that a session on a machine or clone without them does not break (CI's
   edited-migration check still compares with the PR's base). A new or changed failure path that exits
-  otherwise is blocking; `impact` is the call it lets through.
+  otherwise is blocking; `impact` is the call it lets through. A hook that cannot start or times out is
+  blocked by Claude Code, through `"onFailure": "block"` on every hook entry (ADR-0039; Factory guards checks
+  the entries, section 3).
 - **FAC-S05 No secret within reach of an agent that can send.** The secret-file deny rules of both settings
   files apply to it, its read scope excludes them, and a path check counts as no check for a file the
   branch's own code could have written: a symlink, a second hard link, a file under `.ai/runs/` before the
@@ -88,6 +90,10 @@ it is red on one, say so in `unverified` (you cannot run it).
 - The copies of the protected-path list (`check-protected-paths.sh`); deleted tests, weaker assertions, new
   POM plugins or dependencies, edited migrations, an item marked ready, the build configuration
   (`check-factory-guards.sh`).
+- Every hook entry of both settings files and the frontmatter of agents, skills and commands (subdirectories
+  too): a command hook with `onFailure: "block"`, not in the background (`async`), a hook of `.claude/hooks/`
+  with plain arguments and a row in the fail-closed table, no `disableAllHooks`, no key repeated in one map
+  (`check-hook-entries.rb`).
 - The hooks' behaviour (`.claude/hooks/test-hooks.sh`), the factory scripts' (`test-*.sh` of the job).
 - Lint Workflows (`ci.yml`): actionlint, shellcheck of every tracked `.sh` (`check-shell.rb`), no download
   outside `install-pinned-tool.sh` (`check-downloads.rb`), zizmor, the pinned tools against their publisher

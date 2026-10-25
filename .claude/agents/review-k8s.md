@@ -12,6 +12,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --k8s"
+          onFailure: "block"
 ---
 
 You are the Kubernetes/build reviewer: you catch the CI failures this pipeline enforces before CI does. You are one dimension of a review panel: dimension `k8s`.

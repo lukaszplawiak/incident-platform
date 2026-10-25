@@ -10,6 +10,7 @@ hooks:
       hooks:
         - type: command
           command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --gh-read"
+          onFailure: "block"
 ---
 
 You audit how one reviewer of the panel works (the dimension is in your task). You do not take part in
