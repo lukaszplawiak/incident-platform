@@ -119,7 +119,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
-| [0-174](#0-174-seed-bugs-cannot-start-from-its-own-command-and-reads-strings-from-factory-ops) | `/seed-bugs` cannot start from its own command, and reads strings from factory-ops | ci | High | In progress |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -3156,7 +3155,7 @@ row (with #0-170's AC3).
 
 ### 0-174. `/seed-bugs` cannot start from its own command, and reads strings from factory-ops
 
-**Type:** ci · **Priority:** High · **Status:** In progress — found by the owner's rerun of #0-115's "after" measure,
+**Type:** ci · **Priority:** High · **Status:** Done, PR #530 (AC3 is shown by the owner's rerun of #0-115's "after" measure on `76379e806fb4`) — found by the owner's rerun of #0-115's "after" measure,
 the first run after #0-173 (P-10 on `76379e806fb4`, run `perf-after-p10`, 2026-10-25)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-173
 **Touches:** factory (.claude/workflows/seed-bugs.js), ci (.github/scripts/test-autopilot-workflow.mjs), docs
