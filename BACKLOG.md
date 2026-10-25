@@ -117,6 +117,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
+| [0-170](#0-170-seed-bugs-measured-nothing-the-seeders-commands-were-refused-and-reported-as-a-skip) | `/seed-bugs` measured nothing: the seeder's commands were refused and reported as a skip | ci | Medium | In progress |
+| [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
+| [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -2992,6 +2995,82 @@ or `state.sh` refusing a second `preflight`/`branch` in one run by a record the 
 AC1. A `factory-ops` call that runs a factory command other than the one its task named is refused, shown by test
 cases.
 AC2. README "Infrastructure Hardening" names the control.
+
+---
+
+### 0-170. `/seed-bugs` measured nothing: the seeder's commands were refused and reported as a skip
+
+**Type:** ci · **Priority:** Medium · **Status:** In progress — found by the first `/seed-bugs` run on record, the
+"after" measure of #0-115's pilot (P-10 on `253e5b2a3a06`, run `perf-after-p10`, 2026-10-25)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/agents/defect-seeder.md, .claude/workflows/seed-bugs.js), ci
+(.github/scripts/test-autopilot-workflow.mjs)
+
+**Problem.** The run came back SKIPPED with no reason. The seeder had tried `grep … && git show …` (refused by the
+shell guard: a separator), then `git -C /workspace show --stat <commit>` and the `git switch -c seed/…` it needs
+(refused in `dontAsk`: `git -C …` matches none of the session's allow rules), and answered `{"skipped": true}`: its
+definition offers only "skipped" for "this pattern does not fit", and the workflow's schema had no `reason`, so a
+blocked tool read as a result. `.ai/audit/benchmark/results.md` does not exist: no run had ever been recorded.
+
+**Fix.** `defect-seeder.md` says how commands run in an autopilot session (from the root, one per call, no `git -C`,
+no separators; Read and `git grep` to look) and answers `{"blocked": true, "reason"}` when a command is refused.
+`seed-bugs.js` asks for `reason` and `blocked`: blocked is FAILED with the reason, a skip without a reason is FAILED,
+and so is a ground truth the Record phase cannot use (no `seed/` branch, no file, a dimension outside the panel).
+`test-autopilot-workflow.mjs` runs `seed-bugs.js` against a fake agent for each of them, and a measured run.
+Review round 1 added: the answer must name this run's branch (`seed/<pattern>-<runId>`), the line and the rule (a
+missing line made every catch read as a miss) and start from the commit given; the reason is cut to 300 characters.
+Not here: a record of the runs that measured nothing (#0-171) and a write scope for the seeder (#0-172).
+
+**Acceptance criteria.**
+AC1. A refused command of the seeder ends the run FAILED with the refusal, never SKIPPED, shown by a test.
+AC2. A skip without a reason, and an unusable ground truth, end it FAILED, shown by tests.
+AC3. `/seed-bugs` P-10 on `253e5b2a3a06` in an autopilot session plants the pattern and records a row (the run of
+#0-115's pilot, once this is merged).
+
+---
+
+### 0-171. A `/seed-bugs` run that measured nothing leaves no record
+
+**Type:** ci · **Priority:** Low · **Status:** Open — `nonBlocking` FAC-A03 of review-architecture in the `/review` of
+#0-170 (2026-10-25)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-170
+**Touches:** factory (.claude/workflows/seed-bugs.js, .claude/agents/audit-synthesis.md), ci
+(.github/scripts/test-autopilot-workflow.mjs), .ai/rules/audit.md (owner)
+
+**Problem.** `seed-bugs.js` writes a row to `.ai/audit/benchmark/results.md` only for a MEASURED run; a FAILED or
+SKIPPED one is returned to the session that started it and nowhere else. The audit then cannot tell a dimension that
+was measured and caught nothing from one that was never measured, which is how #0-170 went unseen: no row had ever
+been written.
+
+**Approach (to analyse).** Record every run, its outcome and reason included (a row with `FAILED`/`SKIPPED`), and have
+the audit count the attempts per dimension next to the catches.
+
+**Acceptance criteria.**
+AC1. A FAILED or SKIPPED run leaves a row with its outcome and reason, shown by a test.
+AC2. The audit's benchmark section reports, per dimension, runs that measured nothing.
+
+---
+
+### 0-172. The defect-seeder writes and commits with no write scope
+
+**Type:** security · **Priority:** Low · **Status:** Open — `nonBlocking` FAC-S03 of review-security in the `/review` of
+#0-170 (2026-10-25)
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/agents/defect-seeder.md, .claude/settings.json, .claude/settings.autopilot.json,
+.claude/hooks/test-hooks.sh), ci (.github/scripts/check-hook-entries.rb)
+
+**Problem.** `defect-seeder` has Bash and Edit and commits onto a `seed/` branch, but neither its frontmatter nor a
+session-level twin keyed on its `agent_type` runs `write-scope.sh` (ADR-0041): what it may write is bounded only by the
+autopilot's denies of the protected paths. It plants a defect in code the merged change touched, so its scope is that
+change's files.
+
+**Approach (to analyse).** A `write-scope.sh` for it, in its frontmatter and as a twin in both settings files
+(`check-hook-entries.rb` keeps them equal), with a scope the workflow can name per run (the merged change's paths) or a
+fixed one (the services' `src/main/`).
+
+**Acceptance criteria.**
+AC1. The defect-seeder cannot write outside its scope, shown by a test case.
+AC2. Factory guards fails when its guard is missing from one of its places.
 
 ---
 

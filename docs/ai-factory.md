@@ -239,7 +239,9 @@ The agents' instructions are not a boundary; these are, each with its limit:
   extra rounds, scope off, acceptance, owner labels, BLOCKED runs without a PR) — nobody logs them by hand.
 - **Seeded defects**: `/seed-bugs` with args `{"pattern": "P-01", "commit": "<merged sha>", "runId":
   "<id>"}` plants a known defect from `.ai/audit/benchmark/patterns.md` on a throwaway `seed/` branch and
-  records who caught it in `.ai/audit/benchmark/results.md`. Rotate patterns; delete the branch after.
+  records who caught it in `.ai/audit/benchmark/results.md`. Rotate patterns; delete the branch after. A run that
+  measured nothing says so (#0-170): a seeder that was refused a command, a skip without a reason and an answer
+  without its branch, file, line or rule end it FAILED, not SKIPPED.
 - **Escaped defects**: an item that fixes a defect an earlier item introduced carries
   `**Fixes:** #0-N · **Escaped from:** <stage>` — `review-<dimension>` when the panel missed it, or the pipeline
   stage that let it in (BACKLOG.md conventions); the pipeline audit counts the markers added in its period. A
