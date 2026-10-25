@@ -117,7 +117,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
-| [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3193,8 +3192,8 @@ lets through only `git push -u origin <that branch>`; no lock, or no branch in i
 
 ### 0-132. The shell guards' own checks refuse when they fail
 
-**Type:** security · **Priority:** Low · **Status:** In progress (owner's decision below, 2026-10-25) — found while fixing #0-130,
-2026-10-14
+**Type:** security · **Priority:** Low · **Status:** Done, PR #526 — found while fixing #0-130 (2026-10-14); owner's
+decision below. Kept in full for the decisions (A1-E1, the whole-text match)
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** #0-130
 **Touches:** root (.claude/hooks/guard-protected-bash.sh, .claude/hooks/readonly-bash.sh, .claude/hooks/guard-git-push.sh, .claude/hooks/guard-factory-scripts.sh, .claude/hooks/factory-ops-bash.sh, .claude/hooks/_lib.sh, .claude/hooks/test-hooks.sh, README.md "Infrastructure Hardening")
 
