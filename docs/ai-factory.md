@@ -237,9 +237,10 @@ The agents' instructions are not a boundary; these are, each with its limit:
   corrects where the pipeline audit says a case started.
 - **Pipeline cases** are derived by `scripts/factory/audit-data.sh` from what the pipeline records (BLOCKED,
   extra rounds, scope off, acceptance, owner labels, BLOCKED runs without a PR) — nobody logs them by hand.
-- **Seeded defects**: `/seed-bugs` with args `{"pattern": "P-01", "commit": "<merged sha>", "runId":
-  "<id>"}` plants a known defect from `.ai/audit/benchmark/patterns.md` on a throwaway `seed/` branch and
-  records who caught it in `.ai/audit/benchmark/results.md`. Start it from a clean `main` at `origin/main`, with no
+- **Seeded defects**: `/seed-bugs P-01 <merged sha> <run id>` (or args `{"pattern": "P-01", "commit": "<merged
+  sha>", "runId": "<id>"}`; the command passes its words as one string, #0-174) plants a known defect from
+  `.ai/audit/benchmark/patterns.md` on a throwaway `seed/` branch and records who caught it in
+  `.ai/audit/benchmark/results.md`. Start it from a clean `main` at `origin/main`, with no
   autopilot run: `scripts/factory/seed-branch.sh` builds the branch from `main` (the change's code reverted as its base,
   then back), never from the merged commit, whose hooks and agents the session would otherwise run on (#0-173,
   ADR-0044). `scripts/factory/seed-check.sh` confirms the tree after the seeder (on the branch, clean, its one commit in

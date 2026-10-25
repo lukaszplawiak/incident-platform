@@ -119,6 +119,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
+| [0-174](#0-174-seed-bugs-cannot-start-from-its-own-command-and-reads-strings-from-factory-ops) | `/seed-bugs` cannot start from its own command, and reads strings from factory-ops | ci | High | In progress |
+| [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3151,6 +3153,70 @@ AC3. `/seed-bugs` P-10 on a commit whose code still applies to `main` (`76379e80
 row (with #0-170's AC3).
 
 ---
+
+### 0-174. `/seed-bugs` cannot start from its own command, and reads strings from factory-ops
+
+**Type:** ci · **Priority:** High · **Status:** In progress — found by the owner's rerun of #0-115's "after" measure,
+the first run after #0-173 (P-10 on `76379e806fb4`, run `perf-after-p10`, 2026-10-25)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-173
+**Touches:** factory (.claude/workflows/seed-bugs.js), ci (.github/scripts/test-autopilot-workflow.mjs), docs
+(docs/ai-factory.md), .ai/rules/review/factory.md (owner: FAC-A06)
+
+**Problem.** Two defects, one after the other, and no run measured anything:
+1. `/seed-bugs P-10 76379e806fb4 perf-after-p10` hands the workflow its words as one string (Claude Code's command
+   form, `args: "P-10 …"`), and the script, which reads `args.pattern`, `args.commit` and `args.runId`, stopped
+   `NOT_STARTED`. Only a hand-made `Workflow` call with an object started it.
+2. `ops()` gave `factory-ops` the bare schema `{ type: 'object' }`. The agent (Haiku) answered `seed-branch.sh`'s JSON
+   with every value a string (`"ok": "true"`, `"files": "[…]"`) and wrapped `return-to-main.sh`'s in a `parameter`
+   key, so the run failed on a seed branch it had made (`ok !== true`), reported `leftOn: "unknown"` from a tree that
+   was on `main`, and named no cleanup (the branch was deleted by hand). #0-173's tests could not see it: the fake
+   agent of `test-autopilot-workflow.mjs` ignores `schema`. `backlog-autopilot.js` types most answers it reads
+   (`PREFLIGHT` and the rest), but reads `pinned.branch` from `state.sh branch` under `ANY_OBJECT` (a wrong answer
+   stops the item, it lets nothing through) and puts `local-review.sh`'s untyped answer in the PR record: #0-175.
+
+**Decided (owner, 2026-10-25).** The script takes both forms: the object, or three words in the order
+`<pattern> <commit> <run id>`, checked by the same `SAFE` pattern (a wrong count or an unsafe word: `NOT_STARTED`, no
+agent runs). Each script's answer has a typed schema with `additionalProperties: false`: the fields the script prints,
+plus `factory-ops`' own `{error, exitCode}`; no `required`, so an error answer still reaches the run's reason. The same
+string-args gap in `/audit` and `/docs-audit`, and `backlog-autopilot.js`'s untyped answers, are #0-175. The review
+rule is FAC-A06 in `.ai/rules/review/factory.md` (the owner's; review round 1, architecture `ruleGap`).
+
+**Acceptance criteria.**
+AC1. `/seed-bugs <pattern> <commit> <run id>` makes the same calls as the object form, and a wrong count or an unsafe
+word starts nothing, shown by tests.
+AC2. The schemas accept what `seed-branch.sh`, `seed-check.sh` and `return-to-main.sh` print and refuse the answers of
+the 2026-10-25 run, shown by a test.
+AC3. `/seed-bugs` P-10 on `76379e806fb4` plants the pattern and records a row (with #0-173's AC3).
+
+---
+
+### 0-175. The other workflows cannot start from their commands, and read untyped factory-ops answers
+
+**Type:** ci · **Priority:** Medium (Low until review round 2 of #0-174: once FAC-A06 is on main, `:481` breaks it) ·
+**Status:** Open — found with #0-174 (2026-10-25)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-174
+**Touches:** factory (.claude/workflows/audit.js, .claude/workflows/docs-audit.js,
+.claude/workflows/backlog-autopilot.js), .ai/rules/review/factory.md (owner: FAC-A06 to "Enforced by checks"), ci
+(.github/scripts/test-autopilot-workflow.mjs), docs (docs/ai-factory.md)
+
+**Problem.** Like `/seed-bugs` before #0-174: Claude Code passes the words typed after the command as one string, and
+both scripts read object keys (`args.since`, `args.date`, `args.target`; `args.date`), so `/audit 2026-10-01 2026-10-25`
+stops `NOT_STARTED`. `backlog-autopilot.js` is unaffected in its usual form (no args); `/backlog-autopilot #0-25` would
+run the queue's next item instead of #0-25.
+
+**Also (review round 1 of #0-174, architecture FAC-A02 and `ruleGap`).** `backlog-autopilot.js` reads
+`pinned.branch` from `ops('state.sh', ['branch', …], ANY_OBJECT)` (`:481`): an answer in strings or wrapped in another
+key stops the item ("could not record the run's branch"), the same class of defect as #0-174's, failing closed. Its
+`local-review.sh` answer (`:559`) only reaches the PR record. FAC-A06 makes it a review finding; nothing checks it.
+
+**Approach.** The same as #0-174: words in a fixed order, checked like the object's values, and a test per script;
+typed schemas (FAC-A06) for every `ops()` answer a workflow reads; and a test in `test-autopilot-workflow.mjs` that
+every such call's schema types what it reads (a structural check, so FAC-A06 moves to "Enforced by checks").
+
+**Acceptance criteria.**
+AC1. Each of `/audit` and `/docs-audit` starts from its command's words, and refuses a wrong count, shown by tests.
+AC2. Every factory-ops answer a workflow reads has a typed schema, and a test fails when one does not.
+
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
