@@ -46,9 +46,14 @@ jobs:
           persist-credentials: false
 
       # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
-      # (check-ruby-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
+      # (check-runtime-setup.rb); the runner's own Ruby and gems once changed a check's result (PR #517).
       - name: Set up Ruby
         uses: ./.github/actions/setup-ruby
+
+      # Backlog #0-163 (ADR-0043): Node from .node-version for the autopilot workflow's tests (#0-163 PR 2), before
+      # any step that runs Node (check-runtime-setup.rb).
+      - name: Set up Node
+        uses: ./.github/actions/setup-node
 
       - name: Hook tests
         run: .claude/hooks/test-hooks.sh

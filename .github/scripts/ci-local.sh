@@ -8,8 +8,10 @@
 # 2026-10-25): everything emulated as x86_64, apt and the tools downloaded on every run. Now:
 #   - the steps are the workflows' own: ci-local-steps.rb runs each job's `run:` steps in order, so a step added to
 #     CI runs here with nothing to copy, and the linters come from the job's own install step (ci.yml's pins);
-#   - the image is ruby:<.ruby-version>-slim with the packages the steps need, built once per platform and reused
-#     (tagged with a hash of its definition and .ruby-version: a change of either rebuilds it, nothing else does);
+#   - the image is ruby:<.ruby-version>-slim-trixie with the packages the steps need and the node binary of
+#     node:<.node-version>-trixie-slim (backlog #0-163, ADR-0043: the same Debian, so the same C library), built once
+#     per platform and reused (tagged with a hash of its definition, which holds both versions: a change of either
+#     rebuilds it, nothing else does);
 #   - both jobs run on the host's own architecture, at once; on an arm64 Mac only lint-workflows' pinned linters,
 #     x86_64 builds, are emulated (Docker Desktop runs an x86_64 binary in an arm64 container through Rosetta),
 #     not the bash and Ruby of every step (which made test-repository-settings.sh take minutes, review round 1).
@@ -78,12 +80,17 @@ tree_list() {
 if [ "${CI_LOCAL_LIST_ONLY:-}" = 1 ]; then tree_list | tr '\0' '\n'; exit 0; fi
 docker info >/dev/null 2>&1 || { echo "ci-local: Docker is not reachable" >&2; exit 2; }
 ruby_version=$(tr -d '[:space:]' < .ruby-version) && [ -n "$ruby_version" ] || { echo "ci-local: cannot read .ruby-version" >&2; exit 2; }
+node_version=$(tr -d '[:space:]' < .node-version) && [ -n "$node_version" ] || { echo "ci-local: cannot read .node-version" >&2; exit 2; }
 
 # The image: what the steps need besides Ruby (gnupg for check-pinned-tools' gpg cases, python3 for the hooks'
 # fallback cases), and on arm64 the x86_64 C library, without which Rosetta cannot start zizmor's x86_64-gnu build
-# ("failed to open elf at /lib64/ld-linux-x86-64.so.2"; shellcheck and actionlint are static). The tag hashes this
-# text and the Ruby version, so it is rebuilt only when either changes.
-dockerfile="FROM ruby:${ruby_version}-slim
+# ("failed to open elf at /lib64/ld-linux-x86-64.so.2"; shellcheck and actionlint are static). Node is only its
+# binary, copied from the official image (Node's built-in modules are inside it; no npm, ADR-0043), on the same
+# Debian release as the Ruby image: a node built for another C library would not start. The tag hashes this text,
+# which holds both versions, so it is rebuilt only when it changes.
+dockerfile="FROM node:${node_version}-trixie-slim AS node
+FROM ruby:${ruby_version}-slim-trixie
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
 RUN set -e; extra=''; if [ \"\$(dpkg --print-architecture)\" = arm64 ]; then dpkg --add-architecture amd64; extra=libc6:amd64; fi; \\
  apt-get update -qq; apt-get install -y -qq --no-install-recommends ca-certificates curl git gnupg jq python3 \$extra; \\
  rm -rf /var/lib/apt/lists/*; git config --system --add safe.directory '*'"

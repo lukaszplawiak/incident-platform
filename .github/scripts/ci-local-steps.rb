@@ -5,14 +5,16 @@
 #
 #   ruby ci-local-steps.rb <workflow file> <job id> [--step <text>]...
 #
-# First the versions of Ruby, json and psych, as CI's setup-ruby action prints them. Then every step in order: its
+# First the versions of Ruby, json and psych, and of Node, as CI's setup-ruby and setup-node actions print them (no
+# node, or one that does not answer, is exit 2). Then every step in order: its
 # `run:` text in `bash --noprofile --norc -eo pipefail` (GitHub's default shell on Linux), in its
 # `working-directory`, with the job's and the step's `env` and RUNNER_TEMP (removed at the end). One line per
 # step, `[<exit code>] <name> (<seconds>s)`, the last 40 lines of a failing step's output under it; every step runs
 # even after a failure (unlike CI, so that one run shows every problem), and the exit code is 1 when one failed.
 #
-# Not run, each printed as `[skip] <name>: <why>`: a `uses:` step (actions/checkout and ./.github/actions/setup-ruby
-# are what the container already is: the copied tree, the Ruby of .ruby-version), a step with an `if:`, a step
+# Not run, each printed as `[skip] <name>: <why>`: a `uses:` step (actions/checkout, ./.github/actions/setup-ruby
+# and ./.github/actions/setup-node are what the container already is: the copied tree, the Ruby of .ruby-version,
+# the Node of .node-version), a step with an `if:`, a step
 # whose `run:` or `env` holds a `${{ }}` expression (the event, a secret, a token), and a step in another shell.
 #
 # --step: only the steps whose name contains one of the texts, and every step that runs install-pinned-tool.sh
@@ -26,7 +28,7 @@ require 'psych'
 require 'tmpdir'
 require 'yaml'
 
-REPLACED = %w[actions/checkout ./.github/actions/setup-ruby].freeze
+REPLACED = %w[actions/checkout ./.github/actions/setup-ruby ./.github/actions/setup-node].freeze
 TAIL = 40
 
 def usage!(msg)
@@ -79,6 +81,20 @@ usage!("job #{job_id}: #{why}, not supplied locally") unless job_env
 # What runs the steps, as .github/actions/setup-ruby prints it in CI: the same Ruby version is not the same Ruby when
 # its gems differ (PR #517), so a local run shows them too (AC5 of #0-166; that action itself is skipped below).
 puts "#{RUBY_DESCRIPTION}; json #{JSON::VERSION}, psych #{Psych::VERSION}"
+# And the Node .github/actions/setup-node prints (backlog #0-163): the image's, from .node-version. No node stops the
+# run here (exit 2), as a broken image: the jobs set Node up, so its first step would otherwise fail later and
+# unexplained (review round 1 of #0-163 PR 1).
+node = begin
+  IO.popen(%w[node --version], err: %i[child out], &:read).strip
+rescue SystemCallError => e
+  warn "ci-local-steps: no node in this image (#{e.message}): the jobs set Node up (.github/actions/setup-node); rebuild it (ci-local.sh --rebuild)"
+  exit 2
+end
+unless $?.success? && node.start_with?('v')
+  warn "ci-local-steps: `node --version` failed (#{node[0, 200]}): rebuild the image (ci-local.sh --rebuild)"
+  exit 2
+end
+puts "node #{node}"
 
 runner_temp = Dir.mktmpdir('runner-temp-')
 at_exit { FileUtils.remove_entry(runner_temp) if File.directory?(runner_temp) }

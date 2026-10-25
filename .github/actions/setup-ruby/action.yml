@@ -3,7 +3,7 @@
 # .ruby-version, like setup-java and setup-python pin Java and Python.
 #
 # The only place ruby/setup-ruby is used, pinned by SHA (Renovate bumps it with the other actions), and without a
-# `ruby-version` input, so .ruby-version alone decides the version. .github/scripts/check-ruby-setup.rb refuses a
+# `ruby-version` input, so .ruby-version alone decides the version. .github/scripts/check-runtime-setup.rb refuses a
 # step that runs Ruby before this action in its job, and any other use of ruby/setup-ruby. Until #0-166 the checks
 # ran on the runner's own Ruby and gems, which once changed a check's result (PR #517, the json gem).
 #

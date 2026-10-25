@@ -45,7 +45,7 @@ if printf '%s' "$cmd" | grep -Eq -- '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi
 
-protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.git/|\.ai/runs/(LOCK|state\.json)|\.ai/STOP)'
+protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/(LOCK|state\.json)|\.ai/STOP)'
 printf '%s' "$cmd" | grep -Eq -- "$protected" || exit 0
 
 writes='(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|perl[[:space:]]+-[a-zA-Z]*i|(^|[[:space:];&|])(cp|mv|rm|rmdir|ln|chmod|chown|truncate|install|touch|mkdir)[[:space:]]|git[[:space:]]+(checkout|restore|rm|mv|apply|am|stash|reset)|(python3?|ruby|node|perl)[[:space:]])'

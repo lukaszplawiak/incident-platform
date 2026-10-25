@@ -85,6 +85,8 @@
       "Write(./.mvn/**)",
       "Edit(./.ruby-version)",
       "Write(./.ruby-version)",
+      "Edit(./.node-version)",
+      "Write(./.node-version)",
       "Edit(./.git/**)",
       "Write(./.git/**)",
       "Edit(./.ai/runs/LOCK)",

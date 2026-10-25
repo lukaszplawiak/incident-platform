@@ -330,11 +330,14 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   Python 3.13 by their setup actions, and since #0-166 Ruby (ADR-0040): the nine `.github/scripts/*.rb` checks (and
   `run-blocks.rb`, the library three of them load) run on the version in `.ruby-version`, set up by
   `.github/actions/setup-ruby` (`ruby/setup-ruby`, pinned by SHA; Renovate bumps both), no longer on the runner's own
-  Ruby, whose json gem once made a check pass a repeated key that it failed locally (PR #517). lint-workflows'
-  `check-ruby-setup.rb` fails a step that runs Ruby before that action in its job, and any other use of
-  `ruby/setup-ruby`; `.ruby-version` is on the build-config list (a PR changing it needs the owner). Pinned is the
-  version, not the binary: `setup-ruby` downloads a prebuilt Ruby and verifies nothing, so, as for Java and Python,
-  its integrity rests on the action.
+  Ruby, whose json gem once made a check pass a repeated key that it failed locally (PR #517). Since #0-163 Node too (ADR-0043): the
+  JavaScript tests of Factory guards run on `.node-version`, set up by `.github/actions/setup-node` (`actions/setup-node`,
+  pinned by SHA), with Node's built-in modules only (no npm, no `package.json`). lint-workflows'
+  `check-runtime-setup.rb` fails a step that runs Ruby or Node before its action in its job, and any other use of
+  `ruby/setup-ruby` or `actions/setup-node`; `.ruby-version` and `.node-version` are on the build-config list (a PR
+  changing one needs the owner). Pinned is the version, not the binary: `setup-ruby` and `setup-node` download a
+  build and verify nothing here, so, as for Java and Python, its integrity rests on the action; locally
+  `ci-local.sh` takes the same versions from the official `ruby` and `node` images.
 - **Scan tools pinned and verified before they receive a secret** (backlog #0-61): the Snyk CLI is
   the standalone binary at the version pinned in `snyk.yml`, checked against the SHA-256 kept next to
   it. A different binary stops the job before `SNYK_TOKEN` exists in any process. The token reaches
