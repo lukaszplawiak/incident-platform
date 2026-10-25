@@ -557,6 +557,38 @@ expect 0 "session-level: the verifier, the artifact" "$RS" --agent verifier "${G
 expect 2 "session-level: the verifier, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call verifier .ai/runs/0-25/tests-r1-0.log)"
 expect 0 "session-level: another agent, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call review-general .ai/runs/0-25/tests-r1-0.log)"
 
+echo "session-level twins: --agent (backlog #0-164)"
+# agent_call <agent> <tool> <field> <value> — a call as a session-level hook sees it: with agent_type, or (agent
+# empty) without it, as the main session's calls are.
+agent_call() {
+    if [ -n "$1" ]; then jq -cn --arg a "$1" --arg t "$2" --arg f "$3" --arg v "$4" '{agent_type: $a, tool_name: $t, tool_input: {($f): $v}}'
+    else jq -cn --arg t "$2" --arg f "$3" --arg v "$4" '{tool_name: $t, tool_input: {($f): $v}}'; fi
+}
+expect 0 "readonly twin: the reviewer runs git status"      "$R" --agent review-general,review-docs -- "$(agent_call review-docs Bash command 'git status')"
+expect 2 "readonly twin: the reviewer is refused rm"        "$R" --agent review-general,review-docs -- "$(agent_call review-docs Bash command 'rm -rf x')"
+expect 2 "readonly twin: the first name of the list too"    "$R" --agent review-general,review-docs -- "$(agent_call review-general Bash command 'rm -rf x')"
+expect 0 "readonly twin: another agent passes"              "$R" --agent review-general,review-docs -- "$(agent_call implementer Bash command 'rm -rf x')"
+expect 0 "readonly twin: the main session passes"           "$R" --agent review-general,review-docs -- "$(agent_call '' Bash command 'rm -rf x')"
+expect 0 "readonly twin: review, a part of a listed name, is another agent" "$R" --agent review-general,review-docs -- "$(agent_call review Bash command 'rm x')"
+expect 0 "readonly twin: review-general-2 is another agent"    "$R" --agent review-general -- "$(agent_call review-general-2 Bash command 'rm x')"
+expect 2 "readonly twin with a mode: review-k8s is refused rm" "$R" --agent review-k8s --k8s -- "$(agent_call review-k8s Bash command 'rm x')"
+expect 0 "readonly twin with a mode: its own extra command" "$R" --agent review-k8s --k8s -- "$(agent_call review-k8s Bash command 'kubectl kustomize k8s/base')"
+expect 2 "write twin: the planner writes outside its scope" "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call planner Write file_path svc/src/main/java/A.java)"
+expect 0 "write twin: the planner writes the queue"         "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call planner Write file_path .ai/plan/queue.md)"
+expect 0 "write twin: the implementer is not its business"  "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call implementer Write file_path svc/src/main/java/A.java)"
+expect 2 "factory-ops twin: factory-ops runs git push"      "$O" --agent factory-ops -- "$(agent_call factory-ops Bash command 'git push')"
+expect 0 "factory-ops twin: factory-ops runs a gate"        "$O" --agent factory-ops -- "$(agent_call factory-ops Bash command 'scripts/factory/preflight.sh')"
+expect 0 "factory-ops twin: the shipper is not its business" "$O" --agent factory-ops -- "$(agent_call shipper Bash command 'git push')"
+expect 2 "factory-ops: an argument but --agent is refused"  "$O" --k8s -- "$(agent_call factory-ops Bash command 'scripts/factory/preflight.sh')"
+expect 2 "--agent with an empty name in the list"           "$R" --agent review-general,,review-docs -- "$(agent_call implementer Bash command 'git status')"
+expect 2 "--agent with a trailing comma"                    "$R" --agent review-general, -- "$(agent_call implementer Bash command 'git status')"
+expect 2 "--agent with a name that is not one"              "$R" --agent 'review general' -- "$(agent_call implementer Bash command 'git status')"
+expect 2 "--agent with no names"                            "$W" --agent -- "$(agent_call planner Write file_path .ai/plan/q.md)"
+expect 2 "--agent with an empty name (readonly)"            "$R" --agent '' -- "$(agent_call '' Bash command 'git status')"
+expect 2 "--agent with an empty name (write)"               "$W" --agent '' .ai/plan/ -- "$(agent_call '' Write file_path .ai/plan/q.md)"
+expect 2 "--agent with an empty name (factory-ops)"         "$O" --agent '' -- "$(agent_call '' Bash command 'scripts/factory/preflight.sh')"
+expect 2 "an agent_type that does not parse"                "$R" --agent review-general -- '{"agent_type": '
+
 echo "every hook fails closed (backlog #0-162)"
 # Claude Code runs the call after any exit status but 2, so each way a hook can fail must end in 2. One row per
 # hook in this directory: its arguments and a call it allows, so that a 2 below can only come from the failure.

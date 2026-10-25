@@ -41,6 +41,26 @@ block() {
     exit 2
 }
 
+# applies_to_agent <names> <input> — for a guard's session-level twin, `<hook> --agent <name>[,<name>]...` in the
+# settings files (backlog #0-164, ADR-0041): 0 when the call's `agent_type` is one of the names, 1 when it is
+# another agent's or the main session's (which has no agent_type). Frontmatter hooks are documented for agents of
+# the Agent tool, not for the agents a Workflow spawns; session-level hooks get every subagent's call with its
+# agent_type (spikes of 2026-10-23 and 2026-10-25). A list that is not lowercase names separated by single
+# commas, and an input that does not parse, refuse: a twin that cannot tell whom it guards fails closed. What it
+# cannot see: a Claude Code that stops sending agent_type, which reads as the main session, so the twin passes;
+# the frontmatter hook, which needs no agent_type, stays for that.
+applies_to_agent() {
+    local names=$1 input=$2 agent rc
+    case "$names" in
+        ''|*[!a-z0-9,-]*|,*|*,|*,,*) block "--agent needs agent names separated by commas, not '$names'" ;;
+    esac
+    agent=$(json_get "$input" '.agent_type'); rc=$?
+    json_checked "$rc" "the session-level guard"
+    [ -n "$agent" ] || return 1
+    case ",$names," in *",$agent,"*) return 0 ;; esac
+    return 1
+}
+
 # repo_rel <path> — the path relative to the repository root, or the absolute path when it is outside.
 # Symlinks are resolved on both sides first: on macOS /var is /private/var, and a project can sit under a
 # symlinked directory; git reports the resolved root, a tool may pass the unresolved path. Comparing them

@@ -14,19 +14,29 @@
 #      executable file there,
 #      with a row in test-hooks.sh's FAILS_CLOSED table (that table proves the hook exits 2 when it fails; the
 #      test fails a hook of the directory without a row, this one a hook that is wired but not in the table);
-#   3. neither settings file sets `disableAllHooks`.
+#   3. neither settings file sets `disableAllHooks`;
+#   4. every guard an agent's frontmatter runs has its session-level twin in both settings files (backlog #0-164,
+#      ADR-0041): the same hook, on the same matcher, with the same arguments after `--agent <names>`, whose names
+#      are exactly the agents whose frontmatter runs it, so every hook a frontmatter uses as a guard must accept
+#      `--agent` (frontmatter hooks are documented for agents of the Agent
+#      tool, not for the agents a Workflow spawns; a twin keyed on agent_type covers those). A frontmatter hook
+#      takes no `--agent`; a twin naming an agent whose frontmatter has no such guard is stale;
+#   5. every session-level guard of REQUIRED below is wired in its settings file, on a matcher that covers its
+#      tools (#0-164 AC4): a deleted entry, or one moved to another matcher, would pass the rules above.
 # The YAML and JSON are parsed, not matched as text: a field one indent off, or in flow style, is what Claude
 # Code reads, so it is what this reads. A file that does not parse, a frontmatter that does not close, a hooks
 # block of another shape and a key repeated in one map fail the check. Of a repeated key Ruby keeps the last
 # value, and which one Claude Code's parser keeps (or whether it refuses the file) is not documented: `onFailure`
 # written twice could pass here and not hold there, so no file may repeat a key (review round 2).
 #
-# What it does not see: whether an agent that should have a hook has one (#0-164), and a hook a session gets from
-# elsewhere (the user's own settings, a plugin).
+# What it does not see: whether an agent that should have a guard has one in its frontmatter (a new agent with
+# Bash and no readonly-bash.sh is the reviewer's to catch), and a hook a session gets from elsewhere (the user's
+# own settings, a plugin).
 # Usage: ruby check-hook-entries.rb [<repository root>] (Factory guards, after test-hook-entries.sh).
 # Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require 'json'
+require 'shellwords'
 require 'yaml'
 
 # Every file is read as UTF-8, whatever the locale: without one (a bare container) Ruby reads US-ASCII and a
@@ -38,8 +48,28 @@ HOOKS_DIR = File.join(ROOT, '.claude', 'hooks')
 # newline): `guard-tests.sh || true` is a hook that never fails, and `x.sh; other` runs a second command. A `*`
 # only inside single quotes: unquoted, the shell expands it against the session's directory when the hook runs,
 # so `write-scope.sh .ai/*` would hand the hook a list of files rather than its scope (review round 2).
-ARG = %r{(?:[A-Za-z0-9_./=-]|'[A-Za-z0-9_./*= -]*')+}.freeze
+ARG = %r{(?:[A-Za-z0-9_./=,-]|'[A-Za-z0-9_./*= -]*')+}.freeze
 COMMAND = %r{\A"\$CLAUDE_PROJECT_DIR"/\.claude/hooks/([A-Za-z0-9_-]+\.sh)(?: #{ARG})*\z}.freeze
+
+# The session-level guards each settings file must run (#0-164 AC4): file => [[hook and its arguments, the tools
+# its matcher must cover]]. The one list of them; the settings files are what it checks. webfetch-allowlist.sh is
+# not here: check-web-access.sh holds its wiring, both files and both modes (one list per control, FAC-A01).
+REQUIRED = {
+  'settings.json' => [
+    ['guard-migrations.sh', %w[Edit Write MultiEdit]]
+  ],
+  'settings.autopilot.json' => [
+    ['guard-tests.sh', %w[Bash]],
+    ['guard-protected-bash.sh', %w[Bash]],
+    ['guard-git-push.sh', %w[Bash]],
+    ['guard-factory-scripts.sh', %w[Bash]],
+    ['guard-write-in-repo.sh', %w[Edit Write MultiEdit NotebookEdit]],
+    ['guard-migrations.sh', %w[Edit Write MultiEdit NotebookEdit]]
+  ]
+}.freeze
+# Every hook entry read, for rules 4 and 5: {owner: 'settings.json' | 'agent:<name>' | nil, where:, event:,
+# tools: [matcher's tools], hook:, args: [words]}.
+@entries = []
 
 @failures = 0
 def fail!(msg)
@@ -89,7 +119,7 @@ rescue SystemCallError => e
 end
 
 # Checks one `hooks` block (settings or frontmatter) of <where>.
-def check_hooks(where, hooks, rows)
+def check_hooks(where, hooks, rows, owner = nil)
   unless hooks.is_a?(Hash)
     fail!("#{where}: `hooks` is not a map of events")
     return 0
@@ -132,6 +162,8 @@ def check_hooks(where, hooks, rows)
         elsif !File.executable?(path) then fail!("#{at}: .claude/hooks/#{name} is not executable")
         end
         fail!("#{at}: #{name} has no row in FAILS_CLOSED (test-hooks.sh), so nothing shows it fails closed") if rows && !rows.include?(name)
+        @entries << { owner: owner, where: at, event: event, tools: group['matcher'].to_s.split('|').sort, hook: name,
+                      args: Shellwords.split(cmd.sub(/\A\S+/, '')) }
       end
     end
   end
@@ -162,12 +194,12 @@ total = 0
     next
   end
   fail!("#{where} sets disableAllHooks: every hook, and every guard with it, would be off") if settings.key?('disableAllHooks')
-  total += check_hooks(where, settings['hooks'], rows) if settings.key?('hooks')
+  total += check_hooks(where, settings['hooks'], rows, name) if settings.key?('hooks')
 end
 
 # Checks the frontmatter of one Markdown definition. An agent must have one; a skill or a command without one has
 # no hooks, but one that opens a frontmatter must close it and be YAML, or Claude Code and this would read it apart.
-def check_markdown(file, rows, required)
+def check_markdown(file, rows, required, agent = false)
   where = file.sub("#{ROOT}/", '')
   lines = File.readlines(file, encoding: 'UTF-8')
   opened = lines.first.to_s =~ /\A---\s*\z/
@@ -194,7 +226,8 @@ def check_markdown(file, rows, required)
     fail!("#{where}: the frontmatter is not a map")
     return 0
   end
-  front.key?('hooks') ? check_hooks(where, front['hooks'], rows) : 0
+  owner = agent ? "agent:#{front['name'] || File.basename(file, '.md')}" : nil
+  front.key?('hooks') ? check_hooks(where, front['hooks'], rows, owner) : 0
 rescue SystemCallError => e
   fail!("cannot read #{where}: #{e.message}")
   0
@@ -204,13 +237,64 @@ end
 claude = File.join(ROOT, '.claude')
 agents = Dir.glob(File.join(claude, 'agents', '**', '*.md')).sort
 fail!('.claude/agents has no agent definition') if agents.empty?
-agents.each { |file| total += check_markdown(file, rows, true) }
+agents.each { |file| total += check_markdown(file, rows, true, true) }
 (Dir.glob(File.join(claude, 'skills', '**', 'SKILL.md')) + Dir.glob(File.join(claude, 'commands', '**', '*.md'))).sort.each do |file|
   total += check_markdown(file, rows, false)
+end
+
+# 4. Session-level twins of the agents' guards.
+SETTINGS = %w[settings.json settings.autopilot.json].freeze
+guards = Hash.new { |h, k| h[k] = [] }   # [event, tools, hook, args] => agent names
+@entries.each do |e|
+  next unless e[:owner].to_s.start_with?('agent:')
+
+  agent = e[:owner].sub('agent:', '')
+  if e[:args].first == '--agent'
+    fail!("#{e[:where]}: a frontmatter hook guards its own agent, it takes no --agent")
+    next
+  end
+  guards[[e[:event], e[:tools], e[:hook], e[:args]]] << agent
+end
+twins = 0
+SETTINGS.each do |file|
+  seen = []
+  @entries.select { |e| e[:owner] == file && e[:args].first == '--agent' }.each do |e|
+    names = e[:args][1].to_s.split(',')
+    key = [e[:event], e[:tools], e[:hook], e[:args][2..-1] || []]
+    seen << key
+    want = guards.key?(key) ? guards[key].sort.uniq : []
+    if want.empty?
+      fail!("#{e[:where]}: no agent's frontmatter runs #{e[:hook]} #{key[3].join(' ')} on #{e[:tools].join('|')}: a stale twin")
+    elsif names.sort != want
+      fail!("#{e[:where]}: --agent #{names.join(',')} is not the agents whose frontmatter runs it (#{want.join(',')})")
+    end
+    twins += 1
+  end
+  guards.each do |key, agents|
+    next if seen.include?(key)
+
+    fail!(".claude/#{file}: no session-level twin of #{key[2]} #{key[3].join(' ')} on #{key[1].join('|')} " \
+          "(#{agents.sort.uniq.join(',')}'s frontmatter guard; a Workflow's agents are not promised it, #0-164)")
+  end
+end
+
+# 5. The required session-level guards.
+REQUIRED.each do |file, wants|
+  wants.each do |command, tools|
+    hook, *args = command.split(' ')
+    found = @entries.any? do |e|
+      e[:owner] == file && e[:event] == 'PreToolUse' && e[:hook] == hook && e[:args] == args && (tools - e[:tools]).empty?
+    end
+    next if found
+
+    fail!(".claude/#{file} does not run #{command} on #{tools.join('|')} before every such call (#0-164 AC4): a deleted " \
+          'or moved guard would pass every other rule')
+  end
 end
 
 if @failures > 0
   puts "#{@failures} hook entry problem(s)"
   exit 1
 end
-puts "Hook entries: all #{total} block when their hook fails, each a hook of the fail-closed table."
+puts "Hook entries: all #{total} block when their hook fails, each a hook of the fail-closed table; " \
+     "#{twins} session-level twin(s) match the agents' guards, and the #{REQUIRED.values.flatten(1).size} required guards are wired."

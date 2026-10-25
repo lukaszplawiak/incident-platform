@@ -9,6 +9,7 @@
 #   readonly-bash.sh --k8s      ... plus `kubectl kustomize` and `kubeconform` (review-k8s)
 #   readonly-bash.sh --gh-read  ... plus `gh pr list/view/diff`, `gh issue list/view`, `gh run list/view` (auditors)
 #   readonly-bash.sh --architect ... plus `git add` of .ai/decisions/ and .ai/work/ paths, and `git commit`
+#   readonly-bash.sh --agent <names> [mode]   the same, at session level, for those agents' calls only (#0-164)
 #
 # One command per call: no pipes, chaining, redirects or substitutions. Fails closed.
 # Every refusal an agent can hit while reading says what to use instead (backlog #0-123): an agent that is
@@ -16,8 +17,9 @@
 # are read with the Read tool and searched with `git grep -e … -- <paths>` (tracked files only, so never a
 # secret; the Grep and Glob tools do not exist in every Claude Code version, .ai/rules/review/_common.md), so
 # `cat` and plain `grep` stay off the list on purpose; see .claude/skills/review-procedure/SKILL.md, "Tools".
-# Note: frontmatter hooks run only in a trusted workspace and not in `claude -p` (docs); in a headless
-# run the session-level hooks in settings.autopilot.json are the guard.
+# Frontmatter hooks are documented for agents of the Agent tool in a trusted workspace, never in `claude -p` nor
+# for the agents a Workflow spawns; so both settings files run this hook again with `--agent` (backlog #0-164,
+# ADR-0041), and Factory guards checks that the two stay equal (check-hook-entries.rb).
 # ============================================================
 set -uo pipefail
 # Fails closed (backlog #0-162): Claude Code runs the call after any exit status but 2, so a crash (an unset
@@ -25,6 +27,13 @@ set -uo pipefail
 trap 'case $? in 0|2) ;; *) echo "BLOCKED by ${0##*/}: the guard failed (exit $?), so the call is refused" >&2; exit 2 ;; esac' EXIT
 . "$(dirname "$0")/_lib.sh" || { echo "BLOCKED by ${0##*/}: cannot load _lib.sh" >&2; exit 2; }
 
+# Session-level twin (backlog #0-164): `--agent <names>` first, then the mode; the call of any other agent passes.
+only=""
+if [ "${1:-}" = --agent ]; then
+    [ "$#" -ge 2 ] && [ -n "$2" ] || block "readonly-bash.sh --agent needs agent names"
+    only=$2
+    shift 2
+fi
 mode=${1:-}
 HINT="Read a file with the Read tool. Search with git grep -n -e <pattern> -e <other> -- <paths> (each alternative its own -e, not a|b) and list files with git ls-files; one command per call, from the repository root (no git -C)."
 case "$mode" in
@@ -33,6 +42,7 @@ case "$mode" in
     --architect) HINT="$HINT Also allowed here: git add of .ai/decisions/ and .ai/work/ paths, plain git commit." ;;
 esac
 input=$(cat)
+if [ -n "$only" ] && ! applies_to_agent "$only" "$input"; then exit 0; fi
 cmd=$(json_get "$input" '.tool_input.command'); rc=$?
 json_checked "$rc" "this agent's Bash guard"
 [ -n "$cmd" ] || exit 0
