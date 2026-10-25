@@ -117,7 +117,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
-| [0-170](#0-170-seed-bugs-measured-nothing-the-seeders-commands-were-refused-and-reported-as-a-skip) | `/seed-bugs` measured nothing: the seeder's commands were refused and reported as a skip | ci | Medium | In progress |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -3000,8 +2999,8 @@ AC2. README "Infrastructure Hardening" names the control.
 
 ### 0-170. `/seed-bugs` measured nothing: the seeder's commands were refused and reported as a skip
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress — found by the first `/seed-bugs` run on record, the
-"after" measure of #0-115's pilot (P-10 on `253e5b2a3a06`, run `perf-after-p10`, 2026-10-25)
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #528 (AC3 is shown by the rerun of #0-115's "after" measure) —
+found by the first `/seed-bugs` run on record (P-10 on `253e5b2a3a06`, run `perf-after-p10`, 2026-10-25)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/defect-seeder.md, .claude/workflows/seed-bugs.js), ci
 (.github/scripts/test-autopilot-workflow.mjs)
