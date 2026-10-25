@@ -225,8 +225,21 @@ expect 2 "chained"                       "$O" -- "$(bash_call 'scripts/factory/p
 
 GP="$HOOKS/guard-git-push.sh"
 echo "guard-git-push"
-expect 0 "push a feature branch"          "$GP" -- "$(bash_call 'git push -u origin fix/0-25-notification-version')"
+# Backlog #0-131: only the branch the workflow recorded in the lock (state.sh branch).
+expect 2 "no lock: no push"               "$GP" -- "$(bash_call 'git push -u origin fix/0-25-notification-version')"
+(cd "$WORK/repo" && mkdir -p .ai/runs && echo "R1 $(git rev-parse HEAD)" > .ai/runs/LOCK)
+expect 2 "lock without a branch: no push" "$GP" -- "$(bash_call 'git push -u origin fix/0-25-notification-version')"
+(cd "$WORK/repo" && echo "R1 $(git rev-parse HEAD) fix/0-25-notification-version" > .ai/runs/LOCK)
+expect 0 "push the run's own branch"      "$GP" -- "$(bash_call 'git push -u origin fix/0-25-notification-version')"
+expect 2 "another item's branch"          "$GP" -- "$(bash_call 'git push -u origin fix/0-26-other-item')"
+expect 2 "the owner's branch"             "$GP" -- "$(bash_call 'git push -u origin feat/0-131-owners-work')"
+expect 2 "a prefix of the run's branch"   "$GP" -- "$(bash_call 'git push -u origin fix/0-25-notification')"
+expect 2 "the run's branch, longer"       "$GP" -- "$(bash_call 'git push -u origin fix/0-25-notification-version2')"
+(cd "$WORK/repo" && echo "R1 $(git rev-parse HEAD) fix/0-25-maintain-x" > .ai/runs/LOCK)
 expect 0 "branch name containing main"    "$GP" -- "$(bash_call 'git push -u origin fix/0-25-maintain-x')"
+(cd "$WORK/repo" && chmod 000 .ai/runs/LOCK)
+[ -r "$WORK/repo/.ai/runs/LOCK" ] || expect 2 "an unreadable lock: no push" "$GP" -- "$(bash_call 'git push -u origin fix/0-25-maintain-x')"
+(cd "$WORK/repo" && chmod 644 .ai/runs/LOCK)
 expect 2 "bare git push"                  "$GP" -- "$(bash_call 'git push')"
 expect 2 "push main"                      "$GP" -- "$(bash_call 'git push -u origin main')"
 expect 2 "refspec to main"                "$GP" -- "$(bash_call 'git push -u origin fix/x:main')"
@@ -238,7 +251,12 @@ expect 0 "not a push"                     "$GP" -- "$(bash_call 'git status')"
 expect 0 "fetch origin main"              "$GP" -- "$(bash_call 'git fetch origin main')"
 expect 2 "fetch moving origin/main"       "$GP" -- "$(bash_call 'git fetch . HEAD:refs/remotes/origin/main')"
 expect 2 "fetch from another remote"      "$GP" -- "$(bash_call 'git fetch evil main')"
+(cd "$WORK/repo" && rm -f .ai/runs/LOCK)
 expect 2 "write the lock"                 "$P" -- "$(bash_call 'echo x > .ai/runs/LOCK')"
+# Backlog #0-131 (review round 3): git's writing options into a protected path are writes too.
+expect 2 "git log --output into the lock" "$P" -- "$(bash_call 'git log -1 --output=.ai/runs/LOCK')"
+expect 2 "git show --output into scripts/factory" "$P" -- "$(bash_call 'git show HEAD:README.md --output=scripts/factory/state.sh')"
+expect 0 "git log without --output"      "$P" -- "$(bash_call 'git log -1 -- .ai/rules/')"
 # Backlog #0-168: the alternatives of the flattened `protected=` regex, one by one where nothing else probes them.
 expect 2 "write the run state"            "$P" -- "$(bash_call 'echo {} > .ai/runs/state.json')"
 expect 2 "write into .git"               "$P" -- "$(bash_call 'echo x > .git/hooks/pre-commit')"
@@ -247,24 +265,45 @@ expect 2 "rewrite the queue"              "$P" -- "$(bash_call 'sed -i s/A/B/ .a
 expect 2 "delete STOP"                    "$P" -- "$(bash_call 'rm .ai/STOP')"
 
 FS="$HOOKS/guard-factory-scripts.sh"
+# ops_call <agent_type or ""> <command> — a Bash call as the session-level hook sees it; "" = the main session.
+ops_call() {
+    if [ -z "$1" ]; then bash_call "$2"
+    else jq -cn --arg a "$1" --arg c "$2" '{agent_type: $a, tool_name: "Bash", tool_input: {command: $c}}'; fi
+}
 echo "guard-factory-scripts"
 (cd "$WORK/repo" && mkdir -p scripts/factory && printf '#!/bin/sh\necho ok\n' > scripts/factory/preflight.sh && git add -A && git -c user.email=t@t -c user.name=t commit -q -m factory && git branch -f main HEAD)
-expect 0 "intact factory script"          "$FS" -- "$(bash_call 'scripts/factory/preflight.sh')"
+expect 0 "intact factory script"          "$FS" -- "$(ops_call factory-ops 'scripts/factory/preflight.sh')"
 expect 0 "unrelated command"              "$FS" -- "$(bash_call 'git status')"
 (cd "$WORK/repo" && echo "echo pass" >> scripts/factory/preflight.sh)
-expect 2 "modified factory script"        "$FS" -- "$(bash_call 'scripts/factory/preflight.sh')"
+expect 2 "modified factory script"        "$FS" -- "$(ops_call factory-ops 'scripts/factory/preflight.sh')"
 expect 2 "factory-ops on modified script" "$HOOKS/factory-ops-bash.sh" -- "$(bash_call 'scripts/factory/preflight.sh')"
 (cd "$WORK/repo" && git checkout -q -- scripts/factory/preflight.sh && printf '#!/bin/sh\n' > scripts/factory/evil.sh)
-expect 2 "untracked factory script"       "$FS" -- "$(bash_call 'scripts/factory/evil.sh')"
+expect 2 "untracked factory script"       "$FS" -- "$(ops_call factory-ops 'scripts/factory/evil.sh')"
 (cd "$WORK/repo" && rm scripts/factory/evil.sh)
 # The base is the sha in .ai/runs/LOCK, whatever the refs say.
 # LOCK pins a commit before the script existed; refs still point at the commit that has it.
 (cd "$WORK/repo" && mkdir -p .ai/runs && echo "R1 $(git rev-parse HEAD~1)" > .ai/runs/LOCK)
-expect 2 "base from LOCK older than the script" "$FS" -- "$(bash_call 'scripts/factory/preflight.sh')"
+expect 2 "base from LOCK older than the script" "$FS" -- "$(ops_call factory-ops 'scripts/factory/preflight.sh')"
 # LOCK pins the current commit; moving main elsewhere does not matter.
 (cd "$WORK/repo" && echo "R1 $(git rev-parse HEAD)" > .ai/runs/LOCK && git branch -f main HEAD~1)
-expect 0 "base from LOCK, main moved back"  "$FS" -- "$(bash_call 'scripts/factory/preflight.sh')"
+expect 0 "base from LOCK, main moved back"  "$FS" -- "$(ops_call factory-ops 'scripts/factory/preflight.sh')"
 (cd "$WORK/repo" && git branch -f main feat/x && rm .ai/runs/LOCK)
+# Backlog #0-131: only factory-ops runs them; the lock (and the run's branch in it) moves through these scripts.
+for who in implementer implementer-light shipper picker review-general ''; do
+    for run in "scripts/factory/state.sh branch feat/0-131-owners-work" "./scripts/factory/state.sh unlock" "scripts/factory/preflight.sh" \
+               "git status && scripts/factory/state.sh record shipped 0-1"; do
+        expect 2 "${who:-the main session} runs: $run" "$FS" -- "$(ops_call "$who" "$run")"
+    done
+done
+expect 0 "factory-ops runs a factory script"           "$FS" -- "$(ops_call factory-ops 'scripts/factory/state.sh get')"
+expect 0 "a reviewer names one as a path, runs none"   "$FS" -- "$(ops_call review-general 'git grep -n -e lock -- scripts/factory/')"
+expect 0 "an implementer diffs one, runs none"         "$FS" -- "$(ops_call implementer 'git diff HEAD -- scripts/factory/state.sh')"
+# Review round 2: anything else that names the path is refused to them, whatever shape the command takes.
+expect 2 "an implementer cats one"                     "$FS" -- "$(ops_call implementer 'cat scripts/factory/state.sh')"
+expect 2 "a git read chained to a run"                 "$FS" -- "$(ops_call implementer 'git log -1 && scripts/factory/state.sh unlock')"
+expect 2 "a quoted command word"                       "$FS" -- "$(ops_call shipper '"scripts/factory/state.sh" unlock')"
+expect 2 "a git read that writes with --output"        "$FS" -- "$(ops_call implementer 'git diff HEAD --output=x.txt -- scripts/factory/state.sh')"
+expect 2 "a git read over two lines"                   "$FS" -- "$(ops_call implementer $'git log -1\nscripts/factory/state.sh unlock')"
 expect 0 "factory-ops with quoted args"   "$HOOKS/factory-ops-bash.sh" -- "$(bash_call "scripts/factory/preflight.sh '0-25' 'origin/main'")"
 expect 2 "factory-ops with a comment"     "$HOOKS/factory-ops-bash.sh" -- "$(bash_call 'scripts/factory/preflight.sh #0-25')"
 

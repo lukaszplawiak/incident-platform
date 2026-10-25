@@ -50,7 +50,10 @@ fi
 protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/LOCK|\.ai/runs/state\.json|\.ai/STOP)'
 printf '%s' "$cmd" | grep -Eq -- "$protected" || exit 0
 
-writes='(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|perl[[:space:]]+-[a-zA-Z]*i|(^|[[:space:];&|])(cp|mv|rm|rmdir|ln|chmod|chown|truncate|install|touch|mkdir)[[:space:]]|git[[:space:]]+(checkout|restore|rm|mv|apply|am|stash|reset)|(python3?|ruby|node|perl)[[:space:]])'
+# git's own writing options count as writes (backlog #0-131, review round 3): `--output=<file>` writes the file, and
+# `--ext-diff`/`--textconv` run a program; an allow-listed read (`git log`, `git diff`, `git show`) could otherwise
+# write the lock the push guard trusts. Their plain form only: a word spliced with quotes is #0-167's.
+writes='(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|perl[[:space:]]+-[a-zA-Z]*i|(^|[[:space:];&|])(cp|mv|rm|rmdir|ln|chmod|chown|truncate|install|touch|mkdir)[[:space:]]|git[[:space:]]+(checkout|restore|rm|mv|apply|am|stash|reset)|(python3?|ruby|node|perl)[[:space:]]|--output|--ext-diff|--textconv)'
 if printf '%s' "$cmd" | grep -Eq -- "$writes"; then
     block "the command may write to a human-owned path (.ai/rules/protected-paths.md lists them; also .git/ and the run state). Agents never change these; if the item needs it, stop and report NEEDS_HUMAN."
 fi

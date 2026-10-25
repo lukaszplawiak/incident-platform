@@ -105,7 +105,9 @@ const DEFAULTS = {
   verifier: { items: [] },
   'acceptance-reviewer': { verdict: 'ACCEPT', criteria: [{ id: 'AC1', met: true }] },
   shipper: { mode: 'ship', prNumber: 7, prUrl: 'https://github.com/o/r/pull/7', followUpsCreated: [] },
-  'ops:state.sh': {}, 'ops:notify.sh': {}, 'ops:return-to-main.sh': {}, 'ops:local-review.sh': {},
+  // state.sh branch <name> answers the branch it recorded (backlog #0-131); its other commands, {}.
+  'ops:state.sh': ({ prompt }) => { const m = prompt.match(/state\.sh 'branch' '([^']+)'/); return m ? { branch: m[1] } : {} },
+  'ops:notify.sh': {}, 'ops:return-to-main.sh': {}, 'ops:local-review.sh': {},
 }
 const approve = (dimension, extra = {}) => ({ dimension, verdict: 'APPROVE', blocking: [], nonBlocking: [], resolved: [],
   upheldDisputes: [], unverified: [], ...extra })
@@ -353,6 +355,33 @@ test('the item: nothing to do, a malformed next item, a malformed or different p
     const { outcome } = await run({ answers: { picker: pick } })
     assert.equal(outcome.outcome, 'BLOCKED'); assert.match(outcome.reason, why)
   }
+})
+
+test("the run's branch is recorded in the lock before any agent works on it, or the run stops", async () => {
+  const { calls } = await run()
+  const at = calls.findIndex((c) => /state\.sh 'branch' 'fix\/0-1-an-item'/.test(c.prompt))
+  assert.ok(at > 0, 'state.sh branch <the picked branch>')
+  assert.ok(at > calls.findIndex((c) => c.key === 'picker') && at < calls.findIndex((c) => c.key === 'architect'))
+  const resumed = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' } })
+  assert.ok(resumed.calls.some((c) => /state\.sh 'branch' 'fix\/0-1-an-item'/.test(c.prompt)), 'a resumed run records it too')
+  for (const answer of [{ error: 'this run already recorded its branch (fix/0-9-x)' }, { branch: 'fix/0-9-other' }, null]) {
+    const { outcome, calls: c } = await run({ answers: { 'ops:state.sh': ({ prompt }) => (/'branch'/.test(prompt) ? answer : {}) } })
+    assert.equal(outcome.outcome, 'BLOCKED')
+    assert.match(outcome.reason, /could not record the run's branch fix\/0-1-an-item/)
+    assert.ok(!c.some((x) => x.key === 'architect' || x.key === 'shipper'), 'nothing works on, or pushes, a branch the lock does not name')
+  }
+})
+
+test("the run's branch must be the item's own, and on resume the owner's", async () => {
+  for (const branch of ['feat/0-40-owners-work', 'fix/0-10-x', 'fix/0-1', 'fix/0-1-', 'fix/x0-1-y', 'fix/0-1-a/b']) {
+    const { outcome, calls } = await run({ answers: { picker: { ...DEFAULTS.picker, branch } } })
+    assert.equal(outcome.outcome, 'BLOCKED', branch)
+    assert.match(outcome.reason, /an item's branch is <type>\/0-1-<slug>|picker answer incomplete/, branch)
+    assert.ok(!calls.some((c) => /state\.sh 'branch'/.test(c.prompt)), `${branch}: never recorded`)
+  }
+  const other = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' }, answers: { picker: { ...DEFAULTS.picker, branch: 'fix/0-1-another' } } })
+  assert.match(other.outcome.reason, /picker answered the branch fix\/0-1-another, not fix\/0-1-an-item/)
+  assert.ok(!other.calls.some((c) => /state\.sh 'branch'/.test(c.prompt)))
 })
 
 test('complexity: anything but low, in the backlog or the pick, takes the full implementer', async () => {

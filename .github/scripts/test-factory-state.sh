@@ -46,6 +46,33 @@ expect_jq "shipped resets the breaker and counts for the audit" "$out" \
 
 if $ST record merged 0-46 >/dev/null 2>&1; then fail "unknown outcome accepted"; else ok "unknown outcome refused"; fi
 
+echo "state.sh branch (backlog #0-131)"
+# expect_refused <name> <json output> <exit> <error text>
+expect_refused() {
+    if [ "$3" -eq 1 ] && printf '%s' "$2" | jq -e --arg e "$4" '.error | contains($e)' >/dev/null 2>&1; then ok "$1"
+    else fail "$1: expected exit 1 and an error containing '$4', got $3: $2"; fi
+}
+rm -f .ai/runs/LOCK
+out=$($ST branch fix/0-1-x); rc=$?
+expect_refused "no lock: refused" "$out" "$rc" "no run holds the lock"
+echo "R1 0123456789abcdef0123456789abcdef01234567" > .ai/runs/LOCK
+for bad in main fix/main 'fix/a b' 'fix/x;rm' FIX/x fix ''; do
+    out=$($ST branch "$bad"); rc=$?
+    expect_refused "not a feature branch ('$bad'): refused" "$out" "$rc" "not a feature branch name"
+done
+expect_jq "the lock still holds no branch after refusals" "$(jq -Rn --arg l "$(cat .ai/runs/LOCK)" '$l')" '. == "R1 0123456789abcdef0123456789abcdef01234567"'
+out=$($ST branch fix/0-1-x); rc=$?
+expect_jq "the run's branch is recorded" "$out" '.branch == "fix/0-1-x"'
+if [ "$(cat .ai/runs/LOCK)" = "R1 0123456789abcdef0123456789abcdef01234567 fix/0-1-x" ]; then ok "as the lock's third field"
+else fail "as the lock's third field: $(cat .ai/runs/LOCK)"; fi
+out=$($ST branch fix/0-2-other); rc=$?
+expect_refused "a second branch in one run: refused" "$out" "$rc" "already recorded its branch (fix/0-1-x)"
+if grep -q 'fix/0-2-other' .ai/runs/LOCK; then fail "the second branch reached the lock"; else ok "the lock keeps the first branch"; fi
+echo "R1" > .ai/runs/LOCK
+out=$($ST branch fix/0-1-x); rc=$?
+expect_refused "a lock without its base commit: refused" "$out" "$rc" "holds no run and base commit"
+rm -f .ai/runs/LOCK
+
 echo '{not json' > .ai/runs/state.json
 expect_jq "an unreadable state trips the breaker" "$($ST get)" '.consecutiveBlocked == 99'
 

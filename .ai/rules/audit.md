@@ -45,9 +45,9 @@ whose commit is not in the local history, every marker in a shallow clone, every
 read, and every marker while an autopilot PR is authored by the owner's own login (the same rule as for labels). The
 commit's author or committer and a GitHub signature vouch for nothing. The report names what did not count. A marker
 that is not well-formed (`**Escaped from:** <stage>` without `**Fixes:** #0-<digits>` before it) does not reach the
-data at all: Factory guards refuses it (backlog #0-128). A known limit: a commit another account pushed onto a
-branch of the owner's PR is in the owner's PR too; the autopilot may push to any feature branch until backlog
-#0-131. The `ownerIsAutopilot` limit above holds for markers too, and more widely: it is read from the PRs of the
+data at all: Factory guards refuses it (backlog #0-128). The autopilot cannot push onto a branch of the
+owner's PR (it pushes only its run's own branch, recorded in `.ai/runs/LOCK`, backlog #0-131); another account's
+commit there is the owner's to see before merging. The `ownerIsAutopilot` limit above holds for markers too, and more widely: it is read from the PRs of the
 period, while a marker may come from any earlier one, so a marker from an autopilot PR opened on the owner's login
 in an earlier period would count. None exists: the autopilot has run as its own account (`lukaszplawiakbot`) since
 its first run (PR #472, 2026-10-09).

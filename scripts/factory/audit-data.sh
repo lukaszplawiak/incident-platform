@@ -25,8 +25,8 @@
 # vouches for who wrote it: the commit that first added the marker itself (from `**Fixes:**` to the stage, found with
 # `git log -S` and checked in the commit's diff, so moving the line to BACKLOG-DONE.md or changing the rest of it,
 # the status, keeps its origin) belongs to a PR merged into main and opened by the owner
-# (`gh api repos/<repo>/commits/<sha>/pulls`). A known limit: a commit someone else pushed onto the owner's PR
-# branch is in the owner's PR too (backlog #0-131).
+# (`gh api repos/<repo>/commits/<sha>/pulls`). A commit another account pushed onto the owner's PR branch is in
+# the owner's PR too; the autopilot cannot push there since backlog #0-131 (only its run's own branch).
 # Not enough: the commit's author or committer (free text; the owner and the bot share the container), a GitHub
 # signature (the owner signs nothing; the web-flow one on merge commits is GitHub's), the owner's merge of someone
 # else's PR (in shadow mode the owner merges every autopilot PR). A marker pushed with no PR, from another account's
