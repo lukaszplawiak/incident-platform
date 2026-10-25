@@ -133,7 +133,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
-| [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
+| [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | In progress |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
 
 ---
@@ -2688,8 +2688,9 @@ AC2. Inverting a decision in any of them turns a test red.
 
 ### 0-164. The agents' guards rely on frontmatter hooks that Workflow agents are not promised
 
-**Type:** security · **Priority:** Medium · **Status:** Open — `nonBlocking` ARC-02 of review-architecture in round 3
-of the `/review` of #0-160 (2026-10-24); the verifier's read scope is already session-level
+**Type:** security · **Priority:** Medium · **Status:** In progress — `nonBlocking` ARC-02 of review-architecture in
+round 3 of the `/review` of #0-160 (2026-10-24); the verifier's read scope is already session-level; owner's decision
+below (2026-10-25)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/hooks/readonly-bash.sh, .claude/hooks/write-scope.sh, .claude/hooks/test-hooks.sh,
 .claude/settings.json, .claude/settings.autopilot.json), ci (.github/scripts/ (a structural check),
@@ -2718,6 +2719,17 @@ hook entry that exists, not that one exists: a change that deletes `guard-tests.
 verifier's hooks are checked to be wired, by `check-web-access.sh`). The structural check of this item is the
 place for it: one list of which guard each settings file must run, on which matcher (not a second list per
 check, `FAC-A01`).
+
+**Decided (owner, 2026-10-25, after `/research` and spikes; ADR-0041).** A1 + B1 + C1: the twins by hand, one per
+guard and arguments, `--agent` taking a comma-separated list (`applies_to_agent` in `_lib.sh`, used by
+`readonly-bash.sh`, `write-scope.sh`, `factory-ops-bash.sh` and `read-scope.sh`), in both settings files;
+`check-hook-entries.rb` checks them against the frontmatter (the one list) and holds the table of required
+session-wide guards (AC4). Spikes on 2.1.310: `claude --settings <file>` adds to the project's `.claude/settings.json`
+(both files' hooks ran; the owner kept the twins in both files, and an identical command in both runs once, review
+round 1); `agent_type` reaches a
+session hook for an Agent-tool agent (`--agents`) and for a Workflow agent (`agentType: 'review-docs'` gave
+`review-docs`, none gave `workflow-subagent`). factory-ops' `factory-ops-bash.sh` gets a twin too (frontmatter-only
+as well; AC2 names every frontmatter guard).
 
 **Acceptance criteria.**
 AC1. For every agent whose frontmatter runs `readonly-bash.sh` or `write-scope.sh`, both settings files run the same

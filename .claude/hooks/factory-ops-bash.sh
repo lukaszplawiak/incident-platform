@@ -10,7 +10,16 @@ set -uo pipefail
 trap 'case $? in 0|2) ;; *) echo "BLOCKED by ${0##*/}: the guard failed (exit $?), so the call is refused" >&2; exit 2 ;; esac' EXIT
 . "$(dirname "$0")/_lib.sh" || { echo "BLOCKED by ${0##*/}: cannot load _lib.sh" >&2; exit 2; }
 
+# Session-level twin (backlog #0-164): `--agent factory-ops` in the settings files; any other caller passes.
+only=""
+if [ "${1:-}" = --agent ]; then
+    [ "$#" -ge 2 ] && [ -n "$2" ] || block "factory-ops-bash.sh --agent needs agent names"
+    only=$2
+    shift 2
+fi
+[ "$#" -eq 0 ] || block "factory-ops-bash.sh takes no argument but --agent, not: $*"
 input=$(cat)
+if [ -n "$only" ] && ! applies_to_agent "$only" "$input"; then exit 0; fi
 cmd=$(json_get "$input" '.tool_input.command'); rc=$?
 json_checked "$rc" "factory-ops"
 # '$(' is the literal text of a substitution, matched, not run (backlog #0-149).

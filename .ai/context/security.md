@@ -76,7 +76,10 @@ on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are w
   Claude Code 2.1.295 or newer; an older one ignores it silently, and only the autopilot's preflight refuses one
   (ADR-0039). Frontmatter hooks are documented
   for agents of the Agent tool, an @-mention or `--agent`, not for the agents a `Workflow` spawns and never
-  in `claude -p`; session-level hooks are documented for every subagent (#0-164). The devcontainer's
+  in `claude -p`; session-level hooks are documented for every subagent, so every agent's guard runs in both:
+  its frontmatter and a twin in both settings files keyed on `agent_type` (`--agent`, `applies_to_agent` in
+  `_lib.sh`), kept equal by `check-hook-entries.rb`, which also checks that the session-wide guards are wired
+  (#0-164, ADR-0041). The devcontainer's
   firewall opens hosts by IP for every process in it, and binds the agents' commands, not the code they run
   through Docker (#0-116).
 - **Shadow mode is a set of denies.** A session cannot merge past the ruleset, approve a PR, or change the

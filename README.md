@@ -487,7 +487,10 @@ security boundary, so every rule that matters is also enforced outside the model
   refuses an older one.
   Hook tests: `.claude/hooks/test-hooks.sh`, with every hook in a fail-closed table (a hook without a row fails Factory guards).
 - **Least privilege per agent**: reviewers, the architect and the auditors run read-only Bash allow-lists
-  and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`); they read files with the Read tool and
+  and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`), in two layers: the agent's frontmatter and
+  a twin in both settings files keyed on its `agent_type` (`--agent`), since Claude Code does not promise frontmatter
+  hooks to the agents a `Workflow` spawns; Factory guards keeps the twins equal to the frontmatter and checks that
+  every session-wide guard is still wired (`check-hook-entries.rb`, backlog #0-164, ADR-0041); they read files with the Read tool and
   search with `git grep`, and each refusal of the hook that a reading agent can hit names that alternative,
   per mode (backlog #0-123). In Bash every agent searches with `git grep`
   only, with an allow-list of options checked on the command as bash splits it (so no abbreviated or quoted
@@ -570,10 +573,9 @@ branch is already public, and an allow comment passes whatever its line holds (#
 their checks still let a command through when the check itself fails (a grep error, #0-132); an owner's
 session on a Claude Code older than 2.1.295 ignores the hooks' `onFailure` without a word, so there a hook that
 cannot start or times out does not block (only the autopilot's preflight checks the version; ADR-0039);
-subagent frontmatter hooks (the reviewers' read-only allow-lists) do not run in headless (`-p`) sessions,
-where only the session-level hooks apply, and Claude Code does not promise them to agents the `Workflow`
-runtime spawns either (they ran there in #0-160's spike): only the verifier's read scope is also
-session-level (#0-164); the owner's `/review` pre-approves every `git diff` (whose `--output`
+an agent guard's session-level twin passes everything if Claude Code stops sending `agent_type` (its frontmatter
+hook stays for that, ADR-0041), and an agent that should have a guard but has none in its frontmatter is left to
+review; the owner's `/review` pre-approves every `git diff` (whose `--output`
 writes any file) and its reviewers read the rules from the branch under review (#0-165). Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images

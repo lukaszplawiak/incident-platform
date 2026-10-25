@@ -72,8 +72,8 @@ and the ADRs of the area "AI factory" (`.ai/decisions/README.md`). Most of the w
 - **FAC-A04 A guard the autopilot relies on is session-level.** A hook that limits an agent runs in both
   settings files keyed on `agent_type`, besides the agent's frontmatter: Claude Code promises frontmatter
   hooks only to agents of the Agent tool, an @-mention or `--agent`, never in `claude -p`, and not to the
-  agents the `Workflow` runtime spawns (review round 2 of #0-160). A new guard only in frontmatter is a
-  finding; the existing ones are #0-164.
+  agents the `Workflow` runtime spawns (review round 2 of #0-160). A guard only in frontmatter fails Factory
+  guards since #0-164 (ADR-0041); review what the check cannot see: a new agent that needs a guard and has none.
 - **FAC-A05 A weaker layer is named.** A change that removes or weakens a control (a deny becomes an allow
   with a hook, a check becomes a warning) says so in its ADR and in README "Infrastructure Hardening"
   (CLAUDE.md "Security inventory"), naming what now holds it (#0-160: the bare WebFetch deny). Weakening
@@ -92,7 +92,8 @@ it is red on one, say so in `unverified` (you cannot run it).
   (`check-factory-guards.sh`).
 - Every hook entry of both settings files and the frontmatter of agents, skills and commands (subdirectories
   too): a command hook with `onFailure: "block"`, not in the background (`async`), a hook of `.claude/hooks/`
-  with plain arguments and a row in the fail-closed table, no `disableAllHooks`, no key repeated in one map
+  with plain arguments and a row in the fail-closed table, no `disableAllHooks`, no key repeated in one map; each
+  agent's frontmatter guard with its twin in both settings files, and the required session-wide guards wired
   (`check-hook-entries.rb`).
 - The hooks' behaviour (`.claude/hooks/test-hooks.sh`), the factory scripts' (`test-*.sh` of the job).
 - Lint Workflows (`ci.yml`): actionlint, shellcheck of every tracked `.sh` (`check-shell.rb`), no download

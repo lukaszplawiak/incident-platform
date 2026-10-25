@@ -28,8 +28,8 @@ trap 'case $? in 0|2) ;; *) echo "BLOCKED by ${0##*/}: the guard failed (exit $?
 only=""
 names=()
 if [ "${1:-}" = --agent ]; then
-    only=${2:-}
-    [ -n "$only" ] || block "read-scope.sh --agent needs an agent name"
+    [ "$#" -ge 2 ] && [ -n "$2" ] || block "read-scope.sh --agent needs an agent name"
+    only=$2
     shift 2
 fi
 while [ "${1:-}" = --name ]; do
@@ -39,11 +39,7 @@ while [ "${1:-}" = --name ]; do
 done
 [ "$#" -gt 0 ] || block "read-scope.sh needs at least one allowed path prefix"
 input=$(cat)
-if [ -n "$only" ]; then
-    agent=$(json_get "$input" '.agent_type'); rc=$?
-    json_checked "$rc" "the read guard"
-    [ "$agent" = "$only" ] || exit 0
-fi
+if [ -n "$only" ] && ! applies_to_agent "$only" "$input"; then exit 0; fi
 file=$(json_get "$input" '.tool_input.file_path'); rc=$?
 json_checked "$rc" "this agent's read guard"
 SCOPE_VERB='read' require_in_repo "$file" "$@"

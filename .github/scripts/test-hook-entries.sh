@@ -41,6 +41,15 @@ expect() {
 }
 # jqi <file under .claude/> <jq filter> — changes a settings file of the case in place.
 jqi() { jq "$2" "$root/.claude/$1" > "$root/.claude/$1.tmp" && mv "$root/.claude/$1.tmp" "$root/.claude/$1"; }
+# add_twin_name <agent> — puts the agent into the --agent list of the plain readonly-bash.sh twin of both settings files.
+add_twin_name() {
+    local f
+    for f in settings.json settings.autopilot.json; do
+        jqi "$f" "(.hooks.PreToolUse[].hooks[] | select(.command | test(\"readonly-bash\\\\.sh --agent [a-z,-]+$\")) | .command) |= . + \",$1\""
+    done
+}
+# drop <settings file> <command end> — removes the entry whose command ends with the text.
+drop() { jqi "$1" "del(.hooks.PreToolUse[].hooks[] | select(.command | endswith(\"$2\")))"; }
 # agent <name> <frontmatter hooks block> — an agent definition of the case with these hooks.
 agent() {
     printf -- '---\nname: %s\ndescription: a test agent\ntools: Bash\n%s\n---\n\nBody.\n' "$1" "$2" > "$root/.claude/agents/$1.md"
@@ -113,6 +122,7 @@ expect 1 "onFailure one indent off (on the matcher)" 't-indent.md: hooks.PreTool
 fresh; agent t-flow "hooks:
   PreToolUse:
     - {matcher: Bash, hooks: [{type: command, command: '$H/readonly-bash.sh', onFailure: block}]}"
+add_twin_name t-flow
 expect 0 "a flow-style entry that is right passes"
 fresh; agent t-flow "hooks:
   PreToolUse:
@@ -178,6 +188,52 @@ hooks:
           command: '$H/readonly-bash.sh'
           onFailure: \"block\""
 expect 1 "an agent with hooks: twice" 't-hooks2.md: the frontmatter repeats the key(s) hooks'
+
+echo "session-level twins of the agents' guards (backlog #0-164)"
+fresh; drop settings.json "write-scope.sh --agent planner .ai/plan/ BACKLOG.md"
+expect 1 "settings.json without the planner's write twin" '.claude/settings.json: no session-level twin of write-scope.sh .ai/plan/ BACKLOG.md on Edit|MultiEdit|NotebookEdit|Write (planner'
+fresh; drop settings.autopilot.json "factory-ops-bash.sh --agent factory-ops"
+expect 1 "settings.autopilot.json without factory-ops' twin" '.claude/settings.autopilot.json: no session-level twin of factory-ops-bash.sh'
+fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent review-k8s --k8s")) | .command) |= sub("--agent review-k8s"; "--agent review-k8s,review-docs")'
+expect 1 "a twin naming an agent whose frontmatter has no such guard" '--agent review-k8s,review-docs is not the agents whose frontmatter runs it (review-k8s)'
+fresh; jqi settings.autopilot.json '(.hooks.PreToolUse[].hooks[] | select(.command | test("readonly-bash\\.sh --agent [a-z,-]+$")) | .command) |= sub(",review-security"; "")'
+expect 1 "a twin missing one agent of the list" 'is not the agents whose frontmatter runs it'
+fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent audit-synthesis .ai/audit/")) | .command) |= sub(".ai/audit/"; ".ai/")'
+expect 1 "a twin with other arguments" 'runs write-scope.sh .ai/ on Edit|MultiEdit|NotebookEdit|Write: a stale twin'
+fresh; jqi settings.json '(.hooks.PreToolUse[] | select(.hooks[0].command | test("readonly-bash")) | .matcher) |= "Read"'
+expect 1 "a twin on another matcher" '.claude/settings.json: no session-level twin of readonly-bash.sh  on Bash'
+fresh; sed -i.bak 's|readonly-bash.sh"$|readonly-bash.sh --agent review-docs"|' "$root/.claude/agents/review-docs.md"
+expect 1 "a frontmatter hook with --agent" 'review-docs.md: hooks.PreToolUse[0].hooks[0]: a frontmatter hook guards its own agent'
+fresh; agent t-new "hooks:
+  PreToolUse:
+    - matcher: \"Bash\"
+      hooks:
+        - type: command
+          command: '$H/readonly-bash.sh'
+          onFailure: \"block\""
+expect 1 "a new agent's guard, not in its twin's --agent" 'is not the agents whose frontmatter runs it (acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-migration,review-performance,review-security,t-new)'
+
+echo "the required session-level guards, one case each (backlog #0-164 AC4)"
+while IFS='|' read -r file cmd; do
+    fresh; drop "$file" "/.claude/hooks/$cmd"
+    expect 1 "$file without $cmd" ".claude/$file does not run $cmd on "
+done <<'REQ'
+settings.json|guard-migrations.sh
+settings.autopilot.json|guard-tests.sh
+settings.autopilot.json|guard-protected-bash.sh
+settings.autopilot.json|guard-git-push.sh
+settings.autopilot.json|guard-factory-scripts.sh
+settings.autopilot.json|guard-write-in-repo.sh
+settings.autopilot.json|guard-migrations.sh
+REQ
+fresh; jqi settings.autopilot.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("/guard-tests.sh")) | .command) |= . + " --lenient"'
+expect 1 "a required guard with other arguments" '.claude/settings.autopilot.json does not run guard-tests.sh on Bash'
+fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent review-k8s --k8s")) | .command) |= sub("review-k8s --k8s"; "review-k8s;true --k8s")'
+expect 1 "a ; in an --agent list (commas are allowed, shell syntax is not)" 'with plain arguments'
+fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent review-k8s --k8s")) | .command) |= sub("review-k8s --k8s"; "review-k8s|true --k8s")'
+expect 1 "a | in an --agent list" 'with plain arguments'
+fresh; jqi settings.autopilot.json '(.hooks.PreToolUse[] | select(.hooks[0].command | endswith("guard-write-in-repo.sh")) | .matcher) |= "Edit|Write"'
+expect 1 "a required guard moved to a narrower matcher" 'does not run guard-write-in-repo.sh on Edit|Write|MultiEdit|NotebookEdit'
 
 if [ "$failures" -gt 0 ]; then echo "$failures hook entry test(s) failed"; exit 1; fi
 echo "All hook entry tests passed."

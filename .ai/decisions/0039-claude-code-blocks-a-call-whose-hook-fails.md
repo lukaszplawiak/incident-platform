@@ -86,7 +86,8 @@ until now no check required a version.
   says so; the autopilot does not start on one, the owner's own sessions are not checked (README "Infrastructure
   Hardening"). That a frontmatter hook honours the field is shown for agents of the Agent tool only, not for the
   agents a `Workflow` spawns (frontmatter hooks are not documented for them, though they ran in #0-160's spike r2)
-  and frontmatter hooks never run in `claude -p`: session-level twins of the frontmatter guards are #0-164.
+  and frontmatter hooks never run in `claude -p`: session-level twins of the frontmatter guards are #0-164
+  (done since, ADR-0041).
 - A new hook entry, in either settings file or an agent's frontmatter, needs `onFailure: "block"` and a hook of
   the fail-closed table, or Factory guards fails; a new hook needs a row in that table (PR 1).
 - What the check does not see: whether an agent that should have a hook has one (#0-164), and hooks a session
