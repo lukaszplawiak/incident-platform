@@ -1,7 +1,8 @@
 // ============================================================
 // Tests the logic of .claude/workflows/backlog-autopilot.js (backlog #0-163): its helper functions one by one, and
 // whole runs with a fake agent() that answers each agent and factory script as a scenario says.
-// And how .claude/workflows/seed-bugs.js turns the seeder's answer into an outcome (backlog #0-170).
+// And how .claude/workflows/seed-bugs.js turns the seeder's answer into an outcome (backlog #0-170), reads its args and
+// types the factory scripts' answers (#0-174).
 //
 // The workflow is not a module: Claude Code's workflow runtime evaluates its text as the body of an async function,
 // with agent, parallel, phase, log and args in scope, and has no import (the workflow-authoring reference: "No
@@ -15,9 +16,11 @@
 // What it is not: a copy of the runtime. The stubs' behaviour (parallel() resolving a thunk that throws to null,
 // Date and Math throwing) is what the workflow-authoring reference of Claude Code states, not something tested
 // against the runtime, so a wrong reference would be repeated here; the workflow's own "VERIFY BEFORE THE FIRST
-// RUN" still applies. The fake agent() ignores `schema` (the runtime validates an answer against it), and Node's
-// globals (process, globalThis and the rest) stay reachable, so a workflow change that leans on either passes here
-// and fails in the runtime. It tests the script's decisions, not its fit to the runtime.
+// RUN" still applies. The fake agent() does not validate an answer against its `schema` (the runtime does), and
+// Node's globals (process, globalThis and the rest) stay reachable, so a workflow change that leans on either passes
+// here and fails in the runtime. It tests the script's decisions, not its fit to the runtime. It records each call's
+// schema, though: seed-bugs.js's are checked against the scripts' output with conforms() (#0-174, where an untyped
+// schema let the agent answer in strings).
 //
 // Node's built-in modules only (no npm, ADR-0043). Run by Factory guards after .github/actions/setup-node; locally:
 //   node .github/scripts/test-autopilot-workflow.mjs
@@ -122,7 +125,7 @@ function fakeAgent(answers) {
     let key = type
     if (type === 'factory-ops') key = `ops:${(prompt.match(/scripts\/factory\/([\w.-]+)/) ?? [])[1]}`
     else if (opts.label === 'isolation check') key = 'isolation'
-    calls.push({ key, type, label: opts.label, prompt })
+    calls.push({ key, type, label: opts.label, prompt, schema: opts.schema })
     const n = calls.filter((c) => c.key === key).length
     let answer = key in answers ? answers[key] : DEFAULTS[key]
     if (answer === undefined && type?.startsWith('review-')) answer = approve(type.slice('review-'.length))
@@ -595,10 +598,11 @@ const SEED = readFileSync(join(dirname(FILE), 'seed-bugs.js'), 'utf8')
 const SEED_ARGS = { pattern: 'P-10', commit: 'abc1234', runId: 'r1' }
 const SEEDED = { ok: true, branch: 'seed/P-10-r1', base: 'b'.repeat(40), head: 'c'.repeat(40), files: ['svc/src/main/java/A.java'] }
 const CHECKED = { ok: true, commit: 'd'.repeat(40), files: ['svc/src/main/java/A.java'] }
-async function seed(answers) {
+async function seed(answers, ...given) {
+  const args = given.length ? given[0] : SEED_ARGS   // not a default parameter: a test passes undefined itself
   const fake = fakeAgent({ 'audit-synthesis': {}, 'ops:seed-branch.sh': SEEDED, 'ops:seed-check.sh': CHECKED,
     'ops:return-to-main.sh': { onMain: true }, ...answers })
-  const outcome = await evaluate(strip(SEED), { args: SEED_ARGS, agent: fake.agent, logs: [] })
+  const outcome = await evaluate(strip(SEED), { args, agent: fake.agent, logs: [] })
   return { outcome, calls: fake.calls }
 }
 const TRUTH = { branch: 'seed/P-10-r1', pattern: 'P-10', dimension: 'performance', rule: 'PERF-01',
@@ -718,5 +722,76 @@ test('seed-bugs: no seed branch, no seeder; every outcome ends on main', async (
   for (const answer of [{ blocked: true, reason: 'x' }, { skipped: true, reason: 'y' }, { skipped: true }, { ...TRUTH, line: undefined }]) {
     const { calls } = await seed({ 'defect-seeder': answer })
     assert.equal(calls.at(-1).key, 'ops:return-to-main.sh', JSON.stringify(answer))
+  }
+})
+
+test('seed-bugs: `/seed-bugs P-10 <sha> <run id>` passes one string, read as the three args (#0-174)', async () => {
+  const fromObject = await seed({ 'defect-seeder': TRUTH })
+  for (const words of ['P-10 abc1234 r1', '  P-10\tabc1234   r1\n']) {
+    const { outcome, calls } = await seed({ 'defect-seeder': TRUTH }, words)
+    assert.deepEqual(outcome, fromObject.outcome, JSON.stringify(words))
+    assert.deepEqual(calls.map((c) => c.prompt), fromObject.calls.map((c) => c.prompt), JSON.stringify(words))
+  }
+  for (const args of ['P-10 abc1234', 'P-10 abc1234 r1 extra', '', 'P-10 abc1234 r1;rm', "P-10 abc1234 'r1'", undefined, null,
+    {}, { pattern: 'P-10', commit: 'abc1234' }, { ...SEED_ARGS, runId: 'r 1' }]) {
+    const { outcome, calls } = await seed({}, args)
+    assert.equal(outcome.outcome, 'NOT_STARTED', String(JSON.stringify(args)))
+    assert.match(outcome.reason, /pattern, commit, runId/)
+    assert.equal(calls.length, 0, `nothing runs on ${JSON.stringify(args)}`)
+  }
+})
+
+// The runtime validates an agent's answer against its `schema` (the fake agent does not): this checks the schemas
+// themselves, with the subset of JSON Schema they use, against what the scripts print and what the agent answered.
+// A keyword or type outside that subset throws, anywhere in the schema (review round 2 of #0-174): ignored, a later
+// `required` or `enum` would pass here unchecked.
+const KNOWN_KEYWORDS = new Set(['type', 'items', 'properties', 'additionalProperties'])
+const TYPE_OK = { object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v), array: Array.isArray,
+  string: (v) => typeof v === 'string', boolean: (v) => typeof v === 'boolean', number: (v) => typeof v === 'number' }
+function knownSchema(schema) {
+  const unknown = Object.keys(schema).filter((k) => !KNOWN_KEYWORDS.has(k))
+  if (unknown.length) throw new Error(`conforms() does not know ${unknown.join(', ')}: extend it`)
+  if (!Object.hasOwn(TYPE_OK, schema.type)) throw new Error(`conforms() does not know the type ${JSON.stringify(schema.type)}: extend it`)
+  if (schema.items) knownSchema(schema.items)
+  Object.values(schema.properties ?? {}).forEach(knownSchema)
+}
+function conforms(value, schema) {
+  knownSchema(schema)
+  if (!TYPE_OK[schema.type](value)) return false
+  if (schema.type === 'array') return value.every((v) => conforms(v, schema.items))
+  if (schema.type !== 'object') return true
+  return Object.entries(value).every(([k, v]) => k in (schema.properties ?? {}) ? conforms(v, schema.properties[k])
+    : schema.additionalProperties !== false)
+}
+
+test('conforms() refuses a schema keyword or type it does not check (#0-174, review round 2)', () => {
+  for (const schema of [{ type: 'object', required: ['ok'] }, { type: 'string', enum: ['a'] }, { type: ['string', 'null'] },
+    { type: 'integer' }, { type: 'object', properties: { files: { type: 'array', items: { type: 'string', pattern: 'x' } } } }]) {
+    assert.throws(() => conforms({}, schema), /conforms\(\) does not know/, JSON.stringify(schema))
+  }
+})
+
+test('seed-bugs: each factory script\'s answer is typed, so the agent cannot hand back strings (#0-174)', async () => {
+  const { calls } = await seed({ 'defect-seeder': TRUTH })
+  const schemaOf = (key) => calls.find((c) => c.key === key).schema
+  const printed = {
+    'ops:seed-branch.sh': [SEEDED, { ok: false, reason: 'the working tree is not clean' }],
+    'ops:seed-check.sh': [CHECKED, { ok: false, reason: 'the tree is on main' }],
+    'ops:return-to-main.sh': [{ onMain: true }, { onMain: true, left: 'seed/P-10-r1' },
+      { onMain: false, branch: 'seed/P-10-r1', reason: 'working tree not clean: left as it is for the owner' }],
+  }
+  for (const [key, answers] of Object.entries(printed)) {
+    for (const answer of [...answers, { error: 'jq: command not found', exitCode: 127 }]) {
+      assert.ok(conforms(answer, schemaOf(key)), `${key} accepts ${JSON.stringify(answer)}`)
+    }
+  }
+  // What factory-ops answered in the run of 2026-10-25 (P-10 on 76379e806fb4, run perf-after-p10).
+  const answered = {
+    'ops:seed-branch.sh': [{ ...SEEDED, ok: 'true' }, { ...SEEDED, files: JSON.stringify(SEEDED.files) }],
+    'ops:seed-check.sh': [{ ...CHECKED, ok: 'true' }, { ...CHECKED, files: JSON.stringify(CHECKED.files) }],
+    'ops:return-to-main.sh': [{ parameter: '{"onMain": true, "left": "seed/P-10-r1"}' }, { onMain: 'true' }],
+  }
+  for (const [key, answers] of Object.entries(answered)) {
+    for (const answer of answers) assert.ok(!conforms(answer, schemaOf(key)), `${key} refuses ${JSON.stringify(answer)}`)
   }
 })

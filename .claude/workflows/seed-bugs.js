@@ -7,6 +7,7 @@ export const meta = {
 // ============================================================================================
 // Run in an autopilot session, from a clean main at origin/main (the last run's results.md committed), args
 //   { pattern: 'P-01', commit: '<sha of a merged autopilot change>', runId: '<any unique id>' }
+// or the same three words in that order, as `/seed-bugs P-01 <sha> <run id>` passes them (one string).
 // The commit's code must still apply to main (seed-branch.sh refuses it otherwise): choose a recent one.
 // The script cannot pick at random (relaunch must repeat the same calls): choose the pattern and the
 // commit yourself, rotating through .ai/audit/benchmark/patterns.md. Never pushed, never merged; the
@@ -19,12 +20,33 @@ const PANEL = ['general', 'architecture', 'security', 'performance', 'migration'
 const as = (type, prompt, opts = {}) => agent(prompt, { ...opts, [AGENT_TYPE_OPTION]: type, label: opts.label ?? type })
 const runAll = (thunks) => parallel(thunks)
 
+// Fixed (backlog #0-174): `/seed-bugs P-10 <sha> <run id>` hands the script its words as one string, and the run
+// stopped NOT_STARTED; the words are read in the order of the object's keys, and checked the same way.
 const SAFE = /^[A-Za-z0-9._-]+$/
-if (![args?.pattern, args?.commit, args?.runId].every((v) => typeof v === 'string' && SAFE.test(v))) return { outcome: 'NOT_STARTED', reason: 'pass args.pattern, args.commit and args.runId' }
+const words = typeof args === 'string' ? args.trim().split(/\s+/) : null
+const params = words ? (words.length === 3 ? { pattern: words[0], commit: words[1], runId: words[2] } : {}) : (args ?? {})
+if (![params.pattern, params.commit, params.runId].every((v) => typeof v === 'string' && SAFE.test(v))) {
+  return { outcome: 'NOT_STARTED', reason: 'pass args { pattern, commit, runId }, or the words "<pattern> <commit> <run id>"' }
+}
 
 // Every factory script runs through the factory-ops agent, as in backlog-autopilot.js; the arguments are SAFE-checked.
+// Fixed (backlog #0-174): with the bare `{ type: 'object' }` the agent answered seed-branch.sh's JSON with every value
+// a string ("ok": "true", "files": "[…]") and wrapped return-to-main.sh's in a "parameter" key, so the first run after
+// #0-173 failed on a branch it had made. Each script's answer now has its fields typed and nothing else: what the
+// script prints, or factory-ops' own error answer.
+const ERROR_FIELDS = { error: { type: 'string' }, exitCode: { type: 'number' } }
+const answerOf = (fields) => ({ type: 'object', additionalProperties: false, properties: { ...fields, ...ERROR_FIELDS } })
+const SHA_FIELD = { type: 'string' }
+const FILES_FIELD = { type: 'array', items: { type: 'string' } }
+const ANSWERS = {
+  'seed-branch.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, branch: { type: 'string' }, base: SHA_FIELD,
+    head: SHA_FIELD, files: FILES_FIELD }),
+  'seed-check.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, commit: SHA_FIELD, files: FILES_FIELD }),
+  'return-to-main.sh': answerOf({ onMain: { type: 'boolean' }, branch: { type: 'string' }, left: { type: 'string' },
+    reason: { type: 'string' } }),
+}
 const ops = (script, argv, label) => as('factory-ops', `Run exactly: scripts/factory/${script}${argv.map((a) => ` '${a}'`).join('')}`,
-  { schema: { type: 'object' }, label: label ?? script })
+  { schema: ANSWERS[script], label: label ?? script })
 // The run ends on main whatever happens, so the session and the owner's tree go on with main's hooks and agents. When
 // return-to-main.sh cannot (a dirty tree, left for the owner), the outcome says where the tree was left (review round 1
 // of #0-173: a run that reported nothing of it left the next one refused).
@@ -42,16 +64,16 @@ phase('Seed')
 // the devcontainer, and the owner's host) runs on, so the run went on with that commit's hooks, settings and agents
 // (2026-10-25: 253e5b2a's guard refused the seeder, its tree had no read-scope.sh). seed-branch.sh builds the branch
 // from main instead (the change's code reverted as the base, then back), and refuses a tree that is not a clean main.
-const seed = await ops('seed-branch.sh', [args.pattern, args.runId, args.commit], 'seed branch')
+const seed = await ops('seed-branch.sh', [params.pattern, params.runId, params.commit], 'seed branch')
 if (!seed) return finish({ outcome: 'FAILED', reason: 'seed-branch.sh gave no answer' })
 const SHA = /^[0-9a-f]{40}$/
-if (seed.ok === true) made = `seed/${args.pattern}-${args.runId}`
-if (seed.ok !== true || seed.branch !== `seed/${args.pattern}-${args.runId}` || !SHA.test(String(seed.base))
+if (seed.ok === true) made = `seed/${params.pattern}-${params.runId}`
+if (seed.ok !== true || seed.branch !== `seed/${params.pattern}-${params.runId}` || !SHA.test(String(seed.base))
     || !SHA.test(String(seed.head)) || !Array.isArray(seed.files) || !seed.files.length) {
   return finish({ outcome: 'FAILED', reason: `no seed branch: ${String(seed.reason ?? JSON.stringify(seed)).slice(0, 300)}` })
 }
 const truth = await as('defect-seeder', [
-  `Pattern ${args.pattern}. Run id ${args.runId}. The branch ${seed.branch} is checked out: it holds merged change ${args.commit}`,
+  `Pattern ${params.pattern}. Run id ${params.runId}. The branch ${seed.branch} is checked out: it holds merged change ${params.commit}`,
   `as its last commit, on the base ${seed.base}. Plant the pattern in one of the change's files: ${seed.files.join(', ')}.`,
 ].join('\n'), {
   schema: { type: 'object', properties: { skipped: { type: 'boolean' }, blocked: { type: 'boolean' }, reason: { type: 'string' },
@@ -76,7 +98,7 @@ if (truth.branch !== seed.branch || !seed.files.includes(truth.file) || typeof t
 }
 // The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the
 // seed branch, clean, with the seeder's one commit on top of the change, touching the change's files only.
-const check = await ops('seed-check.sh', [args.pattern, args.runId, seed.base, seed.head], 'seed check')
+const check = await ops('seed-check.sh', [params.pattern, params.runId, seed.base, seed.head], 'seed check')
 if (check?.ok !== true || !Array.isArray(check.files) || !check.files.includes(truth.file)) {
   return finish({ outcome: 'FAILED', reason: `the seed branch is not as the seeder says: ${String(check?.reason ?? JSON.stringify(check)).slice(0, 300)}` })
 }
@@ -95,7 +117,7 @@ phase('Record')
 const near = (f) => f.file === truth.file && (typeof f.line !== 'number' || Math.abs(f.line - (truth.line ?? 0)) <= 5)
 const caughtBy = verdicts.filter(Boolean).filter((v) => [...(v.blocking ?? []), ...(v.nonBlocking ?? [])].some(near)).map((v) => v.dimension)
 const result = {
-  runId: args.runId, pattern: args.pattern, rule: truth.rule, expected: truth.dimension,
+  runId: params.runId, pattern: params.pattern, rule: truth.rule, expected: truth.dimension,
   caughtByExpected: caughtBy.includes(truth.dimension), caughtBy, blockingByExpected:
     verdicts.filter(Boolean).some((v) => v.dimension === truth.dimension && (v.blocking ?? []).some(near)),
   noAnswer: PANEL.filter((d, i) => !verdicts[i]),
