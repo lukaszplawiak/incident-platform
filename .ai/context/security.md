@@ -62,7 +62,8 @@ on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are w
   the diff and have neither network nor secrets (`readonly-bash.sh`: git only); the verifier has the network
   and therefore reads only the files the test gate wrote, never the diff (ADR-0037).
 - **Where each list lives.** The protected paths: `.ai/rules/protected-paths.md` (copies in the autopilot's
-  deny rules, `guard-protected-bash.sh` and CODEOWNERS, checked by `check-protected-paths.sh`). The WebFetch
+  deny rules, `guard-protected-bash.sh` and CODEOWNERS, checked by `check-protected-paths.sh` both ways since
+  #0-168: a copy holding a path the list lacks fails too; the autopilot's runtime state is its third list). The WebFetch
   allow-list: `.claude/hooks/webfetch-allowlist.sh --list` (its copies — the autopilot's
   `WebFetch(domain:…)` rules, the firewall's `ALLOWED_DOMAINS`, the prefixes in `verifier.md` — checked by
   `check-web-access.sh`). The pinned CI tools: their `# renovate:` comments in the workflows

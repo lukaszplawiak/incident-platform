@@ -23,7 +23,9 @@ work (`ready.md` point 3): it is `human-only`, or split so the owner does that p
   `.claude/hooks/guard-protected-bash.sh`, and `.github/CODEOWNERS` (the owner's review on a PR, for the
   owner-only list; the build-config list is guarded on PRs by rule 6 above, which reads this file).
   `.github/scripts/check-protected-paths.sh` fails CI when one of them misses an entry here — for
-  CODEOWNERS, when the line GitHub applies (the last match) names no owner.
+  CODEOWNERS, when the line GitHub applies (the last match) names no owner — and, the other way, when the deny
+  rules or the hook protect a path none of these lists holds (backlog #0-168): a copy must not claim a
+  protection the code that reads this file does not apply.
 
 Fixed (backlog #0-122, found by #0-42's run, draft PR #477): the list existed in about ten places that had
 drifted apart (the hook did not cover `.ai/audit/decisions.md`; a copy treated all of `CLAUDE.md` as
@@ -59,6 +61,19 @@ What every verification runs; a change could make a failing build pass.
 - `.ruby-version` — the Ruby every `.github/scripts/*.rb` check of CI runs on (ADR-0040)
 - `.node-version` — the Node every JavaScript test of CI runs on (ADR-0043)
 <!-- build-config:end -->
+
+## Runtime state
+
+The autopilot's own state and git's: not repository content (gitignored, or `.git/` itself), so no diff or
+`**Touches:**` names them and the code above does not read this list; the deny rules and the hook protect them,
+and `check-protected-paths.sh` checks that they do (backlog #0-168).
+
+<!-- runtime:start -->
+- `.git/` — the repository itself: refs, config, hooks
+- `.ai/runs/LOCK` — the lock that keeps a second autopilot run away
+- `.ai/runs/state.json` — the run state and the breaker's count
+- `.ai/STOP` — the autopilot's stop switch (set by the breaker, the audit trigger or the owner)
+<!-- runtime:end -->
 
 ## Partly protected
 

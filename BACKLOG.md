@@ -133,7 +133,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Open |
-| [0-168](#0-168-a-copy-of-the-protected-paths-can-run-ahead-of-the-one-list) | A copy of the protected paths can run ahead of the one list | ci | Medium | Open |
 
 ---
 
@@ -2931,8 +2930,8 @@ AC3. README "Infrastructure Hardening" no longer lists this gap.
 
 ### 0-168. A copy of the protected paths can run ahead of the one list
 
-**Type:** ci · **Priority:** Medium · **Status:** Open — `ruleGap` of review-security and review-architecture in round 1
-of the `/review` of #0-163 PR 1 (2026-10-25)
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #524 — from review-security and review-architecture, `/review` of
+#0-163 PR 1 (2026-10-25); owner's decision below. Kept in full for the decisions (the runtime list, the flat hook line)
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** —
 **Touches:** ci (.github/scripts/check-protected-paths.sh, .github/scripts/test-protected-paths.sh), factory
 (.claude/settings.autopilot.json, .claude/hooks/guard-protected-bash.sh), .ai/rules/protected-paths.md (owner),
@@ -2951,6 +2950,15 @@ list or of a named set of other denies (`.git/**`, `.ai/runs/LOCK`, `.ai/runs/st
 paths of the list on purpose). For the hook: its regex is tested by running it, not parsed (#0-122), so the other
 direction there needs either the regex built from the list at a known place or a list of the hook's alternatives
 kept next to it and compared. Decide whether a `FAC-S`/`FAC-A` rule should say so for review.
+
+**Decided (owner, 2026-10-25, after `/research`).** R1 + B + the other way for the denies, no new `FAC-` rule (one
+sentence at FAC-A01). The four paths outside the lists (`.git/`, `.ai/runs/LOCK`, `.ai/runs/state.json`,
+`.ai/STOP`) become a third list of `protected-paths.md`, "Runtime state" (`runtime:start/end`), which only the copy
+check reads; before it they were in both copies and checked by nothing. `check-protected-paths.sh` also checks
+copy → list: every `Edit(./…)`/`Write(./…)` deny is an entry as written (a directory with its slash), and every
+alternative of the hook's `protected=` line, now one flat alternation (the `.ai/runs/(LOCK|state\.json)` group
+split), is an entry with or without its slash. Not taken: the hook building its regex from the list (#0-122 keeps
+the last line from parsing Markdown), and generating the hook's line (it would change the hook's patterns).
 
 **Acceptance criteria.**
 AC1. Factory guards fails when `settings.autopilot.json` denies writing a path that is neither on the list nor in the

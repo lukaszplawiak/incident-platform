@@ -62,7 +62,8 @@ and the ADRs of the area "AI factory" (`.ai/decisions/README.md`). Most of the w
   tools) lives in one file that code reads; a copy exists only where the last line of defence must not
   parse it, and a Factory guards check fails when the copy drifts (`check-protected-paths.sh`,
   `check-web-access.sh`). A second list without such a check is a finding (#0-122: ten copies had
-  drifted).
+  drifted). The check compares both ways: a copy that holds an entry the list lacks fails too (#0-168: the
+  copies claimed `.node-version` before the list had it).
 - **FAC-A02 Agents' answers fail closed.** A missing, malformed or unsourced answer of an agent stops the
   item or counts as not settled — never as an approval: the workflow validates it (`valid()`, the schemas)
   and a fallback goes the cautious way (`verifyClaims`: a `verified` without source and quote is

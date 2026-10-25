@@ -2,7 +2,7 @@
 # ============================================================
 # Checks that the copies of the protected paths that cannot read their one definition still cover it.
 #   check-protected-paths.sh [settings.json] [hook] [CODEOWNERS]
-# The list: .ai/rules/protected-paths.md (both its "protected" and "build-config" lists), read by
+# The list: .ai/rules/protected-paths.md (its "protected", "build-config" and "runtime" lists), read by
 # scripts/factory/_protected.sh. For every entry:
 #   - .claude/settings.autopilot.json denies both Edit and Write (a directory as "<dir>**");
 #   - .claude/hooks/guard-protected-bash.sh blocks a shell write to it (`echo x > <path>`, under a
@@ -12,6 +12,12 @@
 #     later, narrower line without an owner would take the review away, and fails here. Patterns without a
 #     leading "/" (match at any depth) are not interpreted; the file uses none. (The build-config list is
 #     guarded on PRs by check-factory-guards.sh rule 6, which reads this list itself.)
+# And the other way (backlog #0-168): every Edit(./…)/Write(./…) deny of the settings, and every alternative of
+# the hook's `protected=` regex, is an entry of those lists. Before it, a copy could protect a path the list did
+# not hold, and the code that reads the list (changed-paths.sh, next-item.sh, check-factory-guards.sh rule 6)
+# would not apply it: .node-version was in both copies, and in the documents, before it was on the list. The
+# hook's line is read as a flat alternation (one path per alternative, no group); anything else fails. The hook's
+# separate block for mvnw/mvnw.cmd is not read: it can protect nothing but those two, both entries of the list.
 # Those copies stay literal on purpose: the last line of defence must not depend on parsing a Markdown file.
 # Fixed (backlog #0-122): the copies had drifted (the hook did not cover .ai/audit/decisions.md).
 # Run by .github/workflows/factory-guards.yml; tested by .github/scripts/test-protected-paths.sh.
@@ -25,7 +31,7 @@ codeowners=${3:-$ROOT/.github/CODEOWNERS}
 cd "$ROOT" || exit 1
 . scripts/factory/_protected.sh
 
-entries=$(protected_paths protected && protected_paths build-config) \
+entries=$(protected_paths protected && protected_paths build-config && protected_paths runtime) \
     || { echo "::error::cannot read the lists of $PROTECTED_PATHS_FILE"; exit 1; }
 deny=$(jq -r '.permissions.deny[]?' "$settings" 2>/dev/null) || { echo "::error::cannot read $settings"; exit 1; }
 [ -n "$deny" ] || { echo "::error::$settings has no deny rules"; exit 1; }
@@ -87,5 +93,37 @@ while IFS= read -r p; do
 done <<<"$owned"
 set +f
 
+# The other way: nothing in a copy that the lists lack. An entry is compared as written (a directory with its
+# slash), so a deny of `X/**` must be the entry `X/` and a deny of `X` the entry `X`.
+while IFS= read -r rule; do
+    [ -n "$rule" ] || continue
+    path=${rule#*\(./}; path=${path%\)}
+    case "$path" in *'/**') path=${path%'**'} ;; esac
+    grep -qxF -- "$path" <<<"$entries" \
+        || { echo "::error::$settings denies $rule, but $PROTECTED_PATHS_FILE lists no $path: add it to a list there, or drop the deny"; failures=$((failures+1)); }
+done < <(grep -E '^(Edit|Write)\(\./.+\)$' <<<"$deny")
+# A path deny in any other spelling (`Edit(.x)`, `Edit(/x)`, `Edit(**/x)`) would escape the comparison above: refused,
+# so every Edit/Write deny of a path is written the one way this check reads (review round 1 of #0-168).
+while IFS= read -r rule; do
+    [ -n "$rule" ] || continue
+    echo "::error::$settings denies $rule: write a path deny as Edit(./<path>) or Write(./<path>), the form this check compares with $PROTECTED_PATHS_FILE"; failures=$((failures+1))
+done < <(grep -E '^(Edit|Write)\(' <<<"$deny" | grep -vE '^(Edit|Write)\(\./.+\)$')
+line=$(grep -E "^protected='\(" "$hook" 2>/dev/null)
+if [ "$(grep -c . <<<"$line")" -ne 1 ]; then
+    echo "::error::$hook: expected exactly one line protected='(...)' (backlog #0-168)"; failures=$((failures+1))
+else
+    alts=${line#"protected='("}; alts=${alts%")'"}
+    if [ "$alts" = "$line" ] || [[ $alts == *[\(\)]* ]]; then
+        echo "::error::$hook: protected= must be one flat alternation in ( ), no group inside (backlog #0-168)"; failures=$((failures+1))
+    else
+        bare=$(sed -E 's:/$::' <<<"$entries")
+        while IFS= read -r alt; do
+            literal=$(sed -E 's/\\(.)/\1/g' <<<"$alt")
+            grep -qxF -- "${literal%/}" <<<"$bare" \
+                || { echo "::error::$hook protects $literal, but $PROTECTED_PATHS_FILE lists no ${literal%/} (file) or ${literal%/}/ (directory): add it to a list there, or drop it from the hook"; failures=$((failures+1)); }
+        done < <(tr '|' '\n' <<<"$alts")
+    fi
+fi
+
 if [ "$failures" -gt 0 ]; then echo "$failures protected-path copy problem(s)"; exit 1; fi
-echo "Protected paths: settings.autopilot.json and guard-protected-bash.sh cover all $(grep -c . <<<"$entries") entries, CODEOWNERS the $(grep -c . <<<"$owned") owner-only ones."
+echo "Protected paths: settings.autopilot.json and guard-protected-bash.sh cover all $(grep -c . <<<"$entries") entries and protect nothing else, CODEOWNERS the $(grep -c . <<<"$owned") owner-only ones."
