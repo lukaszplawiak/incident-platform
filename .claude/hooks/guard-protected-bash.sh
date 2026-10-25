@@ -5,10 +5,12 @@
 # (`sed -i`, `cp`, a redirect) goes around them. This is a heuristic second line: the real gates are
 # CODEOWNERS on the PR and the autopilot's changed-paths check before review.
 #
-# Protected: the paths of .ai/rules/protected-paths.md (their one list), plus the run's own state (.git/,
+# Protected: the paths of .ai/rules/protected-paths.md (their one list), its runtime-state list among them (.git/,
 #            .ai/runs/LOCK and state.json, .ai/STOP). This copy stays a literal regex, so the last line does not
 #            depend on parsing that file; .github/scripts/check-protected-paths.sh fails CI when it misses an
-#            entry. Fixed (backlog #0-122): .ai/audit/decisions.md was denied to Edit/Write but not covered here.
+#            entry, and when it holds one the list lacks (backlog #0-168): it reads `protected=` below as a flat
+#            alternation, one path per alternative, so keep it on one line with no group inside.
+#            Fixed (backlog #0-122): .ai/audit/decisions.md was denied to Edit/Write but not covered here.
 # A command that only reads (git diff/log/show, cat, grep, ls, head, tail, wc) passes.
 # Also refused, whatever the verb: commands naming a secret (docker/.env, docker/secrets, application-local,
 # credentials files, gh/ssh config) and `git diff --no-index`, which reads any file around the Read denies.
@@ -45,7 +47,7 @@ if printf '%s' "$cmd" | grep -Eq -- '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi
 
-protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/(LOCK|state\.json)|\.ai/STOP)'
+protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/LOCK|\.ai/runs/state\.json|\.ai/STOP)'
 printf '%s' "$cmd" | grep -Eq -- "$protected" || exit 0
 
 writes='(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|perl[[:space:]]+-[a-zA-Z]*i|(^|[[:space:];&|])(cp|mv|rm|rmdir|ln|chmod|chown|truncate|install|touch|mkdir)[[:space:]]|git[[:space:]]+(checkout|restore|rm|mv|apply|am|stash|reset)|(python3?|ruby|node|perl)[[:space:]])'

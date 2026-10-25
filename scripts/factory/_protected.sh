@@ -4,8 +4,10 @@
 # run; no side effects. Used by changed-paths.sh (a diff touching them needs the owner) and by next-item.sh
 # and check-queue.sh (an item whose Touches names one is not autopilot work). Portable: awk + sed.
 #
-#   protected_paths <protected|build-config> [ref]   the entries of one list, one per line, from the commit
-#                                                    <ref> (the base), or the working tree without one
+#   protected_paths <protected|build-config|runtime> [ref]   the entries of one list, one per line, from the
+#                                                    commit <ref> (the base), or the working tree without one;
+#                                                    `runtime` (the autopilot's state, backlog #0-168) is read
+#                                                    only by .github/scripts/check-protected-paths.sh
 #   paths_regex <anchored|free>   < paths            an ERE for those paths: anchored matches a repository
 #                                                    path (a directory: what is under it; a file: itself),
 #                                                    free matches them anywhere in a text, a directory

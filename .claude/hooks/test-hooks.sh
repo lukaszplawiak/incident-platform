@@ -239,6 +239,10 @@ expect 0 "fetch origin main"              "$GP" -- "$(bash_call 'git fetch origi
 expect 2 "fetch moving origin/main"       "$GP" -- "$(bash_call 'git fetch . HEAD:refs/remotes/origin/main')"
 expect 2 "fetch from another remote"      "$GP" -- "$(bash_call 'git fetch evil main')"
 expect 2 "write the lock"                 "$P" -- "$(bash_call 'echo x > .ai/runs/LOCK')"
+# Backlog #0-168: the alternatives of the flattened `protected=` regex, one by one where nothing else probes them.
+expect 2 "write the run state"            "$P" -- "$(bash_call 'echo {} > .ai/runs/state.json')"
+expect 2 "write into .git"               "$P" -- "$(bash_call 'echo x > .git/hooks/pre-commit')"
+expect 0 "another file in .ai/runs"      "$P" -- "$(bash_call 'echo x > .ai/runs/notes.txt')"
 expect 2 "rewrite the queue"              "$P" -- "$(bash_call 'sed -i s/A/B/ .ai/plan/queue.md')"
 expect 2 "delete STOP"                    "$P" -- "$(bash_call 'rm .ai/STOP')"
 

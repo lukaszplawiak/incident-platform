@@ -461,7 +461,10 @@ security boundary, so every rule that matters is also enforced outside the model
   validates the execution queue against the backlog (`scripts/factory/check-queue.sh`) and fails when the
   deny rules, the shell-write hook or CODEOWNERS stop covering an entry of the protected-path list
   (`.github/scripts/check-protected-paths.sh`; it runs the hook against every entry rather than reading its
-  regex).
+  regex), and, the other way (#0-168), when the deny rules or the hook protect a path the list lacks: a copy
+  cannot claim a protection the code reading the list does not apply. The list also names the autopilot's
+  runtime state (`.git/`, `.ai/runs/LOCK`, `.ai/runs/state.json`, `.ai/STOP`), so dropping its deny or hook
+  entry fails too.
 - **The next item is chosen by code** (`scripts/factory/next-item.sh`), from the files on the run's base
   commit: only `ready` items, dependencies done, no open PR or branch, in the order of the owner-approved
   queue. An item whose `**Touches:**` names a protected path (or a bare `ci`) never starts and cannot be
