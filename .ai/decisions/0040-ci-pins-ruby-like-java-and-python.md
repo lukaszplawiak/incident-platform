@@ -1,6 +1,6 @@
 # ADR-0040: CI pins Ruby like Java and Python: every job that runs a `.rb` check sets up the version in `.ruby-version` (backlog #0-166)
 
-- **Status:** Accepted (2026-10-25)
+- **Status:** Accepted (2026-10-25); decision 5 amended by #0-166 PR 2 (2026-10-25)
 - **Backlog:** #0-166
 - **Date:** 2026-10-25
 - **Author:** human (owner chose to pin Ruby, R2 of the research, and the 4.0 branch; written up by Claude Code in the owner's session)
@@ -41,9 +41,11 @@ could only copy versions by hand.
 4. `.ruby-version` is on the build-config list of `.ai/rules/protected-paths.md`, beside `mvnw` and `.mvn/`: it
    decides what every `.rb` check runs on, so a PR that changes it needs the owner (`check-factory-guards.sh` rule
    6), and the autopilot denies writing it (`settings.autopilot.json`, `guard-protected-bash.sh`).
-5. The checks stay portable to Ruby 2.6, which the CLAUDE.md commands run them on locally (the macOS system Ruby).
-   CI no longer tests that: #0-166 PR 2's local script, on the Ruby of `.ruby-version`, is meant to become the
-   supported local path, and decides then whether 2.6 is still kept.
+5. One Ruby, everywhere: the checks run on the Ruby of `.ruby-version`, in CI and locally. Amended by #0-166 PR 2
+   (the owner's decision, 2026-10-25): until then they also promised to stay portable to Ruby 2.6, the macOS system
+   Ruby, which nothing tested once CI pinned 4.0.9. Locally they run through `.github/scripts/ci-local.sh` (Docker,
+   the image `FROM ruby:<.ruby-version>-slim`); run on the host, they need that Ruby (rbenv, asdf or chruby read
+   `.ruby-version`), which applies to the owner's own `repository-settings.rb plan`/`apply` too.
 
 ## Alternatives considered
 
@@ -79,5 +81,10 @@ could only copy versions by hand.
   exactly when the owner decides whether to approve. What binds such a change is the owner's code owner review of
   `.github/` (review rounds 1 and 2; the owner chose to keep the order).
 - A developer whose rbenv, asdf or chruby reads `.ruby-version` gets 4.0.9 in the repository, or an error if it is
-  not installed, instead of the macOS system Ruby the CLAUDE.md commands assume (review round 2).
-- The local image of #0-166 PR 2 starts `FROM ruby:<.ruby-version>-slim`, for both architectures.
+  not installed (review round 2); the macOS system Ruby is no longer a supported way to run the checks.
+- The local image of `.github/scripts/ci-local.sh` (#0-166 PR 2) starts `FROM ruby:<.ruby-version>-slim`, for both
+  architectures, so a local run uses the same Ruby, json and psych as CI (it prints them, as the action does in CI).
+  Its base is the image's tag, not a digest, and its apt packages are not pinned: it is the owner's local tool, not a
+  gate, the version is what makes it CI's Ruby, and it holds no secret (the tree reaches it as a tar of the files
+  git does not ignore, never as a mount: review round 1 of PR 2). Pinning the digest, with Renovate bumping it,
+  is the step up if it ever runs anything that decides (owner, 2026-10-25).

@@ -36,7 +36,7 @@
 # A file that cannot be read or parsed fails the check; so does a missing action. Paths are compared after
 # turning $HOME/, ${HOME}/, ${{ env.HOME }}/ and /home/runner/ into ~/ and dropping a trailing slash.
 # Run from the repository root (CI: build-and-test, after its own cases in test-maven-caches.sh), or
-# with the root as the only argument. Portable to Ruby 2.6.
+# with the root as the only argument. Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require 'yaml'
 

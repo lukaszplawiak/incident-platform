@@ -24,7 +24,7 @@
 # What it does not see: whether an agent that should have a hook has one (#0-164), and a hook a session gets from
 # elsewhere (the user's own settings, a plugin).
 # Usage: ruby check-hook-entries.rb [<repository root>] (Factory guards, after test-hook-entries.sh).
-# Portable to Ruby 2.6.
+# Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require 'json'
 require 'yaml'

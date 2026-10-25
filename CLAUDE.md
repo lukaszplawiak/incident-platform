@@ -33,6 +33,11 @@ kubectl kustomize k8s/overlays/dev | kubeconform -strict -summary \
   -kubernetes-version "$(sed -n 's/^ *KUBERNETES_VERSION: *//p' .github/workflows/ci.yml)" \
   -schema-location "$(sed -n 's/^ *KUBECONFORM_SCHEMA_LOCATION: *//p' .github/workflows/ci.yml)" -
 
+# CI's Lint Workflows and Factory guards jobs on the working tree, in Docker (backlog #0-166): the workflows' own steps,
+# on the Ruby of .ruby-version, the linters at ci.yml's pins (x86_64, run through emulation on an arm64 Mac), the rest native; one line per step, every
+# step runs after a failure; --job lint-workflows|factory-guards, --step <text> (repeatable), --rebuild. The steps that
+# need a GitHub token (check-pinned-tools.sh, repository-settings.rb check) are skipped: run them as below
+.github/scripts/ci-local.sh
 # Lint the workflows and scripts the way CI's lint-workflows job does (backlog #0-146, #0-147, #0-149): it matches CI
 # only with the actionlint, shellcheck and zizmor versions that job pins; the first line prints them next to the ones on your PATH
 grep -E '^ *(ACTIONLINT|SHELLCHECK|ZIZMOR)_VERSION:' .github/workflows/ci.yml; actionlint -version | head -1; shellcheck --version | sed -n 2p; zizmor --version
@@ -40,7 +45,7 @@ actionlint -shellcheck="$(command -v shellcheck)"; zizmor --offline --persona re
 # shellcheck of every tracked .sh file and the composite actions' steps (new files count once `git add -N`), and no download
 # outside install-pinned-tool.sh; a meant finding is disabled at its line with its reason, never by a .shellcheckrc;
 # and every step that runs Ruby comes after .github/actions/setup-ruby, CI's Ruby of .ruby-version (backlog #0-166, ADR-0040);
-# the .rb checks also run on the macOS system Ruby 2.6, but rbenv/asdf/chruby switch to .ruby-version's (install it or bypass them)
+# the .rb checks need the Ruby of .ruby-version on the host (rbenv/asdf/chruby read it; the macOS system Ruby is not supported)
 ruby .github/scripts/check-shell.rb "$(command -v shellcheck)"; ruby .github/scripts/check-downloads.rb; ruby .github/scripts/check-ruby-setup.rb
 # Secrets in the commits a branch adds, the way CI's secret-scan job does (backlog #0-109, ADR-0036): betterleaks at the
 # BETTERLEAKS_VERSION in ci.yml; a line that holds no secret takes `gitleaks:allow` and its reason

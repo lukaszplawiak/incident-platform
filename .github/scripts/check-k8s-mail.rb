@@ -53,7 +53,7 @@ def fail!(msg)
 end
 
 # kustomize separates documents with "---" lines; each is parsed on its own with
-# safe_load, which works the same on the Psych of Ruby 2.6 and 3.x.
+# safe_load (data only, no object of the YAML's choosing).
 def load_docs(path)
   text = File.read(path)
   raise "#{path} is empty" if text.strip.empty?

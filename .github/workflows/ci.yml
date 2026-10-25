@@ -765,6 +765,11 @@ jobs:
           set -euo pipefail
           "${RUNNER_TEMP}/lint-tools/zizmor" --offline --persona regular --format github .
 
+      # Its cases need no token, so they are a step of their own: .github/scripts/ci-local.sh runs them, and skips the
+      # check below, which needs one (backlog #0-166).
+      - name: Repository settings script tests
+        run: .github/scripts/test-repository-settings.sh
+
       # Backlog #0-113, ADR-0034: the ruleset guarding main, the repository
       # settings and its admins are files in .github/repository-settings/;
       # this fails when GitHub's differ from them, in either direction, and
@@ -779,14 +784,13 @@ jobs:
       # is read-only: GitHub shows it neither the bypass actors, nor the
       # repository settings, nor the admins, so those are compared only when
       # the owner runs it (the summary names them). Last in the job, so a
-      # GitHub outage or a changed setting hides no lint finding above. The
-      # cases run first.
+      # GitHub outage or a changed setting hides no lint finding above. Its
+      # cases run first, in the step above.
       - name: The repository settings match .github/repository-settings/
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          .github/scripts/test-repository-settings.sh
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             git fetch --quiet --depth=1 origin "refs/heads/${GITHUB_BASE_REF}"
             ruby .github/scripts/repository-settings.rb check --main FETCH_HEAD
