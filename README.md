@@ -453,7 +453,9 @@ security boundary, so every rule that matters is also enforced outside the model
   it), and need the owner's review on a PR (`.github/CODEOWNERS`, effective once the protection rule
   requires it). Factory scripts run only while identical to `main` (`guard-factory-scripts.sh`). The shell
   guard's `git grep` and label checks, and the reviewers' `git grep` check in `readonly-bash.sh`, refuse the
-  command when the check itself fails (backlog #0-130); the guard's other checks do not yet (#0-132).
+  command when the check itself fails (backlog #0-130), and so do the guards' other checks since #0-132: they match
+  with bash's own regex over the whole command (`finds` in `_lib.sh`), so a grep that fails or is missing, or a
+  first line that alone matches an allow pattern, no longer lets a call through.
 - **Factory guards** (`.github/workflows/factory-guards.yml`): a PR that deletes, renames away or disables
   tests, removes assertions, adds a Maven plugin, repository or dependency, changes what verification runs
   (`.mvn/`, `mvnw`, skip properties, the coverage check's threshold, rule, goal, phase or includes), edits or deletes an applied Flyway migration, or marks a backlog item
@@ -587,8 +589,7 @@ cannot run on `main` (an expired token, an NVD outage) looks the same as one tha
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
 (#0-116, accepted for shadow mode, required before auto-merge); secrets are scanned only after the push, when a
 branch is already public, and an allow comment passes whatever its line holds (#0-156, ADR-0036); no Maven Enforcer
-(#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines, and most of
-their checks still let a command through when the check itself fails (a grep error, #0-132); an owner's
+(#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines; an owner's
 session on a Claude Code older than 2.1.295 ignores the hooks' `onFailure` without a word, so there a hook that
 cannot start or times out does not block (only the autopilot's preflight checks the version; ADR-0039);
 an agent guard's session-level twin passes everything if Claude Code stops sending `agent_type` (its frontmatter

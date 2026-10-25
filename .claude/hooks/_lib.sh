@@ -117,14 +117,17 @@ require_in_repo() {
 }
 
 # shell_words <command> — splits a command into words the way bash would, one per line, quotes and
-# backslashes removed; a word holding an unquoted glob character is prefixed with a tab. Prints
-# "REFUSE <reason>" (and returns 1) for what bash would expand into words it does not show: `$` (variables,
+# backslashes removed; a word holding an unquoted glob character is prefixed with a tab. Three answers, by its
+# exit status alone (backlog #0-132): 0 and the words; 3 and the reason it refuses, nothing else; any other status,
+# it failed. It refuses what bash would expand into words it does not show: `$` (variables,
 # command substitution, $'..' quoting) outside single quotes, an unquoted `{` (brace expansion), an
 # unterminated quote, a line continuation (bash drops a backslash-newline, so the words it runs differ);
 # and for an unquoted command separator or redirect (`;` `&` `|` `(` `)` `<` `>`, a
 # newline), so that what it returns is the words of exactly one command. Bash 3.2 compatible.
+# Fixed (backlog #0-132): it printed its refusal after the words it had already printed, with status 1, and a
+# shim told a refusal from a failure by the text; the words are now kept until the end.
 shell_words() {
-    local s=$1 i=0 n c q="" tok="" have=0 glob=0 nl=$'\n'
+    local s=$1 i=0 n c q="" tok="" have=0 glob=0 nl=$'\n' out=""
     n=${#s}
     while [ "$i" -lt "$n" ]; do
         c=${s:$i:1}
@@ -135,9 +138,9 @@ shell_words() {
             # shellcheck disable=SC1003
             case "$c" in
                 '"') q="" ;;
-                '$'|'`') echo "REFUSE expansion inside double quotes"; return 1 ;;
+                '$'|'`') echo "expansion inside double quotes"; return 3 ;;
                 '\') i=$((i + 1))
-                     [ "${s:$i:1}" = "$nl" ] && { echo "REFUSE a line continuation (backslash-newline)"; return 1; }
+                     [ "${s:$i:1}" = "$nl" ] && { echo "a line continuation (backslash-newline)"; return 3; }
                      tok="$tok${s:$i:1}" ;;
                 *) tok="$tok$c" ;;
             esac
@@ -147,26 +150,27 @@ shell_words() {
             case "$c" in
                 "'"|'"') q=$c; have=1 ;;
                 '\') i=$((i + 1))
-                     [ "${s:$i:1}" = "$nl" ] && { echo "REFUSE a line continuation (backslash-newline)"; return 1; }
+                     [ "${s:$i:1}" = "$nl" ] && { echo "a line continuation (backslash-newline)"; return 3; }
                      tok="$tok${s:$i:1}"; have=1 ;;
                 ' '|"$(printf '\t')")
                     if [ "$have" = 1 ]; then
-                        if [ "$glob" = 1 ]; then printf '\t%s\n' "$tok"; else printf '%s\n' "$tok"; fi
+                        if [ "$glob" = 1 ]; then out="$out$(printf '\t')$tok$nl"; else out="$out$tok$nl"; fi
                     fi
                     tok=""; have=0; glob=0 ;;
-                '$'|'`') echo "REFUSE expansion (\$ or a backtick)"; return 1 ;;
-                '{') echo "REFUSE an unquoted { (brace expansion)"; return 1 ;;
-                ';'|'&'|'|'|'('|')'|'<'|'>'|"$nl") echo "REFUSE a command separator or redirect: run it as a command of its own"; return 1 ;;
+                '$'|'`') echo "expansion (\$ or a backtick)"; return 3 ;;
+                '{') echo "an unquoted { (brace expansion)"; return 3 ;;
+                ';'|'&'|'|'|'('|')'|'<'|'>'|"$nl") echo "a command separator or redirect: run it as a command of its own"; return 3 ;;
                 '*'|'?'|'[') tok="$tok$c"; glob=1; have=1 ;;
                 *) tok="$tok$c"; have=1 ;;
             esac
         fi
         i=$((i + 1))
     done
-    [ -z "$q" ] || { echo "REFUSE unterminated quote"; return 1; }
+    [ -z "$q" ] || { echo "unterminated quote"; return 3; }
     if [ "$have" = 1 ]; then
-        if [ "$glob" = 1 ]; then printf '\t%s\n' "$tok"; else printf '%s\n' "$tok"; fi
+        if [ "$glob" = 1 ]; then out="$out$(printf '\t')$tok$nl"; else out="$out$tok$nl"; fi
     fi
+    printf '%s' "$out"
 }
 
 # The command checks below (git_grep_unsafe, gh_label_unsafe) answer in three ways: exit 0 and no output — the
@@ -190,11 +194,29 @@ matches() {
     case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
 }
 
-# shell_words_refusal <output of a shell_words that exited non-zero> — prints the reason it refused (the last line,
-# after the words it had already printed), or returns 1 when there is none: then it did not refuse, it failed.
-shell_words_refusal() {
-    local last=${1##*$'\n'}
-    case "$last" in "REFUSE "*) printf '%s\n' "${last#REFUSE }" ;; *) return 1 ;; esac
+# finds <text> <ERE> — 0 when the text matches, 1 when it does not; a match that fails (an invalid expression) refuses
+# the call, so a check that cannot tell never reads as "no match" (backlog #0-132). Bash's own match (matches), not
+# grep: grep's error (2) and a missing grep (127) both read as "no match" in an `if` or behind `||`, which let the call
+# through. And the whole text, not line by line: grep took a command whose first line matched an allow pattern
+# (`^git fetch origin main$`) as that command, whatever its next line ran. A deny pattern's `[^;&|]*` now spans
+# lines too, so a multi-line command may be refused for words on two lines: it refuses more, never less.
+finds() {
+    matches "$1" "$2"
+    case $? in 0) return 0 ;; 1) return 1 ;; *) block "a check of ${0##*/} failed (an invalid expression), so the call is refused" ;; esac
+}
+
+# The programs that run another command given as their arguments (`env git grep …`, `sh -c "gh pr edit …"`): a check
+# that reads a command's own words cannot see what such a program runs, so git_grep_unsafe and gh_label_unsafe refuse a
+# command behind one. One list for both (backlog #0-132). Not on it, and not refused here: an interpreter run by its
+# path or another name, a listed program behind one that is not (`stdbuf sh -c …`), and a git alias; the autopilot's
+# dontAsk allow-list does not let them run, and readonly-bash.sh reads only the first two words (decided in #0-132,
+# review round 1: refusing any word on the list would refuse plain commands that contain one, such as `command`; a
+# guard that reads a command as bash does is #0-167).
+WRAPPER_PROGRAMS='sh bash zsh dash env xargs eval exec command nohup timeout nice sudo time'
+is_wrapper() {
+    local p
+    for p in $WRAPPER_PROGRAMS; do [ "$1" = "$p" ] && return 0; done
+    return 1
 }
 
 # git_grep_unsafe <command> — prints why a `git grep` command is refused, or nothing when it may run.
@@ -207,7 +229,7 @@ shell_words_refusal() {
 # splits it (shell_words), so quoting (`'-Osh'`) cannot hide an option, and an unquoted glob before `--` is
 # refused: bash would expand it into file names, and a file named `--untracked` would become an option.
 git_grep_unsafe() {
-    local cmd=$1 plain words w value=0 paths=0 glob first second why what nl=$'\n'
+    local cmd=$1 plain words w value=0 paths=0 glob first second why what rc nl=$'\n'
     # Detected on the text without quotes, backslashes and newlines: bash removes them, so `git gr\ep`,
     # `git "grep"` and a line continuation (`git gr\<newline>ep`, review round 2, sec-b7d2) are git grep too.
     plain=$(printf '%s' "$cmd" | tr -d "'\"\\\\\n") || return 2
@@ -215,6 +237,8 @@ git_grep_unsafe() {
     matches "$plain" '(^|[[:space:];&|(/])git[[:space:]]|[][*?]' || { [ $? -eq 1 ] && return 0; return 2; }
     # The word grep, or a glob made only of grep's letters that bash may expand into it (`gr?p`, `g[r]ep`, `*`) when a
     # file of that name exists (review round 4 of #0-130). A glob with other letters (`src/*.java`) cannot become grep.
+    # Kept knowingly (backlog #0-132): `./mvnw test -Dtest='Foo*' | grep FAIL` is refused ("a command with grep and a
+    # glob"); grep is not on the autopilot's allow-list, so it costs a prompt in the owner's session only.
     matches "$plain" '(^|[^[:alnum:]_-])grep([^[:alnum:]_-]|$)' || {
         [ $? -eq 1 ] || return 2
         matches "$plain" '(^|[[:space:]])[]grep*?!^[]*[][*?][]grep*?!^[]*([[:space:]]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
@@ -222,8 +246,10 @@ git_grep_unsafe() {
     # The words "git" and "grep" appear somewhere. Split as bash would: with no unquoted separator this is one
     # command, and unless its first two words are `git grep` the words were text (a commit message saying
     # "use git grep"), which runs nothing. A real git grep after `&&` or `;` is refused with the separator.
-    words=$(shell_words "$cmd") || {
-        why=$(shell_words_refusal "$words") || return 2
+    words=$(shell_words "$cmd"); rc=$?
+    [ "$rc" -eq 0 ] || {
+        [ "$rc" -eq 3 ] || return 2
+        why=$words
         # Only a glob let the command this far (no word git in it): say so, not "git grep" (review round 3 of #0-130).
         what="git grep"
         matches "$plain" '(^|[[:space:];&|(/])git[[:space:]]' || { [ $? -eq 1 ] || return 2; what="a command with grep and a glob"; }
@@ -231,11 +257,10 @@ git_grep_unsafe() {
     }
     first=$(printf '%s\n' "$words" | sed -n 1p) || return 2
     second=$(printf '%s\n' "$words" | sed -n 2p) || return 2
+    # git grep run by another program (`env git grep …`, `sh -c "git grep …"`): its options are not visible here.
+    if is_wrapper "$first"; then echo "run git grep as the command itself, not through $first"; return 0; fi
     case "$first" in
         git) ;;
-        # git grep run by another program (`env git grep …`, `sh -c "git grep …"`): its options are not visible here.
-        sh|bash|zsh|dash|env|xargs|eval|exec|command|nohup|timeout|nice|sudo|time)
-            echo "run git grep as the command itself, not through $first"; return 0 ;;
         *)
             # A word `grep` with git behind something (`/usr/bin/git grep`, `GIT_DIR=x git grep`) or a glob that bash may
             # expand into git (`/usr/bin/gi[t] grep`) is git grep to bash, but not to the checks below, which start at
@@ -303,7 +328,7 @@ GH_LABELS_ALLOWED='autopilot shadow blocked risk-high'   # the labels .claude/ag
 # data (it lists PRs by that label); removing a human:* label would erase the owner's word (review round 2).
 GH_LABELS_REMOVABLE='blocked'
 gh_label_unsafe() {
-    local cmd=$1 plain head words w first second third value="" skip=0 rest why nl=$'\n'
+    local cmd=$1 plain head words w first second third value="" skip=0 rest why rc nl=$'\n'
     plain=$(printf '%s' "$cmd" | tr -d "'\"\\\\\n") || return 2
     matches "$plain" '(^|[^[:alnum:]_-])(create|new|edit)([^[:alnum:]_-]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
     matches "$plain" '(^|[^[:alnum:]_-])(pr|issue)([^[:alnum:]_-]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
@@ -314,13 +339,17 @@ gh_label_unsafe() {
         *[\*\?\[]*) echo "a glob before the gh subcommand: run gh by its name"; return 0 ;;
     esac
     matches "$plain" '(^|[^[:alnum:]_-])gh([^[:alnum:]_-]|$)' || { [ $? -eq 1 ] && return 0; return 2; }
-    words=$(shell_words "$cmd") || {
-        why=$(shell_words_refusal "$words") || return 2
+    words=$(shell_words "$cmd"); rc=$?
+    [ "$rc" -eq 0 ] || {
+        [ "$rc" -eq 3 ] || return 2
+        why=$words
         echo "gh pr create/edit: $why (labels are checked; write the command plainly)"; return 0
     }
     first=$(printf '%s\n' "$words" | sed -n 1p) || return 2
     second=$(printf '%s\n' "$words" | sed -n 2p) || return 2
     third=$(printf '%s\n' "$words" | sed -n 3p) || return 2
+    # gh run by another program (`sh -c "gh pr edit …"`, `env gh`): the label it sets is not visible here.
+    if is_wrapper "$first"; then echo "run gh as the command itself, not through $first"; return 0; fi
     case "$first" in
         gh)
             # Read one word per line below, as in git_grep_unsafe: a newline inside a quoted word (`'a<newline>--title'`)
@@ -328,9 +357,6 @@ gh_label_unsafe() {
             case "$cmd" in *"$nl"*) echo "gh: a newline inside a quoted word (a multi-line --title or --body): write the body to a file and use --body-file"; return 0 ;; esac
             ;;
         */gh) echo "run gh by its name, not by a path"; return 0 ;;
-        # gh run by another program (`sh -c "gh pr edit …"`, `env gh`): the label it sets is not visible here.
-        sh|bash|zsh|dash|env|xargs|eval|exec|command|nohup|timeout|nice|sudo|time)
-            echo "run gh as the command itself, not through $first"; return 0 ;;
         *)
             # One command (shell_words refused separators). A word `gh` that is not the first one is gh run behind
             # something (`GH_REPO=x gh`); `gh` inside a quoted message is part of one word, not this.

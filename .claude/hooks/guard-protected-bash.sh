@@ -17,7 +17,8 @@
 # `git grep` options that run a program or read files git does not track (the secrets) are refused too.
 # A label an agent may not set on a PR (`human:*`, the owner's; anything off the shipper's list) is refused on
 # `gh pr|issue create|new|edit` in the forms gh accepts (gh_label_unsafe, backlog #0-126).
-# Fails closed without jq or python3, and when the git grep or gh label check itself fails (backlog #0-130).
+# Fails closed without jq or python3, when the git grep or gh label check itself fails (backlog #0-130), and when a
+# pattern check cannot match (finds in _lib.sh: bash's own regex, no grep, backlog #0-132).
 # ============================================================
 set -uo pipefail
 # Fails closed (backlog #0-162): Claude Code runs the call after any exit status but 2, so a crash (an unset
@@ -31,7 +32,7 @@ json_checked "$rc" "the autopilot's hooks"
 [ -n "$cmd" ] || exit 0
 
 secrets='(docker/\.env|docker/secrets|application-local|\.credentials|\.claude\.json|config/gh|\.ssh/|\.netrc|\.git-credentials|settings-security\.xml|--no-index)'
-if printf '%s' "$cmd" | grep -Eq -- "$secrets"; then
+if finds "$cmd" "$secrets"; then
     block "the command names a secret file or reads files outside the repository's history (--no-index). Agents never read secrets."
 fi
 # A line continuation (backslash-newline) is joined by bash before it runs the command, so a pattern
@@ -43,18 +44,18 @@ why=$(git_grep_unsafe "$cmd") || block "the git grep check failed, so the comman
 [ -z "$why" ] || block "$why"
 why=$(gh_label_unsafe "$cmd") || block "the gh label check failed, so the command is refused${why:+: $why}"
 [ -z "$why" ] || block "$why"
-if printf '%s' "$cmd" | grep -Eq -- '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|(^|[[:space:];&|])(cp|mv|rm|chmod|ln)[[:space:]])[^;&|]*[[:space:]](\./)?mvnw(\.cmd)?([[:space:]]|$)'; then
+if finds "$cmd" '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|(^|[[:space:];&|])(cp|mv|rm|chmod|ln)[[:space:]])[^;&|]*[[:space:]](\./)?mvnw(\.cmd)?([[:space:]]|$)'; then
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi
 
 protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/LOCK|\.ai/runs/state\.json|\.ai/STOP)'
-printf '%s' "$cmd" | grep -Eq -- "$protected" || exit 0
+finds "$cmd" "$protected" || exit 0
 
 # git's own writing options count as writes (backlog #0-131, review round 3): `--output=<file>` writes the file, and
 # `--ext-diff`/`--textconv` run a program; an allow-listed read (`git log`, `git diff`, `git show`) could otherwise
 # write the lock the push guard trusts. Their plain form only: a word spliced with quotes is #0-167's.
 writes='(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|perl[[:space:]]+-[a-zA-Z]*i|(^|[[:space:];&|])(cp|mv|rm|rmdir|ln|chmod|chown|truncate|install|touch|mkdir)[[:space:]]|git[[:space:]]+(checkout|restore|rm|mv|apply|am|stash|reset)|(python3?|ruby|node|perl)[[:space:]]|--output|--ext-diff|--textconv)'
-if printf '%s' "$cmd" | grep -Eq -- "$writes"; then
+if finds "$cmd" "$writes"; then
     block "the command may write to a human-owned path (.ai/rules/protected-paths.md lists them; also .git/ and the run state). Agents never change these; if the item needs it, stop and report NEEDS_HUMAN."
 fi
 exit 0
