@@ -48,6 +48,9 @@ actionlint -shellcheck="$(command -v shellcheck)"; zizmor --offline --persona re
 # ADR-0040; #0-163, ADR-0043);
 # the .rb checks need the Ruby of .ruby-version on the host (rbenv/asdf/chruby read it; the macOS system Ruby is not supported)
 ruby .github/scripts/check-shell.rb "$(command -v shellcheck)"; ruby .github/scripts/check-downloads.rb; ruby .github/scripts/check-runtime-setup.rb
+# The autopilot workflow's logic (backlog #0-163): its helpers and whole runs against a fake agent(), on the Node of
+# .node-version (ADR-0043; Node's built-in modules only, no npm)
+node .github/scripts/test-autopilot-workflow.mjs
 # Secrets in the commits a branch adds, the way CI's secret-scan job does (backlog #0-109, ADR-0036): betterleaks at the
 # BETTERLEAKS_VERSION in ci.yml; a line that holds no secret takes `gitleaks:allow` and its reason
 .github/scripts/secret-scan.sh "$(command -v betterleaks)" "$(git merge-base origin/main HEAD)" HEAD

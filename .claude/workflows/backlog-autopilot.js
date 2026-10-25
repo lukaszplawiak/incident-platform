@@ -30,6 +30,9 @@ export const meta = {
 //                               runs the panel again, and a claim it raises for the first time stops the item
 //                               again instead of passing unread (backlog #0-160, review round 1)
 //
+// Tested by .github/scripts/test-autopilot-workflow.mjs (backlog #0-163), which evaluates this text with a fake agent():
+// it reads the helpers up to the `// ---- run` marker below, so keep the `helpers` and `run` marker lines, each once.
+//
 // The script decides; agents only do. Every branch below is code, every limit is a constant, and a
 // missing or malformed answer from an agent stops the item (fail closed) instead of counting as "OK".
 // The script has no shell: deterministic steps run through the `factory-ops` agent, which may only run

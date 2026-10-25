@@ -31,6 +31,9 @@ next-item.sh (code: ready follow-up → approved queue .ai/plan/queue.md, strict
 ```
 
 Every arrow is code in `.claude/workflows/backlog-autopilot.js`; agents do the work, the script decides.
+That code is tested without a model (backlog #0-163): `.github/scripts/test-autopilot-workflow.mjs`, in Factory
+guards, runs its helpers and whole runs against a fake `agent()` that answers each agent and factory script as a
+scenario says, so a branch that stops fail-closed today cannot start letting an item through unnoticed.
 A BLOCKED item becomes a draft PR labelled `blocked`, which is also the lock that keeps the picker away
 from it.
 
