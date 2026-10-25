@@ -47,18 +47,10 @@ def fail!(msg)
   @failures += 1
 end
 
-# A JSON object that refuses a key it already holds: JSON.parse fills it with []= (object_class).
-class OneKeyOnce < Hash
-  class Repeated < StandardError; end
-
-  def []=(key, value)
-    raise Repeated, "repeats the key #{key.inspect}" if key?(key)
-
-    super
-  end
-end
-
-# The keys repeated in any map of a YAML node tree, as "key" (where: the path of the map, e.g. hooks.PreToolUse[0]).
+# The keys repeated in any map of a YAML node tree, as their path (e.g. hooks.PreToolUse[0].hooks[0].onFailure). JSON
+# is read the same way, as YAML: what JSON.parse does with a repeated key is the json gem's choice, and it changed
+# (2.1 and 2.6 call an object_class's []= for each key, the runner's gem did not, so PR #517's first CI run passed a
+# repeated key; 3.x refuses it with its own message); Psych's tree is the same for every version.
 def repeated_yaml_keys(node, path = '', found = [])
   case node
   when Psych::Nodes::Mapping
@@ -153,8 +145,15 @@ total = 0
 %w[settings.json settings.autopilot.json].each do |name|
   where = ".claude/#{name}"
   begin
-    settings = JSON.parse(File.read(File.join(ROOT, where), encoding: 'UTF-8'), object_class: OneKeyOnce)
-  rescue SystemCallError, JSON::ParserError, OneKeyOnce::Repeated => e
+    text = File.read(File.join(ROOT, where), encoding: 'UTF-8')
+    # Repeated keys first: json 3 refuses them itself, with its own message, older versions keep one in silence.
+    repeated = repeated_yaml_keys(Psych.parse(text))
+    unless repeated.empty?
+      fail!("#{where} repeats the key(s) #{repeated.join(', ')}")
+      next
+    end
+    settings = JSON.parse(text)
+  rescue SystemCallError, JSON::ParserError, Psych::Exception => e
     fail!("cannot read #{where}: #{e.message.lines.first.to_s.strip}")
     next
   end

@@ -2755,8 +2755,8 @@ AC2. A branch under `/review` that changes a rule file is judged by the rules on
 
 **Type:** ci · **Priority:** Low · **Status:** Open — measured during #0-162 PR 2 (2026-10-25)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** ci (.github/scripts/ (a script that runs CI's lint and factory steps in Docker)), docs (CLAUDE.md
-"Commands", README.md if it lists local checks)
+**Touches:** ci (.github/scripts/ (a script that runs CI's lint and factory steps in Docker), .github/workflows/ (if
+Ruby is pinned)), .ai/decisions/ (if Ruby is pinned), docs (CLAUDE.md "Commands", README.md if it lists local checks)
 
 **Problem.** CI's Lint Workflows and Factory guards steps are Linux-only in practice (the pinned actionlint,
 shellcheck and zizmor are x86_64 Linux binaries; macOS has no gpg, an older Ruby and BSD tools), so before a push
@@ -2782,6 +2782,15 @@ it costs it on every review round of a factory change.
 3. takes a list of steps, so a review round runs only the affected ones, and runs all of them by default;
 4. mounts the working tree read-only and copies it, as today (uncommitted files included).
 
+**Also (PR #517, 2026-10-25).** The container must reproduce the runner's gems, not only its Ruby version: Ruby
+3.2.3 in `ubuntu:24.04` has the json gem 2.6.3, the runner a newer one, and a check that relied on how `JSON.parse`
+fills an `object_class` passed locally and failed on the runner (it fails from json 2.12, reproduced). The runner's
+Ruby is not pinned at all: the nine `.github/scripts/*.rb` run on whatever Ruby and gems `ubuntu-latest` brings,
+while every other CI tool is pinned (ADR-0033). **To decide:** pin Ruby in CI (e.g. `ruby/setup-ruby` with a
+version, itself pinned by SHA) for every job that runs a `.rb`, and build the local image from the same version;
+or keep the runner's Ruby and only have the local image read the runner's versions (`ruby --version`, `gem list`
+in a CI step).
+
 **Acceptance criteria.**
 AC1. One command runs every step of Lint Workflows and Factory guards that needs no secret, with the tools pinned in
 `ci.yml`, and prints one line per step with its exit code and time.
@@ -2789,6 +2798,8 @@ AC2. A second full run on the owner's Mac takes at most a third of the 428 s mea
 measurement is in the PR).
 AC3. A change of a tool pin in `ci.yml` rebuilds the image; nothing else does.
 AC4. CLAUDE.md "Commands" names the command.
+AC5. Whether CI pins Ruby is decided (an ADR if it does), and the local image runs the same Ruby and json/psych gems
+as the CI job that runs the `.rb` checks, shown by both printing their versions.
 
 ---
 

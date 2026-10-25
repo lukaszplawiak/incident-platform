@@ -156,9 +156,9 @@ expect 1 "a skill whose frontmatter does not close" 'skills/review/SKILL.md: no 
 
 echo "a key repeated in one map (review round 2: which value a parser keeps is not documented)"
 fresh; perl -pi -e 's/"onFailure": "block" \}/"onFailure": "continue", "onFailure": "block" }/' "$root/.claude/settings.json"
-expect 1 "settings.json: onFailure twice in one entry" 'cannot read .claude/settings.json: repeats the key "onFailure"'
+expect 1 "settings.json: onFailure twice in one entry" '.claude/settings.json repeats the key(s) hooks.PreToolUse[0].hooks[0].onFailure'
 fresh; jqi settings.autopilot.json '.' && perl -0pi -e 's/\A\{\n/{\n  "disableAllHooks": false,\n  "disableAllHooks": false,\n/' "$root/.claude/settings.autopilot.json"
-expect 1 "settings.autopilot.json: a top-level key twice" 'repeats the key "disableAllHooks"'
+expect 1 "settings.autopilot.json: a top-level key twice" '.claude/settings.autopilot.json repeats the key(s) disableAllHooks'
 fresh; agent t-twice "hooks:
   PreToolUse:
     - matcher: \"Bash\"
