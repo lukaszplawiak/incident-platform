@@ -1,6 +1,8 @@
 | Run | Pattern | Rule | Expected | Caught by expected | Blocking | Also caught by | No answer |
 |---|---|---|---|---|---|---|---|
 | perf-after-p12 | P-12 | PERF-02 | performance | yes | yes | general, architecture, security, docs | — |
+| perf-after-p10 | P-10 | PERF-01 | performance | yes | yes | general, architecture, docs | — |
+| perf-after-p11 | P-11 | PERF-23 | performance | yes | yes | general, architecture, security | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
