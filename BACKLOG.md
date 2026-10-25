@@ -133,7 +133,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
-| [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | In progress |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
 
 ---
@@ -2688,9 +2687,9 @@ AC2. Inverting a decision in any of them turns a test red.
 
 ### 0-164. The agents' guards rely on frontmatter hooks that Workflow agents are not promised
 
-**Type:** security · **Priority:** Medium · **Status:** In progress — `nonBlocking` ARC-02 of review-architecture in
+**Type:** security · **Priority:** Medium · **Status:** Done, PR #520 — `nonBlocking` ARC-02 of review-architecture in
 round 3 of the `/review` of #0-160 (2026-10-24); the verifier's read scope is already session-level; owner's decision
-below (2026-10-25)
+below (2026-10-25). Kept in full for the decisions (both layers, the spikes, the required guards)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/hooks/readonly-bash.sh, .claude/hooks/write-scope.sh, .claude/hooks/test-hooks.sh,
 .claude/settings.json, .claude/settings.autopilot.json), ci (.github/scripts/ (a structural check),
