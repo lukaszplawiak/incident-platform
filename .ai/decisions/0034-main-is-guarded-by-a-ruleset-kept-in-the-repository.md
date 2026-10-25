@@ -73,7 +73,9 @@ Around the bypass:
   session is the code owner too and could give the approval the ruleset asks of the owner. The owner runs those themselves, the merge as
   `! gh pr merge <n> --merge --admin --match-head-commit <sha>`, with the head commit they read: the bypass
   also skips the review of the last push and Factory guards passes a PR the owner opened, so without the SHA
-  a commit the bot pushed onto the owner's branch after their reading (#0-131) would merge unread. A plain
+  a commit the bot pushed onto the owner's branch after their reading (#0-131) would merge unread (since #0-131
+  the autopilot pushes only its run's own branch, recorded in `.ai/runs/LOCK`; the SHA still binds the merge to
+  what the owner read, whoever pushed). A plain
   `gh pr merge` respects the ruleset. Like the hooks, these deny patterns stop a mistake, not a command shaped
   to get past them; the autopilot's settings deny `gh pr merge` and `gh api` altogether.
 - **Repository settings** (`repository.json`): `delete_branch_on_merge` on, so a PR merged by `--auto` leaves

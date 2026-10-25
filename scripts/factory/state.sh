@@ -7,6 +7,7 @@
 #     so the audit can tell where a problem was detected from where it was introduced (backlog #0-122; #0-42's
 #     history said only "blocked", with no PR and no stage). "-" stands for "no PR".
 #   state.sh unlock
+#   state.sh branch <type/name>   records the run's own branch in the lock, once (backlog #0-131)
 # Resetting the breaker or the audit counter is the owner's: scripts/factory-admin/state-reset.sh, which
 # autopilot sessions may not run.
 # ============================================================
@@ -15,6 +16,7 @@ set -uo pipefail
 state_init
 now=$(date -u +%FT%TZ)
 tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT   # only record moves it into place; every other command leaves it behind otherwise
 case "${1:-get}" in
     get) cat "$STATE_FILE" ;;
     record)
@@ -33,5 +35,20 @@ case "${1:-get}" in
             || { echo '{"error":"state update failed; state file left unchanged"}'; exit 1; }
         cat "$STATE_FILE" ;;
     unlock) rm -f "$RUNS_DIR/LOCK"; echo '{"unlocked":true}' ;;
-    *) echo "usage: state.sh get|record|unlock" >&2; exit 2 ;;
+    branch)
+        # The run's own branch (backlog #0-131): the one guard-git-push.sh lets the autopilot push. Recorded once per
+        # run, into the lock preflight.sh wrote (`<runId> <sha>` becomes `<runId> <sha> <branch>`); a second call, a
+        # missing lock or a name that is not a feature branch is refused, so the branch cannot move mid-run.
+        name=${2:-}
+        lock="$RUNS_DIR/LOCK"
+        fail() { jq -n --arg e "$1" '{error: $e}'; exit 1; }
+        [[ $name =~ ^[a-z]+/[A-Za-z0-9._-]+$ ]] || fail "not a feature branch name: ${name:0:80}"
+        case "$name" in */main) fail "not a feature branch name: $name" ;; esac
+        [ -f "$lock" ] || fail "no run holds the lock"
+        read -r run sha recorded rest < "$lock" || fail "cannot read the lock"
+        [ -n "${run:-}" ] && [ -n "${sha:-}" ] || fail "the lock holds no run and base commit"
+        [ -z "${recorded:-}${rest:-}" ] || fail "this run already recorded its branch (${recorded:-?})"
+        printf '%s %s %s\n' "$run" "$sha" "$name" > "$lock" || fail "cannot write the lock"
+        jq -n --arg b "$name" '{branch: $b}' ;;
+    *) echo "usage: state.sh get|record|unlock|branch <name>" >&2; exit 2 ;;
 esac

@@ -468,6 +468,20 @@ if (!/^0-\d+$/.test(item.id) || !item.branch || !SAFE.test(item.branch) || !Arra
 if (next && item.itemId !== next.item) {
   return stopItem(null, `picker prepared ${item.itemId} instead of ${next.item} (no state recorded, check the branches)`)
 }
+// The run's own branch, recorded in the lock: the only branch guard-git-push.sh lets the shipper push (backlog
+// #0-131). The picker names it, so it is bound first to what the script already knows (review round 1): the item's
+// own prefix (`<type>/<item>-`, picker.md "Prepare the branch"), and on resume the branch the owner gave. Without
+// it nothing could be pushed, not even a draft PR: stop here.
+if (!new RegExp(`^[a-z]+/${item.id}-[A-Za-z0-9._-]+$`).test(item.branch)) {
+  return stopItem(null, `picker named the branch ${item.branch} for ${item.itemId}: an item's branch is <type>/${item.id}-<slug> (no state recorded, check the branches)`)
+}
+if (args?.branch && item.branch !== args.branch) {
+  return stopItem(null, `picker answered the branch ${item.branch}, not ${args.branch} the run resumes (no state recorded, check the branches)`)
+}
+const pinned = await ops('state.sh', ['branch', item.branch], ANY_OBJECT, 'state')
+if (!pinned || pinned.branch !== item.branch) {
+  return stopItem(null, `could not record the run's branch ${item.branch} (no state recorded, check the branches): ${String(pinned?.error ?? 'no answer').slice(0, 200)}`)
+}
 record.item = item.itemId
 // Complexity: low → the lighter implementer (same definition, Sonnet); anything else, or missing → Opus.
 // Read from the base commit by next-item.sh when it chose the item; the picker's copy only on resume.

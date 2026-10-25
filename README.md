@@ -545,7 +545,13 @@ security boundary, so every rule that matters is also enforced outside the model
   but loopback, and blocks all traffic if its own setup fails (`FIREWALL SETUP FAILED`). It narrows exfiltration, it
   does not prevent it: the host's Docker (needed by Testcontainers) and GitHub itself remain channels.
 - **Merge**: shadow mode does not rely on the agents — `gh pr merge` is denied to autopilot sessions and the
-  only push a hook allows is `git push -u origin <type>/<branch>`; and the bot account (Write) cannot push to
+  only push a hook allows is `git push -u origin <type>/<branch>` of the run's own branch, which the workflow
+  records in `.ai/runs/LOCK` (`state.sh branch`) once it has bound the picker's answer to the item
+  (`<type>/<item>-…`, and on resume to the branch the owner gave). Only the factory-ops agent runs
+  `scripts/factory/` (`guard-factory-scripts.sh`, on `agent_type`), and the autopilot refuses an agent's writes to
+  the lock itself (the denies, `guard-protected-bash.sh`, git's `--output` included); not covered: code run through
+  `./mvnw` (#0-116) and a command shaped past the shell guard's text match, such as a quoted or spliced option
+  word (#0-167). Before #0-131 any feature branch was allowed, the owner's open PR included; and the bot account (Write) cannot push to
   `main` or merge around a red check or a code owner's path, whatever runs in the session: the ruleset of
   `main` (#0-113, above in "GitHub and CI"). A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
   the preflight honours. Both read main's CI result from a push to this repository only (backlog #0-148): a
@@ -571,14 +577,13 @@ security boundary, so every rule that matters is also enforced outside the model
   the owner cannot be read, or while the autopilot runs on the owner's login counts for nothing and is listed as
   unverified; the commit's author, committer or signature proves nothing. Factory guards also fails a malformed
   marker, one the audits could not read, in any spelling (`check-escape-markers.sh`, backlog #0-128), with the
-  pattern defined once in `scripts/factory/_marker.sh`. Its limit: a commit the autopilot pushes onto a branch of
-  the owner's open PR is in the owner's PR too (#0-131).
+  pattern defined once in `scripts/factory/_marker.sh`. Since #0-131 the autopilot cannot push onto a branch of
+  the owner's open PR, so a marker in an owner's PR is not one the bot slipped in.
 
 **Known gaps**: a bypass actor or an admin added in the UI is seen only when the owner runs
 `repository-settings.rb check` (#0-113, ADR-0034), and so is a secret added in the UI (ADR-0035); a scan that
 cannot run on `main` (an expired token, an NVD outage) looks the same as one that found issues, and alerts no one
-(#0-155); the autopilot may push to any feature branch, the
-owner's included (#0-131); the devcontainer's firewall binds the agents' own
+(#0-155); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
 (#0-116, accepted for shadow mode, required before auto-merge); secrets are scanned only after the push, when a
 branch is already public, and an allow comment passes whatever its line holds (#0-156, ADR-0036); no Maven Enforcer

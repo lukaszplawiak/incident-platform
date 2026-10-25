@@ -116,7 +116,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
-| [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | Open |
+| [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -2889,14 +2889,16 @@ as the CI job that runs the `.rb` checks, shown by both printing their versions.
 review found the first version of the hook passable
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-165
 **Touches:** factory (.claude/hooks/ (a session-level Bash guard, `_lib.sh`), .claude/hooks/readonly-bash.sh,
-scripts/factory/local-review.sh,
+.claude/hooks/guard-protected-bash.sh, .claude/hooks/guard-factory-scripts.sh, scripts/factory/local-review.sh,
 .claude/hooks/test-hooks.sh, .claude/settings.json, .claude/settings.autopilot.json, .claude/skills/research/SKILL.md,
 .claude/skills/ship/SKILL.md, .github/scripts/check-hook-entries.rb, .github/scripts/test-hook-entries.sh),
 .ai/rules/review/factory.md (owner, FAC-S03), .ai/decisions/, docs (README.md "Infrastructure Hardening",
 .ai/context/security.md, docs/ai-factory.md)
 
 **Problem.** `git diff`, `git show` and `git log` take `--output=<file>` (writes anywhere) and `--ext-diff`/
-`--textconv` (run a program git's configuration names). `/research` pre-approves `git log *`, `git diff *` and
+`--textconv` (run a program git's configuration names). In autopilot sessions too (#0-131, review round 3): `Bash(git log *)` and its
+siblings are allowed there, and since #0-131 `guard-protected-bash.sh` refuses those options only in their plain
+form, so a spliced form could still write `.ai/runs/LOCK`, the run's branch the push guard trusts. `/research` pre-approves `git log *`, `git diff *` and
 `git show *`, `/ship` `git diff *`, and the owner's session has no Bash hook, so text the session reads (a
 diff, a backlog item, a web page) that steers it into such a command runs without a prompt. #0-165 removed the
 wildcards from `/review` and `/accept` only. `readonly-bash.sh` refuses the options for the reviewers by matching
@@ -2965,6 +2967,32 @@ AC1. Factory guards fails when `settings.autopilot.json` denies writing a path t
 named set of other denies, shown by a test case.
 AC2. Factory guards fails when `guard-protected-bash.sh` protects a path the list does not hold, or the decision why it
 cannot is recorded, with the case shown either way.
+
+---
+
+### 0-169. A factory-ops call is not bound to the command the workflow named
+
+**Type:** security · **Priority:** Medium · **Status:** Open — `nonBlocking` of review-security in round 2 of the
+`/review` of #0-131 (2026-10-25)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-131
+**Touches:** factory (.claude/agents/factory-ops.md, .claude/hooks/factory-ops-bash.sh, .claude/hooks/test-hooks.sh,
+.claude/workflows/backlog-autopilot.js, .claude/workflows/audit.js), docs (README.md "Infrastructure Hardening")
+
+**Problem.** Since #0-131 only the `factory-ops` agent runs `scripts/factory/` in an autopilot session, and the
+lock (the run's base commit and its branch, the one the autopilot may push) moves only through those scripts. The
+workflow tells `factory-ops` "Run exactly: <command>", but nothing binds what it runs to that line:
+`factory-ops-bash.sh` lets it run any factory script with plain arguments, and its `maxTurns: 4` leaves room for
+several. Part of what it relays is text the branch controls (`changed-paths.sh` lists file names), so a steered
+`factory-ops` could run `state.sh unlock`, `preflight.sh` and `state.sh branch <another>` in one task.
+
+**Approach (to analyse).** Bind each call to its task: a per-call value the workflow puts in the command and the
+hook checks (it cannot see the prompt), or one command per task (`maxTurns` after a spike of what one turn allows),
+or `state.sh` refusing a second `preflight`/`branch` in one run by a record the hook keeps.
+
+**Acceptance criteria.**
+AC1. A `factory-ops` call that runs a factory command other than the one its task named is refused, shown by test
+cases.
+AC2. README "Infrastructure Hardening" names the control.
 
 ---
 
@@ -3129,7 +3157,8 @@ through a glob made only of grep's letters, so an ordinary `git add src/*.java` 
 
 ### 0-131. The autopilot pushes only the branch of its own item
 
-**Type:** security · **Priority:** Medium · **Status:** Open (found by the security review of #0-128/#0-129, 2026-10-13)
+**Type:** security · **Priority:** Medium · **Status:** Done, PR #525 — found by the security review of #0-128/#0-129
+(2026-10-13); owner's decision below. Kept in full for the decisions (the branch in the lock, the review rounds' bindings)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 **Touches:** root (.claude/hooks/guard-git-push.sh, .claude/hooks/test-hooks.sh, README.md "Infrastructure Hardening", .ai/rules/audit.md)
 
@@ -3144,6 +3173,21 @@ in the run's working files), and refuses every other branch, with a test per for
 owner's branch, a branch that does not exist yet). Branch protection (#0-113) cannot express "this account only
 its own branches" on a personal repository, so the hook is the control; the owner still reads the commits of
 their own PR before merging. Remove the known limit from README and `audit.md` when done.
+
+**Decided (owner, 2026-10-25, after `/research`).** Option A: the branch is recorded in `.ai/runs/LOCK`, not in the
+run's working files (an agent can change those; no agent writes the lock: the autopilot's denies,
+`guard-protected-bash.sh`, checked both ways since #0-168; code run through `./mvnw` can, #0-116). Review round 1
+added two bindings: only the factory-ops agent runs `scripts/factory/` (`guard-factory-scripts.sh`, on `agent_type`;
+before, any agent could `state.sh unlock`, `preflight.sh` and `state.sh branch <another>`), and the workflow binds
+the picker's branch to `<type>/<item>-…` and, on resume, to the owner's `args.branch` before recording it. Round 2:
+only a single read-only `git grep|diff|log|show|ls-files|blame` may name `scripts/factory/` for other agents (not a
+match on how a script is run); `factory-ops` not being bound to its task's command is #0-169. Round 3: git's
+`--output`, `--ext-diff`, `--textconv` count as writes in `guard-protected-bash.sh` (an allow-listed `git log` could
+write the lock), in their plain form; a word spliced with quotes or a backslash is #0-167's, which now names the
+autopilot's sessions and the lock too. `state.sh branch <name>` writes it as the lock's third
+field, once per run (a second call, no lock or a name that is not a feature branch is refused); the workflow calls it
+right after validating the picker's answer, on resume too, and stops the run when it fails. `guard-git-push.sh`
+lets through only `git push -u origin <that branch>`; no lock, or no branch in it, refuses every push.
 
 ---
 

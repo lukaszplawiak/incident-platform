@@ -394,6 +394,21 @@ base_ref() {
     if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then echo refs/remotes/origin/main; else echo refs/heads/main; fi
 }
 
+# run_branch — the feature branch the workflow recorded for this run's item: the third field of .ai/runs/LOCK
+# (`<runId> <sha> <branch>`, written by scripts/factory/state.sh branch, backlog #0-131). Nothing outside a run,
+# or before the workflow recorded it. Like the sha, it is written by a factory script, which only factory-ops runs
+# (guard-factory-scripts.sh), and the autopilot refuses an agent's writes to the lock itself (its denies, and
+# guard-protected-bash.sh, git's --output included), except code run through ./mvnw (#0-116) and a command shaped
+# past the shell guard's text match (#0-167). Returns 2 when the lock exists but cannot be read.
+run_branch() {
+    local root lock
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
+    lock="$root/.ai/runs/LOCK"
+    [ -f "$lock" ] || return 0
+    [ -r "$lock" ] || return 2
+    awk 'NR == 1 { print $3 }' "$lock" || return 2
+}
+
 # The factory's own scripts must be exactly what the base branch has: the item branch is untrusted code,
 # and a gate that the branch can rewrite is no gate. Prints a reason and returns 1 when they differ.
 factory_scripts_intact() {
