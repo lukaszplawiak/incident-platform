@@ -135,7 +135,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
 | [0-164](#0-164-the-agents-guards-rely-on-frontmatter-hooks-that-workflow-agents-are-not-promised) | The agents' guards rely on frontmatter hooks that Workflow agents are not promised | security | Medium | Open |
 | [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | Open |
-| [0-166](#0-166-checking-cis-linux-steps-locally-takes-seven-minutes) | Checking CI's Linux steps locally takes seven minutes | ci | Low | In progress |
 
 ---
 
@@ -2764,7 +2763,7 @@ AC2. A branch under `/review` that changes a rule file is judged by the rules on
 
 ### 0-166. Checking CI's Linux steps locally takes seven minutes
 
-**Type:** ci · **Priority:** Low · **Status:** In progress — measured during #0-162 PR 2 (2026-10-25); owner's decision below
+**Type:** ci · **Priority:** Low · **Status:** Done, PRs #518, #519 — measured during #0-162 PR 2 (2026-10-25); owner's decision below. Kept in full for the decisions (Ruby pinned in CI, the local runner's design)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** ci (.github/scripts/ (a script that runs CI's lint and factory steps in Docker), .github/workflows/,
 .github/actions/setup-ruby/, .ruby-version), factory (.claude/settings.autopilot.json, .claude/hooks/guard-protected-bash.sh,
