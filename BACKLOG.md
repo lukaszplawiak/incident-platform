@@ -133,7 +133,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
 | [0-163](#0-163-the-autopilot-workflows-logic-has-no-tests) | The autopilot workflow's logic has no tests | ci | Medium | Open |
-| [0-165](#0-165-the-owners-review-session-trusts-the-branch-it-reviews) | The owner's `/review` session trusts the branch it reviews | security | Medium | In progress |
 | [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Open |
 
 ---
@@ -2741,8 +2740,8 @@ moved to another matcher, shown by a test case per guard.
 
 ### 0-165. The owner's `/review` session trusts the branch it reviews
 
-**Type:** security · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-25) — `nonBlocking` of review-security in round 2 of the
-`/review` of #0-161 (2026-10-24), whose blocking finding (`allowed-tools: Bash(git show *)`) that change fixed
+**Type:** security · **Priority:** Medium · **Status:** Done, PR #521 — from review-security, `/review` of #0-161
+(2026-10-24); owner's decision below. Kept in full for the decisions (hook moved to #0-167, the session rule)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/skills/review/SKILL.md, .claude/settings.json, .claude/hooks/ (a session-level Bash
 guard), .claude/hooks/test-hooks.sh, .claude/agents/review-*.md, .claude/skills/review-procedure/SKILL.md), docs
