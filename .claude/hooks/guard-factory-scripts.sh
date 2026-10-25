@@ -33,7 +33,7 @@ if ! applies_to_agent factory-ops "$input"; then
     esac
     # The backtick and $ are the characters refused (a substitution), matched literally (backlog #0-149).
     # shellcheck disable=SC2016
-    grep -Eq '^git[[:space:]]+(grep|diff|log|show|ls-files|blame)([[:space:]][^;&|<>`$(){}]*)?$' <<<"$cmd" \
+    finds "$cmd" '^git[[:space:]]+(grep|diff|log|show|ls-files|blame)([[:space:]][^;&|<>`$(){}]*)?$' \
         || block "only the factory-ops agent runs scripts/factory/ in an autopilot session; the workflow runs every factory script through it (backlog #0-131). Naming the path is fine in one read-only git command (git grep|diff|log|show|ls-files|blame), nothing else"
 fi
 why=$(factory_scripts_intact) || block "factory scripts were changed on this branch ($why): the gates run only as they are on the base branch"

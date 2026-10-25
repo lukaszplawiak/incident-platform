@@ -27,7 +27,7 @@ for pattern in \
     'git[[:space:]]+commit[^|;&]*[[:space:]]-n([[:space:]]|$)' \
     'mvnw[^|;&]*[[:space:]](exec|antrun|groovy):' '-Dexec\.' '-Dmaven\.ext\.class\.path' \
     'mvnw[^|;&]*[[:space:]](-s|--settings|-gs|--global-settings)[[:space:]=]'; do
-    if printf '%s' "$cmd" | grep -Eq -- "$pattern"; then
+    if finds "$cmd" "$pattern"; then
         block "the command skips or bypasses verification ($pattern). Fix the failing check instead; if a test is wrong because the requirement changed, change it and say why in handoff.md (rule GEN-08)."
     fi
 done

@@ -117,7 +117,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
-| [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
+| [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3193,7 +3193,8 @@ lets through only `git push -u origin <that branch>`; no lock, or no branch in i
 
 ### 0-132. The shell guards' own checks refuse when they fail
 
-**Type:** security · **Priority:** Low · **Status:** Open (found while fixing #0-130, 2026-10-14)
+**Type:** security · **Priority:** Low · **Status:** In progress (owner's decision below, 2026-10-25) — found while fixing #0-130,
+2026-10-14
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** #0-130
 **Touches:** root (.claude/hooks/guard-protected-bash.sh, .claude/hooks/readonly-bash.sh, .claude/hooks/guard-git-push.sh, .claude/hooks/guard-factory-scripts.sh, .claude/hooks/factory-ops-bash.sh, .claude/hooks/_lib.sh, .claude/hooks/test-hooks.sh, README.md "Infrastructure Hardening")
 
@@ -3220,6 +3221,22 @@ A known side effect to keep or narrow here: since #0-130 the first filter of `gi
 command with a glob and the word grep, so `./mvnw test -Dtest='Foo*' | grep FAIL` is refused ("a command with grep and
 a glob") in every session the guard covers (architecture review round 4 of #0-130; grep is not on the autopilot's
 allow-list, so it changes little there).
+
+**Decided (owner, 2026-10-25, after `/research`).** A1 + B1 + C + D1 + E1, in one PR.
+- **A1.** The guards' checks match with `finds` (`_lib.sh`, on `matches`: bash's own regex in the C locale, an
+  invalid expression refuses) instead of `printf … | grep -Eq` (`guard-protected-bash.sh`, `guard-git-push.sh`,
+  `guard-tests.sh`, `guard-factory-scripts.sh`). Found on the way: grep matched line by line, so an allow pattern
+  anchored `^…$` (`git fetch origin main`, the push of the run's branch) passed a command whose first line alone
+  matched; `finds` matches the whole command.
+- **B1.** `shell_words` answers by its exit status alone (0 and the words, 3 and the reason, other = it failed),
+  printing the words only at the end; `shell_words_refusal` is gone. Not moved into it: the refusal of a newline
+  inside a quoted word, which its callers make only once the command is `git grep` or `gh pr create|edit` — inside
+  `shell_words` it would refuse a multi-line commit message that names git grep (a test of #0-130 that must pass).
+- **C.** One list of the programs a command can run behind (`WRAPPER_PROGRAMS`, `is_wrapper`).
+- **D1.** An interpreter by its path or another name, and a git alias, stay the allow-list's to stop (`dontAsk`
+  in autopilot sessions, `readonly-bash.sh`'s first two words for the reviewers); written at `WRAPPER_PROGRAMS`, and
+  a guard that reads a command as bash does is #0-167.
+- **E1.** The glob-and-grep refusal is kept, and written at the check.
 
 ---
 

@@ -483,6 +483,50 @@ else
     echo "  skip: matches: invalid UTF-8 (no UTF-8 locale here in which bash fails that match)"
 fi
 
+echo "the guards' own checks without grep (backlog #0-132)"
+# The checks match with bash's own regex (finds in _lib.sh): a grep that fails or is missing changes nothing.
+mkdir -p "$STUBS/grep"
+printf '#!/bin/sh\nexit 2\n' >"$STUBS/grep/grep"
+chmod +x "$STUBS/grep/grep"
+expect 2 "no grep: a write into a protected path"     env PATH="$STUBS/grep:$PATH" "$P" -- "$(bash_call 'echo x > .ai/rules/x.md')"
+expect 2 "no grep: a secret file"                     env PATH="$STUBS/grep:$PATH" "$P" -- "$(bash_call 'cat docker/.env')"
+expect 2 "no grep: a write to mvnw"                   env PATH="$STUBS/grep:$PATH" "$P" -- "$(bash_call 'cp x mvnw')"
+expect 2 "no grep: a skipped test"                    env PATH="$STUBS/grep:$PATH" "$HOOKS/guard-tests.sh" -- "$(bash_call './mvnw verify -DskipTests')"
+expect 2 "no grep: a push with no lock"               env PATH="$STUBS/grep:$PATH" "$HOOKS/guard-git-push.sh" -- "$(bash_call 'git push -u origin fix/0-1-x')"
+expect 2 "no grep: a factory script run by another agent" env PATH="$STUBS/grep:$PATH" "$FS" -- "$(ops_call implementer 'scripts/factory/state.sh unlock')"
+expect 0 "no grep: a git read naming a factory script" env PATH="$STUBS/grep:$PATH" "$FS" -- "$(ops_call implementer 'git diff HEAD -- scripts/factory/state.sh')"
+expect 0 "no grep: a harmless command"                env PATH="$STUBS/grep:$PATH" "$P" -- "$(bash_call 'git status')"
+# The whole command, not its first line: an allow pattern anchored with ^...$ matched the first line alone under grep.
+expect 2 "an allowed fetch with a push on its next line" "$HOOKS/guard-git-push.sh" -- "$(bash_call $'git fetch origin main\ngit push -u origin main')"
+# finds: an invalid expression refuses instead of reading as "no match".
+out=$(bash -c '. "$1"/_lib.sh; finds x "(a"; echo "went on"' _ "$HOOKS" 2>&1); rc=$?
+if [ "$rc" -eq 2 ] && ! grep -q 'went on' <<<"$out"; then echo "  ok: finds: an invalid expression refuses"
+else echo "::error::finds: an invalid expression did not refuse (exit $rc): $out"; failures=$((failures+1)); fi
+
+# No guard goes back to grep for a check (review round 1 of #0-132): every check of .claude/hooks/*.sh matches with
+# finds/matches. Comment lines aside, and `git grep` (the agents' search, named in hints and checked by
+# git_grep_unsafe); this file runs grep for its own tests.
+offenders=""
+for f in "$HOOKS"/*.sh; do
+    case "${f##*/}" in test-hooks.sh) continue ;; esac
+    hits=$(sed -e 's/^[[:space:]]*#.*//' "$f" | awk -v f="${f##*/}" '{ l = $0; gsub(/git[[:space:]]+grep/, "", l) } l ~ /(^|[^[:alnum:]_-])e?grep[[:space:]]+-/ {print f": "$0}')
+    [ -z "$hits" ] || offenders="$offenders$hits"$'\n'
+done
+if [ -z "$offenders" ]; then echo "  ok: no guard calls grep"; else echo "::error::a guard calls grep (use finds): $offenders"; failures=$((failures+1)); fi
+
+echo "shell_words: three answers by its exit status (backlog #0-132)"
+sw() { bash -c '. "$1"/_lib.sh; shell_words "$2"; echo "rc=$?"' _ "$HOOKS" "$1"; }
+out=$(sw 'git grep -e x')
+if [ "$out" = $'git\ngrep\n-e\nx\nrc=0' ]; then echo "  ok: words, status 0"; else echo "::error::shell_words words: $out"; failures=$((failures+1)); fi
+out=$(sw 'git status; rm x'); case "$out" in "a command separator or redirect: run it as a command of its own"$'\n'"rc=3") echo "  ok: a refusal: the reason alone, status 3" ;; *) echo "::error::shell_words refusal: $out"; failures=$((failures+1)) ;; esac
+lib_refusal_is_reason() {   # lib_refusal_is_reason <name> <check> <command> — shell_words refusing (status 3) is a refusal of the check, not a failure
+    local out rc
+    out=$(bash -c 'set -uo pipefail; . "$1"/_lib.sh; shell_words() { echo "stub reason"; return 3; }; "$2" "$3"' _ "$HOOKS" "$2" "$3"); rc=$?
+    if [ "$rc" -eq 0 ] && grep -q 'stub reason' <<<"$out"; then echo "  ok: $1"; else echo "::error::$1: exit $rc, output '$out'"; failures=$((failures+1)); fi
+}
+lib_refusal_is_reason "git_grep_unsafe: a shell_words refusal is its reason" git_grep_unsafe "$GG"
+lib_refusal_is_reason "gh_label_unsafe: a shell_words refusal is its reason" gh_label_unsafe "$GL"
+
 echo "a newline inside a quoted word (review of #0-130, sec-4e1a)"
 expect 2 "git grep: newline makes a fake --"         "$P" -- "$(bash_call $'git grep \'x\n--\' --untracked --no-exclude-standard -e PASSWORD')"
 expect 2 "gh: newline makes a fake --title"          "$P" -- "$(bash_call $'gh pr edit 1 \'a\n--title\' --add-label human:x')"
