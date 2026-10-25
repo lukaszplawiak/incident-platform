@@ -2,7 +2,7 @@
 // Tests the logic of .claude/workflows/backlog-autopilot.js (backlog #0-163): its helper functions one by one, and
 // whole runs with a fake agent() that answers each agent and factory script as a scenario says.
 // And how .claude/workflows/seed-bugs.js turns the seeder's answer into an outcome (backlog #0-170), reads its args and
-// types the factory scripts' answers (#0-174).
+// types the factory scripts' answers (#0-174) and the panel's verdicts, and ends on main after an error (#0-176).
 //
 // The workflow is not a module: Claude Code's workflow runtime evaluates its text as the body of an async function,
 // with agent, parallel, phase, log and args in scope, and has no import (the workflow-authoring reference: "No
@@ -38,7 +38,7 @@ const HELPERS = '// ------------------------------------------------------------
 const RUN = '// ---------------------------------------------------------------- run'
 const EXPORTED = [
   'scopeOf', 'valid', 'ruleFilesOf', 'claimKey', 'claimId', 'openClaims', 'verifyClaims', 'refutedFindings',
-  'unsettledReason', 'q', 'record', 'CLAIM_ID', 'ACCEPT_UNVERIFIABLE', 'as', 'stopItem',
+  'unsettledReason', 'q', 'record', 'CLAIM_ID', 'ACCEPT_UNVERIFIABLE', 'as', 'stopItem', 'VERDICT',
 ]
 
 function once(marker) {
@@ -686,6 +686,7 @@ test('seed-bugs: a run that cannot get back to main says where it left the tree 
   assert.equal(measured.outcome.leftOn, 'seed/P-10-r1')
   assert.match(measured.outcome.returnToMain, /not clean/)
   assert.ok(!measured.calls.some((c) => c.key === 'audit-synthesis'), 'no row written on the seed branch')
+  assert.match(measured.outcome.cleanup, /git branch -D seed\/P-10-r1 once the tree is back on main/, 'names the branch (#0-176, review round 2)')
   const failed = await seed({ 'defect-seeder': { blocked: true, reason: 'x' }, 'ops:return-to-main.sh': stuck })
   assert.equal(failed.outcome.outcome, 'FAILED')
   assert.equal(failed.outcome.leftOn, 'seed/P-10-r1')
@@ -745,28 +746,36 @@ test('seed-bugs: `/seed-bugs P-10 <sha> <run id>` passes one string, read as the
 // themselves, with the subset of JSON Schema they use, against what the scripts print and what the agent answered.
 // A keyword or type outside that subset throws, anywhere in the schema (review round 2 of #0-174): ignored, a later
 // `required` or `enum` would pass here unchecked.
-const KNOWN_KEYWORDS = new Set(['type', 'items', 'properties', 'additionalProperties'])
+const KNOWN_KEYWORDS = new Set(['type', 'items', 'properties', 'additionalProperties', 'required', 'enum'])
 const TYPE_OK = { object: (v) => v !== null && typeof v === 'object' && !Array.isArray(v), array: Array.isArray,
   string: (v) => typeof v === 'string', boolean: (v) => typeof v === 'boolean', number: (v) => typeof v === 'number' }
 function knownSchema(schema) {
   const unknown = Object.keys(schema).filter((k) => !KNOWN_KEYWORDS.has(k))
   if (unknown.length) throw new Error(`conforms() does not know ${unknown.join(', ')}: extend it`)
-  if (!Object.hasOwn(TYPE_OK, schema.type)) throw new Error(`conforms() does not know the type ${JSON.stringify(schema.type)}: extend it`)
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type]
+  if (!types.length || !types.every((t) => t === 'null' || Object.hasOwn(TYPE_OK, t))) {
+    throw new Error(`conforms() does not know the type ${JSON.stringify(schema.type)}: extend it`)
+  }
   if (schema.items) knownSchema(schema.items)
   Object.values(schema.properties ?? {}).forEach(knownSchema)
 }
 function conforms(value, schema) {
   knownSchema(schema)
-  if (!TYPE_OK[schema.type](value)) return false
-  if (schema.type === 'array') return value.every((v) => conforms(v, schema.items))
-  if (schema.type !== 'object') return true
+  const types = Array.isArray(schema.type) ? schema.type : [schema.type]
+  if (value === null) return types.includes('null')
+  const type = types.find((t) => t !== 'null' && TYPE_OK[t](value))
+  if (!type) return false
+  if (schema.enum && !schema.enum.includes(value)) return false
+  if (type === 'array') return value.every((v) => conforms(v, schema.items))
+  if (type !== 'object') return true
+  if (!(schema.required ?? []).every((k) => Object.hasOwn(value, k))) return false
   return Object.entries(value).every(([k, v]) => k in (schema.properties ?? {}) ? conforms(v, schema.properties[k])
     : schema.additionalProperties !== false)
 }
 
-test('conforms() refuses a schema keyword or type it does not check (#0-174, review round 2)', () => {
-  for (const schema of [{ type: 'object', required: ['ok'] }, { type: 'string', enum: ['a'] }, { type: ['string', 'null'] },
-    { type: 'integer' }, { type: 'object', properties: { files: { type: 'array', items: { type: 'string', pattern: 'x' } } } }]) {
+test('conforms() refuses a schema keyword or type it does not check (#0-174, review round 2; #0-176)', () => {
+  for (const schema of [{ type: 'object', minProperties: 1 }, { type: 'string', pattern: 'a' }, { type: ['string', 'integer'] },
+    { type: 'integer' }, { type: [] }, { type: 'object', properties: { files: { type: 'array', items: { type: 'string', pattern: 'x' } } } }]) {
     assert.throws(() => conforms({}, schema), /conforms\(\) does not know/, JSON.stringify(schema))
   }
 })
@@ -794,4 +803,105 @@ test('seed-bugs: each factory script\'s answer is typed, so the agent cannot han
   for (const [key, answers] of Object.entries(answered)) {
     for (const answer of answers) assert.ok(!conforms(answer, schemaOf(key)), `${key} refuses ${JSON.stringify(answer)}`)
   }
+})
+
+test('conforms() checks required keys, enums and a type that allows null (#0-176)', () => {
+  const schema = { type: 'object', required: ['v'], properties: { v: { type: 'string', enum: ['A', 'B'] }, n: { type: ['number', 'null'] } } }
+  assert.ok(conforms({ v: 'A', n: null }, schema))
+  assert.ok(conforms({ v: 'B', n: 3 }, schema))
+  for (const value of [{}, { v: 'C' }, { v: 'A', n: '3' }, { v: null }, null]) assert.ok(!conforms(value, schema), JSON.stringify(value))
+})
+
+// A verdict as a reviewer writes it (review-procedure): blocking findings with an id, non-blocking ones often without.
+const REAL_VERDICT = { dimension: 'performance', round: 1, verdict: 'CHANGES_REQUESTED',
+  blocking: [{ id: 'perf-3c1e', ruleId: 'PERF-30', file: TRUTH.file, line: 330, issue: 'findAll() loads every row', impact: 'memory' }],
+  nonBlocking: [{ ruleId: null, file: TRUTH.file, line: 12, issue: 'a nit' }, { ruleId: 'DOC-20', file: null, line: null, issue: 'x' }],
+  resolved: [], upheldDisputes: [], outOfScope: [], ruleGap: [], unverified: ['a claim'] }
+
+test('seed-bugs: the panel\'s verdicts are typed, so a reviewer cannot hand back strings (#0-176)', async () => {
+  const { calls } = await seed({ 'defect-seeder': TRUTH })
+  const schema = calls.find((c) => c.key === 'review-performance').schema
+  for (const dim of ['general', 'architecture', 'security', 'performance', 'migration', 'docs']) {
+    assert.deepEqual(calls.find((c) => c.key === `review-${dim}`).schema, schema, `review-${dim} gets the same schema`)
+  }
+  assert.ok(conforms(REAL_VERDICT, schema))
+  assert.ok(conforms(approve('migration', { round: 1, outOfScope: [], ruleGap: [] }), schema))
+  // What the panel answered in the run of 2026-10-25 (P-12 on 47b95294, run perf-after-p12): every value a string.
+  const stringly = Object.fromEntries(Object.entries(REAL_VERDICT).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]))
+  assert.ok(!conforms(stringly, schema))
+  for (const bad of [{ ...REAL_VERDICT, verdict: 'LGTM' }, { ...REAL_VERDICT, blocking: [{ id: 'x', line: '330', issue: 'y' }] },
+    { ...REAL_VERDICT, nonBlocking: undefined }]) assert.ok(!conforms(JSON.parse(JSON.stringify(bad)), schema), JSON.stringify(bad).slice(0, 80))
+})
+
+test('seed-bugs: a verdict that is not one counts as no answer, and the run still records (#0-176)', async () => {
+  const stringly = { ...REAL_VERDICT, blocking: JSON.stringify(REAL_VERDICT.blocking), nonBlocking: '[]' }
+  const { outcome, calls } = await seed({ 'defect-seeder': TRUTH, 'review-performance': stringly,
+    'review-security': { ...REAL_VERDICT, dimension: 'security', blocking: [{ issue: 'no tenant predicate', file: TRUTH.file, line: 41 }] } })
+  assert.equal(outcome.outcome, 'MEASURED')
+  assert.deepEqual(outcome.noAnswer, ['performance'])
+  assert.deepEqual(outcome.caughtBy, ['security'])
+  assert.equal(outcome.caughtByExpected, false)
+  assert.ok(calls.some((c) => c.key === 'audit-synthesis'), 'the row is written')
+})
+
+test('seed-bugs: an error after the branch exists ends the run on main and names the branch (#0-176)', async () => {
+  const boom = () => { throw new Error('boom') }
+  for (const answers of [{ 'defect-seeder': boom }, { 'defect-seeder': TRUTH, 'ops:seed-check.sh': boom }]) {
+    const { outcome, calls } = await seed(answers)
+    assert.equal(outcome.outcome, 'FAILED', Object.keys(answers).join())
+    assert.match(outcome.reason, /the run stopped on an error: boom/)
+    assert.equal(outcome.cleanup, 'git branch -D seed/P-10-r1')
+    assert.equal(calls.at(-1).key, 'ops:return-to-main.sh')
+  }
+})
+
+test('seed-bugs: a measure whose row cannot be written is kept, not failed (#0-176, review round 1)', async () => {
+  const { outcome } = await seed({ 'defect-seeder': TRUTH, 'audit-synthesis': () => { throw new Error('boom') } })
+  assert.equal(outcome.outcome, 'MEASURED')
+  assert.equal(outcome.recorded, false)
+  assert.match(outcome.reason, /the row was not written: boom/)
+  assert.deepEqual([outcome.pattern, outcome.expected, outcome.caughtByExpected], ['P-10', 'performance', false])
+  assert.match(outcome.cleanup, /git branch -D seed\/P-10-r1; check .*results\.md/)
+})
+
+test('seed-bugs: return-to-main.sh failing, even after another error, still ends with an outcome (#0-176, review round 1)', async () => {
+  const boom = () => { throw new Error('boom') }
+  for (const answers of [{ 'defect-seeder': { blocked: true, reason: 'x' } }, { 'defect-seeder': boom }, { 'defect-seeder': TRUTH }]) {
+    const { outcome } = await seed({ ...answers, 'ops:return-to-main.sh': () => { throw new Error('no answer') } })
+    assert.equal(outcome.leftOn, 'unknown', Object.keys(answers).join())
+    assert.match(outcome.returnToMain, /return-to-main\.sh did not answer: no answer/)
+  }
+})
+
+test('seed-bugs: its verdict schema types what backlog-autopilot.js\'s does, but for the noted relaxations (#0-176, review round 1)', async () => {
+  const { VERDICT } = await helpers()
+  const { calls } = await seed({ 'defect-seeder': TRUTH })
+  const ours = calls.find((c) => c.key === 'review-performance').schema
+  const typesOf = (t) => new Set(Array.isArray(t) ? t : [t])
+  // seed-bugs.js does not read upheldDisputes; a measure keeps a finding with no id, impact or isRegression, and a
+  // null ruleId or file (FINDING's comment): those are its relaxations, nothing else may differ.
+  const NOT_READ = new Set(['upheldDisputes']), FINDING_NOT_READ = new Set(['isRegression'])
+  for (const [key, theirs] of Object.entries(VERDICT.properties)) {
+    if (NOT_READ.has(key)) continue
+    assert.ok(ours.properties[key], `seed-bugs.js types ${key}`)
+    if (key !== 'blocking' && key !== 'nonBlocking') assert.deepEqual(ours.properties[key], theirs, key)
+  }
+  const finding = ours.properties.blocking.items
+  for (const [key, theirs] of Object.entries(VERDICT.properties.blocking.items.properties)) {
+    if (FINDING_NOT_READ.has(key)) continue
+    assert.ok(finding.properties[key], `seed-bugs.js's FINDING types ${key}`)
+    for (const t of typesOf(theirs.type)) assert.ok(typesOf(finding.properties[key].type).has(t), `${key} still allows ${t}`)
+  }
+  // And the other way (review round 2 of #0-176): a key seed-bugs.js types that the autopilot's schema lacks is a drift
+  // too, unless named here.
+  const OURS_ONLY = new Set([]), FINDING_OURS_ONLY = new Set([])
+  for (const key of Object.keys(ours.properties)) {
+    assert.ok(key in VERDICT.properties || OURS_ONLY.has(key), `seed-bugs.js types ${key}, which backlog-autopilot.js's VERDICT does not`)
+  }
+  for (const key of Object.keys(finding.properties)) {
+    assert.ok(key in VERDICT.properties.blocking.items.properties || FINDING_OURS_ONLY.has(key),
+      `seed-bugs.js's FINDING types ${key}, which backlog-autopilot.js's does not`)
+  }
+  assert.deepEqual(finding.required, ['issue'])
+  assert.deepEqual(ours.properties.nonBlocking.items, finding, 'non-blocking findings are typed like blocking ones')
 })

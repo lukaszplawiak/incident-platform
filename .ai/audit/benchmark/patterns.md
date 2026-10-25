@@ -18,8 +18,8 @@ the smallest edit that produces the defect in real code of the change — never 
 | P-07 | architecture | ARC-20 | add `@Scheduled` to a method without `@SchedulerLock` |
 | P-08 | architecture | ARC-20 | initialise a `@Version Long version = 0L` |
 | P-09 | architecture | ARC-02 | add a hand-written retry loop where `AuthEmailRetryPolicy`-style deadline retries exist |
-| P-10 | performance | PERF-01 | call a repository method inside a loop over a lazy collection (N+1) on a request path |
-| P-11 | performance | PERF-23 | move an outbound HTTP call inside a `@Transactional` method |
+| P-10 | performance | PERF-01 | call a repository method (or reach a lazy association) once per element of a collection, instead of one batched query (N+1), on a request path |
+| P-11 | performance | PERF-23 | move an outbound HTTP call, a direct Kafka send or an email inside a `@Transactional` method (or call it from one) |
 | P-12 | performance | PERF-02 | replace a paged query with `findAll()` on a per-tenant table |
 | P-13 | migration | MIG-04 | add a `NOT NULL` column without a default to an existing table |
 | P-14 | migration | MIG-02 | edit an existing `V<n>` migration instead of adding one |

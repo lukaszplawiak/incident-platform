@@ -80,13 +80,13 @@ and the ADRs of the area "AI factory" (`.ai/decisions/README.md`). Most of the w
   with a hook, a check becomes a warning) says so in its ADR and in README "Infrastructure Hardening"
   (CLAUDE.md "Security inventory"), naming what now holds it (#0-160: the bare WebFetch deny). Weakening
   without saying where it is recorded is a finding.
-- **FAC-A06 A value read from a factory script's answer is typed.** A workflow that decides on a field of a
-  `factory-ops` answer types that field in the call's schema, which allows only the script's fields and
-  `factory-ops`' own `{error, exitCode}` (`additionalProperties: false`): with a bare `{ type: 'object' }`
-  the agent may answer every value as a string or wrap the JSON in another key (#0-174: `"ok": "true"`,
-  `files` as one string, so the first `/seed-bugs` run after #0-173 failed on a branch it had made). An
-  untyped schema on an answer the workflow does not read (a notification, a record that only reaches the
-  PR) is not a finding.
+- **FAC-A06 A value read from an agent's answer is typed.** A workflow that decides on a field of an agent's
+  answer (a `factory-ops` script's JSON, a reviewer's verdict, the seeder's ground truth) types that field in the
+  call's schema; naming only the required keys types nothing. A `factory-ops` answer allows only the script's
+  fields and `factory-ops`' own `{error, exitCode}` (`additionalProperties: false`). Untyped, the agent may answer
+  every value as a string or wrap the JSON in another key (#0-174: `"ok": "true"`, `files` as one string; #0-176:
+  every verdict's `blocking` as one string, so the Record phase threw on the seed branch). An untyped schema on an
+  answer the workflow does not read (a notification, a record that only reaches the PR) is not a finding.
 
 ## 3. Enforced by checks — do not review by hand
 

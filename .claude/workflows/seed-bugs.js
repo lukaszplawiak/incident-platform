@@ -29,6 +29,27 @@ if (![params.pattern, params.commit, params.runId].every((v) => typeof v === 'st
   return { outcome: 'NOT_STARTED', reason: 'pass args { pattern, commit, runId }, or the words "<pattern> <commit> <run id>"' }
 }
 
+// Fixed (backlog #0-176): the panel's schema named its required keys only, so each verdict came back with every value
+// a string (2026-10-25, P-12) and the Record phase threw. Typed as backlog-autopilot.js types its VERDICT and FINDING
+// (a workflow cannot import), with the file and line of a non-blocking finding too: the Record phase matches both.
+// Only `issue` is required of a finding: a measure must not lose a catch because a reviewer left out an id (the
+// non-blocking findings of the review procedure carry none).
+const FINDING = {
+  type: 'object', required: ['issue'],
+  properties: { id: { type: 'string' }, ruleId: { type: ['string', 'null'] }, file: { type: ['string', 'null'] },
+    line: { type: ['number', 'null'] }, issue: { type: 'string' }, impact: { type: 'string' }, fix: { type: 'string' } },
+}
+const VERDICT = {
+  type: 'object', required: ['dimension', 'verdict', 'blocking', 'nonBlocking'],
+  properties: {
+    dimension: { type: 'string' }, round: { type: 'number' },
+    verdict: { type: 'string', enum: ['APPROVE', 'CHANGES_REQUESTED', 'NEEDS_HUMAN'] },
+    blocking: { type: 'array', items: FINDING }, nonBlocking: { type: 'array', items: FINDING },
+    resolved: { type: 'array', items: { type: 'string' } }, outOfScope: { type: 'array', items: { type: 'string' } },
+    ruleGap: { type: 'array', items: { type: 'string' } }, unverified: { type: 'array', items: { type: 'string' } },
+  },
+}
+
 // Every factory script runs through the factory-ops agent, as in backlog-autopilot.js; the arguments are SAFE-checked.
 // Fixed (backlog #0-174): with the bare `{ type: 'object' }` the agent answered seed-branch.sh's JSON with every value
 // a string ("ok": "true", "files": "[…]") and wrapped return-to-main.sh's in a "parameter" key, so the first run after
@@ -50,7 +71,15 @@ const ops = (script, argv, label) => as('factory-ops', `Run exactly: scripts/fac
 // The run ends on main whatever happens, so the session and the owner's tree go on with main's hooks and agents. When
 // return-to-main.sh cannot (a dirty tree, left for the owner), the outcome says where the tree was left (review round 1
 // of #0-173: a run that reported nothing of it left the next one refused).
-const backToMain = () => ops('return-to-main.sh', [], 'back to main')
+// It never throws (review round 1 of #0-176): finish() calls it from the catch of measure(), where a second error would
+// escape and leave the tree on the seed branch with no outcome; a failure reads as "not on main", with its reason.
+const backToMain = async () => {
+  try {
+    return await ops('return-to-main.sh', [], 'back to main')
+  } catch (e) {
+    return { onMain: false, reason: `return-to-main.sh did not answer: ${String(e?.message ?? e).slice(0, 200)}` }
+  }
+}
 const notOnMain = (back) => back?.onMain === true ? null
   : { leftOn: String(back?.branch ?? 'unknown'), returnToMain: String(back?.reason ?? JSON.stringify(back)).slice(0, 300) }
 // Once seed-branch.sh has made the branch, a failed run says how to delete it too (review round 2 of #0-173: a rerun
@@ -72,65 +101,86 @@ if (seed.ok !== true || seed.branch !== `seed/${params.pattern}-${params.runId}`
     || !SHA.test(String(seed.head)) || !Array.isArray(seed.files) || !seed.files.length) {
   return finish({ outcome: 'FAILED', reason: `no seed branch: ${String(seed.reason ?? JSON.stringify(seed)).slice(0, 300)}` })
 }
-const truth = await as('defect-seeder', [
-  `Pattern ${params.pattern}. Run id ${params.runId}. The branch ${seed.branch} is checked out: it holds merged change ${params.commit}`,
-  `as its last commit, on the base ${seed.base}. Plant the pattern in one of the change's files: ${seed.files.join(', ')}.`,
-].join('\n'), {
-  schema: { type: 'object', properties: { skipped: { type: 'boolean' }, blocked: { type: 'boolean' }, reason: { type: 'string' },
-    branch: { type: 'string' }, pattern: { type: 'string' }, dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' },
-    line: { type: 'number' }, description: { type: 'string' } } },
-})
-// Fixed (backlog #0-170): the first run on record came back SKIPPED with no reason, measuring nothing: the seeder's
-// commands had been refused (`git -C …` matches none of the session's allow rules), and a blocked tool and "this
-// pattern does not fit" were one answer. Now they are two, a skip without its reason counts as a failure, and so does
-// a ground truth the Record phase could not use.
-if (!truth) return finish({ outcome: 'FAILED', reason: 'defect-seeder gave no answer' })
-const why = (r) => String(r ?? 'no reason given').slice(0, 300)
-if (truth.blocked) return finish({ outcome: 'FAILED', reason: `defect-seeder was blocked: ${why(truth.reason)}` })
-if (truth.skipped) {
-  return finish(truth.reason ? { outcome: 'SKIPPED', reason: why(truth.reason) } : { outcome: 'FAILED', reason: 'defect-seeder skipped without a reason (blocked?)' })
-}
-// The Record phase matches findings to the file and line, and the panel reviews the branch: both must be this run's
-// (review round 1 of #0-170: without a line every catch read as a miss), and the file one of the change's.
-if (truth.branch !== seed.branch || !seed.files.includes(truth.file) || typeof truth.line !== 'number' || !truth.rule
-    || !PANEL.includes(truth.dimension)) {
-  return finish({ outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` })
-}
-// The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the
-// seed branch, clean, with the seeder's one commit on top of the change, touching the change's files only.
-const check = await ops('seed-check.sh', [params.pattern, params.runId, seed.base, seed.head], 'seed check')
-if (check?.ok !== true || !Array.isArray(check.files) || !check.files.includes(truth.file)) {
-  return finish({ outcome: 'FAILED', reason: `the seed branch is not as the seeder says: ${String(check?.reason ?? JSON.stringify(check)).slice(0, 300)}` })
-}
+// Fixed (backlog #0-176): an error after the branch existed (2026-10-25, P-12: a verdict's `blocking` came back a string
+// and `.some` threw in the Record phase) ended the script on the seed branch, with no row and no cleanup named. Every
+// step after the branch is made runs in measure(), and an error there ends the run like any failure: back on main, the
+// branch named for deletion.
+async function measure() {
+  const truth = await as('defect-seeder', [
+    `Pattern ${params.pattern}. Run id ${params.runId}. The branch ${seed.branch} is checked out: it holds merged change ${params.commit}`,
+    `as its last commit, on the base ${seed.base}. Plant the pattern in one of the change's files: ${seed.files.join(', ')}.`,
+  ].join('\n'), {
+    schema: { type: 'object', properties: { skipped: { type: 'boolean' }, blocked: { type: 'boolean' }, reason: { type: 'string' },
+      branch: { type: 'string' }, pattern: { type: 'string' }, dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' },
+      line: { type: 'number' }, description: { type: 'string' } } },
+  })
+  // Fixed (backlog #0-170): the first run on record came back SKIPPED with no reason, measuring nothing: the seeder's
+  // commands had been refused (`git -C …` matches none of the session's allow rules), and a blocked tool and "this
+  // pattern does not fit" were one answer. Now they are two, a skip without its reason counts as a failure, and so does
+  // a ground truth the Record phase could not use.
+  if (!truth) return finish({ outcome: 'FAILED', reason: 'defect-seeder gave no answer' })
+  const why = (r) => String(r ?? 'no reason given').slice(0, 300)
+  if (truth.blocked) return finish({ outcome: 'FAILED', reason: `defect-seeder was blocked: ${why(truth.reason)}` })
+  if (truth.skipped) {
+    return finish(truth.reason ? { outcome: 'SKIPPED', reason: why(truth.reason) } : { outcome: 'FAILED', reason: 'defect-seeder skipped without a reason (blocked?)' })
+  }
+  // The Record phase matches findings to the file and line, and the panel reviews the branch: both must be this run's
+  // (review round 1 of #0-170: without a line every catch read as a miss), and the file one of the change's.
+  if (truth.branch !== seed.branch || !seed.files.includes(truth.file) || typeof truth.line !== 'number' || !truth.rule
+      || !PANEL.includes(truth.dimension)) {
+    return finish({ outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` })
+  }
+  // The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the
+  // seed branch, clean, with the seeder's one commit on top of the change, touching the change's files only.
+  const check = await ops('seed-check.sh', [params.pattern, params.runId, seed.base, seed.head], 'seed check')
+  if (check?.ok !== true || !Array.isArray(check.files) || !check.files.includes(truth.file)) {
+    return finish({ outcome: 'FAILED', reason: `the seed branch is not as the seeder says: ${String(check?.reason ?? JSON.stringify(check)).slice(0, 300)}` })
+  }
 
-phase('Review')
-// The reviewers see the merged change plus the planted defect, as one change: base = the seed branch's base commit.
-const verdicts = await runAll(PANEL.map((dim) => () => as(`review-${dim}`, [
-  `Autopilot review. Branch ${truth.branch}. mergeBase: ${seed.base}. round: 1.`,
-  'The test gate was not run for this branch. Answer with the verdict JSON only.',
-].join('\n'), { schema: { type: 'object', required: ['dimension', 'verdict', 'blocking'] }, label: `${dim}` })))
+  phase('Review')
+  // The reviewers see the merged change plus the planted defect, as one change: base = the seed branch's base commit.
+  const verdicts = await runAll(PANEL.map((dim) => () => as(`review-${dim}`, [
+    `Autopilot review. Branch ${truth.branch}. mergeBase: ${seed.base}. round: 1.`,
+    'The test gate was not run for this branch. Answer with the verdict JSON only.',
+  ].join('\n'), { schema: VERDICT, label: `${dim}` })))
 
-// The dimension of each verdict is the one we asked for (by position).
-verdicts.forEach((v, i) => { if (v) v.dimension = PANEL[i] })
+  // The dimension of each verdict is the one we asked for (by position); one that is not a verdict counts as no answer.
+  const answered = verdicts.map((v, i) => (v && Array.isArray(v.blocking) && Array.isArray(v.nonBlocking) ? { ...v, dimension: PANEL[i] } : null))
 
-phase('Record')
-const near = (f) => f.file === truth.file && (typeof f.line !== 'number' || Math.abs(f.line - (truth.line ?? 0)) <= 5)
-const caughtBy = verdicts.filter(Boolean).filter((v) => [...(v.blocking ?? []), ...(v.nonBlocking ?? [])].some(near)).map((v) => v.dimension)
-const result = {
-  runId: params.runId, pattern: params.pattern, rule: truth.rule, expected: truth.dimension,
-  caughtByExpected: caughtBy.includes(truth.dimension), caughtBy, blockingByExpected:
-    verdicts.filter(Boolean).some((v) => v.dimension === truth.dimension && (v.blocking ?? []).some(near)),
-  noAnswer: PANEL.filter((d, i) => !verdicts[i]),
+  phase('Record')
+  const near = (f) => f.file === truth.file && (typeof f.line !== 'number' || Math.abs(f.line - (truth.line ?? 0)) <= 5)
+  const caughtBy = answered.filter(Boolean).filter((v) => [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension)
+  const result = {
+    runId: params.runId, pattern: params.pattern, rule: truth.rule, expected: truth.dimension,
+    caughtByExpected: caughtBy.includes(truth.dimension), caughtBy, blockingByExpected:
+      answered.filter(Boolean).some((v) => v.dimension === truth.dimension && v.blocking.some(near)),
+    noAnswer: PANEL.filter((d, i) => !answered[i]),
+  }
+  // Back on main before the row is written: results.md then dirties main, not the seed branch, and the owner commits it
+  // before the next run (seed-branch.sh names it when it refuses), so no row ever rides onto a seed branch.
+  const left = notOnMain(await backToMain())
+  if (left) {
+    return { outcome: 'MEASURED', recorded: false, ...result, ...left, reason: 'not back on main: the row was not recorded',
+      cleanup: `git branch -D ${seed.branch} once the tree is back on main; record the row by hand` }
+  }
+  // A measure is kept when the row cannot be written (review round 1 of #0-176): the outcome carries it, for the owner
+  // to record by hand, instead of a FAILED that drops it.
+  try {
+    await as('audit-synthesis', [
+      'Append one row to .ai/audit/benchmark/results.md (create it with this header if missing:',
+      '`| Run | Pattern | Rule | Expected | Caught by expected | Blocking | Also caught by | No answer |` and its separator).',
+      `Row data (JSON): ${JSON.stringify(result)}. Do not write anything else.`,
+    ].join('\n'), { schema: { type: 'object' }, label: 'record result' })
+  } catch (e) {
+    return { outcome: 'MEASURED', recorded: false, ...result, reason: `the row was not written: ${String(e?.message ?? e).slice(0, 200)}`,
+      cleanup: `git branch -D ${seed.branch}; check .ai/audit/benchmark/results.md and record the row by hand` }
+  }
+
+  return { outcome: 'MEASURED', recorded: true, ...result,
+    cleanup: `git branch -D ${seed.branch}; commit .ai/audit/benchmark/results.md before the next run` }
 }
-// Back on main before the row is written: results.md then dirties main, not the seed branch, and the owner commits it
-// before the next run (seed-branch.sh names it when it refuses), so no row ever rides onto a seed branch.
-const left = notOnMain(await backToMain())
-if (left) return { outcome: 'MEASURED', recorded: false, ...result, ...left, reason: 'not back on main: the row was not recorded' }
-await as('audit-synthesis', [
-  'Append one row to .ai/audit/benchmark/results.md (create it with this header if missing:',
-  '`| Run | Pattern | Rule | Expected | Caught by expected | Blocking | Also caught by | No answer |` and its separator).',
-  `Row data (JSON): ${JSON.stringify(result)}. Do not write anything else.`,
-].join('\n'), { schema: { type: 'object' }, label: 'record result' })
-
-return { outcome: 'MEASURED', recorded: true, ...result,
-  cleanup: `git branch -D ${seed.branch}; commit .ai/audit/benchmark/results.md before the next run` }
+try {
+  return await measure()
+} catch (e) {
+  return finish({ outcome: 'FAILED', reason: `the run stopped on an error: ${String(e?.message ?? e).slice(0, 300)}` })
+}
