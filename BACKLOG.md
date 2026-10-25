@@ -116,7 +116,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
-| [0-131](#0-131-the-autopilot-pushes-only-the-branch-of-its-own-item) | The autopilot pushes only the branch of its own item | security | Medium | In progress |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-132](#0-132-the-shell-guards-own-checks-refuse-when-they-fail) | The shell guards' own checks refuse when they fail | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -3158,8 +3157,8 @@ through a glob made only of grep's letters, so an ordinary `git add src/*.java` 
 
 ### 0-131. The autopilot pushes only the branch of its own item
 
-**Type:** security · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-25) — found by the security review
-of #0-128/#0-129, 2026-10-13
+**Type:** security · **Priority:** Medium · **Status:** Done, PR #525 — found by the security review of #0-128/#0-129
+(2026-10-13); owner's decision below. Kept in full for the decisions (the branch in the lock, the review rounds' bindings)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 **Touches:** root (.claude/hooks/guard-git-push.sh, .claude/hooks/test-hooks.sh, README.md "Infrastructure Hardening", .ai/rules/audit.md)
 
