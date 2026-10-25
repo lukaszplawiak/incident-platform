@@ -113,7 +113,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-110](#0-110-maven-enforcer-allowed-repositories-and-pinned-plugin-versions) | Maven Enforcer: allowed repositories and pinned plugin versions | ci | Low | Open |
 | [0-111](#0-111-openapi-contract-diff-on-pull-requests) | OpenAPI contract diff on pull requests | ci | Low | Open |
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
-| [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | Open |
+| [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | In progress |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
@@ -3292,7 +3292,7 @@ section in its PR), the implementer, the reviewers' `_common.md`, `AGENTS.md`, `
 
 ### 0-115. Rewrite the review rules as invariants
 
-**Type:** docs · **Priority:** Medium · **Status:** Open
+**Type:** docs · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-25)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 
 **Problem.** The ~90 rules in `.ai/rules/review/*.md` came from the former review agents and are written
@@ -3320,8 +3320,23 @@ not, and #0-137 got ADR-0028 only because the architecture reviewer asked; the r
 not cite it. E.g. "A decision that CI enforces across the platform (a structural check in `.github/scripts/`) is
 recorded in an ADR in the same PR. Check: a new rule in a check script points to an ADR, or the PR adds one."
 
+**Decided (owner, 2026-10-25, after `/research`).** One file per PR (A), the pilot first: `performance.md` (13
+rules, outside the core files the implementer reads on every item, benchmark patterns P-10…P-12). The form (F1 with a
+title, like `factory.md`): `**<ID> <the invariant as a title>.** <what is true of the code>. Check: <what to look for in
+a diff>.`; `factory.md` gets its "Check:" lines last. The measure (M2): `/seed-bugs` on the dimension's patterns once the
+file is on main (the reviewers read the rules from `refs/remotes/origin/main`, #0-165), not the audit — with four
+autopilot PRs so far, an audit's before and after would be noise. No "before" run (the owner, 2026-10-25): one sample
+per pattern compares little, and the question is whether the new rules catch, not whether they catch more. An agent drafts
+each file, the owner decides and copies it (`.ai/rules/` is the owner's). Then: `security`, `architecture` (with the ADR rule
+above), `general`, `migration`, `docs`, `k8s` (ids first), `factory.md`.
+
+**Progress.**
+- `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
+  validation named where they live). `/seed-bugs` P-10…P-12 on main: —.
+
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
 AC2. No id was reused or renumbered.
-AC3. The next audit after each file reports review rounds and blocking findings of that dimension, before
-and after.
+AC3. Once each rewritten file is on main, `/seed-bugs` on its dimension's patterns has the panel catch each of them
+(reworded by the owner, 2026-10-25: the audit had too few autopilot PRs to compare, and a before-and-after of one
+sample per pattern compares little).
