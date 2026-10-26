@@ -14,6 +14,7 @@
 | arch-after-p09 | P-09 | ARC-02 | architecture | yes | yes | general, security, performance, docs | — |
 | gen-after-p15 | P-15 | GEN-03 | general | yes | no | — | — |
 | gen-after-p16 | P-16 | GEN-08 | general | yes | yes | architecture, security | — |
+| gen-after-p15-r2 | P-15 | GEN-03 | general | yes | yes | — | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -44,3 +45,8 @@ and `IncidentEscalationLevelIntegrationTest#commitsBeforeReturning` still pin th
 a reason whatever else covers the behaviour, so the verdict should have been `NEEDS_HUMAN`. In a real PR, CI's
 Factory guards would have stopped it ("fewer assertion lines"). In gen-after-p16, general answered `NEEDS_HUMAN` and
 listed the bare `@Disabled` as blocking, with the revocation window it left untested as the impact.
+
+gen-after-p15-r2 (2026-10-26, blind) ran P-15 again once GEN-08's "Check:" said that a removed assertion is weakened
+even when other tests still pin the behaviour. The seeder planted the same edit at the same line. This time general
+answered `NEEDS_HUMAN` and listed it as blocking under GEN-08, naming the missing reason. The two runs differ only in
+the rule's text.
