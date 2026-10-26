@@ -15,6 +15,7 @@
 | gen-after-p15 | P-15 | GEN-03 | general | yes | no | — | — |
 | gen-after-p16 | P-16 | GEN-08 | general | yes | yes | architecture, security | — |
 | gen-after-p15-r2 | P-15 | GEN-03 | general | yes | yes | — | — |
+| mig-after-p13 | P-13 | MIG-04 | migration | yes | yes | general, docs | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -50,3 +51,8 @@ gen-after-p15-r2 (2026-10-26, blind) ran P-15 again once GEN-08's "Check:" said 
 even when other tests still pin the behaviour. The seeder planted the same edit at the same line. This time general
 answered `NEEDS_HUMAN` and listed it as blocking under GEN-08, naming the missing reason. The two runs differ only in
 the rule's text.
+
+mig-after-p13 (2026-10-26, blind, `40bf2ef6`): migration blocked the `NOT NULL` column under MIG-04. Its MIG-01
+finding ("V8, but the highest is V32") is an artifact of the old host, where a July migration reads as new. The seeder
+appended to the migration with Bash. `guard-migrations.sh` refused the same edit made with Edit in P-19, which has no
+row (backlog #0-172's Also).

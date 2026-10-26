@@ -3092,10 +3092,25 @@ those commands before they run. It belongs with this item's guard (the same plac
 the run's own id, which makes `seed-record.sh` refuse the real row. The scope must leave `.ai/runs/` out; until then
 the owner reads a series' rows before landing them (`docs/ai-factory.md`, ADR-0044 decision 6).
 
+**Also (#0-115's `migration.md` series, 2026-10-26).** `guard-migrations.sh` and the seeder do not fit. The hook
+refuses an edit to any migration that is on `origin/main`, but a seed branch is built from a merged change, so every
+migration the seeder may touch is on `main`. For the seed branch, a migration the change added is new, because its
+base is `main` with the change reverted. P-19 (`mig-after-p19` on `aace4118`) failed: the seeder's Edit of V31 was
+refused. P-13 (`mig-after-p13` on `40bf2ef6`) measured only because the seeder appended to V8 with Bash
+(`printf … >>`), which the hook does not watch (it matches Edit, Write, MultiEdit). Two problems:
+- the measure of the migration patterns (P-13, P-19) depends on which tool the seeder picks. The hook could take the
+  seed branch's base, which it already reads from `$FACTORY_BASE_REF` or `.ai/runs/LOCK`, for the seeder's session,
+  instead of `origin/main`;
+- a Bash redirect writes to an applied migration unseen by the hook. For the seeder that is this item's missing write
+  scope. Whether `guard-write-in-repo.sh` covers the autopilot's agents for it was not checked.
+Until this is fixed, the migration patterns are not run (owner, 2026-10-26).
+
 **Acceptance criteria.**
 AC1. The defect-seeder cannot write outside its scope, shown by a test case.
 AC2. Factory guards fails when its guard is missing from one of its places.
 AC3. The defect-seeder cannot switch or create a branch, shown by a test case.
+AC4. A migration pattern can be planted with the seeder's normal Edit, and the seeder cannot write to a migration with
+Bash. Shown by test cases of `guard-migrations.sh` (and of the seeder's write guard).
 
 ---
 
@@ -4018,6 +4033,18 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   Left for `factory.md`'s rewrite (review round 3): section 3's heading still says "Enforced by checks — do not
   review by hand", while its `check-factory-guards.sh` bullet now says those items are reviewed on the owner's
   PRs. Under C3 that section's items take the two labels, which settles the heading.
+- `migration.md` measure: on main with PR #541, each run started by "dalej", blind:
+  - P-13 (`mig-after-p13` on `40bf2ef6`, MIG-04): migration blocked a `NOT NULL` column without a default added to
+    the existing `user_roles` in V8; general and docs caught it too. It also raised MIG-01 ("V8, but the highest is
+    V32"), which is an artifact of an old host: on the seed branch an old migration reads as a new one below the
+    highest number. A host's migration should be its service's newest.
+  - P-19 (`mig-after-p19` on `aace4118`, MIG-05): not measured. `guard-migrations.sh` refused the seeder's Edit of
+    V31, which is on `origin/main` like every migration of a merged change (#0-172's Also). P-13 got through only
+    because the seeder wrote with Bash. AC3 for `migration.md` waits for #0-172; P-19 runs then.
+  - The first host chosen for P-13, `5af2fd55`, was refused: "the change no longer applies to main".
+    `seed-branch.sh` reverts with `git apply -R`, which needs exact context, and the hosts had been checked with
+    `git merge-tree`, a three-way merge that accepts more. A host is checked with
+    `git diff --binary <parent> <sha> -- <code> | git apply -R --check`.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
