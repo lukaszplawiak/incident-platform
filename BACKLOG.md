@@ -120,7 +120,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
-| [0-177](#0-177-seed-bugs-asks-for-a-commit-on-main-between-runs-which-the-ruleset-of-main-refuses) | `/seed-bugs` asks for a commit on `main` between runs, which the ruleset of `main` refuses | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3035,7 +3034,7 @@ AC3. `/seed-bugs` P-10 on `253e5b2a3a06` in an autopilot session plants the patt
 **Type:** ci · **Priority:** Low · **Status:** Open — `nonBlocking` FAC-A03 of review-architecture in the `/review` of
 #0-170 (2026-10-25)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-170
-**Touches:** factory (.claude/workflows/seed-bugs.js, .claude/agents/audit-synthesis.md), ci
+**Touches:** factory (.claude/workflows/seed-bugs.js, scripts/factory/seed-record.sh: the row writer since #0-177), ci
 (.github/scripts/test-autopilot-workflow.mjs), .ai/rules/audit.md (owner)
 
 **Problem.** `seed-bugs.js` writes a row to `.ai/audit/benchmark/results.md` only for a MEASURED run; a FAILED or
@@ -3049,6 +3048,9 @@ the audit count the attempts per dimension next to the catches.
 **Also (review round 2 of #0-176, architecture FAC-A02).** A MEASURED run reports `recorded: true` once `audit-synthesis`
 answers without an error, whatever it answered: nothing checks that the row was written. A typed answer
 (`{ appended: boolean }`, FAC-A06) and `recorded` only on `appended === true` would close it, with the same row writer.
+Done by #0-177: `scripts/factory/seed-record.sh` writes the row (into `.ai/runs/benchmark/results.md`) and the run is
+recorded only on its `appended: true`; `audit-synthesis` no longer takes part. A FAILED or SKIPPED row (AC1) would go
+through the same script.
 
 **Acceptance criteria.**
 AC1. A FAILED or SKIPPED run leaves a row with its outcome and reason, shown by a test.
@@ -3077,6 +3079,11 @@ fixed one (the services' `src/main/`).
 branch is only a prompt. Since #0-173, `scripts/factory/seed-check.sh` detects it, but only after the fact: between a
 switch and the check, the seeder's calls run on another tree's hooks. A guard keyed on its `agent_type` would refuse
 those commands before they run. It belongs with this item's guard (the same places, the same entry check).
+
+**Also (review round 1 of #0-177, security FAC-S05).** Since #0-177 a run's row goes to the gitignored
+`.ai/runs/benchmark/results.md`, which `seed-check.sh` (`git status`) cannot see: the seeder could write rows there, or
+the run's own id, which makes `seed-record.sh` refuse the real row. The scope must leave `.ai/runs/` out; until then
+the owner reads a series' rows before landing them (`docs/ai-factory.md`, ADR-0044 decision 6).
 
 **Acceptance criteria.**
 AC1. The defect-seeder cannot write outside its scope, shown by a test case.
@@ -3217,6 +3224,11 @@ key stops the item ("could not record the run's branch"), the same class of defe
 typed schemas (FAC-A06) for every `ops()` answer a workflow reads; and a test in `test-autopilot-workflow.mjs` that
 every such call's schema types what it reads (a structural check, so FAC-A06 moves to "Enforced by checks").
 
+**Also (review round 3 of #0-177, architecture FAC-A06).** `scripts/factory/_common.sh` answers its own failures (no
+`jq`, not inside the repository) with `{"ok":false,"reasons":[…]}`, a shape the typed schemas of `seed-bugs.js`
+(`seed-branch.sh`, `seed-check.sh`, `seed-fold.sh`, `seed-record.sh`) do not allow: such a run fails closed on a schema
+violation, without its reason. One failure shape for `_common.sh` and every script, or `reasons` in each schema.
+
 **Acceptance criteria.**
 AC1. Each of `/audit` and `/docs-audit` starts from its command's words, and refuses a wrong count, shown by tests.
 AC2. Every factory-ops answer a workflow reads has a typed schema, and a test fails when one does not.
@@ -3261,14 +3273,16 @@ AC4. A `/seed-bugs` run that reaches the panel records its row (the owner's P-10
 
 ---
 
-### 0-177. `/seed-bugs` asks for a commit on `main` between runs, which the ruleset of `main` refuses
+### 0-177. `/seed-bugs` asks for a commit on `main` between runs, and its panel can tell it is measured
 
-**Type:** ci · **Priority:** Medium · **Status:** Open — found by the owner's measure of #0-115's `performance.md`
-(P-10 and P-11 run back to back, 2026-10-25)
-**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-176
-**Touches:** factory (.claude/workflows/seed-bugs.js, scripts/factory/seed-branch.sh), ci
-(.github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh), docs (docs/ai-factory.md, ADR-0044),
-scripts/factory/audit-data.sh (reads `results.md`)
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #533 (the first series on it is #0-115's `security.md`) — found by the owner's measure of #0-115's `performance.md`
+(P-10 and P-11 run back to back, 2026-10-25); widened 2026-10-26 by the owner with the blind panel (below)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** #0-176
+**Touches:** factory (.claude/workflows/seed-bugs.js, scripts/factory/seed-branch.sh, scripts/factory/seed-check.sh,
+scripts/factory/seed-fold.sh and seed-record.sh (new), scripts/factory/_common.sh, .claude/agents/defect-seeder.md), ci
+(.github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh, .github/workflows/factory-guards.yml
+comment), docs (docs/ai-factory.md, ADR-0044 and the ADR index); scripts/factory/audit-data.sh unchanged (it reads the
+tracked `results.md`)
 
 **Problem.** The Record phase appends its row to `.ai/audit/benchmark/results.md` on `main`, and both the run's
 `cleanup` and `seed-branch.sh`'s refusal tell the owner to commit that file before the next run (#0-173). But `main`
@@ -3277,16 +3291,70 @@ takes changes only through a pull request (its ruleset), and `seed-branch.sh` st
 means a merge between every two runs. On 2026-10-25 the session parked the P-10 row in its scratchpad, restored the
 file, ran P-11, and merged both rows on a branch by hand.
 
+**Problem (2): the panel can tell a seeded run from a review** (found 2026-10-26, on the owner's question whether the
+reviewers know about `/seed-bugs`). The measure rests on the reviewers judging the seed branch as any change, but three
+things tell them it is a test, and the first two name the defect:
+- the panel's prompt names the branch (`seed-bugs.js`, `Branch seed/P-10-perf-after-p10`): "seed", and the pattern id;
+- the base commit, the `mergeBase` the panel is given, says `seed base: the code of <sha> reverted (/seed-bugs, not
+  for review)` (`seed-branch.sh`), seen by any `git log` on the branch;
+- the catalogue is readable: reviewers have Read, Grep and Glob over the repository and `readonly-bash.sh` allows
+  `git show`, `git grep` and `git log`, so `.ai/audit/benchmark/patterns.md` (P-10: N+1, PERF-01) and the "Seeded
+  defects" section of `.ai/rules/audit.md` are in reach.
+Whether a reviewer of P-10..P-12 read the catalogue was not checked; the results stand, but `/audit` counts a seeded
+result as a hard fact, and a measure that is not blind by construction should not. Before the `security.md` series
+(P-01..P-05, #0-115).
+
 **Approach (to analyse).** Keep the rows out of the tree while a series runs and land them in one pull request after
 it: e.g. the Record phase appends to `.ai/runs/benchmark/results.md` (gitignored, like the other run artifacts), and the
 owner copies the new rows into `.ai/audit/benchmark/results.md` with the series' PR; `seed-branch.sh` then no longer
 needs to name `results.md`, and `audit-data.sh` keeps reading the tracked file. Or let `seed-branch.sh` accept a tree
 whose only change is that file and carry it aside itself (more moving parts).
+For the blind panel: (A) a branch name and a base commit message that say nothing (e.g. `review/<8 hex>` and git's
+own `Revert "<subject>"`), the pattern kept only in the workflow and the results row; with either (B1) refusing
+`.ai/audit/` to the `review-*` agents (a read hook plus `readonly-bash.sh`; leaky: `git grep` without a pathspec and
+`git show <rev>:<path>` reach it unless that hook grows pathspec rules) or (B2) leaving the catalogue readable and
+recording the residual in ADR-0044: once the prompt and the history are those of a real review, nothing points a
+reviewer at it.
+
+**Decided (owner, 2026-10-26, after /research).** 1a with a script, A, A+ and B2:
+- the rows: `scripts/factory/seed-record.sh` (through `factory-ops`, typed `{appended}`; no agent writes the row any
+  more) appends to the gitignored `.ai/runs/benchmark/results.md`; a run id already there or in the tracked file is
+  refused; a series' rows reach `.ai/audit/benchmark/results.md` in one PR; `seed-branch.sh` no longer names
+  `results.md`. This reverses ADR-0044's rejection of "results under `.ai/runs/`" (amended there, with why).
+- A: the workflow derives the branch (`review/<8 hex>`, FNV-1a of the pattern and the run id, the same on a relaunch)
+  and passes it to the scripts; the base says `Revert "<subject>"` (no sha: it would point at `main`).
+- A+ (found in the research, a fourth tell): the defect was its own commit on top of the change, so `git show HEAD`
+  showed the planted lines alone; `scripts/factory/seed-fold.sh` folds it into the change's commit after
+  `seed-check.sh`, before the panel (same tree, so the ground truth's line holds).
+- B2: the catalogue stays readable; ADR-0044 decision 6 records the residual and the evidence: the transcripts of the
+  18 reviewers of P-10..P-12 hold no read of `.ai/audit/`, `patterns.md` or `audit.md` and no text about seeding, so
+  those results stand. B1 (refuse `.ai/audit/` to reviewers) rejected: the same transcripts show `git grep … -- .ai`
+  and `-- .` as normal review searches.
+- Landing a series' rows stays a step by hand (docs/ai-factory.md), not a `--land` mode: once per series.
+
+Review round 1 (`/review` 12367, owner "1-6"): shellcheck findings fixed (Lint Workflows, found by `ci-local.sh`);
+`seed-fold.sh` also drops the run's reflog entries (the branch's, and HEAD's above the switch onto it), since
+`git log -g`/`HEAD@{1}` still showed the seeder's commit alone (architecture; confirmed in a scratch repository); a run
+id is matched in the first column only (a run id equal to a dimension was refused); a test keeps `seed-record.sh`'s
+dimensions equal to the workflow's `PANEL`; ADR-0044 decision 6 names the other residuals (the prompt's shape, the rows
+file readable during a series, the seeder's missing write scope, now an "Also" of #0-172).
+Review round 2 (`/review` 12367, owner "1-3"): no blocking finding; ADR-0044 decision 6 also names what `main`'s
+history and the owner's HEAD reflog (the runs before #0-177, `seed/P-1x-…`) say of the benchmark; `seed-fold.sh`'s
+header names the one refusal that comes after the fold; a test keeps the workflow's branch names inside
+`SEED_BRANCH_RE`.
+Review round 3 (`/review` 12367, owner "tak"): no blocking finding; `seed-record.sh` reads the id column whole before
+searching it (`cut | grep -q` under pipefail let a SIGPIPE pass a duplicate run id; a test with a long file fails on
+the old pipe); `ops()` says that its arguments must be pattern-checked; ADR-0044 names a HEAD move by another session
+during a run among the residuals; `_common.sh`'s failure shape went to #0-175 as an "Also".
 
 **Acceptance criteria.**
 AC1. Two `/seed-bugs` runs in a row need no commit and no pull request between them, shown by tests of the scripts.
 AC2. The rows of a series reach `.ai/audit/benchmark/results.md` through one pull request, and `docs/ai-factory.md`
 says so.
+AC3. The panel's prompt and the history from its `mergeBase` to the branch's head name neither the pattern nor that a
+defect was planted, and the defect is not in a commit of its own, shown by tests of the workflow and of the scripts.
+AC4. What a reviewer can still read of the catalogue (`patterns.md`, `audit.md`) is decided and recorded in ADR-0044
+with its residual, and `docs/ai-factory.md` says so.
 
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them

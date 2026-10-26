@@ -596,16 +596,20 @@ test('the agent budget: past 45 work-agent calls an agent answers nothing, and t
 
 const SEED = readFileSync(join(dirname(FILE), 'seed-bugs.js'), 'utf8')
 const SEED_ARGS = { pattern: 'P-10', commit: 'abc1234', runId: 'r1' }
-const SEEDED = { ok: true, branch: 'seed/P-10-r1', base: 'b'.repeat(40), head: 'c'.repeat(40), files: ['svc/src/main/java/A.java'] }
+// The branch of P-10, run r1: FNV-1a of "P-10\nr1" (seed-bugs.js, seedBranchOf; backlog #0-177).
+const BRANCH = 'review/0684d0a2'
+const SEEDED = { ok: true, branch: BRANCH, base: 'b'.repeat(40), head: 'c'.repeat(40), files: ['svc/src/main/java/A.java'] }
 const CHECKED = { ok: true, commit: 'd'.repeat(40), files: ['svc/src/main/java/A.java'] }
+const FOLDED = { ok: true, head: 'e'.repeat(40) }
+const RECORDED = { appended: true, file: '.ai/runs/benchmark/results.md' }
 async function seed(answers, ...given) {
   const args = given.length ? given[0] : SEED_ARGS   // not a default parameter: a test passes undefined itself
-  const fake = fakeAgent({ 'audit-synthesis': {}, 'ops:seed-branch.sh': SEEDED, 'ops:seed-check.sh': CHECKED,
-    'ops:return-to-main.sh': { onMain: true }, ...answers })
+  const fake = fakeAgent({ 'ops:seed-branch.sh': SEEDED, 'ops:seed-check.sh': CHECKED, 'ops:seed-fold.sh': FOLDED,
+    'ops:seed-record.sh': RECORDED, 'ops:return-to-main.sh': { onMain: true }, ...answers })
   const outcome = await evaluate(strip(SEED), { args, agent: fake.agent, logs: [] })
   return { outcome, calls: fake.calls }
 }
-const TRUTH = { branch: 'seed/P-10-r1', pattern: 'P-10', dimension: 'performance', rule: 'PERF-01',
+const TRUTH = { branch: BRANCH, pattern: 'P-10', dimension: 'performance', rule: 'PERF-01',
   file: 'svc/src/main/java/A.java', line: 40 }
 
 test('seed-bugs: a blocked seeder is a failed run with its reason, not a skip', async () => {
@@ -619,16 +623,16 @@ test('seed-bugs: a blocked seeder is a failed run with its reason, not a skip', 
 
 test('seed-bugs: a skip says why, or the run failed', async () => {
   const fits = await seed({ 'defect-seeder': { skipped: true, reason: 'no repository loop in this change' } })
-  assert.deepEqual(fits.outcome, { outcome: 'SKIPPED', reason: 'no repository loop in this change', cleanup: 'git branch -D seed/P-10-r1' })
+  assert.deepEqual(fits.outcome, { outcome: 'SKIPPED', reason: 'no repository loop in this change', cleanup: `git branch -D ${BRANCH}` })
   const silent = await seed({ 'defect-seeder': { skipped: true } })
   assert.equal(silent.outcome.outcome, 'FAILED')
   assert.match(silent.outcome.reason, /skipped without a reason/)
 })
 
 test('seed-bugs: a ground truth the Record phase cannot use fails the run', async () => {
-  for (const truth of [{ ...TRUTH, branch: undefined }, { ...TRUTH, branch: 'main' }, { ...TRUTH, branch: 'seed/P-10-old' },
+  for (const truth of [{ ...TRUTH, branch: undefined }, { ...TRUTH, branch: 'main' }, { ...TRUTH, branch: 'review/0584cf0f' },
     { ...TRUTH, file: '' }, { ...TRUTH, file: 'svc/src/main/java/Other.java' }, { ...TRUTH, line: undefined },
-    { ...TRUTH, rule: '' }, { ...TRUTH, dimension: 'k8s' }]) {
+    { ...TRUTH, rule: '' }, { ...TRUTH, rule: "PERF-01' 'x" }, { ...TRUTH, rule: 'perf-01' }, { ...TRUTH, dimension: 'k8s' }]) {
     const { outcome } = await seed({ 'defect-seeder': truth })
     assert.equal(outcome.outcome, 'FAILED', JSON.stringify(truth))
     assert.match(outcome.reason, /ground truth is incomplete/)
@@ -643,7 +647,8 @@ test('seed-bugs: a planted defect is measured and recorded', async () => {
   assert.equal(outcome.outcome, 'MEASURED')
   assert.equal(outcome.caughtByExpected, true)
   assert.equal(outcome.blockingByExpected, true)
-  assert.ok(calls.some((c) => c.key === 'audit-synthesis'), 'the row is recorded')
+  assert.ok(calls.some((c) => c.key === 'ops:seed-record.sh'), 'the row is recorded')
+  assert.equal(outcome.recorded, true)
   const missed = await seed({ 'defect-seeder': TRUTH })
   assert.equal(missed.outcome.caughtByExpected, false)
 })
@@ -653,23 +658,83 @@ test('seed-bugs: the branch comes from seed-branch.sh, never from the seeder, an
   assert.equal(outcome.outcome, 'MEASURED')
   const at = (k) => calls.findIndex((c) => c.key === k)
   assert.ok(at('ops:seed-branch.sh') >= 0 && at('ops:seed-branch.sh') < at('defect-seeder'), 'the branch is made before the seeder runs')
-  assert.match(calls[at('ops:seed-branch.sh')].prompt, /seed-branch\.sh 'P-10' 'r1' 'abc1234'/)
-  assert.match(calls[at('defect-seeder')].prompt, /seed\/P-10-r1 is checked out[\s\S]*svc\/src\/main\/java\/A\.java/)
+  assert.match(calls[at('ops:seed-branch.sh')].prompt, /seed-branch\.sh 'review\/0684d0a2' 'abc1234'$/)
+  assert.match(calls[at('defect-seeder')].prompt, /review\/0684d0a2 is checked out[\s\S]*svc\/src\/main\/java\/A\.java/)
   const review = calls.find((c) => c.key === 'review-performance')
   assert.match(review.prompt, new RegExp(`mergeBase: ${SEEDED.base}`), 'the panel diffs against the seed base, not the old commit')
   assert.ok(at('defect-seeder') < at('ops:seed-check.sh') && at('ops:seed-check.sh') < at('review-performance'),
     'the tree is checked after the seeder, before the panel')
-  assert.match(calls[at('ops:seed-check.sh')].prompt, new RegExp(`seed-check\\.sh 'P-10' 'r1' '${SEEDED.base}' '${SEEDED.head}'`))
-  assert.ok(at('ops:return-to-main.sh') > at('review-performance') && at('ops:return-to-main.sh') < at('audit-synthesis'),
-    'back on main before the row is written, so the row never rides onto a seed branch')
-  assert.equal(calls.at(-1).key, 'audit-synthesis')
+  assert.match(calls[at('ops:seed-check.sh')].prompt, new RegExp(`seed-check\\.sh 'review/0684d0a2' '${SEEDED.base}' '${SEEDED.head}'$`))
+  assert.ok(at('ops:return-to-main.sh') > at('review-performance') && at('ops:return-to-main.sh') < at('ops:seed-record.sh'),
+    'back on main before the row is written')
+  assert.equal(calls.at(-1).key, 'ops:seed-record.sh')
   assert.equal(outcome.recorded, true)
-  assert.match(outcome.cleanup, /git branch -D seed\/P-10-r1; commit \.ai\/audit\/benchmark\/results\.md/)
+  assert.match(outcome.cleanup, /^git branch -D review\/0684d0a2; after the series, copy its rows from \.ai\/runs\/benchmark\/results\.md/)
+})
+
+test('seed-bugs: nothing the panel is told names the pattern, the run or that a defect was planted (#0-177)', async () => {
+  for (const args of [SEED_ARGS, { pattern: 'P-01', commit: 'abc1234', runId: 'sec-after-p01' }, 'P-12 abc1234 perf-after-p12']) {
+    const pattern = typeof args === 'string' ? args.split(' ')[0] : args.pattern
+    const runId = typeof args === 'string' ? args.split(' ')[2] : args.runId
+    const { calls } = await seed({ 'defect-seeder': (({ prompt }) => ({ ...TRUTH, branch: prompt.match(/review\/[0-9a-f]{8}/)[0] })),
+      'ops:seed-branch.sh': ({ prompt }) => ({ ...SEEDED, branch: prompt.match(/review\/[0-9a-f]{8}/)[0] }) }, args)
+    const panel = calls.filter((c) => c.key.startsWith('review-'))
+    assert.equal(panel.length, 6, JSON.stringify(args))
+    for (const { prompt } of panel) {
+      assert.match(prompt, /^Autopilot review\. Branch review\/[0-9a-f]{8}\. mergeBase: /, prompt)
+      for (const tell of [/seed/i, /plant/i, /benchmark/i, /pattern/i, /P-\d/, new RegExp(runId)]) assert.doesNotMatch(prompt, tell, `${pattern}: ${prompt}`)
+    }
+    assert.match(calls.find((c) => c.key === 'ops:seed-branch.sh').prompt, /'review\/[0-9a-f]{8}'/)
+  }
+})
+
+test('seed-bugs: the branch name is the same on a relaunch and differs between runs (#0-177)', async () => {
+  const branchOf = async (args) => (await seed({ 'defect-seeder': TRUTH }, args)).calls.find((c) => c.key === 'ops:seed-branch.sh')
+    .prompt.match(/review\/[0-9a-f]{8}/)[0]
+  assert.equal(await branchOf(SEED_ARGS), BRANCH, 'FNV-1a of "P-10\\nr1"')
+  assert.equal(await branchOf('P-10 abc1234 r1'), BRANCH)
+  assert.equal(await branchOf({ ...SEED_ARGS, runId: 'r2' }), 'review/0584cf0f')
+  assert.equal(await branchOf({ ...SEED_ARGS, pattern: 'P-11' }), 'review/7442af03')
+})
+
+test('seed-bugs: the seeder\'s commit is folded into the change after the check and before the panel (#0-177)', async () => {
+  const { calls } = await seed({ 'defect-seeder': TRUTH })
+  const at = (k) => calls.findIndex((c) => c.key === k)
+  assert.ok(at('ops:seed-check.sh') < at('ops:seed-fold.sh') && at('ops:seed-fold.sh') < at('review-general'))
+  assert.match(calls[at('ops:seed-fold.sh')].prompt,
+    new RegExp(`seed-fold\\.sh 'review/0684d0a2' '${SEEDED.base}' '${SEEDED.head}' '${CHECKED.commit}'$`))
+  for (const answer of [null, { ok: false, reason: 'HEAD is not the checked commit' }, { ok: true }, { ok: true, head: 'abc' }]) {
+    const run = await seed({ 'defect-seeder': TRUTH, 'ops:seed-fold.sh': answer })
+    assert.equal(run.outcome.outcome, 'FAILED', JSON.stringify(answer))
+    assert.match(run.outcome.reason, /the seeder's commit was not folded/)
+    assert.ok(!run.calls.some((c) => c.key.startsWith('review-')), 'no panel on an unfolded branch')
+    assert.equal(run.calls.at(-1).key, 'ops:return-to-main.sh')
+  }
+})
+
+test('seed-bugs: seed-record.sh accepts exactly the panel\'s dimensions (#0-177, review round 1)', () => {
+  // Two lists, one in each language: a dimension added to PANEL alone would have every row naming it refused.
+  const panel = SEED.match(/^const PANEL = \[([^\]]*)\]/m)[1].match(/'([a-z]+)'/g).map((d) => d.slice(1, -1))
+  const record = readFileSync(join(dirname(FILE), '../../scripts/factory/seed-record.sh'), 'utf8')
+  const dims = record.match(/^DIMENSIONS=" ([a-z ]+) "$/m)[1].split(' ')
+  assert.deepEqual([...dims].sort(), [...panel].sort())
+})
+
+test('seed-bugs: the branch the workflow names is one the scripts accept (#0-177, review round 2)', async () => {
+  // The format lives twice, seedBranchOf in the workflow and SEED_BRANCH_RE in _common.sh: a drift refuses every run.
+  const common = readFileSync(join(dirname(FILE), '../../scripts/factory/_common.sh'), 'utf8')
+  const accepted = new RegExp(common.match(/^SEED_BRANCH_RE='([^']+)'$/m)[1])
+  for (const args of [SEED_ARGS, { pattern: 'P-01', commit: 'abc1234', runId: 'sec-after-p01' }, { pattern: 'P-18', commit: 'abc1234', runId: 'x' }]) {
+    const { calls } = await seed({ 'defect-seeder': TRUTH }, args)
+    const branch = calls.find((c) => c.key === 'ops:seed-branch.sh').prompt.match(/seed-branch\.sh '([^']+)'/)[1]
+    assert.match(branch, accepted, JSON.stringify(args))
+  }
+  assert.doesNotMatch('seed/P-10-r1', accepted)
 })
 
 test('seed-bugs: the panel runs only on a tree seed-check.sh confirmed (#0-173, review round 1)', async () => {
-  for (const answer of [null, { ok: false, reason: 'the tree is on main, not on seed/P-10-r1' },
-    { ok: true, files: ['svc/src/main/java/Other.java'] }, { ok: true }]) {
+  for (const answer of [null, { ok: false, reason: `the tree is on main, not on ${BRANCH}` },
+    { ok: true, files: ['svc/src/main/java/Other.java'] }, { ok: true }, { ...CHECKED, commit: undefined }, { ...CHECKED, commit: 'HEAD' }]) {
     const { outcome, calls } = await seed({ 'defect-seeder': TRUTH, 'ops:seed-check.sh': answer })
     assert.equal(outcome.outcome, 'FAILED', JSON.stringify(answer))
     assert.match(outcome.reason, /the seed branch is not as the seeder says/)
@@ -679,17 +744,17 @@ test('seed-bugs: the panel runs only on a tree seed-check.sh confirmed (#0-173, 
 })
 
 test('seed-bugs: a run that cannot get back to main says where it left the tree (#0-173, review round 1)', async () => {
-  const stuck = { onMain: false, branch: 'seed/P-10-r1', reason: 'working tree not clean: left as it is for the owner' }
+  const stuck = { onMain: false, branch: BRANCH, reason: 'working tree not clean: left as it is for the owner' }
   const measured = await seed({ 'defect-seeder': TRUTH, 'ops:return-to-main.sh': stuck })
   assert.equal(measured.outcome.outcome, 'MEASURED')
   assert.equal(measured.outcome.recorded, false)
-  assert.equal(measured.outcome.leftOn, 'seed/P-10-r1')
+  assert.equal(measured.outcome.leftOn, BRANCH)
   assert.match(measured.outcome.returnToMain, /not clean/)
-  assert.ok(!measured.calls.some((c) => c.key === 'audit-synthesis'), 'no row written on the seed branch')
-  assert.match(measured.outcome.cleanup, /git branch -D seed\/P-10-r1 once the tree is back on main/, 'names the branch (#0-176, review round 2)')
+  assert.ok(!measured.calls.some((c) => c.key === 'ops:seed-record.sh'), 'no row written off main')
+  assert.match(measured.outcome.cleanup, /git branch -D review\/0684d0a2 once the tree is back on main/, 'names the branch (#0-176, review round 2)')
   const failed = await seed({ 'defect-seeder': { blocked: true, reason: 'x' }, 'ops:return-to-main.sh': stuck })
   assert.equal(failed.outcome.outcome, 'FAILED')
-  assert.equal(failed.outcome.leftOn, 'seed/P-10-r1')
+  assert.equal(failed.outcome.leftOn, BRANCH)
   const silent = await seed({ 'defect-seeder': TRUTH, 'ops:return-to-main.sh': null })
   assert.equal(silent.outcome.recorded, false, 'no answer is not "on main"')
   const ok = await seed({ 'defect-seeder': { blocked: true, reason: 'x' } })
@@ -698,21 +763,22 @@ test('seed-bugs: a run that cannot get back to main says where it left the tree 
 
 test('seed-bugs: a failed run that made the branch says how to delete it (#0-173, review round 2)', async () => {
   for (const answers of [{ 'defect-seeder': { blocked: true, reason: 'x' } }, { 'defect-seeder': { skipped: true, reason: 'y' } },
-    { 'defect-seeder': TRUTH, 'ops:seed-check.sh': { ok: false, reason: 'z' } }, { 'ops:seed-branch.sh': { ...SEEDED, base: 'abc' } }]) {
+    { 'defect-seeder': TRUTH, 'ops:seed-check.sh': { ok: false, reason: 'z' } }, { 'ops:seed-branch.sh': { ...SEEDED, base: 'abc' } },
+    { 'defect-seeder': TRUTH, 'ops:seed-fold.sh': { ok: false, reason: 'w' } }]) {
     const { outcome } = await seed(answers)
-    assert.equal(outcome.cleanup, 'git branch -D seed/P-10-r1', JSON.stringify(answers))
+    assert.equal(outcome.cleanup, `git branch -D ${BRANCH}`, JSON.stringify(answers))
   }
   for (const answer of [null, { ok: false, reason: 'the working tree is not clean' }]) {
     const { outcome } = await seed({ 'ops:seed-branch.sh': answer })
     assert.ok(!('cleanup' in outcome), 'no branch, nothing to delete')
   }
-  const named = await seed({ 'ops:seed-branch.sh': { ...SEEDED, branch: 'seed/P-10-r1 x; rm' } })
-  assert.equal(named.outcome.cleanup, 'git branch -D seed/P-10-r1', 'the name the run asked for, never the answer\'s')
+  const named = await seed({ 'ops:seed-branch.sh': { ...SEEDED, branch: `${BRANCH} x; rm` } })
+  assert.equal(named.outcome.cleanup, `git branch -D ${BRANCH}`, 'the name the run asked for, never the answer\'s')
 })
 
 test('seed-bugs: no seed branch, no seeder; every outcome ends on main', async () => {
-  for (const answer of [null, { ok: false, reason: 'the working tree is not clean' }, { ok: true, branch: 'seed/x' },
-    { ...SEEDED, branch: 'seed/P-10-other' }, { ...SEEDED, base: 'abc' }, { ...SEEDED, head: undefined }, { ...SEEDED, files: [] }]) {
+  for (const answer of [null, { ok: false, reason: 'the working tree is not clean' }, { ok: true, branch: 'review/x' },
+    { ...SEEDED, branch: 'review/0584cf0f' }, { ...SEEDED, base: 'abc' }, { ...SEEDED, head: undefined }, { ...SEEDED, files: [] }]) {
     const { outcome, calls } = await seed({ 'ops:seed-branch.sh': answer })
     assert.equal(outcome.outcome, 'FAILED', JSON.stringify(answer))
     assert.ok(!calls.some((c) => c.key === 'defect-seeder'))
@@ -786,8 +852,10 @@ test('seed-bugs: each factory script\'s answer is typed, so the agent cannot han
   const printed = {
     'ops:seed-branch.sh': [SEEDED, { ok: false, reason: 'the working tree is not clean' }],
     'ops:seed-check.sh': [CHECKED, { ok: false, reason: 'the tree is on main' }],
-    'ops:return-to-main.sh': [{ onMain: true }, { onMain: true, left: 'seed/P-10-r1' },
-      { onMain: false, branch: 'seed/P-10-r1', reason: 'working tree not clean: left as it is for the owner' }],
+    'ops:seed-fold.sh': [FOLDED, { ok: false, reason: 'HEAD is not the checked commit' }],
+    'ops:seed-record.sh': [RECORDED, { appended: false, reason: 'the run id r1 is in .ai/runs/benchmark/results.md already' }],
+    'ops:return-to-main.sh': [{ onMain: true }, { onMain: true, left: BRANCH },
+      { onMain: false, branch: BRANCH, reason: 'working tree not clean: left as it is for the owner' }],
   }
   for (const [key, answers] of Object.entries(printed)) {
     for (const answer of [...answers, { error: 'jq: command not found', exitCode: 127 }]) {
@@ -799,6 +867,9 @@ test('seed-bugs: each factory script\'s answer is typed, so the agent cannot han
     'ops:seed-branch.sh': [{ ...SEEDED, ok: 'true' }, { ...SEEDED, files: JSON.stringify(SEEDED.files) }],
     'ops:seed-check.sh': [{ ...CHECKED, ok: 'true' }, { ...CHECKED, files: JSON.stringify(CHECKED.files) }],
     'ops:return-to-main.sh': [{ parameter: '{"onMain": true, "left": "seed/P-10-r1"}' }, { onMain: 'true' }],
+    // The same kind of answer for the scripts #0-177 added.
+    'ops:seed-fold.sh': [{ ...FOLDED, ok: 'true' }],
+    'ops:seed-record.sh': [{ ...RECORDED, appended: 'true' }, { parameter: JSON.stringify(RECORDED) }],
   }
   for (const [key, answers] of Object.entries(answered)) {
     for (const answer of answers) assert.ok(!conforms(answer, schemaOf(key)), `${key} refuses ${JSON.stringify(answer)}`)
@@ -841,27 +912,37 @@ test('seed-bugs: a verdict that is not one counts as no answer, and the run stil
   assert.deepEqual(outcome.noAnswer, ['performance'])
   assert.deepEqual(outcome.caughtBy, ['security'])
   assert.equal(outcome.caughtByExpected, false)
-  assert.ok(calls.some((c) => c.key === 'audit-synthesis'), 'the row is written')
+  assert.ok(calls.some((c) => c.key === 'ops:seed-record.sh'), 'the row is written')
+  assert.match(calls.find((c) => c.key === 'ops:seed-record.sh').prompt, /seed-record\.sh 'r1' 'P-10' 'PERF-01' 'performance' 'no' 'no' 'security' 'performance'$/)
 })
 
 test('seed-bugs: an error after the branch exists ends the run on main and names the branch (#0-176)', async () => {
   const boom = () => { throw new Error('boom') }
-  for (const answers of [{ 'defect-seeder': boom }, { 'defect-seeder': TRUTH, 'ops:seed-check.sh': boom }]) {
+  for (const answers of [{ 'defect-seeder': boom }, { 'defect-seeder': TRUTH, 'ops:seed-check.sh': boom },
+    { 'defect-seeder': TRUTH, 'ops:seed-fold.sh': boom }]) {
     const { outcome, calls } = await seed(answers)
     assert.equal(outcome.outcome, 'FAILED', Object.keys(answers).join())
     assert.match(outcome.reason, /the run stopped on an error: boom/)
-    assert.equal(outcome.cleanup, 'git branch -D seed/P-10-r1')
+    assert.equal(outcome.cleanup, `git branch -D ${BRANCH}`)
     assert.equal(calls.at(-1).key, 'ops:return-to-main.sh')
   }
 })
 
 test('seed-bugs: a measure whose row cannot be written is kept, not failed (#0-176, review round 1)', async () => {
-  const { outcome } = await seed({ 'defect-seeder': TRUTH, 'audit-synthesis': () => { throw new Error('boom') } })
+  const { outcome } = await seed({ 'defect-seeder': TRUTH, 'ops:seed-record.sh': () => { throw new Error('boom') } })
   assert.equal(outcome.outcome, 'MEASURED')
   assert.equal(outcome.recorded, false)
   assert.match(outcome.reason, /the row was not written: boom/)
   assert.deepEqual([outcome.pattern, outcome.expected, outcome.caughtByExpected], ['P-10', 'performance', false])
-  assert.match(outcome.cleanup, /git branch -D seed\/P-10-r1; check .*results\.md/)
+  assert.match(outcome.cleanup, /git branch -D review\/0684d0a2; record the row by hand in \.ai\/runs\/benchmark\/results\.md/)
+  // Only `appended: true` is recorded (#0-171's "Also", #0-177): a refusal, an untyped answer or none is not.
+  for (const answer of [{ appended: false, reason: 'the run id r1 is in .ai/runs/benchmark/results.md already' }, { appended: 'true' }, {}, null]) {
+    const r = await seed({ 'defect-seeder': TRUTH, 'ops:seed-record.sh': answer })
+    assert.equal(r.outcome.outcome, 'MEASURED', JSON.stringify(answer))
+    assert.equal(r.outcome.recorded, false, JSON.stringify(answer))
+  }
+  const refused = await seed({ 'defect-seeder': TRUTH, 'ops:seed-record.sh': { appended: false, reason: 'the run id r1 is in x already' } })
+  assert.match(refused.outcome.reason, /the row was not written: the run id r1 is in x already/)
 })
 
 test('seed-bugs: return-to-main.sh failing, even after another error, still ends with an outcome (#0-176, review round 1)', async () => {

@@ -241,15 +241,23 @@ The agents' instructions are not a boundary; these are, each with its limit:
   sha>", "runId": "<id>"}`; the command passes its words as one string, #0-174; a session runs the version of the
   workflow it loaded at its start, so after a change to `seed-bugs.js` start a new session, or pass the file as
   `scriptPath`) plants a known defect from
-  `.ai/audit/benchmark/patterns.md` on a throwaway `seed/` branch and records who caught it in
-  `.ai/audit/benchmark/results.md`. Start it from a clean `main` at `origin/main`, with no
+  `.ai/audit/benchmark/patterns.md` on a throwaway branch and records who caught it in the gitignored
+  `.ai/runs/benchmark/results.md` (`scripts/factory/seed-record.sh`). Start it from a clean `main` at `origin/main`, with no
   autopilot run: `scripts/factory/seed-branch.sh` builds the branch from `main` (the change's code reverted as its base,
   then back), never from the merged commit, whose hooks and agents the session would otherwise run on (#0-173,
   ADR-0044). `scripts/factory/seed-check.sh` confirms the tree after the seeder (on the branch, clean, its one commit in
-  the change's files) before the panel runs. The run goes back to `main` before it writes the row, and an outcome that
+  the change's files), and `scripts/factory/seed-fold.sh` folds that commit into the change's before the panel runs.
+  Nothing the panel reads names the run (#0-177): the branch is `review/<8 hex>` (derived from the pattern and the run
+  id), the base says `Revert "<subject>"`, and the change and the defect are one commit, with the run's reflog entries
+  dropped (the branch's, and HEAD's above the switch onto it; the rest of your HEAD reflog stays). The catalogue
+  (`patterns.md`, `.ai/rules/audit.md`) stays readable to the reviewers, on purpose: ADR-0044 records why and how to check
+  a run's transcripts for a read of it. The run goes back to `main` before it writes the row, and an outcome that
   could not (a dirty tree) says where it left it (`leftOn`). The commit's code must still apply to `main`, so choose a
-  recent one. Rotate patterns; after each run, commit `results.md` (the next run refuses until then) and delete the
-  branch (`git branch -D seed/…`). A run that
+  recent one. Rotate patterns; after each run delete its branch (the outcome's `cleanup` names it). Runs follow one
+  another with no commit between them; after a series, copy its rows from `.ai/runs/benchmark/results.md` into
+  `.ai/audit/benchmark/results.md` in one pull request (the audit reads only that file), then delete
+  `.ai/runs/benchmark/results.md`; a run id already in either file is refused, so a landed one stays refused. Read the
+  rows before landing them: the seeder has no write scope yet (#0-172) and could have written one. A run that
   measured nothing says so (#0-170): a seeder that was refused a command, a skip without a reason and an answer
   without its branch, file, line or rule end it FAILED, not SKIPPED.
 - **Escaped defects**: an item that fixes a defect an earlier item introduced carries
