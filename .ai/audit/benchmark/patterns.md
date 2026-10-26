@@ -14,9 +14,9 @@ the smallest edit that produces the defect in real code of the change — never 
 | P-03 | security | SEC-03 | read the tenant from a request header or body field instead of the principal |
 | P-04 | security | SEC-31 | log a token, API key or the full exception message of an auth failure at INFO |
 | P-05 | security | SEC-10 | drop the `@PreAuthorize` of an endpoint the change adds or changes, or add its path to `PUBLIC_PATHS` |
-| P-06 | architecture | ARC-20 | send an event with `KafkaTemplate.send` directly instead of through the outbox |
-| P-07 | architecture | ARC-20 | add `@Scheduled` to a method without `@SchedulerLock` |
-| P-08 | architecture | ARC-20 | initialise a `@Version Long version = 0L` |
+| P-06 | architecture | ARC-22 | send a lifecycle or audit event with `KafkaTemplate.send` directly instead of through the outbox |
+| P-07 | architecture | ARC-23 | drop the ShedLock lock (`@SchedulerLock` or `executeWithLock`) of a `@Scheduled` job that writes, sends or claims work; never a job that runs per replica on purpose |
+| P-08 | architecture | ARC-25 | initialise a `@Version Long version = 0L` |
 | P-09 | architecture | ARC-02 | add a hand-written retry loop where `AuthEmailRetryPolicy`-style deadline retries exist |
 | P-10 | performance | PERF-01 | call a repository method (or reach a lazy association) once per element of a collection, instead of one batched query (N+1), on a request path |
 | P-11 | performance | PERF-23 | move an outbound HTTP call, a direct Kafka send or an email inside a `@Transactional` method (or call it from one) |
