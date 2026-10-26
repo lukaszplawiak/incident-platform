@@ -22,8 +22,9 @@ the smallest edit that produces the defect in real code of the change — never 
 | P-11 | performance | PERF-23 | move an outbound HTTP call, a direct Kafka send or an email inside a `@Transactional` method (or call it from one) |
 | P-12 | performance | PERF-02 | replace a paged query with `findAll()` on a per-tenant table |
 | P-13 | migration | MIG-04 | add a `NOT NULL` column without a default to an existing table |
-| P-14 | migration | MIG-02 | edit an existing `V<n>` migration instead of adding one |
+| P-14 | migration | MIG-02 | retired 2026-10-26 (#0-115): cannot be planted, since the seeder may touch only the change's files and a migration the change adds is not yet on the base |
 | P-15 | general | GEN-03 | replace a state assertion in a test with a bare `verify(...)` |
 | P-16 | general | GEN-08 | add `@Disabled` to a failing test without a reason |
 | P-17 | docs | DOC-11 | change a method to throw instead of returning `null`, leave its Javadoc `@return null if…` |
 | P-18 | docs | DOC-01 | add a required config key without the README "Step 2" template line |
+| P-19 | migration | MIG-05 | add a `FOREIGN KEY` or `UNIQUE` constraint to an existing table in one step: drop its `NOT VALID` (validated later), or skip the check that no row violates it |

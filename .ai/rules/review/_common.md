@@ -46,7 +46,9 @@ startup-breaking migration or build, data loss on existing rows.
 **A rule a check covers carries one of two labels** (backlog #0-115, every rule file):
 - **"Enforced by: <check>"**: the check decides the whole invariant, a property a file has or does not have. Do not
   review it by hand or spend a finding on it: the check runs in a required CI job on the PR (the ruleset of `main`),
-  after this review, and a red check stops the merge.
+  after this review, and a red check stops the merge. A check that the owner's authorship or approval turns green
+  (the "Changes that need the owner" step of Factory guards, `check-factory-guards.sh`) does not decide a rule in
+  full: it is at most "Backed by".
 - **"Backed by: <check>"**: the check sees the known form of the rule, not a new one. The rule is still reviewed, and
   its "Check:" line says what the check misses. A finding under it blocks like any other.
 
