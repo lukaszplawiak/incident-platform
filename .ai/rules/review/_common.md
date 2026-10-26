@@ -43,6 +43,13 @@ Blocking by default, whatever the dimension (these are the cases the manual `/re
 blocking): tenant isolation, authentication or authorization, the shared security chain, a
 startup-breaking migration or build, data loss on existing rows.
 
+**A rule a check covers carries one of two labels** (backlog #0-115, every rule file):
+- **"Enforced by: <check>"**: the check decides the whole invariant, a property a file has or does not have. Do not
+  review it by hand or spend a finding on it: the check runs in a required CI job on the PR (the ruleset of `main`),
+  after this review, and a red check stops the merge.
+- **"Backed by: <check>"**: the check sees the known form of the rule, not a new one. The rule is still reviewed, and
+  its "Check:" line says what the check misses. A finding under it blocks like any other.
+
 ## NEEDS_HUMAN
 
 Answer `NEEDS_HUMAN` instead of `CHANGES_REQUESTED` when the right fix is a decision, not a correction:
@@ -52,7 +59,7 @@ Answer `NEEDS_HUMAN` instead of `CHANGES_REQUESTED` when the right fix is a deci
   service or the frontend consumes;
 - the change adds a Maven repository or plugin, a new dependency, or a new external service;
 - the change deletes or disables a test, or weakens an assertion, without a reason in `handoff.md`
-  that ties it to a changed requirement;
+  (or, outside the autopilot, in the commit message; GEN-08) that ties it to a changed requirement;
 - the change reverses an ADR without a new ADR;
 - two rules conflict, or the item's acceptance criteria contradict an ADR.
 

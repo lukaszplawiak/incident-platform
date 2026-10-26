@@ -3890,6 +3890,39 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   (`OperatorTenantBootstrap.scheduledReconcile`), P-08 on `fc368943` (`Incident`), P-09 on `82baa5dd` (the API-key
   introspection clients). Each run is started by a message that names nothing (#0-179).
 
+**Decided for `general.md` (owner, 2026-10-26, after `/research`).** A1 + B1 + C1 + D + E + F:
+- A1: the form of `security.md` and `architecture.md`; ids unchanged, none dropped as general knowledge.
+- B1: GEN-09 is retired. It told the reviewer not to quote coverage, which contradicts #0-160: the test gate's
+  artifact gives a module's coverage, and `_common.md` says a number it shows is not `unverified`. How a reviewer
+  reports a check is `_common.md`'s, which already has "Never report a check you could not run".
+- C1: GEN-22 matches the repository. `<Class>Test`, `<Class>IntegrationTest` for a real database or broker (12
+  such files), an aspect suffix (`<Class>SecurityTest`), Spring's `*ApplicationTests`, and helpers without a
+  `Test` suffix. Read literally, the old "`<Class>Test`" was a false alarm on correct files, like ARC-23's ShedLock.
+- D: "Backed by" on GEN-01 (JaCoCo's `check` and diff-cover count lines executed, not checked) and GEN-08
+  (`check-factory-guards.sh`: a deleted test, a new `@Disabled`, fewer assertion lines; `guard-tests.sh`: skip
+  options). GEN-08's reason may be in the PR as well as in `handoff.md`, which only the autopilot writes. "What a
+  linter catches" now reads "the compiler, the test gate and CI's checks": the POMs have no Java linter.
+- E: CLAUDE.md's "Surefire's `<argLine>` keeps `@{argLine}` first, or the JaCoCo agent is dropped and both coverage
+  checks silently skip" has no review rule anywhere. It is a POM rule, so it goes to `k8s.md` when that file is
+  rewritten, not here.
+- F: P-15 on `fc368943` (`IncidentEscalationEventConsumerTest` or `IncidentCommandServiceTest`) and P-16 on
+  `82baa5dd` (`RemoteApiKeyLookupServiceTest` or `CachingApiKeyIntrospectionClientTest`), each run started by a
+  message that names nothing (#0-179).
+- Review round 1: GEN-23 names the backlog item "when one applies", as CLAUDE.md "Conventions" already asks. That
+  is a rule now, so a commit without it can be cited. GEN-08's reason outside the autopilot is in the commit
+  message, not the PR: a manual `/review` runs before the PR exists and cannot read it. The two labels ("Enforced
+  by", "Backed by") are now defined in `_common.md`, which every reviewer reads; `general.md` points there.
+  `security.md` and `architecture.md` keep their own definitions until `factory.md`'s rewrite, which points all of
+  them to `_common.md`.
+- Review round 2: a manual `/review` reads uncommitted changes, so GEN-08's commit message and GEN-23's
+  `git log` do not exist yet there. GEN-08 is then `NEEDS_HUMAN`, the owner gives the reason; GEN-23 says so
+  instead of a finding. `_common.md`'s `NEEDS_HUMAN` condition names the commit message too. "Enforced by" said
+  "if CI is red on it, the autopilot stopped before you were called", which was wrong: before the panel the
+  autopilot runs only the path gate and the Maven test gate, and the checks run in required CI jobs on the PR
+  (`build-and-test`, `postgres-roles`). Fixed in `_common.md` and in `architecture.md`, where it was already on
+  main. Left for `factory.md`'s rewrite: a check that a label's claim about when its check runs matches the
+  workflow, and where a manual `/review` takes the reasons and messages these rules ask for.
+
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
   validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
@@ -3928,6 +3961,8 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   - P-09 (`arch-after-p09` on `82baa5dd`, ARC-02): a hand-written retry loop in `RemoteApiKeyLookupService`. The
     existing Resilience4j `@Retry` was named.
   general also caught all four. AC3 holds for `architecture.md`.
+- `general.md`: drafted (17 ids: GEN-01…09, 20…24, 30…32, of them GEN-09 retired). `patterns.md` is unchanged:
+  P-15 and P-16 keep GEN-03 and GEN-08; copied by the owner, with `_common.md`'s label definition (review round 1).
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.

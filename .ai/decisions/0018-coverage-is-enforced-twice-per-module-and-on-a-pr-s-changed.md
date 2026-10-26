@@ -9,7 +9,8 @@
 ## Record
 
 > Note (2026-10-05): the `code-reviewer` agent named below was split; its test-adequacy section is
-> now `review-general` (`.ai/rules/review/general.md`, rules GEN-01 to GEN-09).
+> now `review-general` (`.ai/rules/review/general.md`, rules GEN-01 to GEN-08; GEN-09
+> retired 2026-10-26, backlog #0-115).
 
 Until #0-57 no coverage rule had ever run: surefire's explicit `<argLine>` replaced the property
 `jacoco:prepare-agent` sets, so no `jacoco.exec` was written and `jacoco:check` skipped itself with
