@@ -114,6 +114,11 @@ A run that had gone through would have had the panel review under older agents a
        block. #0-179 closes this. The four rows of `.ai/audit/benchmark/results.md` are marked in their "Caught by
        expected" cell (`yes (told the pattern, #0-179)`), which `audit-data.sh` passes on to the audit. Until #0-179
        is done, start a run with a message that does not name it.
+     - **The rule files (found 2026-10-26, #0-115).** A reviewer reads its dimension's rule file on every run, so
+       that file must not mention the benchmark. `architecture.md`'s header said "a seeded result" from PR #536 on,
+       through the P-06…P-09 runs. Their transcripts show no reviewer acting on it, and it is reworded. `factory.md`
+       names the seeder, but it is read only for a diff that touches an Owner-only path, which a seed branch never
+       does (`seed-branch.sh` refuses one).
      - That a benchmark exists, and which patterns were measured before, is readable on `main` and in the clone:
        `main`'s history carries the commits that record the measures (#0-115's "seeded-defect measure"), and the
        owner's HEAD reflog keeps the runs before #0-177 (`checkout: moving from main to seed/P-10-…`, `seed base: …`)

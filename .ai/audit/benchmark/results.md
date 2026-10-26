@@ -12,6 +12,8 @@
 | arch-after-p07 | P-07 | ARC-23 | architecture | yes | yes | general | — |
 | arch-after-p08 | P-08 | ARC-25 | architecture | yes | yes | general, docs | — |
 | arch-after-p09 | P-09 | ARC-02 | architecture | yes | yes | general, security, performance, docs | — |
+| gen-after-p15 | P-15 | GEN-03 | general | yes | no | — | — |
+| gen-after-p16 | P-16 | GEN-08 | general | yes | yes | architecture, security | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -33,3 +35,12 @@ the catalogue. P-07 was planted in `OperatorTenantBootstrap.scheduledReconcile`,
 the per-replica `refreshPendingGauge` of the same class. Architecture blocked it as a job that changes shared state
 without its lock (ARC-23), not as a missing annotation. P-09 planted a three-attempt `Thread.sleep` loop in
 `RemoteApiKeyLookupService`, and architecture named the existing Resilience4j `@Retry` (ARC-02).
+
+The `general.md` series (2026-10-26, #0-115) was blind (each run started by "dalej"). gen-after-p15 is the first
+seeded defect the expected dimension saw and let through. The seeder removed
+`assertThat(incident.getEscalationLevel()).isEqualTo(2)` from `IncidentCommandServiceTest#recordsLevel`, leaving a
+bare `should().save(incident)`. general reported it under GEN-08 as non-blocking, because `IncidentTest#raisesFromZero`
+and `IncidentEscalationLevelIntegrationTest#commitsBeforeReturning` still pin the level, and approved. GEN-08 asks for
+a reason whatever else covers the behaviour, so the verdict should have been `NEEDS_HUMAN`. In a real PR, CI's
+Factory guards would have stopped it ("fewer assertion lines"). In gen-after-p16, general answered `NEEDS_HUMAN` and
+listed the bare `@Disabled` as blocking, with the revocation window it left untested as the impact.
