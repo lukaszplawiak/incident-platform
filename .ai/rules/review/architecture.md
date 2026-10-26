@@ -19,7 +19,8 @@ rules themselves), `review-architecture` also reads `factory.md` and judges that
 (`_common.md`), and every rule here is this platform's own decision.
 **Two labels name a check** (the convention of every rule file, decided with this rewrite, #0-115):
 - **"Enforced by: <check>"**: the check decides the whole invariant, a property a file has or does not have. It is
-  not reviewed by hand: do not spend a finding on it; if CI is red on it, the autopilot stopped before you were called.
+  not reviewed by hand: do not spend a finding on it; the check runs in a required CI job on the PR (the ruleset of
+  `main`), after review, and a red check stops the merge.
 - **"Backed by: <check>"**: the check sees the known form of the rule, not a new one. The rule is still reviewed, and
   its "Check:" line says what the check misses.
 
