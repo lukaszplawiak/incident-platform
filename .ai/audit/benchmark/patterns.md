@@ -9,11 +9,11 @@ the smallest edit that produces the defect in real code of the change — never 
 
 | Id | Dimension | Rule | Defect to plant |
 |---|---|---|---|
-| P-01 | security | SEC-06 | drop the `tenant_id` predicate from a native `@Query` in a repository the change touches |
+| P-01 | security | SEC-06 | drop the tenant predicate from a `@Query` (JPQL or native) or a derived query in a repository the change touches |
 | P-02 | security | SEC-04 | in a `@KafkaListener`, set `TenantContext` once for the whole batch instead of per record, or move `TenantContext.clear()` out of `finally` |
 | P-03 | security | SEC-03 | read the tenant from a request header or body field instead of the principal |
 | P-04 | security | SEC-31 | log a token, API key or the full exception message of an auth failure at INFO |
-| P-05 | security | SEC-10 | add a new endpoint's path to `PUBLIC_PATHS` |
+| P-05 | security | SEC-10 | drop the `@PreAuthorize` of an endpoint the change adds or changes, or add its path to `PUBLIC_PATHS` |
 | P-06 | architecture | ARC-20 | send an event with `KafkaTemplate.send` directly instead of through the outbox |
 | P-07 | architecture | ARC-20 | add `@Scheduled` to a method without `@SchedulerLock` |
 | P-08 | architecture | ARC-20 | initialise a `@Version Long version = 0L` |

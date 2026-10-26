@@ -120,6 +120,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
+| [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -2124,6 +2125,10 @@ but its form is the precedent: a file read only when the diff touches `.github/w
 (or rules in `security.md`, read by the implementer for every item — which no autopilot item needs, as
 `.github/` is Owner-only); decide here which.
 
+**Also (the research of #0-115's `security.md`, 2026-10-26).** Kept apart from that rewrite; why: #0-115, "Decided for
+`security.md`". The rules written here take its form (an invariant with a "Check:" line, "Backed by:" where a check
+exists).
+
 ---
 
 ### 0-139. The HPAs scale the JVM services on memory
@@ -3357,6 +3362,47 @@ AC4. What a reviewer can still read of the catalogue (`patterns.md`, `audit.md`)
 with its residual, and `docs/ai-factory.md` says so.
 
 
+### 0-178. A real defect the panel missed never becomes a seeded pattern
+
+**Type:** design · **Priority:** Medium · **Status:** Open — the owner's question in the research of #0-115's
+`security.md` (2026-10-26): should real defects found by review or audit become seeded patterns?
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** —
+**Touches:** .ai/rules/audit.md (owner), .claude/agents/audit-reviewers.md, .claude/agents/audit-synthesis.md,
+.claude/skills/apply-audit/SKILL.md, scripts/factory/audit-data.sh (+ its test), .ai/audit/benchmark/patterns.md
+(owner), docs (docs/ai-factory.md); optionally scripts/factory/seed-branch.sh and .claude/workflows/seed-bugs.js (replay)
+
+**Problem.** `.ai/audit/benchmark/patterns.md` says "A defect that escaped to `main` becomes a new pattern here (the
+audit report proposes it; the owner adds it)", but nothing does it: neither `.ai/rules/audit.md`, nor the audit agents,
+nor `/apply-audit` has a step that proposes a pattern, so the catalogue holds only the 18 synthetic patterns written at
+the start. The two signals a pattern should come from are recorded and then lost:
+- an escape (the "Fixes … Escaped from" marker of an item, vouched by `audit-data.sh`) shows what the panel
+  does not see, the most valuable pattern there is; the audit counts it, but no pattern follows, so nothing checks that
+  the rule written after it now catches it;
+- a `ruleGap` in a verdict (a defect the reviewer saw but could not block, e.g. `releases/latest` in #0-76, which became
+  #0-136) reaches the backlog only when the session that ran the review copies it; `audit-data.sh` does not collect
+  them.
+
+**Approach (to analyse).** Close the loop: escape or rule gap → the rule (new or sharpened, the owner's
+`.ai/rules/review/<dimension>.md`) → a pattern in `patterns.md` with its source → `/seed-bugs` on it once the rule is on
+`main`.
+- Which defects: an escape always; a `ruleGap` once its rule exists; a defect the panel caught and blocked only by the
+  owner's choice, for the critical classes (tenant isolation, auth) as a regression guard when rules are rewritten
+  (#0-115). Not every finding: a catalogue fed by what the panel already catches measures less and less (survivorship).
+  A pattern is a repeatable mutation ("drop the tenant predicate"), not a one-off, and not a duplicate of one there.
+- Who: the audit, which already has the escapes and the verdicts; a recommendation "pattern P-NN from <rule>, source PR
+  #…" in its report, applied by the owner with `/apply-audit` like any other. `audit-data.sh` collects the verdicts'
+  `ruleGap` entries per dimension.
+- `patterns.md` gets a "Source" column: the PR or commit of the real defect, or "synthetic".
+- Optional, "replay": for an escape, the fix commit is the exact recipe: `seed-branch.sh` could revert the fix on the
+  change that held the defect, with no seeder (deterministic, as realistic as it gets); only while that revert still
+  applies to `main`, so for recent escapes; older ones fall back to a described pattern.
+
+**Acceptance criteria.**
+AC1. A vouched escape in an audit's period ends in a recommendation for a pattern (or a recorded reason why not), shown
+by a test of the audit's data or of the synthesis' rules.
+AC2. `audit-data.sh` reports the verdicts' `ruleGap` entries per dimension, shown by its test.
+AC3. `patterns.md` names each pattern's source, and `docs/ai-factory.md` describes the loop.
+
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
 **Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
@@ -3708,6 +3754,25 @@ per pattern compares little, and the question is whether the new rules catch, no
 each file, the owner decides and copies it (`.ai/rules/` is the owner's). Then: `security`, `architecture` (with the ADR rule
 above), `general`, `migration`, `docs`, `k8s` (ids first), `factory.md`.
 
+**Decided for `security.md` (owner, 2026-10-26, after `/research`).** A′: every rule rewritten as an invariant with a
+"Check:" line, ids unchanged, none retired for being general knowledge (a blocking finding must cite a rule, so a class
+without one could not be blocked: #0-136's case), only SEC-32 retired into SEC-30 (the named secrets are a case of it).
+The 10–15 rules of point 5 are not the aim here, on purpose: the file is shorter to act on, not shorter. A rule a check
+already covers says "Backed by: <check>" and its "Check:" names what that check misses; it is still reviewed (a check
+sees the known form, not a new one). D: P-01 and P-05 reworded so they can be planted in code that exists and still
+reverts on `main`: of the revertible changes only `8ea7a120` touches a native query (`UserRepository`), so P-01 now
+names any `@Query` or derived query (`47b95294`'s JPQL counts too); no revertible change touches a `SecurityConfig`, so
+P-05 also counts a dropped `@PreAuthorize` (review round 1 corrected "no native query exists", which was wrong); hosts:
+P-01, P-03 and P-05 on `47b95294`, P-02 on `fc368943`, P-04 on `8ea7a120`. The measure needs #0-177 (merged) and a new
+session.
+#0-136 (CI supply chain) stays its own item, not part of this file's PR (owner, 2026-10-26): it is several rules
+(downloads, privileged triggers, secret-holding steps, a scanner the change can reconfigure, environment separation),
+may change `check-k8s-environments.rb`, and leaves open whether CI rules belong in `security.md`, which the implementer
+reads for every item though no autopilot item may touch `.github/`, or in a file read only for such diffs.
+For `architecture.md` (review round 1): `security.md` now says a rule a check backs is still reviewed ("Backed by:"),
+while `architecture.md` section 4 and `factory.md` section 3 say "enforced by checks, do not review by hand"; the
+implementer reads both. Choose one convention when `architecture.md` is rewritten, and apply it to the others.
+
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
   validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
@@ -3720,6 +3785,8 @@ above), `general`, `migration`, `docs`, `k8s` (ids first), `factory.md`.
   blocked by general, architecture (ARC-20) and security. AC3 holds for `performance.md`: each of P-10…P-12 caught
   by its dimension. Both runs recorded their rows themselves, which also shows #0-173's and #0-174's AC3 and #0-176's
   AC4.
+- `security.md`: drafted (26 ids, SEC-32 retired into SEC-30), with P-01 and P-05 reworded in `patterns.md`; the owner
+  copies both (`.ai/rules/` and the patterns are the owner's).
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
