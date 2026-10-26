@@ -120,7 +120,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
-| [0-177](#0-177-seed-bugs-asks-for-a-commit-on-main-between-runs-and-its-panel-can-tell-it-is-measured) | `/seed-bugs` asks for a commit on `main` between runs, and its panel can tell it is measured | ci | Medium | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3276,7 +3275,7 @@ AC4. A `/seed-bugs` run that reaches the panel records its row (the owner's P-10
 
 ### 0-177. `/seed-bugs` asks for a commit on `main` between runs, and its panel can tell it is measured
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress — found by the owner's measure of #0-115's `performance.md`
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #533 (the first series on it is #0-115's `security.md`) — found by the owner's measure of #0-115's `performance.md`
 (P-10 and P-11 run back to back, 2026-10-25); widened 2026-10-26 by the owner with the blind panel (below)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** #0-176
 **Touches:** factory (.claude/workflows/seed-bugs.js, scripts/factory/seed-branch.sh, scripts/factory/seed-check.sh,
