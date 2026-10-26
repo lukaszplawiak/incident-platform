@@ -3936,6 +3936,30 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   main. Left for `factory.md`'s rewrite: a check that a label's claim about when its check runs matches the
   workflow, and where a manual `/review` takes the reasons and messages these rules ask for.
 
+**Decided for `migration.md` (owner, 2026-10-26, after `/research`).** A1 + B1 + C1 + D + E:
+- A1: the form of the other rewritten files; ids unchanged, none dropped as general knowledge. "If nothing
+  migration-related changed, `APPROVE`" stays in the introduction as an instruction, not a rule.
+- B1, changed on review (round 1, architecture's arc-5e1c): MIG-02 is "Backed by", not "Enforced by".
+  `check-factory-guards.sh` flags a migration that exists in the base and was modified or deleted, but
+  `factory-guards.yml` passes it when the owner wrote the PR or approved its head commit. So on the owner's own PRs
+  the check decides nothing, and the hook fails open without both `jq` and `python3`, or without a base ref.
+  `_common.md` and `architecture.md` now say that such a check is at most "Backed by", naming the step that has the
+  bypass (review round 2); `factory.md` section 3 no longer lists `check-factory-guards.sh`'s items as unreviewed on
+  the owner's PRs. P-14 is still retired: it cannot be planted. `seed-check.sh` lets the seeder touch only the
+  change's files. A migration the change adds is not on the panel's base (`main` with the change reverted), so editing
+  it is no MIG-02 defect, and a migration from before the change is out of the seeder's reach.
+- C1: new pattern P-19 for MIG-05: a `FOREIGN KEY` or `UNIQUE` constraint added to an existing table in one step.
+  This is the risk of locking a table and failing on its rows that `NOT VALID` plus a later `VALIDATE` avoids, as
+  auth-service's V31 and V32 do. The rule text names no file, so it does not point a reviewer at P-19's host.
+- D: "Backed by" on MIG-03 (the smoke test starts every service with `ddl-auto: validate`; the rule leaves nullability
+  and length to the review rather than claiming what the validation skips, review round 1) and MIG-06 (the smoke test
+  migrates as `incident_app`; Testcontainers connect as a superuser). MIG-07 has no check: 10 migrations (29 lines)
+  carry the slug `CHECK`, and no test asks for it on a new table.
+- E: MIG-04 keeps one id. Unlike ARC-20, its points are one invariant: rows that already exist survive.
+- Measure: P-13 on `5af2fd55` (escalation-service V6 adds columns to the existing `escalation_tasks`) and P-19 on
+  `aace4118` (auth-service V31 adds `NOT VALID` foreign keys to existing tables), each run started by a message
+  that names nothing (#0-179).
+
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
   validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
@@ -3989,6 +4013,11 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   - Found while drafting that fix: `architecture.md`'s header (PR #536) said "a seeded result", in the file
     architecture reads on every run, so the P-06…P-09 runs had it. No reviewer's transcript acts on it. It is
     reworded (copied by the owner), and ADR-0044 records the residual: a rule file must not mention the benchmark.
+- `migration.md`: drafted (9 ids, none retired; MIG-02 "Backed by", review round 1), with P-14 retired and P-19
+  added in `patterns.md`; copied by the owner.
+  Left for `factory.md`'s rewrite (review round 3): section 3's heading still says "Enforced by checks — do not
+  review by hand", while its `check-factory-guards.sh` bullet now says those items are reviewed on the owner's
+  PRs. Under C3 that section's items take the two labels, which settles the heading.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.

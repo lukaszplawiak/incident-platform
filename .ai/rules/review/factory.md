@@ -96,9 +96,11 @@ it is red on one, say so in `unverified` (you cannot run it).
 - Only the verifier has `WebFetch`, no agent `WebSearch`, every agent declares `tools:`, the verifier's exact
   read scope in its frontmatter and in both settings files, the hook in its mode in both settings, the
   autopilot's allow rules equal the hook's hosts, the firewall opens each (`check-web-access.sh`).
-- The copies of the protected-path list (`check-protected-paths.sh`); deleted tests, weaker assertions, new
-  POM plugins or dependencies, edited migrations, an item marked ready, the build configuration
-  (`check-factory-guards.sh`).
+- The copies of the protected-path list (`check-protected-paths.sh`).
+- Deleted tests, weaker assertions, new POM plugins or dependencies, edited migrations, an item marked ready, the
+  build configuration (`check-factory-guards.sh`), but not on the owner's own PRs: its step ("Changes that need the
+  owner") passes when the owner wrote the PR or approved its commit, so there the ones a rule covers are reviewed by
+  it (GEN-08, MIG-02, K8S-08), as `_common.md`'s "Backed by" says (backlog #0-115).
 - Every hook entry of both settings files and the frontmatter of agents, skills and commands (subdirectories
   too): a command hook with `onFailure: "block"`, not in the background (`async`), a hook of `.claude/hooks/`
   with plain arguments and a row in the fail-closed table, no `disableAllHooks`, no key repeated in one map; each

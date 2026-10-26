@@ -20,7 +20,9 @@ rules themselves), `review-architecture` also reads `factory.md` and judges that
 **Two labels name a check** (the convention of every rule file, decided with this rewrite, #0-115):
 - **"Enforced by: <check>"**: the check decides the whole invariant, a property a file has or does not have. It is
   not reviewed by hand: do not spend a finding on it; the check runs in a required CI job on the PR (the ruleset of
-  `main`), after review, and a red check stops the merge.
+  `main`), after review, and a red check stops the merge. A check that the owner's authorship or approval turns
+  green (the "Changes that need the owner" step of Factory guards, `check-factory-guards.sh`) does not decide a rule
+  in full: it is at most "Backed by".
 - **"Backed by: <check>"**: the check sees the known form of the rule, not a new one. The rule is still reviewed, and
   its "Check:" line says what the check misses.
 
