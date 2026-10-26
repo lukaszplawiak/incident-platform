@@ -122,6 +122,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
+| [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3448,9 +3449,53 @@ AC4. Where a pattern has a row that was not blind and a re-run's row (AC2), the 
 tells them apart is decided with the mechanism (until then the 2026-10-26 rows say `yes (told the pattern, #0-179)` in
 "Caught by expected", review round 1).
 
+**Workaround confirmed (2026-10-26, #0-115's `architecture.md` series).** In P-06…P-09, each run was started by the
+owner's "dalej" and the workflow was called by the session. Every reviewer's first message relayed only that word.
+Until a mechanism lands, this is how a series is run.
+
 **Also (review round 1).** `.ai/rules/review/architecture.md` has no rule that a qualification on the factory's
 measurement data (a benchmark row) must be in the data the audit's script reads, not only in prose beside it
 (`audit-data.sh` keeps only the table's lines). This is a rule gap for the owner's rules.
+
+### 0-180. `/seed-bugs` measures catches, never false alarms
+
+**Type:** design · **Priority:** Low · **Status:** Open. The owner's question on P-07 of #0-115's `architecture.md`
+series (2026-10-26): the code has deliberate exceptions to a rule, so does the measure check that the panel leaves
+them alone?
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/workflows/seed-bugs.js, .claude/agents/defect-seeder.md, scripts/factory/seed-record.sh,
+scripts/factory/audit-data.sh, their tests), .ai/audit/benchmark/patterns.md and .ai/rules/audit.md (owner), docs
+(docs/ai-factory.md, ADR-0044)
+
+**Problem.** A seeded run plants a defect and counts whether its dimension blocks it: it measures catches only. A
+panel that blocks too much passes that measure too. Some rules have deliberate exceptions in the code:
+- ARC-23: `TenantWebSocketSessions` and `OperatorTenantBootstrap.refreshPendingGauge` run per replica on purpose;
+- ARC-29: a state-guarded UPDATE replaces `@Version`;
+- SEC-08: `tenant-status.read-only.allowed-writes`.
+
+A reviewer that blocks every missing `@SchedulerLock` would score 100% on P-07 and still block a correct change.
+The audit counts false alarms only from the owner's labels on real PRs (`human:fp-<dimension>`,
+`.ai/rules/audit.md`). With few autopilot PRs, that count is close to empty, and it never covers a rule's exception
+on purpose.
+
+**Approach (to analyse).**
+- "Clean" patterns in `patterns.md` (e.g. `C-01`), each a correct change that a careless reading of a rule would
+  block: a new per-replica job with its reason in the Javadoc (ARC-23), a conditional UPDATE on a one-writer row
+  (ARC-29), a new route in `allowed-writes` with its reason (SEC-08).
+- The run plants it like a pattern, but the expected answer is reversed. The expected dimension approving, or
+  raising only non-blocking findings, is a pass. A blocking finding there, or in any other dimension, is a false
+  alarm. There is no ground-truth line, so `seed-check.sh` checks only the tree.
+- The row records it apart from catches, e.g. a "Kind" column or a separate table, so `audit-data.sh` and the
+  synthesis do not count a clean run as a missed catch.
+- Rotate clean and defect runs in a series, so a reviewer cannot learn that every seeded branch holds a defect.
+
+**Acceptance criteria.**
+AC1. `patterns.md` holds at least one clean pattern per rule with a deliberate exception named in the code, starting
+with ARC-23.
+AC2. A clean run records a false alarm when a dimension blocks it, and a pass when none does. This is shown by tests
+of the workflow and of `seed-record.sh`.
+AC3. `audit-data.sh` reports clean results apart from catches, shown by its test. `docs/ai-factory.md` describes the
+clean runs.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
@@ -3872,7 +3917,17 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
 - `architecture.md`: rewritten (22 ids: ARC-01…07, 10, 20…29, 40…43, of them ARC-20 retired into ARC-22…29), with
   P-06, P-07 and P-08 renamed in `patterns.md` and P-07 reworded; copied by the owner. The packaged-secret part of old
   section 4 moved to SEC-30's "Backed by" (`check-packaged-profiles.sh`, review round 1). `/review` rounds 1 and 2:
-  no blocking finding.
+  no blocking finding. On main with PR #536. `/seed-bugs` series on main (2026-10-26), each run started by the owner's
+  "dalej" (#0-179's workaround). Every reviewer's first message relayed only that word, so the series was blind.
+  Architecture caught and blocked each pattern:
+  - P-06 (`arch-after-p06` on `fc368943`, ARC-22): a direct send instead of the outbox.
+  - P-07 (`arch-after-p07` on `aace4118`, ARC-23): the lock dropped from `scheduledReconcile`. Architecture blocked it
+    as a job that writes shared state, not for a missing annotation; the per-replica `refreshPendingGauge` beside it
+    was left alone.
+  - P-08 (`arch-after-p08` on `fc368943`, ARC-25): `@Version Long version = 0L` in `Incident`.
+  - P-09 (`arch-after-p09` on `82baa5dd`, ARC-02): a hand-written retry loop in `RemoteApiKeyLookupService`. The
+    existing Resilience4j `@Retry` was named.
+  general also caught all four. AC3 holds for `architecture.md`.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.

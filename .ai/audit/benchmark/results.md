@@ -8,6 +8,10 @@
 | sec-after-p03 | P-03 | SEC-03 | security | yes (told the pattern, #0-179) | yes | general | — |
 | sec-after-p04 | P-04 | SEC-31 | security | yes (told the pattern, #0-179) | yes | general | — |
 | sec-after-p05 | P-05 | SEC-10 | security | yes (told the pattern, #0-179) | yes | general, docs | — |
+| arch-after-p06 | P-06 | ARC-22 | architecture | yes | yes | general, security, performance, docs | — |
+| arch-after-p07 | P-07 | ARC-23 | architecture | yes | yes | general | — |
+| arch-after-p08 | P-08 | ARC-25 | architecture | yes | yes | general, docs | — |
+| arch-after-p09 | P-09 | ARC-02 | architecture | yes | yes | general, security, performance, docs | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -21,3 +25,11 @@ started the run (`/seed-bugs P-0n <sha> sec-after-p0n`). The Workflow tool puts 
 at the head of each of its agents' prompts (backlog #0-179). No reviewer's tool calls or text name a seed, a
 pattern, the run or the catalogue. Their thinking is not in the transcripts, so it cannot be checked. Count these
 four as caught by a panel that was told the pattern, not as blind results: their "Caught by expected" cell says so.
+
+The `architecture.md` series (2026-10-26, #0-115) was blind. The owner started each run with a message that names
+nothing ("dalej"), and the session called the workflow. In each of the four runs, every reviewer's first message
+relayed only that word (#0-179's workaround). No reviewer's tool calls or text name a seed, a pattern, the run or
+the catalogue. P-07 was planted in `OperatorTenantBootstrap.scheduledReconcile`, which writes shared state, not in
+the per-replica `refreshPendingGauge` of the same class. Architecture blocked it as a job that changes shared state
+without its lock (ARC-23), not as a missing annotation. P-09 planted a three-attempt `Thread.sleep` loop in
+`RemoteApiKeyLookupService`, and architecture named the existing Resilience4j `@Retry` (ARC-02).
