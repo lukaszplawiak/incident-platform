@@ -61,7 +61,8 @@ gates (backlog #0-57) only prove lines were executed; whether they were checked 
   Backed by: `check-factory-guards.sh` (a deleted test file, a new `@Disabled`, fewer assertion lines) and
   `guard-tests.sh` (options that skip tests). Check: a changed assertion that keeps its line but checks less
   (`isEqualTo` to `isNotNull`, an exact value to a range), an expected value changed to match the new code, a test
-  moved or renamed out of the run.
+  moved or renamed out of the run; a removed assertion is weakened even when other tests still pin the behaviour,
+  because what is missing is the reason, not the coverage (whether a test still fails is GEN-01's).
 - **GEN-09** retired: how a reviewer reports tests and coverage is `_common.md`'s ("Never report a check you could
   not run"; the test gate's artifact is the evidence for a test count or a coverage, #0-160), 2026-10-26. It said
   not to quote coverage, which the gate's artifact now gives.

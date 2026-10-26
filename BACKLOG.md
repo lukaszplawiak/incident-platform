@@ -3453,6 +3453,13 @@ tells them apart is decided with the mechanism (until then the 2026-10-26 rows s
 owner's "dalej" and the workflow was called by the session. Every reviewer's first message relayed only that word.
 Until a mechanism lands, this is how a series is run.
 
+**Also (#0-115's `general.md` results, review round 1).** The relayed message is not the only text a reviewer reads
+on every run. Its rule files are too, and `architecture.md`'s header said "a seeded result" from PR #536 on (ADR-0044
+records it). Only prose holds "a rule file does not mention the benchmark", so the next rewrite can bring it back.
+A Factory guards check could refuse `seed`, `seeded`, `benchmark` and `patterns.md` in `_common.md`, the dimension
+rule files other than `factory.md` (read only for an Owner-only diff, which a seed branch never is), the `review-*`
+agent definitions and the `review-procedure` skill.
+
 **Also (review round 1).** `.ai/rules/review/architecture.md` has no rule that a qualification on the factory's
 measurement data (a benchmark row) must be in the data the audit's script reads, not only in prose beside it
 (`audit-data.sh` keeps only the table's lines). This is a rule gap for the owner's rules.
@@ -3488,6 +3495,12 @@ on purpose.
 - The row records it apart from catches, e.g. a "Kind" column or a separate table, so `audit-data.sh` and the
   synthesis do not count a clean run as a missed catch.
 - Rotate clean and defect runs in a series, so a reviewer cannot learn that every seeded branch holds a defect.
+
+**Also (#0-115's `general.md` series, 2026-10-26).** A run counts as blocked only when the expected dimension lists
+the finding in `blocking` (`seed-bugs.js`, the Record phase). A rule whose answer is `NEEDS_HUMAN` (GEN-08, ARC-01,
+ARC-05, ARC-06) is stopped by that verdict too. A reviewer that answers `NEEDS_HUMAN` and leaves the finding in
+`nonBlocking` would be recorded as not blocked. It did not happen in that series (gen-after-p16 listed it as
+blocking), but the row should take the verdict into account where the rule asks for `NEEDS_HUMAN`.
 
 **Acceptance criteria.**
 AC1. `patterns.md` holds at least one clean pattern per rule with a deliberate exception named in the code, starting
@@ -3963,6 +3976,17 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   general also caught all four. AC3 holds for `architecture.md`.
 - `general.md`: drafted (17 ids: GEN-01…09, 20…24, 30…32, of them GEN-09 retired). `patterns.md` is unchanged:
   P-15 and P-16 keep GEN-03 and GEN-08; copied by the owner, with `_common.md`'s label definition (review round 1).
+  On main with PR #538.
+- `general.md` measure: `/seed-bugs` on main (2026-10-26), each run started by "dalej", blind:
+  - P-16 (`gen-after-p16` on `82baa5dd`, GEN-08): general answered `NEEDS_HUMAN` and blocked the bare `@Disabled` on
+    `CachingApiKeyIntrospectionClientTest#refreshedAfterTtl`; architecture and security caught it too.
+  - P-15 (`gen-after-p15` on `fc368943`, GEN-03): general saw the removed state assertion in
+    `IncidentCommandServiceTest#recordsLevel` but approved, as other tests still pin the level. GEN-08 wants a reason
+    whatever else covers it. GEN-08's "Check:" now says so (copied by the owner). AC3 does not hold for `general.md`
+    yet: P-15 is run again on that rule (`gen-after-p15-r2`) once it is on main.
+  - Found while drafting that fix: `architecture.md`'s header (PR #536) said "a seeded result", in the file
+    architecture reads on every run, so the P-06…P-09 runs had it. No reviewer's transcript acts on it. It is
+    reworded (copied by the owner), and ADR-0044 records the residual: a rule file must not mention the benchmark.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.

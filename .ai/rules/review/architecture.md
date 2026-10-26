@@ -4,7 +4,7 @@ Owned by the maintainer; agents never edit it. Sections 2 and 3 were moved from
 `.claude/agents/code-reviewer.md` on 2026-10-05 (with ids); sections 1 and 4 were new then. Rewritten as
 invariants on 2026-10-26 (backlog #0-115): each rule says what is true of the code, and its "Check:" line what to look
 for in a diff. No id changed its meaning. ARC-20 is retired: it was split into ARC-22…ARC-29, one rule per decided
-pattern, so a finding and a seeded result name the pattern they are about. ARC-07 (an ADR for a decision CI enforces)
+pattern, so a finding names the pattern it is about. ARC-07 (an ADR for a decision CI enforces)
 and ARC-43 (the log format) are new; section 4 gave its rules ids (ARC-40…ARC-43).
 The `architect` agent reads this file too, before it plans an item.
 
