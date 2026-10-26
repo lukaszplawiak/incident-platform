@@ -36,9 +36,11 @@ import java.util.concurrent.ConcurrentHashMap;
  * keeps its sessions: reading is what it is left with.
  *
  * <h2>No ShedLock, on purpose</h2>
- * Every other {@code @Scheduled} job carries a ShedLock so that replicas do not
- * double-fire. This one must run on every replica: the sessions are held in
- * this JVM, and a lock would leave every other replica's sessions open.
+ * A {@code @Scheduled} job that changes shared state runs under ShedLock so that
+ * replicas do not double-fire (architecture rule ARC-23). This one must run on
+ * every replica: the sessions are held in this JVM, and a lock would leave every
+ * other replica's sessions open. auth-service's
+ * {@code OperatorTenantBootstrap.refreshPendingGauge} is the other such job.
  */
 @Component
 public class TenantWebSocketSessions implements WebSocketHandlerDecoratorFactory {

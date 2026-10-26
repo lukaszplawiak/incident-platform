@@ -112,8 +112,9 @@ it — read that file before changing code in its area (`.ai/README.md` has the 
 - **Migrations**: number after the highest `V<n>` of that service only; `ddl-auto` is `validate`; no
   superuser rights; never edit a migration that is already on `main`. → `architecture.md`
 - **Decided patterns**: outbox for `incidents.lifecycle` and audit events, ShedLock on every
-  `@Scheduled`, `@Version Long` left uninitialised, `clearAutomatically` always with
-  `flushAutomatically`, deadline-bounded retries. → `architecture.md`, `.ai/decisions/`
+  `@Scheduled` job that changes shared state (a per-replica job says why in its Javadoc), `@Version Long`
+  left uninitialised, `clearAutomatically` always with `flushAutomatically`, deadline-bounded retries.
+  → `architecture.md`, `.ai/decisions/`
 - **Nothing under `src/main/resources`** carries a Spring profile or a literal secret. → `infrastructure.md`
 - **Logs** are one ECS JSON object per line, set by `shared` (`StructuredLoggingDefaults`); nothing deployed
   changes the format, and no log line carries a token, secret, password, key or raw payload. → CLAUDE.md

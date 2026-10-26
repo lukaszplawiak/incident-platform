@@ -3404,6 +3404,11 @@ by a test of the audit's data or of the synthesis' rules.
 AC2. `audit-data.sh` reports the verdicts' `ruleGap` entries per dimension, shown by its test.
 AC3. `patterns.md` names each pattern's source, and `docs/ai-factory.md` describes the loop.
 
+**Also (review round 2 of #0-115's `architecture.md`).** Nothing checks that the rule a pattern cites is a live id
+of its dimension's file. Retiring ARC-20 left P-06…P-08 citing it until the same PR renamed them, and nothing would
+have failed if it had not. A Factory guards check could read `patterns.md`'s "Rule" column against the ids of
+`.ai/rules/review/<dimension>.md` and refuse one that is missing or `retired`.
+
 ### 0-179. The Workflow tool shows the panel the `/seed-bugs` command that started the run
 
 **Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-10-26 in the transcripts of #0-115's `security.md`
@@ -3817,6 +3822,29 @@ For `architecture.md` (review round 1): `security.md` now says a rule a check ba
 while `architecture.md` section 4 and `factory.md` section 3 say "enforced by checks, do not review by hand"; the
 implementer reads both. Choose one convention when `architecture.md` is rewritten, and apply it to the others.
 
+**Decided for `architecture.md` (owner, 2026-10-26, after `/research`).** A1 + B2 + C3 + D1–D3 + E1:
+- A1: the form of `security.md`; ids unchanged, none dropped as general knowledge.
+- B2: ARC-20, eight patterns under one id, is retired and split into ARC-22…ARC-29, one per pattern. With one id the
+  seeded patterns P-06, P-07 and P-08 gave one number, and the audit could not tell which pattern the panel misses.
+  P-06 is now ARC-22, P-07 ARC-23 and P-08 ARC-25 in `patterns.md`.
+- C3, the convention for every rule file: "Enforced by: <check>" when the check decides the whole invariant (not
+  reviewed, no "Check:" line), "Backed by: <check>" when it sees only the known form (reviewed). `security.md`
+  already fits. `factory.md` section 3 takes the labels when it is rewritten.
+- D1: ARC-07, the ADR rule above. D2: ShedLock only on a job that changes shared state, taken by `@SchedulerLock` or
+  `executeWithLock`; a job that runs on every replica says why in its Javadoc (ARC-23). "ShedLock on every
+  `@Scheduled`" did not match the code. `TenantWebSocketSessions` and
+  `OperatorTenantBootstrap.refreshPendingGauge` are per replica on purpose. `PausedTenantsSync` and
+  `AuditOutboxRelay` (`relay`, `purge`) lock programmatically. CLAUDE.md, `.ai/context/architecture.md` and
+  `TenantWebSocketSessions`' Javadoc now say so (review round 1). P-07 is reworded so it is never planted
+  in such a job. D3: ARC-43, the ECS log format, until now the one invariant of CLAUDE.md with no review rule. It is
+  "Backed by", not "Enforced by": `check-structured-logging.sh` matches the usual spellings, and the guard only warns
+  about the switch.
+- Section 4 gave its rules ids (ARC-40…ARC-43). The Dockerfile/Deployment pair and the overlays' profiles left it:
+  they are K8S-01's and K8S-04's.
+- E1: P-06 on `fc368943` (`IncidentCommandService` or the escalation consumer), P-07 on `aace4118`
+  (`OperatorTenantBootstrap.scheduledReconcile`), P-08 on `fc368943` (`Incident`), P-09 on `82baa5dd` (the API-key
+  introspection clients). Each run is started by a message that names nothing (#0-179).
+
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
   validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
@@ -3841,6 +3869,10 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   owner's to relay. The leak is #0-179, which also re-runs those four. No reviewer's tool calls or text name a seed, the
   run or the catalogue, but their thinking is not in the transcripts. AC3 holds for `security.md` with that
   qualification, recorded with the rows.
+- `architecture.md`: rewritten (22 ids: ARC-01…07, 10, 20…29, 40…43, of them ARC-20 retired into ARC-22…29), with
+  P-06, P-07 and P-08 renamed in `patterns.md` and P-07 reworded; copied by the owner. The packaged-secret part of old
+  section 4 moved to SEC-30's "Backed by" (`check-packaged-profiles.sh`, review round 1). `/review` rounds 1 and 2:
+  no blocking finding.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.

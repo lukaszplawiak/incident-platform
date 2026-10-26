@@ -104,8 +104,11 @@ the attack scenario: a specific, concrete way this could be exploited or trigger
   and workflow files hold no secret, API key or credential; a secret (`jwt.secret`, `mfa.encryption-key`,
   `slack.encryption-key`, `gemini.api-key` and any new one) is read from configuration or the environment, never a
   literal (`application-local.yml`, gitignored, holds a developer's values). Backed by:
-  `secret-scan.sh` (betterleaks on a PR's commits; known secret shapes only). Check: a new literal that is a
-  credential in a shape the scan does not know, or a secret given a default.
+  `secret-scan.sh` (betterleaks on a PR's commits; known secret shapes only) and `check-packaged-profiles.sh` (in a
+  packaged `application.*`, a key ending in `secret`, `encryption-key`, `private-key` or `api-key` is a bare `${VAR}`;
+  moved here from `architecture.md`'s section 4, review round 1 of its rewrite). Check: a new literal that is a
+  credential in a shape the scan does not know or under a key name the check does not match, or a secret given a
+  default.
 - **SEC-31 No secret or raw payload is logged or returned.** A token, secret, password, key or raw payload reaches no
   log line (at any level), exception message, audit metadata, dead-letter reason or anything a client can read; a
   provider's text goes to the log only, never to a tenant-readable record (#0-93). Check: a new log statement,
