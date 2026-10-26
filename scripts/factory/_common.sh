@@ -10,6 +10,12 @@ mkdir -p "$RUNS_DIR"
 
 command -v jq >/dev/null 2>&1 || { echo '{"ok":false,"reasons":["jq is not installed"]}'; exit 1; }
 
+# The branch a /seed-bugs run plants its defect on: a name that says nothing of the run (backlog #0-177). The workflow
+# derives it from the pattern and the run id (seed-bugs.js, seedBranchOf); seed-branch.sh, seed-check.sh and
+# seed-fold.sh take it as given and accept nothing else.
+# shellcheck disable=SC2034 # read by the seed-*.sh scripts that source this file, not here
+SEED_BRANCH_RE='^review/[0-9a-f]{8}$'
+
 # Same rule as .claude/hooks/_lib.sh: during a run, the commit recorded in .ai/runs/LOCK.
 base_ref() {
     local sha

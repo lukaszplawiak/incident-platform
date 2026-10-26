@@ -3,23 +3,29 @@
 # The branch a /seed-bugs run plants its defect on (backlog #0-173). Prints one JSON object:
 #   {"ok": true, "branch", "base", "head", "files": [...]}   or   {"ok": false, "reason"}
 #
-#   seed-branch.sh <pattern> <run id> <commit>
+#   seed-branch.sh <branch> <commit>
 #
 # The branch starts from the current main, never from the merged change itself: the hooks, settings, agents and rules
 # the session runs on live in this working tree (and Claude Code reads them from disk), so a switch to an old commit
 # ran the whole run on that commit's guards and agents (2026-10-25: 253e5b2a's guard refused the seeder, its tree had
-# no read-scope.sh, the owner's session lost its verifier). Instead, on `seed/<pattern>-<run id>` from main:
-#   commit A (the base the panel diffs against): the change's code reverted;
+# no read-scope.sh, the owner's session lost its verifier). Instead, on <branch> from main:
+#   commit A (the base the panel diffs against): the change's code reverted, as git's own `Revert "<subject>"`;
 #   commit B: the change's code back, under the change's own subject;
-# and the seeder then plants the defect in one of `files` and commits it. The panel reviews B and the defect as one
-# change, as the benchmark means, under main's hooks, agents and rules.
+# and the seeder then plants the defect in one of `files` and commits it, and seed-fold.sh folds that commit into B. The
+# panel reviews B and the defect as one change, as the benchmark means, under main's hooks, agents and rules.
+# Nothing the panel reads names the run (backlog #0-177): <branch> is `review/<8 hex>`, a name the workflow derives from
+# the pattern and the run id and the reviewers cannot read back, and A's message is the one `git revert` would write.
+# The P-10..P-12 runs had `seed/<pattern>-<run id>` in the panel's prompt and "seed base … (/seed-bugs, not for
+# review)" one `git log` away; their reviewers' transcripts show no read of the catalogue, but the measure must not rest
+# on that.
 # Only the change's code is replayed: Markdown and the backlog files would clash with today's main. A rename is a
 # deletion and an addition (--no-renames), and `files` (where the seeder may plant) leaves out the files the change
 # deleted. A merge commit is replayed as its whole pull request (the diff from its first parent), under the subject of
-# its second parent. Refused: a tree that is not a clean main at origin/main (an uncommitted results.md of the last
-# run is named, so the owner commits it), an autopilot run in progress (.ai/runs/LOCK), a branch that exists, a change
-# that touches a path of .ai/rules/protected-paths.md or CLAUDE.md (its revert would change the evaluator), a change
-# with no code left to replay or to plant in, and one that no longer applies to main (then a newer commit is needed).
+# its second parent. Refused: a tree that is not a clean main at origin/main (a run's row goes to the gitignored
+# .ai/runs/benchmark/results.md, seed-record.sh, so it never dirties main: #0-177), an autopilot run in progress
+# (.ai/runs/LOCK), a branch that exists, a change that touches a path of .ai/rules/protected-paths.md or CLAUDE.md
+# (its revert would change the evaluator), a change with no code left to replay or to plant in, and one that no longer
+# applies to main (then a newer commit is needed).
 # On any refusal after the branch exists, the tree goes back to main and the branch is deleted. ADR-0044.
 # Run by the seed-bugs workflow through factory-ops. Tested by .github/scripts/test-seed-branch.sh.
 # ============================================================
@@ -36,21 +42,14 @@ undo() {   # undo <reason>: back to main, the half-made branch gone, then refuse
     refuse "$1"
 }
 
-[ $# -eq 3 ] || refuse "usage: seed-branch.sh <pattern> <run id> <commit>"
-pattern=$1 run=$2 commit=$3
-[[ $pattern =~ ^P-[0-9]+$ ]] || refuse "not a pattern id: ${pattern:0:40}"
-[[ $run =~ ^[A-Za-z0-9._-]+$ ]] || refuse "not a run id: ${run:0:40}"
+[ $# -eq 2 ] || refuse "usage: seed-branch.sh <branch> <commit>"
+branch_name=$1 commit=$2
+[[ $branch_name =~ $SEED_BRANCH_RE ]] || refuse "not a seed branch name (review/<8 hex>): ${branch_name:0:40}"
 [[ $commit =~ ^[0-9a-f]{7,40}$ ]] || refuse "not a commit: ${commit:0:40}"
 
 [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ] || refuse "not on main: start /seed-bugs from main"
-results=.ai/audit/benchmark/results.md
 dirty=$(git status --porcelain --untracked-files=all 2>/dev/null) || refuse "cannot read the working tree's status"
-if [ -n "$dirty" ]; then
-    # The last run's row (the Record phase writes it on main): committed by the owner, never carried onto a seed branch.
-    # One status line ("XY <path>") naming exactly that file; a second line keeps the newline and does not match.
-    if [ "${dirty:3}" = "$results" ]; then refuse "commit $results (the last run's result) first"; fi
-    refuse "the working tree is not clean"
-fi
+[ -z "$dirty" ] || refuse "the working tree is not clean"
 head=$(git rev-parse HEAD) || refuse "cannot read HEAD"
 origin=$(git rev-parse --verify --quiet refs/remotes/origin/main) || refuse "no refs/remotes/origin/main: fetch first"
 [ "$head" = "$origin" ] || refuse "main is not at origin/main: pull first"
@@ -59,7 +58,6 @@ origin=$(git rev-parse --verify --quiet refs/remotes/origin/main) || refuse "no 
 sha=$(git rev-parse --verify --quiet "$commit^{commit}") || refuse "no such commit: $commit"
 git merge-base --is-ancestor "$sha" "$head" || refuse "$commit is not on main"
 parent=$(git rev-parse --verify --quiet "$sha^1") || refuse "$commit has no parent"
-branch_name="seed/$pattern-$run"
 git show-ref --verify --quiet "refs/heads/$branch_name" && refuse "the branch $branch_name exists already"
 
 changed=$(git diff --name-only --no-renames "$parent" "$sha") || refuse "cannot list the change's files"
@@ -89,7 +87,8 @@ subject=$(git log -1 --format=%s "$sha^2" 2>/dev/null || git log -1 --format=%s 
 branch=$branch_name
 git switch --quiet -c "$branch" "$head" || undo "cannot create $branch"
 git apply --index -R "$patch" 2>/dev/null || undo "the change no longer applies to main (its code changed since): choose a newer commit"
-git commit --quiet -m "seed base: the code of $commit reverted (/seed-bugs, not for review)" || undo "cannot commit the base"
+# git revert's subject, without its "This reverts commit <sha>." line: that sha is on main, and would say the change is.
+git commit --quiet -m "Revert \"$subject\"" || undo "cannot commit the base"
 base=$(git rev-parse HEAD)
 git apply --index "$patch" || undo "the change does not apply back on its base"
 git commit --quiet -m "$subject" || undo "cannot commit the change"
