@@ -251,8 +251,10 @@ The agents' instructions are not a boundary; these are, each with its limit:
   id), the base says `Revert "<subject>"`, and the change and the defect are one commit, with the run's reflog entries
   dropped (the branch's, and HEAD's above the switch onto it; the rest of your HEAD reflog stays). The catalogue
   (`patterns.md`, `.ai/rules/audit.md`) stays readable to the reviewers, on purpose: ADR-0044 records why and how to check
-  a run's transcripts for a read of it. The run goes back to `main` before it writes the row, and an outcome that
-  could not (a dirty tree) says where it left it (`leftOn`). The commit's code must still apply to `main`, so choose a
+  a run's transcripts for a read of it. One leak is still open (#0-179). The Workflow tool shows every agent,
+  word for word, the message that started the run, so a typed `/seed-bugs P-01 …` names the pattern to the panel.
+  Until #0-179 is done, start a run with a message that does not name it (the session calls `Workflow` itself).
+  The run goes back to `main` before it writes the row, and an outcome that could not (a dirty tree) says where it left it (`leftOn`). The commit's code must still apply to `main`, so choose a
   recent one. Rotate patterns; after each run delete its branch (the outcome's `cleanup` names it). Runs follow one
   another with no commit between them; after a series, copy its rows from `.ai/runs/benchmark/results.md` into
   `.ai/audit/benchmark/results.md` in one pull request (the audit reads only that file), then delete

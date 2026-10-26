@@ -105,6 +105,15 @@ A run that had gone through would have had the panel review under older agents a
        and the change itself is in `main`'s history. None of it names a test, but a reviewer that looks can find the
        review unusual; giving the prompt an autopilot item's shape would mean inventing one.
      - `.ai/runs/benchmark/results.md` is in reach of the reviewers during a series, and says a measure is running.
+     - **The message that started the run (found 2026-10-26, in the `security.md` series of #0-115).** The Workflow
+       tool starts every agent's first message with `[Workflow harness — user request]`, which holds the user's
+       message that started the run, word for word. Started by the owner's `/seed-bugs P-01 47b95294 sec-after-p01`,
+       each reviewer read the command, the pattern and the run id. This happened in P-01, P-03, P-04 and P-05. P-02,
+       started by the session's own turn, had no such block, and P-10..P-12 relayed "tak" and "rób". No tool call or
+       text of a reviewer acted on it, but their thinking is not in the transcripts. `seed-bugs.js` cannot remove the
+       block. #0-179 closes this. The four rows of `.ai/audit/benchmark/results.md` are marked in their "Caught by
+       expected" cell (`yes (told the pattern, #0-179)`), which `audit-data.sh` passes on to the audit. Until #0-179
+       is done, start a run with a message that does not name it.
      - That a benchmark exists, and which patterns were measured before, is readable on `main` and in the clone:
        `main`'s history carries the commits that record the measures (#0-115's "seeded-defect measure"), and the
        owner's HEAD reflog keeps the runs before #0-177 (`checkout: moving from main to seed/P-10-…`, `seed base: …`)

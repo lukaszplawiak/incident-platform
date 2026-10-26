@@ -121,6 +121,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
+| [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3403,6 +3404,49 @@ by a test of the audit's data or of the synthesis' rules.
 AC2. `audit-data.sh` reports the verdicts' `ruleGap` entries per dimension, shown by its test.
 AC3. `patterns.md` names each pattern's source, and `docs/ai-factory.md` describes the loop.
 
+### 0-179. The Workflow tool shows the panel the `/seed-bugs` command that started the run
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-10-26 in the transcripts of #0-115's `security.md`
+series, read before landing its rows (ADR-0044 decision 6).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** docs (docs/ai-factory.md, ADR-0044, .ai/audit/benchmark/results.md); optionally
+.claude/skills/seed-bugs/SKILL.md or the command's text (owner), .claude/workflows/seed-bugs.js,
+scripts/factory/audit-data.sh (+ its test)
+
+**Problem.** #0-177 made the panel's prompt, branch and history say nothing about the run. But the Workflow tool
+starts the first message of every agent with a block of its own, `[Workflow harness — user request]`. That block
+holds, word for word, the user's message that started the workflow. When the owner types
+`/seed-bugs P-01 47b95294 sec-after-p01`, each reviewer reads "seed-bugs", the pattern id and the run id before its
+task. This happened in four of the five `security.md` runs (P-01, P-03, P-04, P-05). In P-02 the session started the
+run in its own turn, after the previous run's notification, so the block was absent. The P-10..P-12 runs of
+2026-10-25 relayed the owner's "tak" and "rób", which say nothing. The script cannot remove the block: the tool adds
+it, not `seed-bugs.js`. The transcripts show no reviewer acting on it: no tool call or text names a seed, a pattern
+or the catalogue. But their thinking is not recorded, so a result from such a run is not blind by construction.
+
+**Approach (to analyse).**
+- A neutral start: the owner starts each run with a message that names no pattern, e.g. a plain "next run" once the
+  session holds the series' list. The session then calls `Workflow` with the args. This needs no code. It does rest on
+  the owner's habit and on the tool keeping that behaviour.
+- The series in one call: `seed-bugs.js` takes a list of `pattern commit runId` triples and runs them one after
+  another. Only one start message is relayed, and it can stay neutral. This changes the workflow and its tests.
+- A check before a series' rows land: search the reviewers' first message for the run's pattern or run id and mark the
+  row as not blind. `audit-data.sh` would then count only blind rows as a hard fact. This means a column in
+  `results.md` and changes to the script and its test.
+- Recorded in ADR-0044 decision 6, as one more thing that told the panel it was measured.
+
+**Acceptance criteria.**
+AC1. A `/seed-bugs` run's reviewers receive no message that names the pattern, the run id or `seed-bugs`, shown by
+their first message in a run's transcripts, or by a test where the mechanism is a script's.
+AC2. P-01, P-03, P-04 and P-05 run again that way (new run ids), and their rows land beside the 2026-10-26 ones.
+AC3. ADR-0044 and `docs/ai-factory.md` name the relayed message and how a run avoids it.
+AC4. Where a pattern has a row that was not blind and a re-run's row (AC2), the audit counts only the blind one. How it
+tells them apart is decided with the mechanism (until then the 2026-10-26 rows say `yes (told the pattern, #0-179)` in
+"Caught by expected", review round 1).
+
+**Also (review round 1).** `.ai/rules/review/architecture.md` has no rule that a qualification on the factory's
+measurement data (a benchmark row) must be in the data the audit's script reads, not only in prose beside it
+(`audit-data.sh` keeps only the table's lines). This is a rule gap for the owner's rules.
+
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
 **Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
@@ -3786,7 +3830,17 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   by its dimension. Both runs recorded their rows themselves, which also shows #0-173's and #0-174's AC3 and #0-176's
   AC4.
 - `security.md`: drafted (26 ids, SEC-32 retired into SEC-30), with P-01 and P-05 reworded in `patterns.md`; the owner
-  copies both (`.ai/rules/` and the patterns are the owner's).
+  copies both (`.ai/rules/` and the patterns are the owner's). On main with PR #534. `/seed-bugs` series on main
+  (2026-10-26, the first one run on #0-177, with no commit between runs): security caught and blocked each pattern:
+  P-01 (`sec-after-p01` on `47b95294`, SEC-06), P-02 (`sec-after-p02` on `fc368943`, SEC-04), P-03 (`sec-after-p03` on
+  `47b95294`, SEC-03), P-04 (`sec-after-p04` on `aace4118`, SEC-31) and P-05 (`sec-after-p05` on `47b95294`, SEC-10).
+  general also caught all five. P-04 was planned on `8ea7a120`, but `seed-branch.sh` refused it: that merge of PR #459
+  changes `CLAUDE.md`, the evaluator. `aace4118` is the same PR's code commit. Only P-02 was blind. The reviewers of the
+  other four were also shown the owner's `/seed-bugs` command, pattern included: the Workflow tool puts the message that
+  started a run at the head of each agent's prompt. P-02 was started by the session's own turn, with no message of the
+  owner's to relay. The leak is #0-179, which also re-runs those four. No reviewer's tool calls or text name a seed, the
+  run or the catalogue, but their thinking is not in the transcripts. AC3 holds for `security.md` with that
+  qualification, recorded with the rows.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
