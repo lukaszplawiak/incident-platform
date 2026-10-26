@@ -3983,7 +3983,9 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   - P-15 (`gen-after-p15` on `fc368943`, GEN-03): general saw the removed state assertion in
     `IncidentCommandServiceTest#recordsLevel` but approved, as other tests still pin the level. GEN-08 wants a reason
     whatever else covers it. GEN-08's "Check:" now says so (copied by the owner). AC3 does not hold for `general.md`
-    yet: P-15 is run again on that rule (`gen-after-p15-r2`) once it is on main.
+    yet: P-15 is run again on that rule (`gen-after-p15-r2`) once it is on main. Done (PR #539 on main): the seeder
+    planted the same edit at the same line, and general answered `NEEDS_HUMAN` with it listed as blocking under GEN-08.
+    AC3 holds for `general.md`.
   - Found while drafting that fix: `architecture.md`'s header (PR #536) said "a seeded result", in the file
     architecture reads on every run, so the P-06…P-09 runs had it. No reviewer's transcript acts on it. It is
     reworded (copied by the owner), and ADR-0044 records the residual: a rule file must not mention the benchmark.
