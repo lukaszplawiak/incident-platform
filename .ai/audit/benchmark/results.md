@@ -18,6 +18,8 @@
 | mig-after-p13 | P-13 | MIG-04 | migration | yes | yes | general, docs | — |
 | docs-after-p17 | P-17 | DOC-11 | docs | no | no | general, architecture | — |
 | docs-after-p18 | P-18 | DOC-01 | docs | yes | yes | general | — |
+| k8s-after-p20 | P-20 | K8S-08 | k8s | yes | yes | general, architecture, security, docs | — |
+| k8s-after-p21 | P-21 | K8S-10 | k8s | yes | yes | general, architecture, docs | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -68,3 +70,11 @@ apart read as a miss (backlog #0-181). Read by hand: caught and blocked by docs.
 `static` method reads the field `id`); security and architecture said so, and no test gate runs before the panel
 (#0-181 too). docs-after-p18: docs blocked the required key with no default and no README "Step 2" line at the
 planted line of ingestion-service's `application.yml`.
+
+The `k8s.md` series (2026-10-27, #0-115) was the first with k8s on the panel (seven reviewers), each run blind
+(every reviewer's first message relayed only "dalej"). k8s-after-p20: the seeder added a `<repositories>` block with
+an HTTP snapshot repository to the root `pom.xml`; k8s answered `NEEDS_HUMAN` with it blocking under K8S-08, one line
+from the planted one. k8s-after-p21: the seeder replaced `@{argLine}` with `${argLine}` in surefire's `<argLine>`; k8s
+blocked it under K8S-10 at the planted line, naming the coverage checks that would skip. P-22 has no row: its host,
+`4e608067`, also changes `check-k8s-environments.rb` and `ci.yml`, so `seed-branch.sh` refused it as touching the
+evaluator, and no other revertible change touches a Deployment.
