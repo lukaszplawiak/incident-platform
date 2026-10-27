@@ -241,7 +241,8 @@ The agents' instructions are not a boundary; these are, each with its limit:
   sha>", "runId": "<id>"}`; the command passes its words as one string, #0-174; a session runs the version of the
   workflow it loaded at its start, so after a change to `seed-bugs.js` start a new session, or pass the file as
   `scriptPath`) plants a known defect from
-  `.ai/audit/benchmark/patterns.md` on a throwaway branch and records who caught it in the gitignored
+  `.ai/audit/benchmark/patterns.md` on a throwaway branch, has all seven reviewers review it (k8s since #0-115's
+  `k8s.md`) and records who caught it in the gitignored
   `.ai/runs/benchmark/results.md` (`scripts/factory/seed-record.sh`). Start it from a clean `main` at `origin/main`, with no
   autopilot run: `scripts/factory/seed-branch.sh` builds the branch from `main` (the change's code reverted as its base,
   then back), never from the merged commit, whose hooks and agents the session would otherwise run on (#0-173,

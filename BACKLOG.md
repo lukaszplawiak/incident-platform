@@ -124,6 +124,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
+| [0-182](#0-182-the-k8s-reviewers-guard-lets-kubectl-kustomize-and-kubeconform-take-any-option) | The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option | security | High | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3557,6 +3558,43 @@ AC1. A finding at any place of the ground truth counts as a catch; shown by a wo
 AC2. A plant that does not compile ends the run before the panel, with a recorded reason; shown by a test.
 AC3. P-17 run again on `fc368943` after the change records docs as caught without a hand reading.
 
+### 0-182. The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option
+
+**Type:** security · **Priority:** High · **Status:** Open. Found by security in review round 2 of #0-115's
+`k8s.md` (2026-10-27), as a non-blocking finding on code that change did not touch.
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/hooks/readonly-bash.sh, .claude/hooks/test-hooks.sh, .claude/agents/review-k8s.md),
+.ai/rules/review/factory.md (owner), security (README "Infrastructure Hardening")
+
+**Problem.** `readonly-bash.sh --k8s` (lines 79-81) lets `review-k8s` run `kubectl kustomize` and `kubeconform` as
+soon as the first words match, with any further argument. The hook already refuses pipes, chaining, redirects,
+substitutions and `--output` for every mode, but not these tools' own options:
+- `kubectl kustomize -o <file>` writes a file;
+- `kubectl kustomize --enable-alpha-plugins --enable-exec` runs the program a kustomization of the reviewed branch
+  names (an exec plugin or a KRM function), and `--load-restrictor LoadRestrictionsNone` reads outside the directory;
+- a remote resource in a kustomization, or `kubeconform -schema-location <url>`, fetches from the network.
+
+The reviewer reads a change it did not write, so text in that change can steer it into such a call. Since #0-115's
+`k8s.md` the reviewer also runs on every `/seed-bugs` branch, not only when a change touches its paths.
+`.ai/rules/review/factory.md` FAC-S03 covers a wildcard allow rule over a command with such an option, but not a
+hook mode that passes a whole command (the reviewer's `ruleGap`).
+
+**Approach (to analyse).**
+- Allow only the forms CI runs: `kubectl kustomize <dir under k8s/>` with no option, and `kubeconform` with only
+  `-strict`, `-summary`, `-kubernetes-version <ci.yml's KUBERNETES_VERSION>`, `-schema-location <ci.yml's pin>` and
+  `-` (stdin cannot reach it: one command per call, no pipe), or a file under `k8s/`; or drop `kubeconform`, since
+  K8S-03 is now "Enforced by" validate-k8s-manifests and the reviewer need not run it.
+- Remote resources: refuse `kubectl kustomize` on a tree whose kustomization names a URL, or accept that the render
+  fetches and record it.
+- FAC-S03 names hook modes too (the owner's `factory.md`).
+
+**Acceptance criteria.**
+AC1. `test-hooks.sh` refuses `kubectl kustomize -o x k8s/base`, `--enable-alpha-plugins`, `--enable-exec`,
+`--load-restrictor`, a directory outside `k8s/`, and a `kubeconform` option outside the allowed set, and still allows
+the plain forms; a mutation of the new check fails a case.
+AC2. `factory.md` FAC-S03 covers a guard mode that passes a whole command.
+AC3. README "Infrastructure Hardening" names the narrowed guard, and the gap leaves its known gaps.
+
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
 **Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
@@ -4023,6 +4061,42 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   introspection client and its `application.yml`), each run started by a message that names nothing (#0-179). Both
   checked with `git apply -R --check` on `87ae8ca2`.
 
+**Decided for `k8s.md` (owner, 2026-10-27, after `/research`).** A1 + B1 + C1 + D1 + E1 + F1:
+- A1: the form of the other rewritten files; ids unchanged, none dropped as general knowledge. The ids came with the
+  move of 2026-10-05, so "ids first" of the approach was already done.
+- B1: "Enforced by" only where the check decides the whole rule: K8S-03 (validate-k8s-manifests renders and
+  validates against the pinned version and schemas; the rule's old local command had no pins, #0-76). "Backed by",
+  each "Check:" naming the gap: K8S-01 (the cross-check greps `name: <service>`, so a `Service` or a budget of that
+  name passes without a Deployment), K8S-02 and K8S-07 (the smoke test; a service left out of the health checks
+  passes), K8S-04 (the regex misses a profile in nested YAML), K8S-05 (`check-tenant-status-config.sh` reads only
+  `application.yml`; nothing checks the ports), K8S-08 (`check-factory-guards.sh`, passed on the owner's PRs),
+  K8S-09 (the `.dockerignore` allowlist and the build; a JDK base, `--chown` or a missing `USER` build fine).
+- C1: new K8S-10, `@{argLine}` first in every surefire `<argLine>` (`general.md`'s E above): without it the JaCoCo
+  agent is dropped and both coverage checks skip silently, and no check sees it (`check-factory-guards.sh` looks
+  for skips, excludes and the coverage limits, not `argLine`).
+- D1: the rules a check decides in full get ids and "Enforced by", as `architecture.md` section 4: K8S-20 (each
+  overlay's namespace), K8S-21 (prod's image tags), K8S-22 (the HPAs own the replicas), K8S-23 (a budget and a
+  spread per service; all `check-k8s-environments.rb`), K8S-24 (Mailpit in dev only, `check-k8s-mail.rb`).
+- E1: K8S-06 holds for every service's Deployment, not only a new one: a change never drops a probe or the
+  resources. K8S-05 keeps one id: a Deployment agrees with its service's configuration (ports and
+  `AUTH_SERVICE_URL`).
+- F1: `patterns.md` had no k8s pattern, so AC3 would have measured nothing. New P-20 (K8S-08, a repository or
+  plugin added to a POM) and P-21 (K8S-10, `@{argLine}` dropped) on `62d4fdb1` (the root POM's Tomcat bump), P-22
+  (K8S-06, a probe or the resources removed) on `4e608067` (every service's Deployment and budget); both revert on
+  `a9dac425`. No revertible change touches a Dockerfile (`89f91e82`, #0-141, no longer applies), so K8S-01, K8S-02
+  and K8S-09 have no pattern yet. The seed panel had no k8s reviewer, and its scripts refused a digit in a
+  dimension or a rule id (`k8s`, `K8S-08`): `seed-bugs.js` and `seed-record.sh` take `k8s` and both forms, with
+  tests (owner, 2026-10-27: in this PR). Each run then has seven reviewers, k8s included even when the change
+  touches no manifest, as migration already does.
+- Review round 1: the comment over `PANEL` says the autopilot differs (it adds migration and k8s only when their
+  paths change), the seed test names each reviewer, k8s included, not only how many, and one test compares the four
+  copies of the dimension list (`PANEL`, `seed-record.sh`'s `DIMENSIONS`, `audit.js`'s `ALL`, the rule files of
+  `backlog-autopilot.js`'s `RULE_FILE_OF`); a mutation of each fails it.
+- Review round 2: the test that the panel's verdicts are typed loops over `PANEL` instead of a fifth hand-written
+  list, so `review-k8s` gets the same schema too. Security found that `readonly-bash.sh --k8s` passes any option to
+  `kubectl kustomize` and `kubeconform` (code this change does not touch, now run on every seed branch): #0-182, listed in
+  README "Infrastructure Hardening"'s known gaps.
+
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
   validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
@@ -4103,6 +4177,8 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   - P-18 (`docs-after-p18` on `82baa5dd`, DOC-01): docs blocked the required `application.yml` key with no README
     "Step 2" line, at the planted line; general caught it too.
   AC3 holds for `docs.md`, P-17 with that reading, recorded with the rows.
+- `k8s.md`: drafted (15 ids: K8S-01…10, 20…24, none retired), with P-20…P-22 added to `patterns.md`; copied by the
+  owner. The seed panel takes k8s.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.

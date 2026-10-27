@@ -596,7 +596,9 @@ an agent guard's session-level twin passes everything if Claude Code stops sendi
 hook stays for that, ADR-0041), and an agent that should have a guard but has none in its frontmatter is left to
 review; the reviewers read the rules from `origin/main` by instruction (`review-procedure`), which no hook
 enforces (#0-165); `/research` and `/ship` still pre-approve `git diff *` (and `/research` `git log/show *`), and no
-hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167).
+hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167); the k8s reviewer's guard
+(`readonly-bash.sh --k8s`) passes any option to `kubectl kustomize` and `kubeconform`, so a file can be written, a
+kustomization's exec plugin run and a URL fetched (#0-182).
 Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images
