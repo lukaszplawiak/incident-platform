@@ -123,6 +123,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
+| [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3525,6 +3526,37 @@ of the workflow and of `seed-record.sh`.
 AC3. `audit-data.sh` reports clean results apart from catches, shown by its test. `docs/ai-factory.md` describes the
 clean runs.
 
+### 0-181. `/seed-bugs` scores a catch by one line, and never compiles the plant
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. Found in #0-115's `docs.md` series (2026-10-27,
+`docs-after-p17`).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/workflows/seed-bugs.js, .claude/agents/defect-seeder.md, scripts/factory/seed-check.sh,
+.github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh), docs (docs/ai-factory.md, ADR-0044)
+
+**Problem.**
+1. The ground truth is one file and one line, and the Record phase counts a finding as a catch only within 5 lines of
+   it (`seed-bugs.js`, `near`). Some defects have two places: P-17 is a method's code and its stale Javadoc. In
+   `docs-after-p17` the seeder named the code's line (266), docs blocked the Javadoc (257) under DOC-11, and the row
+   says "not caught". The same holds for any pattern where a rule's finding points at the other half (a doc against
+   code, a test against the code it pins, a migration against its entity).
+2. Nothing compiles the plant. In `docs-after-p17` the `private static` method read the instance field `id`, so
+   incident-service would not compile; security and architecture said so. The panel then measures a defect easier to
+   see than the one in the pattern, and a reviewer may block for the build, not for the rule.
+
+**Approach (to analyse).**
+- The ground truth takes a list of places (`[{file, line}]`, at most a few), the seeder names every half the pattern
+  has, and `near` matches any of them; `seed-check.sh` checks every file is one of the seeder's.
+- Before the panel, compile the affected module on the seed branch (`./mvnw -q -pl <module> compile`, or the test
+  gate's compile step) and refuse the run as `SKIPPED` with the compiler's first error when it fails, so the seeder's
+  mistake is recorded, not measured.
+- Patterns that span two places say so in `patterns.md` (owner), e.g. P-17 "the code and its Javadoc".
+
+**Acceptance criteria.**
+AC1. A finding at any place of the ground truth counts as a catch; shown by a workflow test with a two-place truth.
+AC2. A plant that does not compile ends the run before the panel, with a recorded reason; shown by a test.
+AC3. P-17 run again on `fc368943` after the change records docs as caught without a hand reading.
+
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
 **Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
@@ -4063,6 +4095,14 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
     `git diff --binary <parent> <sha> -- <code> | git apply -R --check`.
 - `docs.md`: drafted (7 ids, none retired; level A points to the Owner-only list, DOC-10 exempts an accepted ADR's
   Context); `patterns.md` is unchanged: P-17 and P-18 keep DOC-11 and DOC-01. Copied by the owner.
+- `docs.md` measure: on main with PR #543, blind:
+  - P-17 (`docs-after-p17` on `fc368943`, DOC-11): docs blocked the stale `@return`-style Javadoc of
+    `Incident.minutesBetween` under DOC-11, at the Javadoc's line 257. The row says "no": the ground truth is the
+    code's line 266, and the Record phase counts only findings within 5 lines (#0-181). Read by hand: caught and
+    blocked. general (GEN-30) and architecture caught it at the code's line.
+  - P-18 (`docs-after-p18` on `82baa5dd`, DOC-01): docs blocked the required `application.yml` key with no README
+    "Step 2" line, at the planted line; general caught it too.
+  AC3 holds for `docs.md`, P-17 with that reading, recorded with the rows.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
