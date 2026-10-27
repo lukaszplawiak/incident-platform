@@ -3975,6 +3975,22 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   `aace4118` (auth-service V31 adds `NOT VALID` foreign keys to existing tables), each run started by a message
   that names nothing (#0-179).
 
+**Decided for `docs.md` (owner, 2026-10-27, after `/research`).** A1 + B1 + C1 + D + E + F:
+- A1: the form of the other rewritten files; ids unchanged, none dropped as general knowledge. No rule has a check
+  behind it, so none carries a label; the introduction says so.
+- B1: level A of the levels table copied part of the Owner-only list (`.ai/rules/**`, `AGENTS.md`), so a drift in
+  documentation under `.claude/` or `.github/` fell to level D. The row now points to the Owner-only list of
+  `.ai/rules/protected-paths.md` as it is on `main`, the one list (FAC-A01), plus CLAUDE.md outside its
+  `agent-editable` blocks and the Service Map, which that list does not hold.
+- C1: DOC-10 exempts the Context and history of an accepted ADR: they record what was true when it was decided. A
+  change to the decision itself is ARC-05's. This settles the question of `.ai/audit/2026-10-10-pipeline.md` (PR #482,
+  `human:fp-docs`, the third collected case of #0-121's audit).
+- D: DOC-20 and DOC-40 are invariants too; DOC-40 points to GEN-20 for what a comment must say.
+- E: DOC-01 keeps one id. Like MIG-04, its homes are one invariant: a new fact lands where it is documented.
+- F: P-17 on `fc368943` (a Javadoc `@return` in `Incident`) and P-18 on `82baa5dd` (ingestion-service's
+  introspection client and its `application.yml`), each run started by a message that names nothing (#0-179). Both
+  checked with `git apply -R --check` on `87ae8ca2`.
+
 **Progress.**
 - `performance.md`: rewritten (13 rules, ids unchanged, none retired; PERF-10's startup check and PERF-22's budget
   validation named where they live). `/seed-bugs` on main (2026-10-25): P-12 caught and blocked by performance
@@ -4045,6 +4061,8 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
     `seed-branch.sh` reverts with `git apply -R`, which needs exact context, and the hosts had been checked with
     `git merge-tree`, a three-way merge that accepts more. A host is checked with
     `git diff --binary <parent> <sha> -- <code> | git apply -R --check`.
+- `docs.md`: drafted (7 ids, none retired; level A points to the Owner-only list, DOC-10 exempts an accepted ADR's
+  Context); `patterns.md` is unchanged: P-17 and P-18 keep DOC-11 and DOC-01. Copied by the owner.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
