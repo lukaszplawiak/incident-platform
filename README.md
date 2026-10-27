@@ -500,8 +500,12 @@ security boundary, so every rule that matters is also enforced outside the model
   hooks to the agents a `Workflow` spawns; Factory guards keeps the twins equal to the frontmatter and checks that
   every session-wide guard is still wired (`check-hook-entries.rb`, backlog #0-164, ADR-0041); they read files with the Read tool and
   search with `git grep`, and each refusal of the hook that a reading agent can hit names that alternative,
-  per mode (backlog #0-123). In Bash every agent searches with `git grep`
-  only, with an allow-list of options checked on the command as bash splits it (so no abbreviated or quoted
+  per mode (backlog #0-123). No agent runs `kubectl` or `kubeconform` (backlog #0-182): the k8s reviewer reads the
+  manifests as files, and CI renders and validates them. Its render could read what git does not track (a root or a
+  base above `k8s/`, a `!!binary` path, an upper-case `KUSTOMIZATION.YML` each printed `docker/.env`), run a program
+  (`--helm-command`) and fetch remote bases, and a guard of its allowed forms missed one in each review round; the
+  hook refuses an unknown mode, so a stale `--k8s` fails closed (ADR-0045). In Bash every agent's search is `git grep`
+  only (the hook's modes add other commands, never another search), with an allow-list of options checked on the command as bash splits it (so no abbreviated or quoted
   `--untracked`, `--no-index`, `-f` or `-O`, no `$` expansion, no unquoted glob before `--`, no line
   continuation, which bash joins before running; the latter is refused in every autopilot command): tracked files
   only, so a gitignored secret is never read and no program is run. Also refused (backlog #0-130): a newline inside
@@ -596,9 +600,7 @@ an agent guard's session-level twin passes everything if Claude Code stops sendi
 hook stays for that, ADR-0041), and an agent that should have a guard but has none in its frontmatter is left to
 review; the reviewers read the rules from `origin/main` by instruction (`review-procedure`), which no hook
 enforces (#0-165); `/research` and `/ship` still pre-approve `git diff *` (and `/research` `git log/show *`), and no
-hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167); the k8s reviewer's guard
-(`readonly-bash.sh --k8s`) passes any option to `kubectl kustomize` and `kubeconform`, so a file can be written, a
-kustomization's exec plugin run and a URL fetched (#0-182).
+hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167).
 Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images

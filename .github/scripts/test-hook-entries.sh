@@ -45,7 +45,7 @@ jqi() { jq "$2" "$root/.claude/$1" > "$root/.claude/$1.tmp" && mv "$root/.claude
 add_twin_name() {
     local f
     for f in settings.json settings.autopilot.json; do
-        jqi "$f" "(.hooks.PreToolUse[].hooks[] | select(.command | test(\"readonly-bash\\\\.sh --agent [a-z,-]+$\")) | .command) |= . + \",$1\""
+        jqi "$f" "(.hooks.PreToolUse[].hooks[] | select(.command | test(\"readonly-bash\\\\.sh --agent [a-z0-9,-]+$\")) | .command) |= . + \",$1\""
     done
 }
 # drop <settings file> <command end> — removes the entry whose command ends with the text.
@@ -194,9 +194,9 @@ fresh; drop settings.json "write-scope.sh --agent planner .ai/plan/ BACKLOG.md"
 expect 1 "settings.json without the planner's write twin" '.claude/settings.json: no session-level twin of write-scope.sh .ai/plan/ BACKLOG.md on Edit|MultiEdit|NotebookEdit|Write (planner'
 fresh; drop settings.autopilot.json "factory-ops-bash.sh --agent factory-ops"
 expect 1 "settings.autopilot.json without factory-ops' twin" '.claude/settings.autopilot.json: no session-level twin of factory-ops-bash.sh'
-fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent review-k8s --k8s")) | .command) |= sub("--agent review-k8s"; "--agent review-k8s,review-docs")'
-expect 1 "a twin naming an agent whose frontmatter has no such guard" '--agent review-k8s,review-docs is not the agents whose frontmatter runs it (review-k8s)'
-fresh; jqi settings.autopilot.json '(.hooks.PreToolUse[].hooks[] | select(.command | test("readonly-bash\\.sh --agent [a-z,-]+$")) | .command) |= sub(",review-security"; "")'
+fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent architect --architect")) | .command) |= sub("--agent architect"; "--agent architect,review-docs")'
+expect 1 "a twin naming an agent whose frontmatter has no such guard" '--agent architect,review-docs is not the agents whose frontmatter runs it (architect)'
+fresh; jqi settings.autopilot.json '(.hooks.PreToolUse[].hooks[] | select(.command | test("readonly-bash\\.sh --agent [a-z0-9,-]+$")) | .command) |= sub(",review-security"; "")'
 expect 1 "a twin missing one agent of the list" 'is not the agents whose frontmatter runs it'
 fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent audit-synthesis .ai/audit/")) | .command) |= sub(".ai/audit/"; ".ai/")'
 expect 1 "a twin with other arguments" 'runs write-scope.sh .ai/ on Edit|MultiEdit|NotebookEdit|Write: a stale twin'
@@ -211,7 +211,7 @@ fresh; agent t-new "hooks:
         - type: command
           command: '$H/readonly-bash.sh'
           onFailure: \"block\""
-expect 1 "a new agent's guard, not in its twin's --agent" 'is not the agents whose frontmatter runs it (acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-migration,review-performance,review-security,t-new)'
+expect 1 "a new agent's guard, not in its twin's --agent" 'is not the agents whose frontmatter runs it (acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-k8s,review-migration,review-performance,review-security,t-new)'
 
 echo "the required session-level guards, one case each (backlog #0-164 AC4)"
 while IFS='|' read -r file cmd; do
@@ -228,9 +228,9 @@ settings.autopilot.json|guard-migrations.sh
 REQ
 fresh; jqi settings.autopilot.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("/guard-tests.sh")) | .command) |= . + " --lenient"'
 expect 1 "a required guard with other arguments" '.claude/settings.autopilot.json does not run guard-tests.sh on Bash'
-fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent review-k8s --k8s")) | .command) |= sub("review-k8s --k8s"; "review-k8s;true --k8s")'
+fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent architect --architect")) | .command) |= sub("architect --architect"; "architect;true --architect")'
 expect 1 "a ; in an --agent list (commas are allowed, shell syntax is not)" 'with plain arguments'
-fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent review-k8s --k8s")) | .command) |= sub("review-k8s --k8s"; "review-k8s|true --k8s")'
+fresh; jqi settings.json '(.hooks.PreToolUse[].hooks[] | select(.command | endswith("--agent architect --architect")) | .command) |= sub("architect --architect"; "architect|true --architect")'
 expect 1 "a | in an --agent list" 'with plain arguments'
 fresh; jqi settings.autopilot.json '(.hooks.PreToolUse[] | select(.hooks[0].command | endswith("guard-write-in-repo.sh")) | .matcher) |= "Edit|Write"'
 expect 1 "a required guard moved to a narrower matcher" 'does not run guard-write-in-repo.sh on Edit|Write|MultiEdit|NotebookEdit'

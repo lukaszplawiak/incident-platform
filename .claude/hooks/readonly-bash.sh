@@ -6,7 +6,6 @@
 #
 #   readonly-bash.sh            git diff/log/show/status/rev-parse/merge-base/ls-files/blame/cat-file/grep
 #                               (git grep: tracked files only, never -O, --no-index, --untracked, -f)
-#   readonly-bash.sh --k8s      ... plus `kubectl kustomize` and `kubeconform` (review-k8s)
 #   readonly-bash.sh --gh-read  ... plus `gh pr list/view/diff`, `gh issue list/view`, `gh run list/view` (auditors)
 #   readonly-bash.sh --architect ... plus `git add` of .ai/decisions/ and .ai/work/ paths, and `git commit`
 #   readonly-bash.sh --agent <names> [mode]   the same, at session level, for those agents' calls only (#0-164)
@@ -37,9 +36,12 @@ fi
 mode=${1:-}
 HINT="Read a file with the Read tool. Search with git grep -n -e <pattern> -e <other> -- <paths> (each alternative its own -e, not a|b) and list files with git ls-files; one command per call, from the repository root (no git -C)."
 case "$mode" in
-    --k8s)       HINT="$HINT Also allowed here: kubectl kustomize <dir>, kubeconform." ;;
     --gh-read)   HINT="$HINT Also allowed here: gh pr list/view/diff, gh issue list/view, gh run list/view." ;;
     --architect) HINT="$HINT Also allowed here: git add of .ai/decisions/ and .ai/work/ paths, plain git commit." ;;
+    '') ;;
+    # Fails closed on a mode it does not know (FAC-S04): `--k8s` is gone (backlog #0-182), and a frontmatter or a
+    # settings twin that still passes it, or a typo, must not leave its agent with no guard of its own.
+    *) block "readonly-bash.sh: unknown mode $mode" ;;
 esac
 input=$(cat)
 if [ -n "$only" ] && ! applies_to_agent "$only" "$input"; then exit 0; fi
@@ -76,10 +78,9 @@ case "$1 ${2:-}" in
         [ "$#" -le 2 ] || case "${3:-}" in --list|-a|-r|--all|--remotes|--contains|--merged) ;; *) block "git branch may only list branches. $HINT" ;; esac
         exit 0 ;;
 esac
-if [ "$mode" = --k8s ]; then
-    case "$1 ${2:-}" in "kubectl kustomize") exit 0 ;; esac
-    [ "$1" = kubeconform ] && exit 0
-fi
+# No kubectl (backlog #0-182): the k8s reviewer reads the manifests as files, like every reviewer. Its render could
+# read what git does not track (a root or a base above k8s/ printed docker/.env, so did a `!!binary` path and an
+# upper-case KUSTOMIZATION.YML), run a program (--helm-command) or fetch (a remote base); CI renders and validates.
 if [ "$mode" = --gh-read ]; then
     case "$1 ${2:-} ${3:-}" in
         "gh pr list"|"gh pr view"|"gh pr diff"|"gh issue list"|"gh issue view"|"gh run list"|"gh run view") exit 0 ;;

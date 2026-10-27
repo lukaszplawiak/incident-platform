@@ -55,10 +55,9 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-migration,review-performance,review-security", "onFailure": "block" },
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-k8s,review-migration,review-performance,review-security", "onFailure": "block" },
           { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent architect --architect", "onFailure": "block" },
           { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent audit-pipeline,audit-reviewers --gh-read", "onFailure": "block" },
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent review-k8s --k8s", "onFailure": "block" },
           { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/factory-ops-bash.sh --agent factory-ops", "onFailure": "block" }
         ]
       },

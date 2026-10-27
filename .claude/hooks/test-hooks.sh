@@ -172,8 +172,14 @@ expect 2 "git diff --output"             "$R" -- "$(bash_call 'git diff --output
 expect 2 "pipe"                          "$R" -- "$(bash_call 'git diff | head')"
 expect 2 "chaining"                      "$R" -- "$(bash_call 'git log && rm -rf x')"
 expect 2 "maven"                         "$R" -- "$(bash_call './mvnw test')"
-expect 2 "kubectl without --k8s"         "$R" -- "$(bash_call 'kubectl kustomize k8s/overlays/dev')"
-expect 0 "kubectl with --k8s"            "$R" --k8s -- "$(bash_call 'kubectl kustomize k8s/overlays/dev')"
+# Backlog #0-182: no reviewer runs kubectl. The k8s reviewer's render read files git does not track (a root or a base
+# above k8s/, a `!!binary` path, an upper-case KUSTOMIZATION.YML printed docker/.env), ran a program (--helm-command)
+# and fetched remote bases; a guard of its forms kept missing one, so the mode is gone and CI renders.
+expect 2 "kubectl kustomize is refused"  "$R" -- "$(bash_call 'kubectl kustomize k8s/overlays/dev')"
+expect 2 "kubeconform is refused"        "$R" -- "$(bash_call 'kubeconform -strict -summary -')"
+expect 2 "the old --k8s mode is refused (unknown mode)" "$R" --k8s -- "$(bash_call 'git diff HEAD')"
+expect 2 "an unknown mode is refused"    "$R" --no-such-mode -- "$(bash_call 'git log --oneline -1')"
+expect 0 "a known mode still runs"       "$R" --gh-read -- "$(bash_call 'git log --oneline -1')"
 expect 2 "gh without --gh-read"          "$R" -- "$(bash_call 'gh pr list --label autopilot')"
 expect 0 "gh pr list with --gh-read"     "$R" --gh-read -- "$(bash_call 'gh pr list --label autopilot --state merged')"
 expect 2 "gh api is not allowed"         "$R" --gh-read -- "$(bash_call 'gh api repos/o/r/pulls')"
@@ -197,7 +203,6 @@ expect_hint "alternation with a pipe: hint"    'git grep -n -E "mailpit|MAIL_HOS
 expect_hint "git diff --output: hint"          'git diff --output=/tmp/x'
 expect_hint "unsafe git grep option: hint"     'git grep --untracked secret'
 expect_hint "git branch delete: hint"          'git branch -D feat/x'
-expect_hint "k8s mode names kubectl"           'cat k8s/overlays/dev/mailpit.yml' --k8s 'kubectl kustomize'
 expect_hint "gh-read mode names gh reads"      'cat x' --gh-read 'gh pr list/view/diff'
 expect_hint "architect mode names git add"     'cat x' --architect 'git add of .ai/decisions/'
 
@@ -661,15 +666,16 @@ expect 0 "readonly twin: another agent passes"              "$R" --agent review-
 expect 0 "readonly twin: the main session passes"           "$R" --agent review-general,review-docs -- "$(agent_call '' Bash command 'rm -rf x')"
 expect 0 "readonly twin: review, a part of a listed name, is another agent" "$R" --agent review-general,review-docs -- "$(agent_call review Bash command 'rm x')"
 expect 0 "readonly twin: review-general-2 is another agent"    "$R" --agent review-general -- "$(agent_call review-general-2 Bash command 'rm x')"
-expect 2 "readonly twin with a mode: review-k8s is refused rm" "$R" --agent review-k8s --k8s -- "$(agent_call review-k8s Bash command 'rm x')"
-expect 0 "readonly twin with a mode: its own extra command" "$R" --agent review-k8s --k8s -- "$(agent_call review-k8s Bash command 'kubectl kustomize k8s/base')"
+expect 2 "readonly twin with a mode: audit-pipeline is refused rm" "$R" --agent audit-pipeline,audit-reviewers --gh-read -- "$(agent_call audit-pipeline Bash command 'rm x')"
+expect 0 "readonly twin with a mode: its own extra command" "$R" --agent audit-pipeline,audit-reviewers --gh-read -- "$(agent_call audit-pipeline Bash command 'gh pr list --label autopilot')"
+expect 2 "readonly twin: review-k8s may not run kubectl" "$R" --agent acceptance-reviewer,review-k8s -- "$(agent_call review-k8s Bash command 'kubectl kustomize k8s/base')"
 expect 2 "write twin: the planner writes outside its scope" "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call planner Write file_path svc/src/main/java/A.java)"
 expect 0 "write twin: the planner writes the queue"         "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call planner Write file_path .ai/plan/queue.md)"
 expect 0 "write twin: the implementer is not its business"  "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call implementer Write file_path svc/src/main/java/A.java)"
 expect 2 "factory-ops twin: factory-ops runs git push"      "$O" --agent factory-ops -- "$(agent_call factory-ops Bash command 'git push')"
 expect 0 "factory-ops twin: factory-ops runs a gate"        "$O" --agent factory-ops -- "$(agent_call factory-ops Bash command 'scripts/factory/preflight.sh')"
 expect 0 "factory-ops twin: the shipper is not its business" "$O" --agent factory-ops -- "$(agent_call shipper Bash command 'git push')"
-expect 2 "factory-ops: an argument but --agent is refused"  "$O" --k8s -- "$(agent_call factory-ops Bash command 'scripts/factory/preflight.sh')"
+expect 2 "factory-ops: an argument but --agent is refused"  "$O" --gh-read -- "$(agent_call factory-ops Bash command 'scripts/factory/preflight.sh')"
 expect 2 "--agent with an empty name in the list"           "$R" --agent review-general,,review-docs -- "$(agent_call implementer Bash command 'git status')"
 expect 2 "--agent with a trailing comma"                    "$R" --agent review-general, -- "$(agent_call implementer Bash command 'git status')"
 expect 2 "--agent with a name that is not one"              "$R" --agent 'review general' -- "$(agent_call implementer Bash command 'git status')"
