@@ -124,7 +124,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
-| [0-182](#0-182-the-k8s-reviewers-guard-lets-kubectl-kustomize-and-kubeconform-take-any-option) | The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option | security | High | In progress |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -3561,7 +3560,8 @@ AC3. P-17 run again on `fc368943` after the change records docs as caught withou
 
 ### 0-182. The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option
 
-**Type:** security · **Priority:** High · **Status:** In progress (owner's decision below, 2026-10-27). Found by
+**Type:** security · **Priority:** High · **Status:** Done, PR #547 (kept for the decision history: B after two
+review rounds bypassed the guard, ADR-0045). Found by
 security in review round 2 of #0-115's `k8s.md` (2026-10-27), as a non-blocking finding on code that change did not
 touch.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
