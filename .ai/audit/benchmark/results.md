@@ -16,6 +16,8 @@
 | gen-after-p16 | P-16 | GEN-08 | general | yes | yes | architecture, security | — |
 | gen-after-p15-r2 | P-15 | GEN-03 | general | yes | yes | — | — |
 | mig-after-p13 | P-13 | MIG-04 | migration | yes | yes | general, docs | — |
+| docs-after-p17 | P-17 | DOC-11 | docs | no | no | general, architecture | — |
+| docs-after-p18 | P-18 | DOC-01 | docs | yes | yes | general | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -56,3 +58,13 @@ mig-after-p13 (2026-10-26, blind, `40bf2ef6`): migration blocked the `NOT NULL` 
 finding ("V8, but the highest is V32") is an artifact of the old host, where a July migration reads as new. The seeder
 appended to the migration with Bash. `guard-migrations.sh` refused the same edit made with Edit in P-19, which has no
 row (backlog #0-172's Also).
+
+The `docs.md` series (2026-10-27, #0-115) was blind: every reviewer's first message relayed only the owner's words
+("dalej", "1-3 tak, dalej"). docs-after-p17's "no" is the scoring, not the panel. The seeder changed
+`Incident.minutesBetween` to throw instead of returning `null` and left its Javadoc ("or null if end hasn't happened
+yet"); the ground truth is the code's line, 266. docs blocked it under DOC-11 at line 257, the stale Javadoc, which
+is where a DOC-11 finding points. The Record phase counts a finding within 5 lines of the ground truth, so 9 lines
+apart read as a miss (backlog #0-181). Read by hand: caught and blocked by docs. The plant also did not compile (the
+`static` method reads the field `id`); security and architecture said so, and no test gate runs before the panel
+(#0-181 too). docs-after-p18: docs blocked the required key with no default and no README "Step 2" line at the
+planted line of ingestion-service's `application.yml`.
