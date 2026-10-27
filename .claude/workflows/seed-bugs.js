@@ -17,7 +17,12 @@ export const meta = {
 // ============================================================================================
 
 const AGENT_TYPE_OPTION = 'agentType'
-const PANEL = ['general', 'architecture', 'security', 'performance', 'migration', 'docs']
+// Every dimension runs on every seeded branch, whether or not the change reaches its area. The autopilot differs here:
+// it adds migration and k8s only when the change touches their paths (changed-paths.sh). A reviewer told nothing must
+// decide itself that the change is not its own; for a pattern outside migration's or k8s's area their "Also caught by"
+// or "No answer" entries have no autopilot counterpart. k8s joined with #0-115's k8s.md (P-20..P-22). The same list is
+// seed-record.sh's DIMENSIONS, audit.js's ALL and backlog-autopilot.js's RULE_FILE_OF (a test compares all four).
+const PANEL = ['general', 'architecture', 'security', 'performance', 'migration', 'docs', 'k8s']
 const as = (type, prompt, opts = {}) => agent(prompt, { ...opts, [AGENT_TYPE_OPTION]: type, label: opts.label ?? type })
 const runAll = (thunks) => parallel(thunks)
 
@@ -143,7 +148,7 @@ async function measure() {
   // (review round 1 of #0-170: without a line every catch read as a miss), and the file one of the change's. The rule
   // reaches seed-record.sh's command line (#0-177), so it must be a rule id and nothing else.
   if (truth.branch !== seed.branch || !seed.files.includes(truth.file) || typeof truth.line !== 'number'
-      || !/^[A-Z]+-[0-9]+$/.test(String(truth.rule)) || !PANEL.includes(truth.dimension)) {
+      || !/^[A-Z][A-Z0-9]*-[0-9]+$/.test(String(truth.rule)) || !PANEL.includes(truth.dimension)) {
     return finish({ outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` })
   }
   // The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the

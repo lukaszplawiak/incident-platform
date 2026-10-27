@@ -632,12 +632,15 @@ test('seed-bugs: a skip says why, or the run failed', async () => {
 test('seed-bugs: a ground truth the Record phase cannot use fails the run', async () => {
   for (const truth of [{ ...TRUTH, branch: undefined }, { ...TRUTH, branch: 'main' }, { ...TRUTH, branch: 'review/0584cf0f' },
     { ...TRUTH, file: '' }, { ...TRUTH, file: 'svc/src/main/java/Other.java' }, { ...TRUTH, line: undefined },
-    { ...TRUTH, rule: '' }, { ...TRUTH, rule: "PERF-01' 'x" }, { ...TRUTH, rule: 'perf-01' }, { ...TRUTH, dimension: 'k8s' }]) {
+    { ...TRUTH, rule: '' }, { ...TRUTH, rule: "PERF-01' 'x" }, { ...TRUTH, rule: 'perf-01' }, { ...TRUTH, dimension: 'frontend' }]) {
     const { outcome } = await seed({ 'defect-seeder': truth })
     assert.equal(outcome.outcome, 'FAILED', JSON.stringify(truth))
     assert.match(outcome.reason, /ground truth is incomplete/)
   }
   assert.equal((await seed({ 'defect-seeder': null })).outcome.outcome, 'FAILED')
+  // A dimension or a rule id may hold a digit (k8s, K8S-08: #0-115's k8s.md); the run measures, it does not fail.
+  const k8s = await seed({ 'defect-seeder': { ...TRUTH, dimension: 'k8s', rule: 'K8S-08' } })
+  assert.equal(k8s.outcome.outcome, 'MEASURED', JSON.stringify(k8s.outcome))
 })
 
 test('seed-bugs: a planted defect is measured and recorded', async () => {
@@ -679,7 +682,9 @@ test('seed-bugs: nothing the panel is told names the pattern, the run or that a 
     const { calls } = await seed({ 'defect-seeder': (({ prompt }) => ({ ...TRUTH, branch: prompt.match(/review\/[0-9a-f]{8}/)[0] })),
       'ops:seed-branch.sh': ({ prompt }) => ({ ...SEEDED, branch: prompt.match(/review\/[0-9a-f]{8}/)[0] }) }, args)
     const panel = calls.filter((c) => c.key.startsWith('review-'))
-    assert.equal(panel.length, 6, JSON.stringify(args))
+    // Each reviewer by name, k8s included (#0-115's k8s.md, review round 1), not only how many.
+    assert.deepEqual(panel.map((c) => c.key).sort(),
+      ['architecture', 'docs', 'general', 'k8s', 'migration', 'performance', 'security'].map((d) => `review-${d}`), JSON.stringify(args))
     for (const { prompt } of panel) {
       assert.match(prompt, /^Autopilot review\. Branch review\/[0-9a-f]{8}\. mergeBase: /, prompt)
       for (const tell of [/seed/i, /plant/i, /benchmark/i, /pattern/i, /P-\d/, new RegExp(runId)]) assert.doesNotMatch(prompt, tell, `${pattern}: ${prompt}`)
@@ -713,11 +718,18 @@ test('seed-bugs: the seeder\'s commit is folded into the change after the check 
 })
 
 test('seed-bugs: seed-record.sh accepts exactly the panel\'s dimensions (#0-177, review round 1)', () => {
-  // Two lists, one in each language: a dimension added to PANEL alone would have every row naming it refused.
-  const panel = SEED.match(/^const PANEL = \[([^\]]*)\]/m)[1].match(/'([a-z]+)'/g).map((d) => d.slice(1, -1))
+  // Two lists, one in each language: a dimension added to PANEL alone would have every row naming it refused. And the
+  // same dimensions as the audit's ALL and the rule files of the autopilot's RULE_FILE_OF, factory.md aside (#0-115's
+  // k8s.md, review round 1): a new dimension added to one of the four would drift unseen in the others.
+  const panel = SEED.match(/^const PANEL = \[([^\]]*)\]/m)[1].match(/'([a-z][a-z0-9]*)'/g).map((d) => d.slice(1, -1))
   const record = readFileSync(join(dirname(FILE), '../../scripts/factory/seed-record.sh'), 'utf8')
-  const dims = record.match(/^DIMENSIONS=" ([a-z ]+) "$/m)[1].split(' ')
+  const dims = record.match(/^DIMENSIONS=" ([a-z0-9 ]+) "$/m)[1].split(' ')
   assert.deepEqual([...dims].sort(), [...panel].sort())
+  const audit = readFileSync(join(dirname(FILE), 'audit.js'), 'utf8')
+  const all = audit.match(/^const ALL = \[([^\]]*)\]/m)[1].match(/'([a-z][a-z0-9]*)'/g).map((d) => d.slice(1, -1))
+  assert.deepEqual([...all].sort(), [...panel].sort())
+  const ruleFiles = SRC.match(/^const RULE_FILE_OF = \{([^}]*)\}/m)[1].match(/: '([a-z][a-z0-9]*)'/g).map((d) => d.slice(3, -1))
+  assert.deepEqual([...new Set(ruleFiles)].filter((f) => f !== 'factory').sort(), [...panel].sort())
 })
 
 test('seed-bugs: the branch the workflow names is one the scripts accept (#0-177, review round 2)', async () => {
@@ -892,7 +904,10 @@ const REAL_VERDICT = { dimension: 'performance', round: 1, verdict: 'CHANGES_REQ
 test('seed-bugs: the panel\'s verdicts are typed, so a reviewer cannot hand back strings (#0-176)', async () => {
   const { calls } = await seed({ 'defect-seeder': TRUTH })
   const schema = calls.find((c) => c.key === 'review-performance').schema
-  for (const dim of ['general', 'architecture', 'security', 'performance', 'migration', 'docs']) {
+  // Every dimension of PANEL, k8s included (#0-115's k8s.md, review round 2), not a list of its own.
+  const panel = SEED.match(/^const PANEL = \[([^\]]*)\]/m)[1].match(/'([a-z][a-z0-9]*)'/g).map((d) => d.slice(1, -1))
+  assert.ok(panel.includes('k8s'))
+  for (const dim of panel) {
     assert.deepEqual(calls.find((c) => c.key === `review-${dim}`).schema, schema, `review-${dim} gets the same schema`)
   }
   assert.ok(conforms(REAL_VERDICT, schema))

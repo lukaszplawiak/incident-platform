@@ -7,7 +7,7 @@
 #   seed-check.sh <branch> <base> <head>
 #
 # The seeder's answer names its branch, but its word is not what the panel runs on: the checked-out tree is. A seeder
-# that switched (`git switch` is allowed to it) or committed outside the change would have the six reviewers run on
+# that switched (`git switch` is allowed to it) or committed outside the change would have the reviewers run on
 # another tree's hooks and agents, the failure #0-173 fixes. So the tree must be on <branch> (`review/<8 hex>`, #0-177),
 # clean, with exactly one commit on top of seed-branch.sh's <head>, and that commit may touch only files the change
 # brought back and kept (the diff of <base> to <head>, without the files it deleted: seed-branch.sh's `files`). `files`

@@ -263,14 +263,18 @@ rm -rf .ai/audit
 record "a bad run id" "not a run id" "r 1" P-10 PERF-01 performance yes yes - -
 record "a bad pattern" "not a pattern id" P-1x r3 PERF-01 performance yes yes - -
 record "a bad rule" "not a rule id" r3 P-10 "PERF-01'" performance yes yes - -
-record "an unknown dimension" "not a dimension" r3 P-10 PERF-01 k8s yes yes - -
+record "an unknown dimension" "not a dimension" r3 P-10 PERF-01 frontend yes yes - -
 record "not yes or no" "not yes or no" r3 P-10 PERF-01 performance true yes - -
-for list in 'general,k8s' 'general;rm' '*' 'general,' ''; do
+for list in 'general,frontend' 'general;rm' '*' 'general,' ''; do
     record "a bad list: '$list'" "not a list of dimensions" r3 P-10 PERF-01 performance yes yes "$list" -
     record "a bad no-answer list: '$list'" "not a list of dimensions" r3 P-10 PERF-01 performance yes yes - "$list"
 done
 record "the wrong number of arguments" "usage" r3 P-10 PERF-01 performance yes yes -
 if [ "$(grep -c '^| [rs]' "$rows")" = 3 ]; then ok "a refused row writes nothing"; else fail "rows after refusals: $(cat "$rows")"; fi
+# A dimension and a rule id's name may hold a digit (k8s, K8S-08: #0-115's k8s.md): as expected, in "Also caught by" and in "No answer".
+record "a k8s run" ok r9 P-20 K8S-08 k8s yes yes k8s,general security,k8s
+if [ "$(tail -1 "$rows")" = '| r9 | P-20 | K8S-08 | k8s | yes | yes | general | security, k8s |' ]; then ok "the k8s row"
+else fail "k8s row: $(tail -1 "$rows")"; fi
 
 if [ "$failures" -gt 0 ]; then echo "$failures seed-branch/seed-check/seed-fold/seed-record test(s) failed"; exit 1; fi
 echo "All seed-branch, seed-check, seed-fold and seed-record tests passed."

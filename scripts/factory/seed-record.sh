@@ -21,13 +21,13 @@ set -uo pipefail
 refuse() { jq -n --arg r "$1" '{appended: false, reason: $r}'; exit 0; }
 FILE="$RUNS_DIR/benchmark/results.md"
 TRACKED=.ai/audit/benchmark/results.md
-DIMENSIONS=" general architecture security performance migration docs "
+DIMENSIONS=" general architecture security performance migration docs k8s "
 
 # dimensions <csv | -> — the list as the table writes it ("a, b", or — for none); refuses anything but known dimensions
 dimensions() {
     local csv=$1 out="" d parts
     [ "$csv" = - ] && { printf '%s' '—'; return 0; }
-    [[ $csv =~ ^[a-z]+(,[a-z]+)*$ ]] || return 1
+    [[ $csv =~ ^[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*$ ]] || return 1
     IFS=, read -r -a parts <<<"$csv"
     for d in "${parts[@]}"; do
         case "$DIMENSIONS" in *" $d "*) ;; *) return 1 ;; esac
@@ -40,10 +40,10 @@ dimensions() {
 run=$1 pattern=$2 rule=$3 expected=$4 caught=$5 blocking=$6 by=$7 none=$8
 [[ $run =~ ^[A-Za-z0-9._-]+$ ]] || refuse "not a run id: ${run:0:40}"
 [[ $pattern =~ ^P-[0-9]+$ ]] || refuse "not a pattern id: ${pattern:0:40}"
-[[ $rule =~ ^[A-Z]+-[0-9]+$ ]] || refuse "not a rule id: ${rule:0:40}"
+[[ $rule =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]] || refuse "not a rule id: ${rule:0:40}"
 case "$DIMENSIONS" in *" $expected "*) ;; *) refuse "not a dimension: ${expected:0:40}" ;; esac
 for v in "$caught" "$blocking"; do case "$v" in yes|no) ;; *) refuse "not yes or no: ${v:0:40}" ;; esac; done
-[[ $by =~ ^(-|[a-z]+(,[a-z]+)*)$ ]] || refuse "not a list of dimensions: ${by:0:80}"
+[[ $by =~ ^(-|[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*)$ ]] || refuse "not a list of dimensions: ${by:0:80}"
 # "Also caught by": the dimensions that caught it besides the expected one.
 IFS=, read -r -a caught_by <<<"$by"
 also=$(printf '%s\n' "${caught_by[@]}" | grep -vxF -e "$expected" -e - | paste -sd, -)

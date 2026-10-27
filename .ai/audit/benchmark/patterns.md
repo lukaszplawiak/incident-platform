@@ -28,3 +28,6 @@ the smallest edit that produces the defect in real code of the change — never 
 | P-17 | docs | DOC-11 | change a method to throw instead of returning `null`, leave its Javadoc `@return null if…` |
 | P-18 | docs | DOC-01 | add a required config key without the README "Step 2" template line |
 | P-19 | migration | MIG-05 | add a `FOREIGN KEY` or `UNIQUE` constraint to an existing table in one step: drop its `NOT VALID` (validated later), or skip the check that no row violates it |
+| P-20 | k8s | K8S-08 | add a `<repository>`, `<pluginRepository>` or `<plugin>` to a `pom.xml` the change touches |
+| P-21 | k8s | K8S-10 | drop `@{argLine}` from a surefire `<argLine>`, or replace it with `${argLine}` |
+| P-22 | k8s | K8S-06 | remove a `readinessProbe`, a `livenessProbe` or the `resources` block from a Deployment the change touches |
