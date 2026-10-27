@@ -1,10 +1,14 @@
 # Review dimension: docs
 
 Owned by the maintainer; agents never edit it. Sections 2–4 were moved from
-`.claude/agents/docs-reviewer.md` on 2026-10-05 (unchanged, now with ids); section 1 (levels) is new.
+`.claude/agents/docs-reviewer.md` on 2026-10-05, each check with an id; section 1 (levels) was added then.
+Rewritten as invariants on 2026-10-27 (backlog #0-115): each rule says what is true of the documentation after a
+change, and its "Check:" line what to look for in a diff. No id changed its meaning.
 
 Read by `review-docs` (the whole file, whenever it runs) and by the implementer: the rules the
-architect's plan lists, or the whole file when the change reaches this area (self-check).
+architect's plan lists, or the whole file when the change reaches this area (self-check). For the implementer a rule
+is what the documentation must say; for the reviewer, its "Check:" line is where a drift shows. No rule here has a
+check behind it, so none carries the labels `_common.md` defines ("Enforced by", "Backed by").
 
 You check whether README.md, CLAUDE.md, `.ai/`, Javadoc, comments and API annotations still tell the truth
 about the code after this change. You do not review whether the code is correct, nor whether a decision
@@ -25,7 +29,7 @@ makes every later item fail the same way.
 
 | Level | Covers | A drift is | Fixed by |
 |---|---|---|---|
-| **A** human-owned | `.ai/rules/**`, `AGENTS.md`, CLAUDE.md outside `agent-editable` blocks, the Service Map in `.ai/context/project.md` | `NEEDS_HUMAN` — propose the exact text in `fix` | the owner |
+| **A** human-owned | the documentation among the paths of the Owner-only list in `.ai/rules/protected-paths.md` (read it as it is on `main`: it is the one list), CLAUDE.md outside its `agent-editable` blocks, the Service Map in `.ai/context/project.md` | `NEEDS_HUMAN` — propose the exact text in `fix` | the owner |
 | **B** agent input, facts | CLAUDE.md `agent-editable` blocks (commands), `.ai/context/*.md` facts, an ADR's status, `.ai/decisions/README.md` index | blocking | implementer |
 | **C** contracts | Javadoc of public/protected API whose behaviour changed (`@param`, `@return`, `@throws`), OpenAPI annotations of a changed endpoint, `@ConfigurationProperties` documentation, README "Step 2" local-run templates, README "Infrastructure Hardening" (CLAUDE.md "Security inventory" rule) | blocking when the text contradicts the behaviour | implementer |
 | **D** everything else | comments, other README sections, non-public Javadoc | non-blocking — except a comment that contradicts the code next to it, which is blocking | implementer or a backlog item |
@@ -35,8 +39,8 @@ over-comment.
 
 ## 2. New facts not reflected anywhere
 
-- **DOC-01** For each of these kinds of change in the diff, confirm a corresponding doc update exists in
-  the same diff:
+- **DOC-01 A new fact lands in the documentation that owns it, in the same change.** One invariant, several
+  homes:
   - a new runnable service → CLAUDE.md's service/port table, the Service Map, README's service list (the
     Deployment in `k8s/base` is `review-k8s`'s job);
   - a new required config key (like `jwt.secret`, `mfa.encryption-key`) → README's local-run templates
@@ -46,26 +50,35 @@ over-comment.
   - a security control added, removed or weakened, or a gap closed → README "Infrastructure Hardening";
   - any other non-obvious decision (something a future reader, human or AI, couldn't reconstruct just by
     reading the changed source) → an ADR.
-- **DOC-02** A backlog item finished by the change moved to `BACKLOG-DONE.md` with its PR (the shipper does
-  this; flag it if missing at review time only when the item is marked done in the diff).
+  Check: each new service, config key without a default, pattern, CI rule, security control or decision in the
+  diff, and its home above in the same diff.
+- **DOC-02 A backlog item the change finishes is in `BACKLOG-DONE.md` with its PR.** The shipper moves it, so at
+  review time this is a finding only when the diff marks the item done and does not move it. Check: an item whose
+  status the diff sets to Done.
 
 ## 3. Stale references
 
-- **DOC-10** If the diff renames, removes, or changes the value of something docs currently describe (a
-  port, a Makefile target, a module name, a command, a config key, a class named in an ADR), grep
-  README.md, CLAUDE.md, AGENTS.md and `.ai/` for the old name/value and flag every place it's still
-  mentioned as current.
-- **DOC-11** Javadoc or a comment next to changed code that now describes the old behaviour.
+- **DOC-10 No document describes as current a name or value the change removed.** When the diff renames, removes or
+  changes the value of something docs describe (a port, a Makefile target, a module name, a command, a config key, a
+  class named in an ADR), no mention of the old one is left as current in README.md, CLAUDE.md, AGENTS.md or `.ai/`.
+  The Context and history of an accepted ADR record what was true when it was decided, so they are not current
+  text: an old name there is no finding. A change to the decision itself is `architecture`'s (ARC-05). Check: grep
+  for each old name or value the diff removes.
+- **DOC-11 Javadoc and comments next to changed code describe the new behaviour.** Check: the Javadoc and comments
+  of every method or block whose behaviour the diff changes (`@return`, `@throws`, the conditions in the text).
 
 ## 4. Existing contradictions and `.ai/` hygiene
 
-- **DOC-20** While reading the docs touched by sections 2–3, note an *existing* contradiction between
-  README.md, CLAUDE.md and `.ai/` unrelated to this diff — as non-blocking, clearly labeled pre-existing,
-  so it isn't attributed to the current diff.
-- **DOC-30** If `.ai/context/*` or `.ai/README.md` changed: it reads as durable project knowledge
-  (architecture, decisions, invariants), not a changelog entry, and it doesn't duplicate what CLAUDE.md
-  already states — CLAUDE.md and `.ai/` complement each other, they don't repeat each other.
-- **DOC-40** Comments that restate the code, or a Javadoc block on a trivial getter: non-blocking.
+- **DOC-20 A contradiction found that this diff did not cause is reported as pre-existing.** It is non-blocking and
+  labeled pre-existing, so it is not attributed to the current diff. Check: while reading the docs touched by
+  sections 2–3, two of README.md, CLAUDE.md and `.ai/` that disagree on something the diff does not change.
+- **DOC-30 `.ai/context/*` and `.ai/README.md` hold durable knowledge, not a changelog.** They state
+  architecture, decisions and invariants, and do not repeat what CLAUDE.md already says: the two complement each
+  other. Check: a changed `.ai/context/*` or `.ai/README.md`, for text written as an event and for a CLAUDE.md
+  statement copied.
+- **DOC-40 A comment says what the code cannot.** A comment or Javadoc that only restates the code (a trivial
+  getter's Javadoc) is non-blocking noise; what a comment must say is `general`'s GEN-20. Check: new comments that
+  repeat the line they describe.
 
 ## Audit mode
 
