@@ -246,7 +246,9 @@ The agents' instructions are not a boundary; these are, each with its limit:
   `.ai/runs/benchmark/results.md` (`scripts/factory/seed-record.sh`). Start it from a clean `main` at `origin/main`, with no
   autopilot run: `scripts/factory/seed-branch.sh` builds the branch from `main` (the change's code reverted as its base,
   then back), never from the merged commit, whose hooks and agents the session would otherwise run on (#0-173,
-  ADR-0044). `scripts/factory/seed-check.sh` confirms the tree after the seeder (on the branch, clean, its one commit in
+  ADR-0044). Choose a host that passes both of its refusals: its code still reverts on `main` (`git diff --binary
+  <parent> <sha> -- <code> | git apply -R --check`) and none of its files is the evaluator's (a protected path or
+  `CLAUDE.md`). `scripts/factory/seed-check.sh` confirms the tree after the seeder (on the branch, clean, its one commit in
   the change's files), and `scripts/factory/seed-fold.sh` folds that commit into the change's before the panel runs.
   Nothing the panel reads names the run (#0-177): the branch is `review/<8 hex>` (derived from the pattern and the run
   id), the base says `Revert "<subject>"`, and the change and the defect are one commit, with the run's reflog entries

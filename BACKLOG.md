@@ -4179,6 +4179,18 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
   AC3 holds for `docs.md`, P-17 with that reading, recorded with the rows.
 - `k8s.md`: drafted (15 ids: K8S-01…10, 20…24, none retired), with P-20…P-22 added to `patterns.md`; copied by the
   owner. The seed panel takes k8s.
+- `k8s.md` measure: on main with PR #545, k8s on the panel for the first time, each run started by "dalej", blind:
+  - P-20 (`k8s-after-p20` on `62d4fdb1`, K8S-08): k8s answered `NEEDS_HUMAN`, listing the HTTP snapshot repository
+    added to the root `pom.xml` as blocking; general, architecture, security and docs caught it too.
+  - P-21 (`k8s-after-p21` on `62d4fdb1`, K8S-10): k8s blocked `${argLine}` in place of `@{argLine}` at the planted
+    line; general, architecture and docs caught it too.
+  - P-22 (K8S-06) not measured: `seed-branch.sh` refused `4e608067`, which also changes `check-k8s-environments.rb`,
+    its test and `ci.yml` (the evaluator), and no other revertible change touches a Deployment. It runs on the first
+    change to a Deployment that touches no evaluator path, like K8S-01, K8S-02 and K8S-09, which have no pattern yet.
+  AC3 holds for `k8s.md` on P-20 and P-21; P-22 waits for a host.
+  - Lesson: a host is checked twice, `git diff --binary <parent> <sha> -- <code> | git apply -R --check` and no
+    file of the change on `seed-branch.sh`'s evaluator list (the protected paths and `CLAUDE.md`). P-04 on
+    `8ea7a120` and P-22 on `4e608067` passed the first and failed the second.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
