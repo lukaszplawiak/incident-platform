@@ -29,7 +29,10 @@ owner's manual `/review`.
   a secret and send data out; then the network, tools and scopes, guards that fail closed, secrets out of
   reach, the owner's denies), `FAC-A01`…`FAC-A05` to architecture (one list per control, agents' answers that
   fail closed, every stage in the PR record, guards at session level, a weakened layer named). Its section 3
-  names what Factory guards and Lint Workflows already check, so reviewers do not repeat a script.
+  names what Factory guards and Lint Workflows already check, so reviewers do not repeat a script. **Amended by
+  #0-115 (2026-10-28):** section 3 is gone; each check is the "Backed by" of the rule it backs (`_common.md`'s
+  labels), so a reviewer reads a rule and what checks it in one place, and the "Check:" line says what the check
+  misses. The linters that back no rule are named in one paragraph without an id.
 - **Read only when the diff touches a path of the Owner-only list**, the list as it is on `main` (`/review` reads
   `origin/main`, and an unreadable list means the rules apply) — not a list of the file's own. `_common.md` names
   the exception to "nothing else from `.ai/rules/review/`"; `security.md`, `architecture.md`, the two reviewers'
@@ -71,4 +74,5 @@ owner's manual `/review`.
   #0-165 (ADR-0042) `/review` pre-approves exact commands only; a hook for every session is #0-167.
 - A reviewer recognises a violation as: a second list of the factory's paths, `factory.md` read by an agent
   other than security and architecture or its trigger decided elsewhere than `/review` Step 2, a `FAC-` rule
-  that repeats a check of section 3, or a factory rule with an id outside `factory.md`.
+  that repeats a check of section 3 (since #0-115: a check named apart from the rule it backs), or a factory rule
+  with an id outside `factory.md`.

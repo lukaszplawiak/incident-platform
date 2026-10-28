@@ -17,14 +17,8 @@ rules themselves), `review-architecture` also reads `factory.md` and judges that
 
 **No rule is dropped for being general knowledge** (as in `security.md`): a blocking finding must cite a rule
 (`_common.md`), and every rule here is this platform's own decision.
-**Two labels name a check** (the convention of every rule file, decided with this rewrite, #0-115):
-- **"Enforced by: <check>"**: the check decides the whole invariant, a property a file has or does not have. It is
-  not reviewed by hand: do not spend a finding on it; the check runs in a required CI job on the PR (the ruleset of
-  `main`), after review, and a red check stops the merge. A check that the owner's authorship or approval turns
-  green (the "Changes that need the owner" step of Factory guards, `check-factory-guards.sh`) does not decide a rule
-  in full: it is at most "Backed by".
-- **"Backed by: <check>"**: the check sees the known form of the rule, not a new one. The rule is still reviewed, and
-  its "Check:" line says what the check misses.
+`_common.md` defines the two labels ("Enforced by", "Backed by"), the convention of every rule file decided with
+this rewrite (#0-115).
 
 Read `.ai/context/architecture.md`, the "Service Map" in `.ai/context/project.md`, and the ADRs whose area
 the change touches (`.ai/decisions/README.md`). Judge the change as a part of the whole system: a change
@@ -114,7 +108,7 @@ the platform decided for it (`.ai/context/architecture.md`, "Patterns already de
 
 ## 4. Platform configuration
 
-Rules a check covers. One marked "Enforced by" is decided in full by its check (see the labels above), so it has no
+Rules a check covers. One marked "Enforced by" is decided in full by its check (`_common.md`), so it has no
 "Check:" line and is not reviewed by hand; a check that stops deciding it in full turns its label into "Backed by"
 and the rule gets one. Dockerfile/Deployment pairs and Spring profiles in the overlays are `k8s`'s (K8S-01, K8S-04).
 

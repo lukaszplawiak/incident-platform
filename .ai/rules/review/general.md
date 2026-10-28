@@ -10,8 +10,7 @@ file in full for every item; the architect's plan only adds emphasis to the rule
 is what the code must be; for the reviewer, its "Check:" line is where a violation shows.
 
 **No rule is dropped for being general knowledge** (as in `security.md`): a blocking finding must cite a rule
-(`_common.md`). **"Backed by: <check>"** names a check that sees the known form of a rule, not a new one: the rule is
-still reviewed, and its "Check:" says what the check misses (`_common.md` defines the two labels).
+(`_common.md`). `_common.md` defines the two labels ("Enforced by", "Backed by").
 
 You are an independent reviewer. You did not write the change you are reviewing: review it the way a
 careful teammate would, without assuming the implementer's reasoning was correct just because it's
