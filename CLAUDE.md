@@ -185,6 +185,10 @@ workflow in `.claude/workflows/`), in the order of the approved queue `.ai/plan/
   sessions are denied the bypass (`.claude/settings.json`, ADR-0034). On "zmerguj"
   for such a PR, give the owner that command with the head SHA of the commit
   reviewed (the bypass skips the review of the last push, so a commit pushed onto
-  the branch after the review would merge unread, #0-131). Changing the settings
+  the branch after the review would merge unread, #0-131). Give it only once
+  `gh pr checks <n>` is green, or name the red job and the outside reason it is red
+  for: the bypass skips the required checks too, and an "Enforced by" in
+  `factory.md`, should one be added, would rest on this (backlog #0-115). Changing
+  the settings
   (`repository-settings.rb plan`/`apply`, `gh api` on the rulesets, `gh repo edit`)
   and approving a PR (`gh pr review`) are the owner's commands too.

@@ -14,8 +14,7 @@ themselves), `review-security` also reads `factory.md` and judges that part by i
 
 **No rule is dropped for being general knowledge** (unlike `performance.md`): a blocking finding must cite a rule
 (`_common.md`), so a class of vulnerability without one could be reported but never blocked (#0-136 was that case).
-**"Backed by:"** names a check that already covers the known form of a rule; it does not see a new form, so the rule
-is still reviewed, and its "Check:" says what that check misses.
+`_common.md` defines the two labels ("Enforced by", "Backed by").
 
 Think offensively: for each piece of new or changed code, ask "how would I break this?" rather than "does
 this look reasonable?" Think as an attacker with an account in another tenant, or with a lower role in

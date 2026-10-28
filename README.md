@@ -419,8 +419,11 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   dismissed, every `ci.yml` job and Factory guards as required checks, each pinned to GitHub Actions (a commit
   status of the same name does not count), no force-push or deletion. Its one bypass: the admin role, at merge
   only, so the owner can merge their own PR without a review, or with a red check when CI fails for an outside
-  reason; GitHub records each bypass. Only the owner is an admin (`repository.json` lists them, the check
-  compares), and interactive Claude Code sessions, which use the owner's login, may not use the bypass
+  reason; GitHub records each bypass. A session gives the owner that merge command only once the PR's checks are
+  green, or names the red job and its outside reason (CLAUDE.md "Working style"): on the owner's PRs a required
+  check holds only through that (an "Enforced by" in the review rules' `factory.md`, should one be added, would rest
+  on it; backlog #0-115). Only the owner is an admin (`repository.json` lists them, the check compares), and
+  interactive Claude Code sessions, which use the owner's login, may not use the bypass
   nor change the ruleset (`.claude/settings.json` denies `gh pr merge --admin`, merges through the API, `gh api`
   on the rulesets, `gh repo edit`, `gh pr review` and `repository-settings.rb plan`/`apply`: the owner runs them, the merge with
   `--match-head-commit` so a commit pushed after their reading cannot ride along, #0-131).
