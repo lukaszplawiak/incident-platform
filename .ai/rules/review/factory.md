@@ -36,7 +36,10 @@ and the ADRs of the area "AI factory" (`.ai/decisions/README.md`). Most of the w
   entry that is a wildcard over a command with an option that writes a file or runs a program (`git show *`
   and `git diff *` take `--output=<file>`, `--ext-diff`), unless a hook of that session refuses the option:
   pre-approved means no prompt, in a session that reads the change (review round 2 of #0-161; #0-165 removed
-  them from `/review` and `/accept`, #0-167 is the rest).
+  them from `/review` and `/accept`, #0-167 is the rest). The same holds for a mode of a guard hook that lets a
+  command through by its first words: it allows the command's options and arguments too, so it names the forms it
+  allows, and an argument that reads outside the repository's tracked files (a directory whose own files a tool
+  loads, `kubectl kustomize .`) is one of them only when the hook checks where it leads (#0-182).
 - **FAC-S04 A guard fails closed.** Every way a PreToolUse guard can fail ends in `exit 2`: its helper does
   not load, `jq`/`python3` is missing, the input does not parse or is empty, an argument is unknown, an unset
   variable under `set -u`, a tool it runs fails. Claude Code treats any other exit code as a non-blocking error

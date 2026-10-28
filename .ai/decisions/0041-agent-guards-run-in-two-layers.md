@@ -36,7 +36,7 @@ look like the main session's, which a guard must let through. The frontmatter ho
    `.claude/settings.autopilot.json`, with `onFailure: "block"` (ADR-0039). Each layer covers the other's failure:
    the frontmatter one the loss of `agent_type`, the twin the loss of frontmatter hooks for a Workflow's agents.
 2. **One twin per guard and arguments**, its `--agent` a comma-separated list of exactly the agents whose
-   frontmatter runs that hook with those arguments (nine reviewers and checkers share the plain `readonly-bash.sh`).
+   frontmatter runs that hook with those arguments (nine reviewers and checkers share the plain `readonly-bash.sh`; ten since #0-182, ADR-0045, added `review-k8s`).
    So every hook an agent's frontmatter uses as a guard must accept `--agent` (today `readonly-bash.sh`,
    `write-scope.sh`, `factory-ops-bash.sh`, `read-scope.sh`); a new one gets it before it guards an agent.
    `applies_to_agent` in `.claude/hooks/_lib.sh` decides it for every hook: another agent and the main session pass;

@@ -125,7 +125,7 @@ end it with the same JSON in a fenced block.
 
 Your tools are Read, and Bash for read-only git (`diff`, `log`, `show`, `status`, `blame`, `rev-parse`,
 `merge-base`, `ls-files`, `cat-file`, `grep`, listing branches) — a hook enforces the list and refuses
-`--no-index`, `--output` and chaining; the k8s reviewer may also run `kubectl kustomize` and `kubeconform`.
+`--no-index`, `--output` and chaining; no reviewer renders or validates manifests (backlog #0-182: CI does).
 **Search with `git grep`** (`git grep -n <pattern> -- <paths>`; tracked files only, so never a secret).
 The hook allows only its listed options (`-n -i -w -l -L -c -h -H -E -F -P -v -o -e -A/-B/-C`, their long
 names, `--count`, `--name-only`…, written out in full: git's abbreviations are refused), no `$`, and no

@@ -11,7 +11,7 @@ hooks:
     - matcher: "Bash"
       hooks:
         - type: command
-          command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --k8s"
+          command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh"
           onFailure: "block"
 ---
 
@@ -22,8 +22,9 @@ You are the Kubernetes/build reviewer: you catch the CI failures this pipeline e
   `.ai/rules/review/_common.md`
 - Procedure (how to get the diff and what to read): the preloaded `review-procedure` skill
 
-You may also run `kubectl kustomize` and `kubeconform` (the hook allows them for you); if a tool is not
-installed, say the validation did not run.
+You read the manifests, Dockerfiles and POMs as files, like every reviewer: you do not render or validate them
+(backlog #0-182: a render could read files git does not track). CI renders every overlay and validates it
+(K8S-03), and its checks read those renders (K8S-04, K8S-20…K8S-24); an overlay's patches you read from the files.
 
 You did not write the change you are reviewing. Review it the way a careful, independent teammate would:
 do not assume the implementer's reasoning was correct because it is already there, and do not let

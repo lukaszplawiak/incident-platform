@@ -124,7 +124,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
-| [0-182](#0-182-the-k8s-reviewers-guard-lets-kubectl-kustomize-and-kubeconform-take-any-option) | The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option | security | High | Open |
+| [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3560,10 +3560,13 @@ AC3. P-17 run again on `fc368943` after the change records docs as caught withou
 
 ### 0-182. The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option
 
-**Type:** security · **Priority:** High · **Status:** Open. Found by security in review round 2 of #0-115's
-`k8s.md` (2026-10-27), as a non-blocking finding on code that change did not touch.
+**Type:** security · **Priority:** High · **Status:** Done, PR #547 (kept for the decision history: B after two
+review rounds bypassed the guard, ADR-0045). Found by
+security in review round 2 of #0-115's `k8s.md` (2026-10-27), as a non-blocking finding on code that change did not
+touch.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
-**Touches:** factory (.claude/hooks/readonly-bash.sh, .claude/hooks/test-hooks.sh, .claude/agents/review-k8s.md),
+**Touches:** factory (.claude/hooks/readonly-bash.sh, .claude/hooks/test-hooks.sh, .claude/agents/review-k8s.md,
+.claude/settings.json, .claude/settings.autopilot.json, .github/scripts/test-hook-entries.sh),
 .ai/rules/review/factory.md (owner), security (README "Infrastructure Hardening")
 
 **Problem.** `readonly-bash.sh --k8s` (lines 79-81) lets `review-k8s` run `kubectl kustomize` and `kubeconform` as
@@ -3588,12 +3591,62 @@ hook mode that passes a whole command (the reviewer's `ruleGap`).
   fetches and record it.
 - FAC-S03 names hook modes too (the owner's `factory.md`).
 
+**Decided (owner, 2026-10-27).** B: no reviewer runs `kubectl` or `kubeconform`. The `--k8s` mode of
+`readonly-bash.sh` is gone, `review-k8s` joins the plain read-only twin in both settings files, its frontmatter runs
+the plain hook, and the hook now refuses a mode it does not know (FAC-S04), so a stale `--k8s` fails closed. The
+reviewer reads the manifests as files; CI renders every overlay and validates it (K8S-03), and its checks read the
+renders (K8S-04, K8S-20…K8S-24). Neither `Bash(kubectl kustomize *)` nor `Bash(kubeconform *)` is on the autopilot's
+allow-list any more (the devcontainer has no kubectl either). A render of a tracked-only snapshot with no network is
+#0-183, should the owner's manual review want the render back. Recorded in ADR-0045 (review round 3).
+
+How it came to B, for the record:
+- `/research` chose A + E2: an allow-list of `kubectl kustomize`'s forms (`kustomize_unsafe`, on `git_grep_unsafe`'s
+  model) and a refusal of `://`. Tested first on kubectl 1.36.1 (kustomize 5.8.1): `-o` wrote a file,
+  `--enable-helm --helm-command <program>` ran it, `--load-restrictor LoadRestrictionsNone` read outside the root,
+  and with no option at all a root above `k8s/` (`.`, a symlink in `k8s/` to `..`) or a base outside it
+  (`../../docker` with a kustomization of the branch there) printed a gitignored `docker/.env`.
+- Review round 1 found, each confirmed by a test: the shell expands a leading `~+` (a root symlink `~+` -> `k8s`
+  made `~+/docker` pass), YAML decodes `"\u002e\u002e/…"` (the escaped path printed the secret), kustomize clones
+  `github.com/o/r//dir?ref=v1` (no `://`), and the autopilot's `Bash(kubectl kustomize *)` let every other agent
+  run it with no hook.
+- Review round 2 found, again confirmed: bash expands `a=~` inside a word, `!!binary Li4vLi4vZG9ja2Vy` (base64 of
+  `../../docker`) printed the secret, an upper-case `KUSTOMIZATION.YML` is opened on a case-insensitive APFS and was
+  never scanned (it printed the secret), gitignored files under `k8s/` stay readable, and `github.com:o/r` matched
+  no refused shape. The guard predicted what kustomize would read; each round found a form it missed. B removes the
+  capability instead.
+
 **Acceptance criteria.**
-AC1. `test-hooks.sh` refuses `kubectl kustomize -o x k8s/base`, `--enable-alpha-plugins`, `--enable-exec`,
-`--load-restrictor`, a directory outside `k8s/`, and a `kubeconform` option outside the allowed set, and still allows
-the plain forms; a mutation of the new check fails a case.
+AC1. `test-hooks.sh` refuses `kubectl kustomize` and `kubeconform` for every reviewer, the old `--k8s` mode and any
+unknown mode, and `review-k8s`'s twin refuses kubectl; Factory guards' twin check passes with `review-k8s` in the
+plain twin (B, see Decided).
 AC2. `factory.md` FAC-S03 covers a guard mode that passes a whole command.
 AC3. README "Infrastructure Hardening" names the narrowed guard, and the gap leaves its known gaps.
+
+### 0-183. The k8s reviewer could render a tracked-only snapshot with no network
+
+**Type:** security · **Priority:** Low · **Status:** Open. From #0-182 (owner, 2026-10-27): B took the render away
+from the k8s reviewer; this is how to bring it back safely, if the owner's manual review misses it.
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-182
+**Touches:** factory (scripts/factory/ or .claude/hooks/: a render script and its test, readonly-bash.sh,
+.claude/agents/review-k8s.md, both settings files), .ai/rules/review/_common.md and factory.md (owner), security
+(README "Infrastructure Hardening")
+
+**Problem.** Since #0-182 the k8s reviewer reads manifests as files; an overlay's patches over a base are read by
+hand. A guard that predicts what `kubectl kustomize` reads failed twice (#0-182's rounds: `~`, YAML escapes and tags,
+remote shorthands, file-name case, gitignored files).
+
+**Approach (to analyse).** Control what kustomize can reach instead of predicting it, as Argo CD and Flux do: a script
+(e.g. `render-k8s.sh <overlay>`) copies to a temporary directory only the files under `k8s/` that git tracks or
+that are new and not ignored, refuses a symlink (mode 120000), and runs `kubectl kustomize` there with no option and
+no network (an unreachable proxy, `GIT_ALLOW_PROTOCOL=file`, or `sandbox-exec` on macOS). The reviewer's hook allows
+that script with one overlay name and nothing else. Nothing outside the snapshot exists for kustomize to read, so
+YAML tricks no longer matter.
+
+**Acceptance criteria.**
+AC1. The script renders the repository's overlays as CI does, and refuses a symlink, an ignored file and a remote
+base; shown by its test, with a mutation of each refusal failing a case.
+AC2. Every attack of #0-182's rounds, replayed against the script, prints no file from outside the snapshot.
+AC3. README "Infrastructure Hardening" and `review-k8s.md` describe the render; `_common.md` names it (owner).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

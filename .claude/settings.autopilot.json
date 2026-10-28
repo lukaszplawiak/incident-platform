@@ -49,8 +49,6 @@
       "Bash(mkdir -p .ai/runs/*)",
       "Bash(cp -r .ai/work/_template *)",
       "Bash(jar tf *)",
-      "Bash(kubectl kustomize *)",
-      "Bash(kubeconform *)",
       "WebFetch(domain:api.osv.dev)",
       "WebFetch(domain:osv.dev)",
       "WebFetch(domain:github.com)",
@@ -207,7 +205,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-migration,review-performance,review-security",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-k8s,review-migration,review-performance,review-security",
             "onFailure": "block"
           },
           {
@@ -218,11 +216,6 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent audit-pipeline,audit-reviewers --gh-read",
-            "onFailure": "block"
-          },
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent review-k8s --k8s",
             "onFailure": "block"
           },
           {

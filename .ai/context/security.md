@@ -59,7 +59,8 @@ on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are w
 
 - **The rule of two.** An agent that reads text someone else controls (a diff, a PR, a web page) is assumed to
   follow it. It may then have at most one of: reading something secret, sending data out. The reviewers read
-  the diff and have neither network nor secrets (`readonly-bash.sh`: git only); the verifier has the network
+  the diff and have neither network nor secrets (`readonly-bash.sh`: read-only git; no reviewer renders manifests,
+  backlog #0-182); the verifier has the network
   and therefore reads only the files the test gate wrote, never the diff (ADR-0037).
 - **Where each list lives.** The protected paths: `.ai/rules/protected-paths.md` (copies in the autopilot's
   deny rules, `guard-protected-bash.sh` and CODEOWNERS, checked by `check-protected-paths.sh` both ways since
