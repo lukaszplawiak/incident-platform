@@ -124,7 +124,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
-| [0-184](#0-184-nothing-checks-what-the-review-rule-files-claim) | Nothing checks what the review rule files claim | ci | Medium | Open |
 | [0-185](#0-185-a-seed-runs-original-change-is-in-reach-of-the-panel-and-the-defect-is-its-only-difference) | A seed run's original change is in reach of the panel, and the defect is its only difference | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -3649,41 +3648,6 @@ base; shown by its test, with a mutation of each refusal failing a case.
 AC2. Every attack of #0-182's rounds, replayed against the script, prints no file from outside the snapshot.
 AC3. README "Infrastructure Hardening" and `review-k8s.md` describe the render; `_common.md` names it (owner).
 
-### 0-184. Nothing checks what the review rule files claim
-
-**Type:** ci · **Priority:** Medium · **Status:** Open. From #0-115's `factory.md` (owner, 2026-10-28: E1); it takes
-in #0-178's "Also" (a pattern's rule id is live), the same kind of check over the same files.
-**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** —
-**Touches:** factory (.github/scripts/: a check script and its test, .github/workflows/factory-guards.yml),
-.ai/context/infrastructure.md, docs (docs/ai-factory.md); .ai/rules/review/ only if the check finds a drift (owner)
-
-**Problem.** The rule files of `.ai/rules/review/` make three claims that nothing checks, and each has been wrong or
-nearly wrong before:
-1. A rule's label names a check and says when it runs. "Enforced by: <check>" tells a reviewer not to review the rule,
-   because a required CI job decides it on the PR (`_common.md`). Nothing checks that the named script exists, that a
-   required job of the ruleset of `main` runs it, and that it is not run only in a step the owner's authorship turns
-   green ("Changes that need the owner"). Round 2 of `general.md` found such a claim wrong by hand ("if CI is red on it,
-   the autopilot stopped before you were called").
-2. A rule file must not mention the benchmark (ADR-0044's residual): a reviewer reads its dimension's file on every
-   seed run. `architecture.md` said "a seeded result" from PR #536 through the P-06…P-09 runs; it was found by hand.
-3. A pattern of `.ai/audit/benchmark/patterns.md` cites a live id of its dimension's file (#0-178 "Also"): retiring
-   ARC-20 left P-06…P-08 citing it until the same PR renamed them, and nothing would have failed.
-
-**Approach (to analyse).** One Factory guards step over `.ai/rules/review/*.md` and `patterns.md`, read as text:
-- every "Enforced by:" and "Backed by:" names a script that exists, and every "Enforced by:" one that a job of
-  `rulesets/main.json`'s required checks runs outside the owner's step (a label naming a CI job by name is read
-  against `ci.yml`'s job names);
-- no rule file but `factory.md` says "benchmark", "seed" or "plant" (`factory.md` is read only for a diff that touches
-  an Owner-only path, which `seed-branch.sh` refuses, ADR-0044);
-- every rule a pattern cites is an id of its dimension's file and not `retired`.
-
-**Acceptance criteria.**
-AC1. The check fails on a label naming a missing script, on an "Enforced by" whose script runs in no required job or
-only in the owner's step, on a rule file other than `factory.md` naming the benchmark, and on a pattern citing a
-missing or retired id; shown by its test, with a mutation of each rule failing a case.
-AC2. It passes on `main` as it is, or the owner fixes the drift it finds in the same PR.
-AC3. `.ai/context/infrastructure.md` and `docs/ai-factory.md` name the check.
-
 ### 0-185. A seed run's original change is in reach of the panel, and the defect is its only difference
 
 **Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-10-28 in #0-115's `factory.md` measure (F1), in
@@ -3721,6 +3685,10 @@ AC1. Each row of the earlier series says whether a reviewer reached the original
 #0-179 say whether the command was relayed.
 AC2. The owner's choice among the approaches is recorded in ADR-0044 decision 6, and `.ai/rules/audit.md`'s reading of
 seeded rows matches it.
+
+**Also (found in #0-184's research, 2026-10-29).** `scripts/factory/seed-record.sh:43` takes a rule id only as
+`^[A-Z][A-Z0-9]*-[0-9]+$`, so it refuses `FAC-A02`. F1 recorded its rows by hand, so nothing failed. A seeded
+`factory.md` run that `/seed-bugs` records would need the id form of `check-rule-claims.rb` (`[A-Z][A-Z0-9]*-[A-Z]?\d+`).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

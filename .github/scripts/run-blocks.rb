@@ -1,8 +1,9 @@
 # ============================================================
 # The `run:` blocks of the workflows and of the composite actions, each with the line its text starts on
 # (backlog #0-149). Read by check-shell.rb (shellcheck of the composite actions' steps, which actionlint does
-# not lint), check-downloads.rb (no download outside install-pinned-tool.sh, ADR-0033) and check-runtime-setup.rb
-# (its helpers only: it walks each job's steps in order, backlog #0-166).
+# not lint), check-downloads.rb (no download outside install-pinned-tool.sh, ADR-0033), check-runtime-setup.rb
+# (its helpers only: it walks each job's steps in order, backlog #0-166) and check-rule-claims.rb (its helpers only:
+# it reads each job's name, `if:` and `continue-on-error` with its steps, backlog #0-184).
 #
 # The YAML is read as a node tree (Psych.parse), not as data (safe_load): only the nodes know their line.
 # Psych counts lines from 0 and puts a block scalar (`run: |`, `run: >`) on the line of its indicator; its
