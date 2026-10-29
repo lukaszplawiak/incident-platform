@@ -12,7 +12,8 @@
 # the audits can read (backlog #0-128), that only the verifier agent can fetch from the web (backlog #0-160), and
 # that every hook entry blocks the call when its hook fails (backlog #0-162); and the tests of ci-local.sh's step
 # runner, the owner's local run of this job and of lint-workflows (backlog #0-166), and the tests of the autopilot
-# workflow's logic against a fake agent(), on the Node of .node-version (backlog #0-163, ADR-0043).
+# workflow's logic against a fake agent(), on the Node of .node-version (backlog #0-163, ADR-0043); and that the
+# review rule files' labels, words and the seeded patterns' rule ids are true (backlog #0-184).
 #
 # A required check of main (its ruleset, .github/repository-settings/rulesets/main.json, backlog #0-113,
 # ADR-0034). On its own it binds nobody who can change check-factory-guards.sh, since a pull request runs its
@@ -98,6 +99,9 @@ jobs:
       - name: Hook entry check tests
         run: .github/scripts/test-hook-entries.sh
 
+      - name: Rule claims check tests
+        run: .github/scripts/test-rule-claims.sh
+
       # The step runner of .github/scripts/ci-local.sh, the owner's local run of this job and of lint-workflows
       # (backlog #0-166): it must run these steps as the runner does, or a local green means nothing.
       - name: Local CI runner tests
@@ -132,6 +136,14 @@ jobs:
       # (backlog #0-128); the pattern is scripts/factory/_marker.sh, the one audit-data.sh reads.
       - name: Escape markers are well-formed
         run: .github/scripts/check-escape-markers.sh
+
+      # What the review rule files claim (backlog #0-184): an "Enforced by" check runs in a required job on every
+      # pull request, outside the owner's step below; a label's script exists; no rule file but factory.md names the
+      # seeded-defect measure (ADR-0044); every pattern of .ai/audit/benchmark/patterns.md cites a live id.
+      - name: Review rule claims are true
+        run: |
+          set -euo pipefail
+          ruby .github/scripts/check-rule-claims.rb
 
       # The approved order of work (.ai/plan/queue.md) must stay consistent with the backlog: a PR that
       # removes or changes an item the queue relies on fails here, not in the next autopilot run.

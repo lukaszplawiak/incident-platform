@@ -588,6 +588,11 @@ security boundary, so every rule that matters is also enforced outside the model
   marker, one the audits could not read, in any spelling (`check-escape-markers.sh`, backlog #0-128), with the
   pattern defined once in `scripts/factory/_marker.sh`. Since #0-131 the autopilot cannot push onto a branch of
   the owner's open PR, so a marker in an owner's PR is not one the bot slipped in.
+- **The review rules' labels are true** (backlog #0-184, ADR-0046): a rule marked "Enforced by" is not reviewed by
+  hand, so Factory guards fails one whose script runs in no required job on a pull request, only under an `if:` that
+  leaves pull requests out, while continuing on error, or in the owner's step, and a label naming a script, test or
+  guard that does not exist (`check-rule-claims.rb`); it also fails a rule file other than `factory.md` naming the
+  seeded-defect measure, and a pattern citing a retired or missing rule id. It reads backticked names only.
 
 **Known gaps**: a bypass actor or an admin added in the UI is seen only when the owner runs
 `repository-settings.rb check` (#0-113, ADR-0034), and so is a secret added in the UI (ADR-0035); a scan that

@@ -120,7 +120,9 @@ A run that had gone through would have had the panel review under older agents a
        that file must not mention the benchmark. `architecture.md`'s header said "a seeded result" from PR #536 on,
        through the P-06…P-09 runs. Their transcripts show no reviewer acting on it, and it is reworded. `factory.md`
        names the seeder, but it is read only for a diff that touches an Owner-only path, which a seed branch never
-       does (`seed-branch.sh` refuses one).
+       does (`seed-branch.sh` refuses one). Amended 2026-10-29 (#0-184, ADR-0046): #0-115's F1 measured `factory.md`'s
+       reviewers by hand, on Owner-only hosts, so the reason is now that such a measure is rare and run by hand.
+       Factory guards' `check-rule-claims.rb` fails a measure word in every other rule file.
      - That a benchmark exists, and which patterns were measured before, is readable on `main` and in the clone:
        `main`'s history carries the commits that record the measures (#0-115's "seeded-defect measure"), and the
        owner's HEAD reflog keeps the runs before #0-177 (`checkout: moving from main to seed/P-10-…`, `seed base: …`)

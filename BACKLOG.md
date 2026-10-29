@@ -124,7 +124,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
-| [0-184](#0-184-nothing-checks-what-the-review-rule-files-claim) | Nothing checks what the review rule files claim | ci | Medium | Open |
+| [0-184](#0-184-nothing-checks-what-the-review-rule-files-claim) | Nothing checks what the review rule files claim | ci | Medium | In progress |
 | [0-185](#0-185-a-seed-runs-original-change-is-in-reach-of-the-panel-and-the-defect-is-its-only-difference) | A seed run's original change is in reach of the panel, and the defect is its only difference | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -3651,7 +3651,7 @@ AC3. README "Infrastructure Hardening" and `review-k8s.md` describe the render; 
 
 ### 0-184. Nothing checks what the review rule files claim
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. From #0-115's `factory.md` (owner, 2026-10-28: E1); it takes
+**Type:** ci · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-29). From #0-115's `factory.md` (owner, 2026-10-28: E1); it takes
 in #0-178's "Also" (a pattern's rule id is live), the same kind of check over the same files.
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.github/scripts/: a check script and its test, .github/workflows/factory-guards.yml),
@@ -3683,6 +3683,43 @@ only in the owner's step, on a rule file other than `factory.md` naming the benc
 missing or retired id; shown by its test, with a mutation of each rule failing a case.
 AC2. It passes on `main` as it is, or the owner fixes the drift it finds in the same PR.
 AC3. `.ai/context/infrastructure.md` and `docs/ai-factory.md` name the check.
+
+**Decided (owner, 2026-10-29: option A of the research).** One check, `.github/scripts/check-rule-claims.rb` (with
+`test-rule-claims.sh`), in Factory guards, which runs on Markdown-only pull requests too; it reuses `run-blocks.rb`.
+It reads backticked names only, since the labels' text has no grammar ("the smoke test", "JaCoCo's `check`"): a
+grammar for every label (option B) would have rewritten about 30 labels of files just measured. The research found
+that the Approach above, as written, fails on `main` in three places, so the check differs from it:
+- A label names a check outside its parentheses (what they explain is not one), and a Java check only when it is a
+  test or a guard (`*Test`, `*Guard`): `WebFetch` and `Service` in FAC-S02's and K8S-01's labels are what they check.
+- An "Enforced by" step counts only when neither it nor its job has an `if:` that leaves pull requests out
+  (`ci.yml`'s "Save the Maven caches" runs on push only), the workflow runs on `pull_request`, and the step does not
+  run `check-factory-guards.sh`. A label may name a job by its id instead (K8S-03's `validate-k8s-manifests`).
+- The measure's words are narrow phrases (`benchmark`, `seeded`, `seeder`, `seed-bugs`, `seed branch`,
+  `patterns.md`, `P-<two digits>`), without `plant`: `security.md`'s SEC-33 names build-and-test's "Plant a local
+  config" step. No line marker exempts one: none is needed on `main`, and it would be an exemption in the files the
+  reviewers read. `_common.md` is checked too. `factory.md` stays out, but no longer because no reviewer of it is
+  ever measured: #0-115's F1 ran its reviewers by hand on Owner-only hosts. Its measure is rare and by hand, so its
+  words (FAC-A06 names `seed-bugs.js`, a workflow it reviews) are a residual of ADR-0044 decision 6.
+- A pattern's rule is in its dimension's file, except `FAC-S` (security's) and `FAC-A` (architecture's), both in
+  `factory.md`, as `backlog-autopilot.js`'s `RULE_FILE_OF` maps them (P-23 and P-24 are architecture's FAC-A ids).
+  A retired pattern (P-14) is skipped, and a retired rule is read in both forms (`**ARC-20** retired:` and
+  `**SEC-32** retired —`).
+On `main` it passes: 35 labels, the 9 "Enforced by" in `Build, Test & Coverage`, `PostgreSQL Roles` and
+`Validate Kubernetes Manifests`. With `Build, Test & Coverage` and `Validate Kubernetes Manifests` taken out of the
+ruleset, 8 of them fail; ARC-42's, in `PostgreSQL Roles`, stays green.
+Review round 1 (2026-10-29):
+- Architecture's blocking finding (ARC-07: no ADR, and ADR-0044 kept the old reason for `factory.md`) is ADR-0046,
+  with ADR-0044 decision 6 amended.
+- Security's non-blocking findings are fixed. A step or job whose `if:` is `false`, or that continues on error, no
+  longer counts. Neither does a line that names the script only in a comment or an `echo`, or with `|| true`.
+- A required job gated on changed paths (an `if:` with `||`) still counts. This is named in the header and in
+  ADR-0046.
+- `run-blocks.rb` names its new reader, and the file lister is `files_on_disk` (a local run counts untracked files).
+- The two rule gaps are recorded in ADR-0046, not filled: `_common.md` says nothing of skipped required jobs, and no
+  FAC rule judges a check of labels.
+49 cases; 23 mutations of the check, one per condition, each fail a case.
+Review round 2 (2026-10-29): no blocking finding; arc-7c41 resolved. ADR-0046's count of the "Enforced by" labels in
+build-and-test is corrected to two (ARC-40, ARC-41), and the owner accepted it.
 
 ### 0-185. A seed run's original change is in reach of the panel, and the defect is its only difference
 
@@ -3721,6 +3758,10 @@ AC1. Each row of the earlier series says whether a reviewer reached the original
 #0-179 say whether the command was relayed.
 AC2. The owner's choice among the approaches is recorded in ADR-0044 decision 6, and `.ai/rules/audit.md`'s reading of
 seeded rows matches it.
+
+**Also (found in #0-184's research, 2026-10-29).** `scripts/factory/seed-record.sh:43` takes a rule id only as
+`^[A-Z][A-Z0-9]*-[0-9]+$`, so it refuses `FAC-A02`. F1 recorded its rows by hand, so nothing failed. A seeded
+`factory.md` run that `/seed-bugs` records would need the id form of `check-rule-claims.rb` (`[A-Z][A-Z0-9]*-[A-Z]?\d+`).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

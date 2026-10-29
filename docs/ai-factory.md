@@ -265,6 +265,13 @@ The agents' instructions are not a boundary; these are, each with its limit:
   rows before landing them: the seeder has no write scope yet (#0-172) and could have written one. A run that
   measured nothing says so (#0-170): a seeder that was refused a command, a skip without a reason and an answer
   without its branch, file, line or rule end it FAILED, not SKIPPED.
+- **What the rule files claim** (backlog #0-184, ADR-0046): Factory guards' "Review rule claims are true"
+  (`.github/scripts/check-rule-claims.rb`) fails a label naming a script, test or guard that does not exist, an
+  "Enforced by" whose check runs in no required job on a pull request, only while continuing on error or only in
+  the owner's step (it is then at most "Backed by"), a rule file other than `factory.md` naming the measure (`benchmark`, `seeded`, `seeder`,
+  `/seed-bugs`, `patterns.md`, a pattern id; ADR-0044), and a pattern citing a missing or retired id of its
+  dimension's file (`FAC-S` is security's, `FAC-A` architecture's). It reads backticked names only: a label's
+  plain words, and a synonym of the measure, are still the reviewer's and the owner's to see.
 - **Escaped defects**: an item that fixes a defect an earlier item introduced carries
   `**Fixes:** #0-N · **Escaped from:** <stage>` — `review-<dimension>` when the panel missed it, or the pipeline
   stage that let it in (BACKLOG.md conventions); the pipeline audit counts the markers added in its period. A
