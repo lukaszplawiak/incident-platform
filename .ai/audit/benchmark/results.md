@@ -20,6 +20,8 @@
 | docs-after-p18 | P-18 | DOC-01 | docs | yes | yes | general | — |
 | k8s-after-p20 | P-20 | K8S-08 | k8s | yes | yes | general, architecture, security, docs | — |
 | k8s-after-p21 | P-21 | K8S-10 | k8s | yes | yes | general, architecture, docs | — |
+| fac-after-p23 | P-23 | FAC-A02 | architecture | yes (the original in reach, #0-185) | yes | security | — |
+| fac-after-p24 | P-24 | FAC-A06 | architecture | yes (the original in reach, #0-185) | yes | security | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -78,3 +80,13 @@ from the planted one. k8s-after-p21: the seeder replaced `@{argLine}` with `${ar
 blocked it under K8S-10 at the planted line, naming the coverage checks that would skip. P-22 has no row: its host,
 `4e608067`, also changes `check-k8s-environments.rb` and `ci.yml`, so `seed-branch.sh` refused it as touching the
 evaluator, and no other revertible change touches a Deployment.
+
+The `factory.md` measure (2026-10-28, #0-115 F1) was run by hand, not by `/seed-bugs`. Every host is an Owner-only
+path, which `seed-branch.sh` refuses. The host's code was reverted on `review/<8 hex>` (`Revert "<subject>"`),
+replayed with the plant uncommitted, and reviewed by `/review 27`. That runs security and architecture, the only two
+that read `factory.md`, so "Also caught by" counts one other reviewer at most. No prompt named the plant.
+fac-after-p23 (`0fabc93a`): at `backlog-autopilot.js:482`, `!pinned ||` became `pinned &&`. Architecture blocked it
+there under FAC-A02, and security under FAC-S03. fac-after-p24 (`3f13958f`): `unverifiedEscapes` was left out of
+`audit.js:36`'s schema and read at `:50`. Architecture blocked it under FAC-A06; security named it non-blocking. In
+both runs, both reviewers reached the original change, through the diff against `main` or the revert's `git show`. So
+"yes" here is a catch with the original in reach (backlog #0-185).

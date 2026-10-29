@@ -31,3 +31,10 @@ the smallest edit that produces the defect in real code of the change — never 
 | P-20 | k8s | K8S-08 | add a `<repository>`, `<pluginRepository>` or `<plugin>` to a `pom.xml` the change touches |
 | P-21 | k8s | K8S-10 | drop `@{argLine}` from a surefire `<argLine>`, or replace it with `${argLine}` |
 | P-22 | k8s | K8S-06 | remove a `readinessProbe`, a `livenessProbe` or the `resources` block from a Deployment the change touches |
+| P-23 | architecture | FAC-A02 | in a workflow, let a missing or malformed agent answer go on: drop the `!answer \|\|` of a guard that stops the item, or read a field with `?.` where its absence must stop |
+| P-24 | architecture | FAC-A06 | leave a field the workflow reads out of its `agent()` call's schema, or type it only as required |
+
+P-23 and P-24 are planted by hand, not by `seed-bugs`: their hosts change Owner-only paths, which `seed-branch.sh`
+refuses. The host's code is reverted on `review/<8 hex>` (`Revert "<subject>"`), replayed with the plant left
+uncommitted, and the owner runs `/review 27`. A host changes only `.claude/workflows/` and `scripts/factory/`, never a
+hook, a setting, an agent, a skill or a rule: those are what `/review` runs under.

@@ -104,6 +104,8 @@ A run that had gone through would have had the panel review under older agents a
        branch outside the `fix/`/`feat/` names. `git log` shows the change's subject, then its `Revert`, then `main`,
        and the change itself is in `main`'s history. None of it names a test, but a reviewer that looks can find the
        review unusual; giving the prompt an autopilot item's shape would mean inventing one.
+       More than unusual (#0-185, 2026-10-28): the seeded tree differs from `main` in the defect alone, and the
+       `Revert` holds the original lines. In #0-115's `factory.md` measure, every reviewer read one of the two.
      - `.ai/runs/benchmark/results.md` is in reach of the reviewers during a series, and says a measure is running.
      - **The message that started the run (found 2026-10-26, in the `security.md` series of #0-115).** The Workflow
        tool starts every agent's first message with `[Workflow harness — user request]`, which holds the user's
