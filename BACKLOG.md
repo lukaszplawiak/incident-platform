@@ -113,7 +113,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-110](#0-110-maven-enforcer-allowed-repositories-and-pinned-plugin-versions) | Maven Enforcer: allowed repositories and pinned plugin versions | ci | Low | Open |
 | [0-111](#0-111-openapi-contract-diff-on-pull-requests) | OpenAPI contract diff on pull requests | ci | Low | Open |
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
-| [0-115](#0-115-rewrite-the-review-rules-as-invariants) | Rewrite the review rules as invariants | docs | Medium | In progress |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
@@ -4036,7 +4035,8 @@ section in its PR), the implementer, the reviewers' `_common.md`, `AGENTS.md`, `
 
 ### 0-115. Rewrite the review rules as invariants
 
-**Type:** docs · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-25)
+**Type:** docs · **Priority:** Medium · **Status:** Done, PRs #527, #532, #534 to #546, #548, #549 (kept for the
+decision history of each rule file and its measure; owner's decision below, 2026-10-25)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 
 **Problem.** The ~90 rules in `.ai/rules/review/*.md` came from the former review agents and are written
