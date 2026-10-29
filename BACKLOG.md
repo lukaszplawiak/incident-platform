@@ -126,6 +126,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-184](#0-184-nothing-checks-what-the-review-rule-files-claim) | Nothing checks what the review rule files claim | ci | Medium | Open |
+| [0-185](#0-185-a-seed-runs-original-change-is-in-reach-of-the-panel-and-the-defect-is-its-only-difference) | A seed run's original change is in reach of the panel, and the defect is its only difference | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3684,6 +3685,44 @@ missing or retired id; shown by its test, with a mutation of each rule failing a
 AC2. It passes on `main` as it is, or the owner fixes the drift it finds in the same PR.
 AC3. `.ai/context/infrastructure.md` and `docs/ai-factory.md` name the check.
 
+### 0-185. A seed run's original change is in reach of the panel, and the defect is its only difference
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-10-28 in #0-115's `factory.md` measure (F1), in
+both runs.
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** docs (ADR-0044, docs/ai-factory.md, .ai/audit/benchmark/results.md); optionally
+scripts/factory/seed-branch.sh (+ its test), .claude/hooks/readonly-bash.sh (+ test-hooks.sh), .ai/rules/audit.md
+(owner)
+
+**Problem.** A seed branch is `main` with a merged change reverted, then the change brought back with the defect
+inside it (ADR-0044). The merged change stays in `main`'s history, so the seeded tree differs from `main` in the
+defect's lines alone, and the base commit, `Revert "<subject>"`, holds the original lines as well. Both reviewers used
+this in both runs of F1. In P-23, architecture ran `git diff 6883bec3~1` and security compared the tree with
+`refs/remotes/origin/main` ("differs on one line only"). In P-24, both read `git show` of the revert and wrote that
+the re-application "leaves out" the schema line. Nothing named a test, and the reviewers read `origin/main` because
+their procedure says to (the rule files), so this is not a tell they looked for. It is an answer key one `git diff`
+away. ADR-0044 decision 6 lists "the change itself is in `main`'s history" only as something that makes the review
+look unusual. Nobody has checked whether the reviewers of the earlier series (P-01..P-22) did the same. Their rows
+stand as caught, but caught with the original in reach.
+
+**Approach (to analyse).**
+- First, the check: search the reviewer transcripts of the earlier series for a diff or a `git show` against
+  `origin/main`, the revert or the host commit, as ADR-0044 decision 6 did for the catalogue, and mark the rows.
+- A host whose original is not on `main`: plant into the owner's change before it merges (e.g. a copy of an open PR's
+  branch). This is the most realistic option, but a run can then no longer be replayed on demand, and the host's tree
+  is not yet reviewed.
+- Hide it from the reviewers: `readonly-bash.sh` refuses `git diff`/`git show`/`git log` on any revision except `HEAD`
+  and the `mergeBase`. This leaks (`git cat-file`, `git rev-list`, the reflog). It also collides with the procedure's
+  own reads of the rule files from `refs/remotes/origin/main`, so a read hook would need path rules.
+- Record it as a residual: a seeded row measures "the panel finds the defect when the original is in reach", and
+  `/audit` reads it as an upper bound of the catch rate, not as a hard fact.
+
+**Acceptance criteria.**
+AC1. Each row of the earlier series says whether a reviewer reached the original, from its transcripts, as the rows of
+#0-179 say whether the command was relayed.
+AC2. The owner's choice among the approaches is recorded in ADR-0044 decision 6, and `.ai/rules/audit.md`'s reading of
+seeded rows matches it.
+
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
 **Type:** design · **Priority:** Medium · **Status:** Done, PR #484 (owner's decision 2026-10-10, after #0-42). Kept in full
@@ -4321,6 +4360,26 @@ implementer reads both. Choose one convention when `architecture.md` is rewritte
 - `factory.md`: drafted (12 ids, none retired; section 3 moved into the rules' "Backed by"), with `security.md`,
   `architecture.md` and `general.md` pointing to `_common.md` for the labels and CLAUDE.md's merge-on-green sentence;
   copied by the owner. The measure (F1) is the second PR.
+- `factory.md` measure (F1, 2026-10-28). The plants were made by hand, because `seed-branch.sh` refuses every host:
+  the workflows are Owner-only. Each host's code was reverted on `review/<8 hex>`, replayed with the plant left
+  uncommitted, and reviewed with `/review 27`; no prompt named the plant:
+  - P-23 (`fac-after-p23` on `0fabc93a`, FAC-A02): at `backlog-autopilot.js:482`, `!pinned ||` became `pinned &&`.
+    Architecture blocked it at that line under FAC-A02. Security blocked it there too, under FAC-S03 (the one pin of
+    the run's branch, which #0-131's push guard rests on). The verifier could not settle the claim that a test fails,
+    because it reads only the gate's Maven artifact. The session ran the test itself, and
+    `test-autopilot-workflow.mjs` failed ("the run's branch is recorded in the lock before any agent works on it, or
+    the run stops").
+  - P-24 (`fac-after-p24` on `3f13958f`, FAC-A06): `unverifiedEscapes` was left out of `audit.js:36`'s schema, and the
+    field is read at `:50`. Architecture blocked it at the planted line under FAC-A06. Security named it non-blocking
+    and passed it to architecture.
+  - In both runs both reviewers reached the original: the defect was the tree's only difference from `main` (P-23), or
+    one `git show` of the revert away (P-24). This is #0-185.
+  - FAC-S has no pattern: its hosts are hooks, settings and agents, which are what `/review` runs under.
+  - ruleGaps:
+    - Both runs: no check types `audit.js`'s or `backlog-autopilot.js`'s `factory-ops` answers. This is #0-175's AC2.
+    - Architecture: the manual gate runs no Factory guards test on a diff that changes only workflows.
+    - Security: no FAC-S rule covers the integrity of a control file a guard trusts (the lock's branch).
+  AC3 holds for `factory.md` on P-23 and P-24, with #0-185's caveat; FAC-S is not measured.
 
 **Acceptance criteria.**
 AC1. Every rule of the rewritten file is an invariant with a "Check:" line, or retired with a reason.
