@@ -123,7 +123,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-186](#0-186-factory-guards-cannot-see-an-agent-with-bash-or-edit-and-no-guard) | Factory guards cannot see an agent with Bash or Edit and no guard | security | Low | Open |
-| [0-187](#0-187-sec-31-is-weighed-by-what-a-log-line-holds-today-not-by-what-it-is-built-from) | SEC-31 is weighed by what a log line holds today, not by what it is built from | security | Medium | Open |
+| [0-187](#0-187-sec-31-is-weighed-by-what-a-log-line-holds-today-not-by-what-it-is-built-from) | SEC-31 is weighed by what a log line holds today, not by what it is built from | security | Medium | In progress |
+| [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3768,8 +3769,8 @@ AC2. README's known gap sentence goes.
 
 ### 0-187. SEC-31 is weighed by what a log line holds today, not by what it is built from
 
-**Type:** security · **Priority:** Medium · **Status:** Open. From #0-179's blind re-run of P-04 (`sec-p04-blind` on
-`aace4118`, 2026-10-30).
+**Type:** security · **Priority:** Medium · **Status:** In progress (2026-10-30). From #0-179's blind re-run of P-04
+(`sec-p04-blind` on `aace4118`, 2026-10-30).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** .ai/rules/review/security.md (owner), .ai/audit/benchmark/results.md (the re-run's row)
 
@@ -3790,6 +3791,54 @@ P-04 again on `aace4118`, blind (a new run id, started the #0-179 way, scanned).
 AC1. SEC-31's "Check:" says a line built from an exception message, a request or a payload is the finding whatever it
 carries today (owner's file).
 AC2. P-04 runs again blind, and its row lands beside `sec-p04-blind`'s, blocked or not.
+
+**Progress.** AC1 (owner, 2026-10-30): SEC-31's "Check:" now says such a line is the finding whatever it carries
+today. AC2 follows the merge: the reviewers read the rules from `origin/main`, and `seed-branch.sh` starts from a
+clean `main`. Then P-04 runs again on `aace4118`, blind, as `sec-p04-blind-r2`, and its row lands in its own pull
+request, as P-15's re-run did after GEN-08 (#0-115).
+
+Review round 1 (security, architecture): the first wording kept "a credential, a request or a payload" as its
+sources, so a reviewer still had to read `e.getMessage()` as a payload, the step `sec-p04-blind` missed. Read
+broadly, it also made the platform's usual `log.warn(…, e.getMessage(), e)` a finding (33 main files hold
+`getMessage()`). The owner's second wording names the message of an exception the platform did not write as a
+source, and keeps the platform's own content-free exceptions out of it. Its fix is the one `KafkaFailures.reason`
+and `describe` already apply (#0-96). The throwable passed to a logger is left to #0-188, a decision for the whole
+platform rather than for a review rule.
+Review round 2: "a message the platform did not write", so a platform exception that wraps a foreign message counts
+(architecture). The carve-out for the logged throwable stops where the change itself puts a credential into what the
+exception quotes (security). For example, a key in a URL's query: `RestTemplate`'s I/O error names the URL in its
+message (`spring-web` 6.2.19, read in the session).
+
+### 0-188. A logged exception's message reaches the log as the library wrote it
+
+**Type:** security · **Priority:** Medium · **Status:** Open. Known gap of README "Infrastructure Hardening" since #0-94
+step 1, which had no item. Split out of #0-187's review (2026-10-30, security and architecture round 1).
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** —
+**Touches:** shared (logging: `StructuredLoggingDefaults` or a converter, and its tests), all 7 services through
+`shared`, security (README "Infrastructure Hardening", its known gap), .ai/rules/review/security.md SEC-31's last
+sentence (owner)
+
+**Problem.** A throwable passed to a logger (`log.warn("…", e)`) puts its message into ECS's `error.message` and every
+cause's message into `error.stack_trace`, as the library wrote it. The ECS encoder escapes it, but nothing filters it.
+A database, driver, parser or client exception quotes what its query, call or input held: SQL text, a Postgres
+`Detail` with key values, a JSON fragment, a URL with a query string. Logs are read across tenants (one Loki org,
+#0-94 step 2). `KafkaFailures.reason`/`describe` (#0-96) keeps such messages out of dead-letter reasons and the lines
+built from them, but every other `log.*(…, e)` keeps them. SEC-31 (#0-187) judges a new line that adds an exception's
+message itself, and leaves the throwable to this item. Dropping the throwable everywhere would also drop the stack
+traces the operator debugs with.
+
+**Approach (to analyse, `/research`).**
+- What reaches the log today, by exception type and service.
+- A converter in `shared` that writes `error.stack_trace` with each foreign exception's message replaced by its type
+  (the platform's own content-free exceptions kept), against what debugging loses.
+- How systems of this kind handle it (log redaction at the encoder, an allow-list of exception types).
+- Whether an operator-only log stream changes the answer.
+
+**Acceptance criteria.**
+AC1. A decision, as an ADR, on what a logged throwable may carry.
+AC2. If it filters, a test per service type of exception shows a foreign message absent from `error.message` and
+`error.stack_trace`, and the platform's own message kept.
+AC3. README's known gap sentence names the outcome.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
