@@ -119,7 +119,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | In progress |
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
@@ -3463,8 +3462,9 @@ have failed if it had not. A Factory guards check could read `patterns.md`'s "Ru
 
 ### 0-179. The Workflow tool shows the panel the `/seed-bugs` command that started the run
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress (2026-10-30). Found 2026-10-26 in the transcripts of
-#0-115's `security.md` series, read before landing its rows (ADR-0044 decision 6).
+**Type:** ci · **Priority:** Medium · **Status:** Done, PRs #553 and #554 (kept for the decision history: C + D, the
+script as an aid to the hand reading, the blind re-runs). Found 2026-10-26 in the transcripts of #0-115's
+`security.md` series, read before landing its rows (ADR-0044 decision 6).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium (was low: the scan script and its test) · **Depends on:** —
 **Touches:** factory (scripts/factory-admin/seed-scan.sh), ci (.github/scripts/test-seed-scan.sh,
 .github/workflows/factory-guards.yml), docs (docs/ai-factory.md, ADR-0044, .ai/audit/benchmark/results.md for AC2)
