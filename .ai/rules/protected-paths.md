@@ -46,7 +46,7 @@ directory and everything under it; any other path is one file.
 - `architecture-tests/` — the ArchUnit rules and their frozen store
 - `AGENTS.md` — the instructions every assistant reads first
 - `scripts/factory/` — the autopilot's deterministic gates
-- `scripts/factory-admin/` — the owner's tools (breaker and audit counter reset)
+- `scripts/factory-admin/` — the owner's tools (breaker and audit counter reset, the local implementer, the seed-run scan)
 - `.devcontainer/` — the sandbox and its firewall
 <!-- protected:end -->
 
