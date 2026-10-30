@@ -27,6 +27,7 @@
 | sec-p04-blind | P-04 | SEC-31 | security | yes | no | general, docs | — |
 | sec-p05-blind | P-05 | SEC-10 | security | yes | yes | general, docs | — |
 | sec-p04-blind-r2 | P-04 | SEC-31 | security | yes | yes | general | — |
+| mig-after-p19 | P-19 | MIG-05 | migration | yes | no (the plant is within MIG-05, see note) | architecture, performance | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -124,3 +125,14 @@ message of an exception the platform did not write as a source, the line being t
 (backlog #0-187). The seeder planted the same edit at the same line. This time security asked for changes and listed
 it as blocking under SEC-31, naming Hibernate's and the PostgreSQL driver's message (the SQL and the `Detail` with
 row values). The two runs differ only in the rule's text.
+
+mig-after-p19 (2026-10-30, blind, scanned clean; only architecture read names, of ADR-0009's commit) is P-19's first
+run. It waited for backlog #0-172, and the seeder now planted with an ordinary Edit of `V31__tenant_foreign_keys.sql`,
+a migration on `main` that `guard-migrations.sh` lets it edit on the seed branch (#0-172's AC4, in a real run). It
+dropped `NOT VALID` from `fk_users_tenant`, so the key on `users` is added and validated in one step. migration
+approved, with the inconsistency as a non-blocking MIG-09 finding. Its reason: after the lock and the backfill the key
+cannot fail, and the cost is one more scan of `users` while writes wait. That reading holds. V31 takes `SHARE ROW
+EXCLUSIVE` on `tenants` and the nine tables, then backfills the missing tenants, then adds the keys. So the plant has the "comes
+with a check that no row violates it" of MIG-05's second branch, and the rule allows it. The host is the miss, not the
+panel. P-19 needs a key on an existing table whose rows nothing has checked. The row is kept as the record of the
+run, not as a measure of MIG-05: no violation was planted, so its "no" in "Blocking" is not a miss.
