@@ -4,8 +4,9 @@
 # in a temporary repository with an origin: the seed branch starts from main (so the evaluator stays main's), its base
 # reverts the change's code and its head brings it back, Markdown is not replayed, a rename is a deletion and an
 # addition, a merge commit is its whole pull request, and every refusal leaves the tree on a clean main without the
-# branch; seed-check.sh confirms the seeder's one commit on that branch, in the change's files, and refuses anything
-# else; seed-fold.sh makes the change and the defect one commit; nothing on the branch names the run (#0-177); and
+# branch, and the run is recorded in .ai/runs/SEED until return-to-main.sh (#0-172); seed-check.sh confirms the
+# seeder's uncommitted edit on that branch, in the change's files, and refuses anything else (a commit of its own
+# included, #0-172); seed-fold.sh makes the change and the edit one commit; nothing on the branch names the run (#0-177); and
 # seed-record.sh appends a run's row to the gitignored .ai/runs/benchmark/results.md, which leaves main clean.
 # Run: .github/scripts/test-seed-branch.sh   (also run by .github/workflows/factory-guards.yml)
 # ============================================================
@@ -25,7 +26,8 @@ cd "$R" || exit 1
 git config user.email t@t && git config user.name t
 mkdir -p scripts/factory .ai/rules svc .claude
 cp "$SRC"/scripts/factory/_common.sh "$SRC"/scripts/factory/_protected.sh "$SRC"/scripts/factory/seed-branch.sh \
-   "$SRC"/scripts/factory/seed-check.sh "$SRC"/scripts/factory/seed-fold.sh "$SRC"/scripts/factory/seed-record.sh scripts/factory/
+   "$SRC"/scripts/factory/seed-check.sh "$SRC"/scripts/factory/seed-fold.sh "$SRC"/scripts/factory/seed-record.sh \
+   "$SRC"/scripts/factory/return-to-main.sh scripts/factory/
 cp "$SRC"/.ai/rules/protected-paths.md .ai/rules/
 printf '.ai/runs/\n' > .gitignore
 printf 'v1\n' > svc/A.java && printf 'backlog 1\n' > BACKLOG.md && printf 'x\n' > .claude/x
@@ -118,34 +120,49 @@ if [ "$(git log -1 --format=%s "$head")" = "fix(svc): the change under test" ]; 
 if [ "$(git log -1 --format=%B "$base")" = 'Revert "fix(svc): the change under test"' ]; then ok "the base says what git revert says, and no more"
 else fail "base message: $(git log -1 --format=%B "$base")"; fi
 
+echo "seed-branch.sh: the seed record (backlog #0-172)"
+if [ "$(cat .ai/runs/SEED 2>/dev/null)" = "$B1 $base $head" ]; then ok "the run is recorded in .ai/runs/SEED: branch, base, head"
+else fail "seed record: $(cat .ai/runs/SEED 2>/dev/null)"; fi
+if [ -z "$(git status --porcelain)" ]; then ok "the record leaves the branch clean (.ai/runs/ is gitignored)"; else fail "the record dirties the tree"; fi
+
 echo "seed-check.sh: the tree the panel runs on"
 check() {   # check <name> <reason regex | ok> <args...>
     local name=$1 re=$2 out; shift 2
     out=$("$SC" "$@")
     if [ "$re" = ok ]; then
-        if jq -e '.ok == true and .files == ["svc/A.java"]' <<<"$out" >/dev/null; then ok "$name"; else fail "$name: $out"; fi
+        if jq -e '.ok == true and .files == ["svc/A.java"] and (has("commit") | not)' <<<"$out" >/dev/null; then ok "$name"; else fail "$name: $out"; fi
     elif jq -e --arg re "$re" '.ok == false and (.reason | test($re))' <<<"$out" >/dev/null; then ok "$name"
     else fail "$name: $out"; fi
 }
-check "no seeder's commit yet" "not the one commit on top" "$B1" "$base" "$head"
-printf 'v2 planted\n' > svc/A.java && git commit -qam "refactor(svc): simplify"
-check "the seeder's one commit, in the change's file" ok "$B1" "$base" "$head"
+check "no edit yet" "changed nothing" "$B1" "$base" "$head"
+printf 'v2 planted\n' > svc/A.java
+check "the seeder's edit, uncommitted, in the change's file" ok "$B1" "$base" "$head"
+git add svc/A.java
+check "the same edit, staged" ok "$B1" "$base" "$head"
+git reset -q
 check "bad base" "not a base commit" "$B1" abc "$head"
 check "a bad branch name" "not a seed branch name" seed/P-10-r1 "$base" "$head"
 check "a base that is not under the head" "is not the commit on top of" "$B1" "$(git rev-parse main)" "$head"
 check "another run's branch" "not on $B9" "$B9" "$base" "$head"
-printf 'more\n' >> svc/A.java
-check "changes left uncommitted" "not clean" "$B1" "$base" "$head"
-git checkout -q -- svc/A.java
-printf 'again\n' >> svc/A.java && git commit -qam "refactor(svc): again"
-check "two commits on top" "not the one commit on top" "$B1" "$base" "$head"
-git reset -q --hard "$head" && printf 'z\n' > svc/Z.java && git add svc/Z.java && git commit -qm "refactor(svc): add Z"
-check "a file outside the change" "outside the change: svc/Z.java" "$B1" "$base" "$head"
-git reset -q --hard "$head" && printf 'w\n' > .claude/x && git commit -qam "refactor(svc): tweak"
+git commit -qam "refactor(svc): simplify"
+check "a seeder that committed" "the seeder committed" "$B1" "$base" "$head"
+git reset -q --hard "$head" && printf 'z\n' > svc/Z.java
+check "a file git does not track" "files git does not track: svc/Z.java" "$B1" "$base" "$head"
+rm -f svc/Z.java && printf 'v2 planted\n' > svc/A.java && printf 'w\n' > .claude/x
 check "the evaluator, outside the change" "outside the change: \\.claude/x" "$B1" "$base" "$head"
+git checkout -q -- .claude/x && printf 'n\n' > svc/M.java
+check "a file outside the change" "outside the change: svc/M.java" "$B1" "$base" "$head"
 git reset -q --hard "$head"
 
 echo "seed-fold.sh: the change and the defect as one commit"
+# The cases above ran git on the branch (a commit, resets), as a seeder no longer can (#0-172): their HEAD reflog
+# entries go, so the fold sees the run as seed-branch.sh left it, its two commits above the switch.
+as_made() {   # as_made <branch>
+    local n
+    n=$(git reflog show --format=%gs HEAD | awk -v s="checkout: moving from main to $1" '$0 == s { print NR - 1; exit }')
+    while [ "${n:-0}" -gt 2 ]; do git reflog delete "HEAD@{0}"; n=$((n - 1)); done
+}
+as_made "$B1"
 fold() {   # fold <name> <reason regex> <args...>: ok false with that reason, the branch where it was
     local name=$1 re=$2 out before; shift 2
     before=$(git rev-parse "$B1")
@@ -153,34 +170,38 @@ fold() {   # fold <name> <reason regex> <args...>: ok false with that reason, th
     if jq -e --arg re "$re" '.ok == false and (.reason | test($re))' <<<"$out" >/dev/null && [ "$(git rev-parse "$B1")" = "$before" ]; then ok "$name"
     else fail "$name: $out"; fi
 }
-printf 'v2 planted\n' > svc/A.java && git commit -qam "refactor(svc): simplify"
-seeded=$(git rev-parse HEAD)
-fold "a bad branch name" "not a seed branch name" seed/P-10-r1 "$base" "$head" "$seeded"
-fold "a bad commit" "not a commit" "$B1" "$base" "$head" HEAD
-fold "not the checked commit" "not the checked commit" "$B1" "$base" "$head" "$head"
-fold "a head not on the base" "is not the commit on top of" "$B1" "$head" "$head" "$seeded"
-printf 'more\n' >> svc/A.java
-fold "changes left uncommitted" "not clean" "$B1" "$base" "$head" "$seeded"
-git checkout -q -- svc/A.java
-fold "not on the branch" "on $B1, not on $B9" "$B9" "$base" "$head" "$seeded"
-out=$("$SF" "$B1" "$base" "$head" "$seeded")
+fold "nothing to fold" "changed nothing" "$B1" "$base" "$head"
+printf 'v2 planted\n' > svc/A.java
+fold "a bad branch name" "not a seed branch name" seed/P-10-r1 "$base" "$head"
+fold "a bad commit" "not a commit" "$B1" "$base" HEAD
+fold "the wrong number of arguments (the old <seeded> too)" "usage" "$B1" "$base" "$head" "$head"
+fold "a head not on the base" "is not the commit on top of" "$B1" "$head" "$head"
+fold "not the change's commit" "HEAD is not the change's commit" "$B1" "$base" "$base"
+printf 'z\n' > svc/Z.java
+fold "a file git does not track" "files git does not track" "$B1" "$base" "$head"
+rm -f svc/Z.java
+fold "not on the branch" "on $B1, not on $B9" "$B9" "$base" "$head"
+# Staged or not, the fold takes the working tree: a part staged and a part not both land.
+printf 'v2 planted\n' > svc/A.java && git add svc/A.java && printf 'v2 planted\nmore\n' > svc/A.java
+planted_blob=$(git hash-object svc/A.java)
+out=$("$SF" "$B1" "$base" "$head")
 folded=$(jq -r .head <<<"$out")
 if jq -e '.ok == true' <<<"$out" >/dev/null && [ "$(git rev-parse HEAD)" = "$folded" ] && [ "$(git rev-parse --abbrev-ref HEAD)" = "$B1" ]; then
     ok "folded, the branch at the new commit"; else fail "fold: $out"; fi
 if [ "$(git rev-parse "$folded^")" = "$base" ] && [ "$(git rev-list --count "$base..HEAD")" = 1 ]; then ok "one commit on the base"
 else fail "commits on the base: $(git rev-list --count "$base..HEAD")"; fi
-if [ "$(git rev-parse "$folded^{tree}")" = "$(git rev-parse "$seeded^{tree}")" ] && [ -z "$(git status --porcelain)" ]; then
-    ok "the seeded tree, and a clean working tree"; else fail "tree or status after the fold"; fi
+if [ "$(git rev-parse "$folded:svc/A.java")" = "$planted_blob" ] && [ -z "$(git status --porcelain)" ]; then
+    ok "the working tree's edit, staged or not, and a clean working tree"; else fail "tree or status after the fold: $(git status --porcelain)"; fi
 if [ "$(git log -1 --format=%B "$folded")" = "fix(svc): the change under test" ]; then ok "under the change's subject only"
 else fail "folded message: $(git log -1 --format=%B "$folded")"; fi
 # What a reviewer reads of the branch: its name and every message from main on. None names the run or the planting.
 told="$B1 $(git log --format=%B "$(git rev-parse main)..HEAD")"
 if ! grep -qiE 'seed|plant|benchmark|P-[0-9]|simplify' <<<"$told"; then ok "nothing on the branch names the run (#0-177)"; else fail "a tell: $told"; fi
-# Nor its reflogs (review round 1 of #0-177): `git log -g` and `HEAD@{n}` showed the seeder's commit alone.
+# Nor its reflogs (review round 1 of #0-177): `git log -g` and `HEAD@{n}` showed the change without the defect.
 branch_log=$(git reflog show --format=%H "$B1" 2>/dev/null)
 head_log=$(git reflog show --format=%H HEAD)
-if ! grep -qxF -e "$seeded" -e "$head" <<<"$branch_log$head_log"; then ok "no reflog names the seeder's commit or the change without it"
-else fail "a reflog still names them: branch [$branch_log] HEAD [$head_log]"; fi
+if ! grep -qxF -e "$head" <<<"$branch_log$head_log"; then ok "no reflog names the change without the defect"
+else fail "a reflog still names it: branch [$branch_log] HEAD [$head_log]"; fi
 if [ "$(git reflog show --format='%H %gs' HEAD | tail -n +2)" = "$reflog_before" ] \
    && [ "$(git reflog show --format=%gs -n 1 HEAD)" = "checkout: moving from main to $B1" ]; then
     ok "the owner's HEAD reflog is kept, below the run's switch"
@@ -201,20 +222,21 @@ if git cat-file -e "$base:svc/B.java" && git cat-file -e "$base:svc/D.java" && !
    && ! git cat-file -e "$head:svc/B.java" 2>/dev/null && ! git cat-file -e "$head:svc/D.java" 2>/dev/null; then
     ok "the base has B and D back, the head moves B to C and drops D"
 else fail "rename base/head trees"; fi
-printf 'b again\n' > svc/B.java && git add svc/B.java && git commit -qm "refactor(svc): B back"
+printf 'b again\n' > svc/B.java && git add svc/B.java
 check "a file the change deleted, brought back" "outside the change: svc/B.java" "$B3" "$base" "$head"
 git reset -q --hard "$head"
-# A seeder that switched away and back: the newest switch is not the run's first, its commit stays below it. Refused.
-printf 'c planted\n' > svc/C.java && git commit -qam "refactor(svc): C" && seeded=$(git rev-parse HEAD)
+# Git that ran on the branch since seed-branch.sh (a switch away and back, the edit carried along): the newest switch
+# is not the run's, an entry sits above seed-branch.sh's two commits. Refused, the branch where it was.
+printf 'c planted\n' > svc/C.java
 git switch -q main && git switch -q "$B3"
-out=$("$SF" "$B3" "$base" "$head" "$seeded")
-if jq -e '.ok == false and (.reason | test("still names the seeder"))' <<<"$out" >/dev/null; then ok "a seeder that switched away and back"
+out=$("$SF" "$B3" "$base" "$head")
+if jq -e '.ok == false and (.reason | test("does not show the switch|git ran on the branch"))' <<<"$out" >/dev/null \
+   && [ "$(git rev-parse "$B3")" = "$head" ]; then ok "git that ran on the branch since: refused"
 else fail "switched away and back: $out"; fi
 # A HEAD reflog without the run's switch (expired, or off): refused before anything moves.
-git reset -q --hard "$seeded" 2>/dev/null; git update-ref "refs/heads/$B3" "$seeded"
 git reflog expire --expire=now HEAD
-out=$("$SF" "$B3" "$base" "$head" "$seeded")
-if jq -e '.ok == false and (.reason | test("does not show the switch"))' <<<"$out" >/dev/null && [ "$(git rev-parse "$B3")" = "$seeded" ]; then
+out=$("$SF" "$B3" "$base" "$head")
+if jq -e '.ok == false and (.reason | test("does not show the switch"))' <<<"$out" >/dev/null && [ "$(git rev-parse "$B3")" = "$head" ]; then
     ok "no switch in the HEAD reflog: refused, the branch where it was"; else fail "no switch: $out"; fi
 git reset -q --hard "$head"
 git switch -q main && git branch -D -q "$B3"
@@ -225,11 +247,21 @@ if [ "$(git show "$base:svc/M.java")" = m1 ] && [ "$(git show "$head:svc/M.java"
 else fail "merge base/head"; fi
 if [ "$(git log -1 --format=%s "$head")" = "feat(svc): the merged change" ]; then ok "under its pull request's subject"
 else fail "merge subject: $(git log -1 --format=%s "$head")"; fi
-git switch -q main && git branch -D -q "$B4"
+if [ "$(cat .ai/runs/SEED)" = "$B4 $base $head" ]; then ok "a new run's record replaces the last one's"; else fail "record: $(cat .ai/runs/SEED)"; fi
+# The run over, back on main: the record goes with it (#0-172). Left on the branch (a dirty tree), it stays.
+printf 'dirt\n' > svc/M.java
+out=$(scripts/factory/return-to-main.sh)
+if jq -e '.onMain == false' <<<"$out" >/dev/null && [ -f .ai/runs/SEED ]; then ok "left on the branch: the record stays"; else fail "dirty return: $out"; fi
+git checkout -q -- svc/M.java
+out=$(scripts/factory/return-to-main.sh)
+if jq -e '.onMain == true' <<<"$out" >/dev/null && [ ! -e .ai/runs/SEED ]; then ok "back on main: the record is gone"; else fail "return: $out"; fi
+git branch -D -q "$B4"
 
 echo "seed-branch.sh: a change that no longer applies"
 printf 'v3\n' > svc/A.java && git add -A && git commit -qm "fix(svc): later" && git push -q origin main 2>/dev/null && git fetch -q origin
+printf '%s %s %s\n' "$B9" "$change" "$change" > .ai/runs/SEED
 refused "the change's code changed since" "no longer applies" "$B2" "$change"
+if [ ! -e .ai/runs/SEED ]; then ok "a refusal after the branch was made leaves no record"; else fail "a record after a refusal: $(cat .ai/runs/SEED)"; fi
 
 echo "seed-record.sh: a run's row in .ai/runs/benchmark/results.md"
 rows=.ai/runs/benchmark/results.md

@@ -405,6 +405,27 @@ gh_label_unsafe() {
     return 0
 }
 
+# seed_record — the /seed-bugs run on the checked-out branch (backlog #0-172): `<base> <head>` from .ai/runs/SEED
+# (`<branch> <base> <head>`, written by scripts/factory/seed-branch.sh, removed by return-to-main.sh), when HEAD is
+# on the `review/<8 hex>` branch it names. Nothing on any other branch, so a record a crashed run left behind speaks
+# for its own branch only (seed-branch.sh refuses a branch that exists). Returns 2 when the record exists but cannot
+# be read, names a branch or commits that are not ones, or, on its branch, commits this repository does not hold
+# (security review round 1: a well-formed sha of no commit sent guard-migrations.sh to its "base not found" exception).
+seed_record() {
+    local root rec line branch base head on
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+    rec="$root/.ai/runs/SEED"
+    [ -e "$rec" ] || return 0
+    [ -f "$rec" ] && [ -r "$rec" ] || return 2
+    IFS= read -r line <"$rec" || [ -n "$line" ] || return 2
+    read -r branch base head _ <<<"$line"
+    [[ $branch =~ ^review/[0-9a-f]{8}$ && $base =~ ^[0-9a-f]{40}$ && $head =~ ^[0-9a-f]{40}$ ]] || return 2
+    on=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || return 0
+    [ "$on" = "$branch" ] || return 0
+    git cat-file -e "$base^{commit}" 2>/dev/null && git cat-file -e "$head^{commit}" 2>/dev/null || return 2
+    printf '%s %s\n' "$base" "$head"
+}
+
 # The base an autopilot run compares against is the commit the preflight recorded in .ai/runs/LOCK
 # (`<runId> <sha>`), not a ref: a ref can be moved by the session (`git fetch . HEAD:refs/remotes/origin/main`,
 # a local branch named origin/main), a recorded sha cannot. Outside a run: $FACTORY_BASE_REF, origin/main, main.
@@ -418,6 +439,21 @@ base_ref() {
     fi
     if [ -n "${FACTORY_BASE_REF:-}" ]; then echo "$FACTORY_BASE_REF"; return; fi
     if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then echo refs/remotes/origin/main; else echo refs/heads/main; fi
+}
+
+# migration_base_ref — the base guard-migrations.sh compares with: base_ref, except on a /seed-bugs run's branch
+# (backlog #0-172), where it is the run's base, main with the merged change reverted. A migration the change added is
+# new there, as it was on the change's own branch, so the seeder can plant in it with Edit (against origin/main, where
+# every migration of a merged change is, P-19 was refused). Only this guard reads it: base_ref stays main's (or the
+# lock's) for every other check, factory_scripts_intact above all (architecture review round 1 of #0-172). The lock
+# comes first: seed-branch.sh refuses to start while an autopilot run holds it, and during a run a record an agent
+# wrote itself (.ai/runs/SEED is not denied to it) changes nothing. A record that cannot be read, or names a commit
+# that does not exist, is ignored (base_ref, the stricter answer); write-scope.sh --seed refuses on it.
+migration_base_ref() {
+    local root seed
+    root=$(git rev-parse --show-toplevel 2>/dev/null) || root=.
+    if [ ! -f "$root/.ai/runs/LOCK" ] && seed=$(seed_record) && [ -n "$seed" ]; then echo "${seed%% *}"; return; fi
+    base_ref
 }
 
 # run_branch — the feature branch the workflow recorded for this run's item: the third field of .ai/runs/LOCK

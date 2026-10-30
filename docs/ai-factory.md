@@ -248,8 +248,11 @@ The agents' instructions are not a boundary; these are, each with its limit:
   then back), never from the merged commit, whose hooks and agents the session would otherwise run on (#0-173,
   ADR-0044). Choose a host that passes both of its refusals: its code still reverts on `main` (`git diff --binary
   <parent> <sha> -- <code> | git apply -R --check`) and none of its files is the evaluator's (a protected path or
-  `CLAUDE.md`). `scripts/factory/seed-check.sh` confirms the tree after the seeder (on the branch, clean, its one commit in
-  the change's files), and `scripts/factory/seed-fold.sh` folds that commit into the change's before the panel runs.
+  `CLAUDE.md`). The seeder commits nothing (#0-172, ADR-0047): its Bash is read-only git (`readonly-bash.sh`) and its
+  Edit reaches only the change's files (`write-scope.sh --seed`, from the run's record `.ai/runs/SEED`, which also gives
+  `guard-migrations.sh` the run's base, so a migration the change added can be planted in). `scripts/factory/seed-check.sh`
+  confirms the tree after the seeder (on the branch at the change's commit, its edit uncommitted and in the change's
+  files only), and `scripts/factory/seed-fold.sh` makes the change and the edit one commit before the panel runs.
   Nothing the panel reads names the run (#0-177): the branch is `review/<8 hex>` (derived from the pattern and the run
   id), the base says `Revert "<subject>"`, and the change and the defect are one commit, with the run's reflog entries
   dropped (the branch's, and HEAD's above the switch onto it; the rest of your HEAD reflog stays). The catalogue
@@ -269,9 +272,9 @@ The agents' instructions are not a boundary; these are, each with its limit:
   names it). Runs follow one another with no commit between them; after a series, copy its rows from
   `.ai/runs/benchmark/results.md` into `.ai/audit/benchmark/results.md` in one pull request (the audit reads only that
   file), then delete `.ai/runs/benchmark/results.md`; a run id already in either file is refused, so a landed one
-  stays refused. Read the rows before landing them: the seeder has no write scope yet (#0-172) and could have written
-  one. A run that measured nothing says so (#0-170): a seeder that was refused a command, a skip without a reason and
-  an answer without its branch, file, line or rule end it FAILED, not SKIPPED.
+  stays refused. The seeder cannot write a row (its scope is the change's files, #0-172). A run that measured nothing
+  says so (#0-170): a seeder that was refused a command, a skip without a reason and an answer without its branch,
+  file, line or rule end it FAILED, not SKIPPED.
 - **What the rule files claim** (backlog #0-184, ADR-0046): Factory guards' "Review rule claims are true"
   (`.github/scripts/check-rule-claims.rb`) fails a label naming a script, test or guard that does not exist, an
   "Enforced by" whose check runs in no required job on a pull request, only while continuing on error or only in

@@ -68,7 +68,7 @@ const FILES_FIELD = { type: 'array', items: { type: 'string' } }
 const ANSWERS = {
   'seed-branch.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, branch: { type: 'string' }, base: SHA_FIELD,
     head: SHA_FIELD, files: FILES_FIELD }),
-  'seed-check.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, commit: SHA_FIELD, files: FILES_FIELD }),
+  'seed-check.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, files: FILES_FIELD }),
   'seed-fold.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, head: SHA_FIELD }),
   'seed-record.sh': answerOf({ appended: { type: 'boolean' }, reason: { type: 'string' }, file: { type: 'string' } }),
   'return-to-main.sh': answerOf({ onMain: { type: 'boolean' }, branch: { type: 'string' }, left: { type: 'string' },
@@ -129,6 +129,7 @@ async function measure() {
   const truth = await as('defect-seeder', [
     `Pattern ${params.pattern}. Run id ${params.runId}. The branch ${seed.branch} is checked out: it holds merged change ${params.commit}`,
     `as its last commit, on the base ${seed.base}. Plant the pattern in one of the change's files: ${seed.files.join(', ')}.`,
+    'Leave the edit uncommitted.',
   ].join('\n'), {
     schema: { type: 'object', properties: { skipped: { type: 'boolean' }, blocked: { type: 'boolean' }, reason: { type: 'string' },
       branch: { type: 'string' }, pattern: { type: 'string' }, dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' },
@@ -155,16 +156,19 @@ async function measure() {
     return finish({ outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` })
   }
   // The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the
-  // seed branch, clean, with the seeder's one commit on top of the change, touching the change's files only.
+  // seed branch at the change's commit, with the seeder's edit uncommitted in the change's files only. Fixed (backlog
+  // #0-172): the seeder committed, with a Bash and an Edit no hook held (it could switch, write any file, append to a
+  // migration); now its hooks hold it to read-only git and to the change's files (readonly-bash.sh, write-scope.sh
+  // --seed), and a factory script makes the commit (ADR-0047).
   const check = await ops('seed-check.sh', [BRANCH, seed.base, seed.head], 'seed check')
-  if (check?.ok !== true || !Array.isArray(check.files) || !check.files.includes(truth.file) || !SHA.test(String(check.commit))) {
+  if (check?.ok !== true || !Array.isArray(check.files) || !check.files.includes(truth.file)) {
     return finish({ outcome: 'FAILED', reason: `the seed branch is not as the seeder says: ${String(check?.reason ?? JSON.stringify(check)).slice(0, 300)}` })
   }
   // Fixed (backlog #0-177): the defect sat in a commit of its own on top of the change, so `git show HEAD` was the
-  // planted lines alone. seed-fold.sh folds it into the change's commit (same tree, the ground truth's line unchanged).
-  const fold = await ops('seed-fold.sh', [BRANCH, seed.base, seed.head, check.commit], 'seed fold')
+  // planted lines alone. seed-fold.sh makes the change and the edit one commit (the ground truth's line unchanged).
+  const fold = await ops('seed-fold.sh', [BRANCH, seed.base, seed.head], 'seed fold')
   if (fold?.ok !== true || !SHA.test(String(fold.head))) {
-    return finish({ outcome: 'FAILED', reason: `the seeder's commit was not folded: ${String(fold?.reason ?? JSON.stringify(fold)).slice(0, 300)}` })
+    return finish({ outcome: 'FAILED', reason: `the seeder's edit was not folded: ${String(fold?.reason ?? JSON.stringify(fold)).slice(0, 300)}` })
   }
 
   phase('Review')

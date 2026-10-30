@@ -1,6 +1,7 @@
 # ADR-0044: A seed branch starts from main: the merged change is reverted and brought back on top of it, and scripts check the tree before and after the seeder (backlog #0-173)
 
-- **Status:** Accepted (2026-10-25); decision 5 amended and decision 6 added by #0-177 (2026-10-26)
+- **Status:** Accepted (2026-10-25); decision 5 amended and decision 6 added by #0-177 (2026-10-26); the seeder commits
+  nothing since #0-172 (ADR-0047, 2026-10-30): where this ADR folds "the seeder's commit", the fold now takes its edit
 - **Backlog:** #0-173, #0-177
 - **Date:** 2026-10-25
 - **Author:** human (owner chose F2 of the research, then the proposals of review round 1; for #0-177, 1a with a script,
