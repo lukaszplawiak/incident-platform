@@ -87,8 +87,10 @@ Any input the check cannot read fails it.
 - `factory.md` stays out of the words rule as a residual (ADR-0044 decision 6). It is read on an Owner-only diff, a
   measure that `/seed-bugs` refuses. #0-115's F1 measured it by hand, so its reviewers were measured too. That
   measure is rare and run by hand, and FAC-A06 names `seed-bugs.js` because it is a workflow `factory.md` reviews.
-- `seed-record.sh` refuses an `FAC-A` id (#0-185 "Also"). This check's id form (`[A-Z][A-Z0-9]*-[A-Z]?\d+`) is the one a
-  recorded `factory.md` run would need.
+- `seed-record.sh` refused an `FAC-A` id (#0-185 "Also"). Amended 2026-10-29 (#0-185): it and `seed-bugs.js` now
+  take this check's id form (`[A-Z][A-Z0-9]*-[A-Z]?\d+`), so `seed-record.sh` can write a `factory.md` row (a host
+  of one is still refused by `seed-branch.sh`). The id form is now written three times (`check-rule-claims.rb`'s
+  `ID`, `seed-record.sh`, `seed-bugs.js`), and nothing checks that they agree: a residual.
 - A reviewer recognises a violation in any of these:
   - a label rewritten to "Enforced by" without its check moving into a required job;
   - a new exemption from the words rule;

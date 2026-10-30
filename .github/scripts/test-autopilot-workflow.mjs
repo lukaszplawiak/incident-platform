@@ -641,6 +641,10 @@ test('seed-bugs: a ground truth the Record phase cannot use fails the run', asyn
   // A dimension or a rule id may hold a digit (k8s, K8S-08: #0-115's k8s.md); the run measures, it does not fail.
   const k8s = await seed({ 'defect-seeder': { ...TRUTH, dimension: 'k8s', rule: 'K8S-08' } })
   assert.equal(k8s.outcome.outcome, 'MEASURED', JSON.stringify(k8s.outcome))
+  // A factory id has a letter after the dash (FAC-A02: #0-115's F1, #0-185); one with two still fails.
+  const fac = await seed({ 'defect-seeder': { ...TRUTH, dimension: 'architecture', rule: 'FAC-A02' } })
+  assert.equal(fac.outcome.outcome, 'MEASURED', JSON.stringify(fac.outcome))
+  assert.equal((await seed({ 'defect-seeder': { ...TRUTH, dimension: 'architecture', rule: 'FAC-AB02' } })).outcome.outcome, 'FAILED')
 })
 
 test('seed-bugs: a planted defect is measured and recorded', async () => {

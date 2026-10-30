@@ -224,7 +224,9 @@ measures that fix (its metric), and is not a new recommendation.
 Escaped defects are a slow and painful source of truth. The `seed-bugs` workflow plants a known defect
 from `.ai/audit/benchmark/patterns.md` into a throwaway branch and runs the panel on it; the result
 (caught by whom, missed by whom) counts as a hard fact for confidence. Seeded branches are never pushed
-and never merged.
+and never merged. A row whose "Caught by expected" cell carries a note, such as `told the pattern` (#0-179) or `the
+original in reach` (#0-185), is an upper bound, not a hard fact: count it as caught, never let it raise a
+recommendation's confidence. The same note in "Also caught by" applies to that reviewer only (ADR-0044 decision 6).
 
 ## Calibration
 

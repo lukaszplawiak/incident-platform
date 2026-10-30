@@ -254,17 +254,24 @@ The agents' instructions are not a boundary; these are, each with its limit:
   id), the base says `Revert "<subject>"`, and the change and the defect are one commit, with the run's reflog entries
   dropped (the branch's, and HEAD's above the switch onto it; the rest of your HEAD reflog stays). The catalogue
   (`patterns.md`, `.ai/rules/audit.md`) stays readable to the reviewers, on purpose: ADR-0044 records why and how to check
-  a run's transcripts for a read of it. One leak is still open (#0-179). The Workflow tool shows every agent,
-  word for word, the message that started the run, so a typed `/seed-bugs P-01 …` names the pattern to the panel.
-  Until #0-179 is done, start a run with a message that does not name it (the session calls `Workflow` itself).
-  The run goes back to `main` before it writes the row, and an outcome that could not (a dirty tree) says where it left it (`leftOn`). The commit's code must still apply to `main`, so choose a
-  recent one. Rotate patterns; after each run delete its branch (the outcome's `cleanup` names it). Runs follow one
-  another with no commit between them; after a series, copy its rows from `.ai/runs/benchmark/results.md` into
-  `.ai/audit/benchmark/results.md` in one pull request (the audit reads only that file), then delete
-  `.ai/runs/benchmark/results.md`; a run id already in either file is refused, so a landed one stays refused. Read the
-  rows before landing them: the seeder has no write scope yet (#0-172) and could have written one. A run that
-  measured nothing says so (#0-170): a seeder that was refused a command, a skip without a reason and an answer
-  without its branch, file, line or rule end it FAILED, not SKIPPED.
+  a run's transcripts for a read of it. The original change is in reach as well (#0-185, ADR-0044 decision 6):
+  `main` holds it, so `git diff origin/main HEAD` shows the defect alone, and the revert's patch holds its lines.
+  Before a series' rows land, scan its reviewers' Bash calls for a `git diff/show/log` against `main`, `origin/main`,
+  `HEAD~`, the base's parent, the base without `--stat` or the host commit. Mark a row whose expected reviewer did in
+  "Caught by expected", and one whose other reviewer did in "Also caught by". A measure by hand (an Owner-only host,
+  #0-115's F1) commits the plant into the change and gives the panel the autopilot prompt, not a manual `/review`,
+  with a sentence that `factory.md` applies. F1's manual review of an uncommitted plant reached the original 4 times
+  of 4. One leak is still open (#0-179). The Workflow tool shows every agent, word for word, the message that started
+  the run, so a typed `/seed-bugs P-01 …` names the pattern to the panel. Until #0-179 is done, start a run with a
+  message that does not name it (the session calls `Workflow` itself). The run goes back to `main` before it writes
+  the row, and an outcome that could not (a dirty tree) says where it left it (`leftOn`). The commit's code must still
+  apply to `main`, so choose a recent one. Rotate patterns; after each run delete its branch (the outcome's `cleanup`
+  names it). Runs follow one another with no commit between them; after a series, copy its rows from
+  `.ai/runs/benchmark/results.md` into `.ai/audit/benchmark/results.md` in one pull request (the audit reads only that
+  file), then delete `.ai/runs/benchmark/results.md`; a run id already in either file is refused, so a landed one
+  stays refused. Read the rows before landing them: the seeder has no write scope yet (#0-172) and could have written
+  one. A run that measured nothing says so (#0-170): a seeder that was refused a command, a skip without a reason and
+  an answer without its branch, file, line or rule end it FAILED, not SKIPPED.
 - **What the rule files claim** (backlog #0-184, ADR-0046): Factory guards' "Review rule claims are true"
   (`.github/scripts/check-rule-claims.rb`) fails a label naming a script, test or guard that does not exist, an
   "Enforced by" whose check runs in no required job on a pull request, only while continuing on error or only in

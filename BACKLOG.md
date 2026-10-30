@@ -124,7 +124,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
-| [0-185](#0-185-a-seed-runs-original-change-is-in-reach-of-the-panel-and-the-defect-is-its-only-difference) | A seed run's original change is in reach of the panel, and the defect is its only difference | ci | Medium | Open |
+| [0-185](#0-185-a-seed-runs-original-change-is-in-reach-of-the-panel-and-the-defect-is-its-only-difference) | A seed run's original change is in reach of the panel, and the defect is its only difference | ci | Medium | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3650,7 +3650,7 @@ AC3. README "Infrastructure Hardening" and `review-k8s.md` describe the render; 
 
 ### 0-185. A seed run's original change is in reach of the panel, and the defect is its only difference
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-10-28 in #0-115's `factory.md` measure (F1), in
+**Type:** ci · **Priority:** Medium · **Status:** In progress (owner's decision below, 2026-10-29). Found 2026-10-28 in #0-115's `factory.md` measure (F1), in
 both runs.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** docs (ADR-0044, docs/ai-factory.md, .ai/audit/benchmark/results.md); optionally
@@ -3686,9 +3686,35 @@ AC1. Each row of the earlier series says whether a reviewer reached the original
 AC2. The owner's choice among the approaches is recorded in ADR-0044 decision 6, and `.ai/rules/audit.md`'s reading of
 seeded rows matches it.
 
+**Decided (owner, 2026-10-29: A + E of the research; the scan by hand, 2b).** The transcripts were checked first.
+- What was read: the 122 reviewers of the 20 `/seed-bugs` runs before F1. Their Bash calls were scanned for a
+  `git diff/show/log` against `main`, `origin/main`, `HEAD~`, the base's parent, the base without `--stat` or the
+  host.
+- No expected reviewer reached the original. Two others did: general in arch-after-p07 read the host's patch of one
+  file, and architecture in mig-after-p13 listed the files that differ from `main`. F1, a manual `/review` of an
+  uncommitted plant, reached it 4 times of 4.
+Decided, in ADR-0044 decision 6:
+- A: the rows are marked. arch-after-p07's "Also caught by" says so, and `results.md` notes every row. Each series
+  is scanned this way before its rows land. `.ai/rules/audit.md` reads a marked row as an upper bound (owner).
+- E: a measure by hand commits the plant and gives the panel the autopilot prompt (`patterns.md`'s note, owner;
+  `docs/ai-factory.md`).
+- B is not built: a clone with no history of the change and `origin/main` at the revert, as SWE-bench did. It is
+  built once a scan finds an expected reviewer that reached the original.
+- C (plant only into unmerged changes) and D (refuse revisions in `readonly-bash.sh`) are rejected.
+- The "Also" below is done in the same PR (owner, 2b): `seed-record.sh` and `seed-bugs.js` take a rule id with one
+  letter after the dash (`FAC-A02`), tested in `test-seed-branch.sh` and `test-autopilot-workflow.mjs` (two letters are
+  still refused), each mutation back caught.
+
 **Also (found in #0-184's research, 2026-10-29).** `scripts/factory/seed-record.sh:43` takes a rule id only as
 `^[A-Z][A-Z0-9]*-[0-9]+$`, so it refuses `FAC-A02`. F1 recorded its rows by hand, so nothing failed. A seeded
 `factory.md` run that `/seed-bugs` records would need the id form of `check-rule-claims.rb` (`[A-Z][A-Z0-9]*-[A-Z]?\d+`).
+
+**Review r1 (2026-10-30, owner "1-4").** No blocking finding. Applied: a measure by hand's prompt also says that
+`factory.md` applies (ADR-0044 decision 6, `docs/ai-factory.md`, `patterns.md`'s note, owner); a long line of
+`docs/ai-factory.md` broken; ADR-0046 records as a residual that the id form is written three times, unchecked.
+Review r1 of those (owner "1-3"): no blocking finding. `docs/ai-factory.md`'s paragraph rewrapped (the break above had
+left a long line); `seed-bugs.js` says a `FAC-` truth is not measured by the workflow today (its panel prompt does not
+say that `factory.md` applies, and `seed-branch.sh` refuses an Owner-only host); ADR-0044's index row names #0-185.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

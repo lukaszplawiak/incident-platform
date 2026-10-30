@@ -40,7 +40,8 @@ dimensions() {
 run=$1 pattern=$2 rule=$3 expected=$4 caught=$5 blocking=$6 by=$7 none=$8
 [[ $run =~ ^[A-Za-z0-9._-]+$ ]] || refuse "not a run id: ${run:0:40}"
 [[ $pattern =~ ^P-[0-9]+$ ]] || refuse "not a pattern id: ${pattern:0:40}"
-[[ $rule =~ ^[A-Z][A-Z0-9]*-[0-9]+$ ]] || refuse "not a rule id: ${rule:0:40}"
+# A factory id has a letter after the dash (FAC-A02, FAC-S03; #0-185), as check-rule-claims.rb reads them.
+[[ $rule =~ ^[A-Z][A-Z0-9]*-[A-Z]?[0-9]+$ ]] || refuse "not a rule id: ${rule:0:40}"
 case "$DIMENSIONS" in *" $expected "*) ;; *) refuse "not a dimension: ${expected:0:40}" ;; esac
 for v in "$caught" "$blocking"; do case "$v" in yes|no) ;; *) refuse "not yes or no: ${v:0:40}" ;; esac; done
 [[ $by =~ ^(-|[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*)$ ]] || refuse "not a list of dimensions: ${by:0:80}"

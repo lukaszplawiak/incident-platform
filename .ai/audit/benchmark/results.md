@@ -9,7 +9,7 @@
 | sec-after-p04 | P-04 | SEC-31 | security | yes (told the pattern, #0-179) | yes | general | — |
 | sec-after-p05 | P-05 | SEC-10 | security | yes (told the pattern, #0-179) | yes | general, docs | — |
 | arch-after-p06 | P-06 | ARC-22 | architecture | yes | yes | general, security, performance, docs | — |
-| arch-after-p07 | P-07 | ARC-23 | architecture | yes | yes | general | — |
+| arch-after-p07 | P-07 | ARC-23 | architecture | yes | yes | general (the original in reach, #0-185) | — |
 | arch-after-p08 | P-08 | ARC-25 | architecture | yes | yes | general, docs | — |
 | arch-after-p09 | P-09 | ARC-02 | architecture | yes | yes | general, security, performance, docs | — |
 | gen-after-p15 | P-15 | GEN-03 | general | yes | no | — | — |
@@ -90,3 +90,12 @@ there under FAC-A02, and security under FAC-S03. fac-after-p24 (`3f13958f`): `un
 `audit.js:36`'s schema and read at `:50`. Architecture blocked it under FAC-A06; security named it non-blocking. In
 both runs, both reviewers reached the original change, through the diff against `main` or the revert's `git show`. So
 "yes" here is a catch with the original in reach (backlog #0-185).
+
+Whether a reviewer reached the original change (backlog #0-185, ADR-0044 decision 6, checked 2026-10-29). The rows
+before the `factory.md` measure were checked from the Bash calls in their 122 reviewer transcripts. No expected
+reviewer read the host's lines, the revert's patch, or a diff against `main`. Two other reviewers reached more:
+- general in arch-after-p07 read the host's patch of `OperatorTenantBootstrap.java` (`git show aace4118 -- …`), so
+  its "Also caught by" is marked;
+- architecture in mig-after-p13 listed the files that differ from `main` (`git diff origin/main HEAD --stat`). That
+  names the planted file but not its lines, and architecture is not among that row's catches.
+Every other row stands as recorded. The two fac- rows were the exception: both of their reviewers reached the original.

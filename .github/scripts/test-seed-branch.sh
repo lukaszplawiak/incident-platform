@@ -263,6 +263,7 @@ rm -rf .ai/audit
 record "a bad run id" "not a run id" "r 1" P-10 PERF-01 performance yes yes - -
 record "a bad pattern" "not a pattern id" P-1x r3 PERF-01 performance yes yes - -
 record "a bad rule" "not a rule id" r3 P-10 "PERF-01'" performance yes yes - -
+record "a rule with two letters after the dash" "not a rule id" r3 P-10 FAC-AB02 architecture yes yes - -
 record "an unknown dimension" "not a dimension" r3 P-10 PERF-01 frontend yes yes - -
 record "not yes or no" "not yes or no" r3 P-10 PERF-01 performance true yes - -
 for list in 'general,frontend' 'general;rm' '*' 'general,' ''; do
@@ -275,6 +276,10 @@ if [ "$(grep -c '^| [rs]' "$rows")" = 3 ]; then ok "a refused row writes nothing
 record "a k8s run" ok r9 P-20 K8S-08 k8s yes yes k8s,general security,k8s
 if [ "$(tail -1 "$rows")" = '| r9 | P-20 | K8S-08 | k8s | yes | yes | general | security, k8s |' ]; then ok "the k8s row"
 else fail "k8s row: $(tail -1 "$rows")"; fi
+# A factory id has a letter after the dash (FAC-A02: #0-115's F1, #0-185).
+record "a factory run" ok r10 P-23 FAC-A02 architecture yes yes architecture,security -
+if [ "$(tail -1 "$rows")" = '| r10 | P-23 | FAC-A02 | architecture | yes | yes | security | — |' ]; then ok "the factory row"
+else fail "factory row: $(tail -1 "$rows")"; fi
 
 if [ "$failures" -gt 0 ]; then echo "$failures seed-branch/seed-check/seed-fold/seed-record test(s) failed"; exit 1; fi
 echo "All seed-branch, seed-check, seed-fold and seed-record tests passed."
