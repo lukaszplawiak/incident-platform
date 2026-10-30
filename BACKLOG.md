@@ -117,7 +117,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
-| [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | In progress |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
@@ -3069,8 +3068,9 @@ AC2. The audit's benchmark section reports, per dimension, runs that measured no
 
 ### 0-172. The defect-seeder writes and commits with no write scope
 
-**Type:** security · **Priority:** Low · **Status:** In progress (2026-10-30) — `nonBlocking` FAC-S03 of review-security in
-the `/review` of #0-170 (2026-10-25)
+**Type:** security · **Priority:** Low · **Status:** Done, PR #552 (kept for the decision history: the Also sections and
+the owner's choice of option C, 2026-10-30) — `nonBlocking` FAC-S03 of review-security in the `/review` of #0-170
+(2026-10-25)
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** medium (was low: the seeder no longer commits, so the seed
 scripts and the workflow change too) · **Depends on:** —
 **Touches:** factory (.claude/agents/defect-seeder.md, .claude/settings.json, .claude/settings.autopilot.json,
