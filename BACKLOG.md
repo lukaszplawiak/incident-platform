@@ -119,7 +119,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
+| [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | In progress |
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
@@ -3462,12 +3462,11 @@ have failed if it had not. A Factory guards check could read `patterns.md`'s "Ru
 
 ### 0-179. The Workflow tool shows the panel the `/seed-bugs` command that started the run
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-10-26 in the transcripts of #0-115's `security.md`
-series, read before landing its rows (ADR-0044 decision 6).
-**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** docs (docs/ai-factory.md, ADR-0044, .ai/audit/benchmark/results.md); optionally
-.claude/skills/seed-bugs/SKILL.md or the command's text (owner), .claude/workflows/seed-bugs.js,
-scripts/factory/audit-data.sh (+ its test)
+**Type:** ci · **Priority:** Medium · **Status:** In progress (2026-10-30). Found 2026-10-26 in the transcripts of
+#0-115's `security.md` series, read before landing its rows (ADR-0044 decision 6).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium (was low: the scan script and its test) · **Depends on:** —
+**Touches:** factory (scripts/factory-admin/seed-scan.sh), ci (.github/scripts/test-seed-scan.sh,
+.github/workflows/factory-guards.yml), docs (docs/ai-factory.md, ADR-0044, .ai/audit/benchmark/results.md for AC2)
 
 **Problem.** #0-177 made the panel's prompt, branch and history say nothing about the run. But the Workflow tool
 starts the first message of every agent with a block of its own, `[Workflow harness — user request]`. That block
@@ -3499,7 +3498,60 @@ AC4. Where a pattern has a row that was not blind and a re-run's row (AC2), the 
 tells them apart is decided with the mechanism (until then the 2026-10-26 rows say `yes (told the pattern, #0-179)` in
 "Caught by expected", review round 1).
 
-**Workaround confirmed (2026-10-26, #0-115's `architecture.md` series).** In P-06…P-09, each run was started by the
+**Decided (owner, 2026-10-30: C + D of the `/research`, the scan covering #0-185's and ADR-0044 decision 6's
+reads too; the script as an aid).**
+- D, the start: the session calls `Workflow` in a turn no user message started. On the owner's message it starts a
+  background command that does nothing, and starts the run in that command's notification turn. That turn's first
+  message is the `[Workflow harness — computed task]` block alone. A scan of the 20 seed runs on disk shows why the
+  owner's habit was not enough: one run's panel got `1-3 tak, dalej`, the owner's answer to another question.
+- C, the check: `scripts/factory-admin/seed-scan.sh <transcriptDir> <pattern> <run id>` reports, per reviewer:
+  - a relayed message that names the run (`seed`, `benchmark`, `plant`, a pattern id, the run id);
+  - a git read that reaches the merged change, as content or names only (#0-185's list);
+  - a read of the answer key (ADR-0044 decision 6).
+  Tested on fixtures by `test-seed-scan.sh` in Factory guards; 11 mutations caught.
+- ADR-0044 decision 6 said "no script: the transcripts' format is not a contract". The owner chose a script that
+  helps the hand reading and does not replace it. It refuses (`ok: false`) a shape it does not know: no reviewer, a
+  reviewer without its transcript, a first message with neither harness header, a prompt without its mergeBase, a
+  seeder prompt naming another run. ADR-0044 is amended.
+- Checked against the hand readings on the 20 runs on disk. It found the same 4 relayed commands and the same patch
+  read (general, `arch-after-p07`), plus one names-only read the hand scan had not listed: security's
+  `git log --oneline -5 refs/remotes/origin/main` in `arch-after-p07`. That read shows subjects only, by a reviewer
+  that is not the expected one, so the row stands.
+- AC4 needs no code. `.ai/rules/audit.md` (#0-185) reads a marked row as an upper bound, not a hard fact, so a re-run's
+  blind row (AC2) is the one that counts.
+- The first "Also" is done: #0-184's `check-rule-claims.rb` refuses the measure's words in the rule files (ADR-0046).
+  The second (a rule gap of the owner's `architecture.md`) stays for the owner. A row's qualification is in the data
+  (the cell), as the scan's result goes.
+- Left for after the merge: AC2, re-running P-01, P-03, P-04 and P-05 with new run ids, started the D way and scanned.
+
+- Review round 1 (owner: "tak" on 1-9):
+  - the scan knows more forms: git's global options, `grep`, `diff-tree`, `ls-tree`, `archive`, `FETCH_HEAD`,
+    `ORIG_HEAD`, `@{…}`, `origin/HEAD`, and says its list is not a proof (security);
+  - it no longer flags `Main.java`, a hex-looking word or a searched pattern (general);
+  - only `main:.ai/rules/` is excluded (security);
+  - it says its output is data (security);
+  - a test pins the prompt words it parses from `seed-bugs.js` (architecture);
+  - `docs/ai-factory.md` points at the scan instead of copying its list (architecture);
+  - ADR-0044's Backlog line and index row name #0-179 (docs, architecture).
+  The wider scan found, on the 20 runs on disk, a read by content that no hand scan had listed: security's
+  `git grep … refs/remotes/origin/main` of the P-07 host file in `arch-after-p07`. It also found two `ls-tree`
+  reads of names. None caught the defect, so the rows stand (ADR-0044).
+  Not done: procedure D in `CLAUDE.md` (architecture). `CLAUDE.md` reaches every agent, the reviewers too, and the
+  text they read must not mention the measure (ADR-0044 decision 6). D stays in ADR-0044 and `docs/ai-factory.md`.
+  ADR-0044 is amended, not replaced (owner): the script helps the decision's hand reading and does not reverse it.
+
+- Review round 2: no blocking finding (security and architecture NEEDS_HUMAN, protected paths only). Owner:
+  "popraw". The scan now also knows:
+  - `@~`/`@^`;
+  - a history walk from HEAD with no revision, or a limit above the branch's two commits (`git log -p`,
+    `git log -- <path>`);
+  - `--all`/`--branches`/`--remotes`, `reflog` and `show-branch`.
+  A patch flag wins over a names flag (security). The header lists its subcommands, and ADR-0044 points back to
+  decision 6 (architecture). The relayed message's lines are all indented (18 multi-line relays on disk, checked in
+  the session). On the 20 runs on disk the content reads are still the two known ones; two walks of main's history by
+  names were added (ADR-0044).
+
+**Workaround, until AC2 (superseded by D above; 2026-10-26, #0-115's `architecture.md` series).** In P-06…P-09, each run was started by the
 owner's "dalej" and the workflow was called by the session. Every reviewer's first message relayed only that word.
 Until a mechanism lands, this is how a series is run.
 
