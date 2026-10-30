@@ -3808,6 +3808,8 @@ Review round 2: "a message the platform did not write", so a platform exception 
 (architecture). The carve-out for the logged throwable stops where the change itself puts a credential into what the
 exception quotes (security). For example, a key in a URL's query: `RestTemplate`'s I/O error names the URL in its
 message (`spring-web` 6.2.19, read in the session).
+AC2 done (2026-10-30): `sec-p04-blind-r2`, blind and scanned clean, is caught and blocked by security under SEC-31,
+on the same plant at the same line that `sec-p04-blind` approved. Its row is in `.ai/audit/benchmark/results.md`.
 
 ### 0-188. A logged exception's message reaches the log as the library wrote it
 
