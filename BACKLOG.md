@@ -122,7 +122,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
-| [0-186](#0-186-factory-guards-cannot-see-an-agent-with-bash-or-edit-and-no-guard) | Factory guards cannot see an agent with Bash or Edit and no guard | security | Low | In progress |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -3745,7 +3744,7 @@ AC3. README "Infrastructure Hardening" and `review-k8s.md` describe the render; 
 
 ### 0-186. Factory guards cannot see an agent with Bash or Edit and no guard
 
-**Type:** security · **Priority:** Low · **Status:** In progress (2026-10-30). From the `/research` of #0-172 (2026-10-30): the defect-seeder
+**Type:** security · **Priority:** Low · **Status:** Done, PR #558 (kept for the decision history and its two rule gaps). From the `/research` of #0-172 (2026-10-30): the defect-seeder
 had Bash and Edit and no guard in either layer of ADR-0041, and nothing failed.
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
 **Touches:** ci (.github/scripts/check-hook-entries.rb, test-hook-entries.sh), security (README "Infrastructure
