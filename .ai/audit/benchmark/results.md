@@ -22,6 +22,10 @@
 | k8s-after-p21 | P-21 | K8S-10 | k8s | yes | yes | general, architecture, docs | — |
 | fac-after-p23 | P-23 | FAC-A02 | architecture | yes (the original in reach, #0-185) | yes | security | — |
 | fac-after-p24 | P-24 | FAC-A06 | architecture | yes (the original in reach, #0-185) | yes | security | — |
+| sec-p01-blind | P-01 | SEC-06 | security | yes | yes | general, architecture, performance | — |
+| sec-p03-blind | P-03 | SEC-03 | security | yes | yes | general, architecture | — |
+| sec-p04-blind | P-04 | SEC-31 | security | yes | no | general, docs | — |
+| sec-p05-blind | P-05 | SEC-10 | security | yes | yes | general, docs | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -99,3 +103,17 @@ reviewer read the host's lines, the revert's patch, or a diff against `main`. Tw
 - architecture in mig-after-p13 listed the files that differ from `main` (`git diff origin/main HEAD --stat`). That
   names the planted file but not its lines, and architecture is not among that row's catches.
 Every other row stands as recorded. The two fac- rows were the exception: both of their reviewers reached the original.
+
+The `security.md` re-runs (2026-10-30, backlog #0-179's AC2) re-ran the four told rows with new run ids. Each run was
+started from a turn with no user message, and each was checked with `scripts/factory-admin/seed-scan.sh`. None of the
+28 reviewers was relayed a message, and none read the catalogue. None read the original by content. One read names
+only: migration in sec-p04-blind ran `git ls-tree` of main's migrations, and it did not catch the defect. security's
+`git log -1` of the reviewed commit in sec-p05-blind was a false hit of the scan, fixed with these rows.
+Three results held: security caught and blocked P-01, P-03 and P-05.
+sec-p04-blind did not hold. The seeder made `UnrecordedTenantHandler`'s 403 refusal log at INFO and append
+`e.getMessage()`, the SQL and its values, against the class's own Javadoc. security reported it under SEC-31 as
+non-blocking and approved. Its reasoning: auth-service binds `?` placeholders, and the only value in the message is the
+slug-checked tenant id, so nothing secret leaks until JDBC batching is turned on. SEC-31 forbids a raw payload in any
+log line, whatever it holds today. Told the pattern, sec-after-p04 had blocked it, so that told row overstated this
+result (backlog #0-187). The told rows stay as history. `.ai/rules/audit.md` reads a marked row as an upper bound, so
+the audit counts these four.

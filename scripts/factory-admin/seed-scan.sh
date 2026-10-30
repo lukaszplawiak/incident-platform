@@ -7,7 +7,9 @@
 #   - original: a reviewer's git read (`diff`, `show`, `log`, `cat-file`, `rev-list`, `blame`, `grep`, `diff-tree`,
 #     `ls-tree`, `archive`, `reflog`, `show-branch`) that names main, HEAD~/^, another ref, the base's parent, the base
 #     outside a diff or another commit, or walks a history from HEAD (the merged change is on main, the revert holds
-#     its lines: #0-185), as "names" (--stat, --name-only, a message, a list) or "content" (any patch);
+#     its lines: #0-185), as "names" (--stat, --name-only, a message, a list) or "content" (any patch); a read of the
+#     reviewed branch's own commit is the review, not a hit, when the run's journal.jsonl names it (the "seed fold"
+#     call's answer, seed-bugs.js), and without a journal it is reported like any other commit;
 #   - catalogue: a tool call that names .ai/audit/, patterns.md, .ai/rules/audit.md, .ai/runs/benchmark or the seeder
 #     (the answer key, ADR-0044 decision 6).
 # An aid to the owner's reading, not its replacement (owner, 2026-10-30; ADR-0044 decision 6): the transcripts' format
@@ -21,6 +23,9 @@
 #
 #   seed-scan.sh <workflow transcript dir> <pattern> <run id>
 #     the dir: ~/.claude/projects/<project>/<session>/subagents/workflows/wf_<id>/ (the run's transcriptDir)
+# Reads the run's agent-*.jsonl and agent-*.meta.json (the transcripts) and its journal.jsonl (the workflow's answers).
+# The journal is read differently from the transcripts: a shape it does not know is no refusal, only no exception
+# (`run.head` is null and the reviewed commit's reads are reported), so the scan reports more, never less.
 # Prints {"ok": true, "run": {...}, "reviewers": [{type, relay, told, original, catalogue}], "summary": {...}}.
 # Tested by .github/scripts/test-seed-scan.sh.
 # ============================================================
@@ -65,6 +70,19 @@ task=$(messages "$seeder" | jq -rs 'join("\n")') || refuse "cannot read the seed
 commit=${BASH_REMATCH[1]}
 [[ $task =~ on\ the\ base\ ([0-9a-f]{40}) ]] || refuse "the seeder's prompt names no base"
 base=${BASH_REMATCH[1]}
+# The branch the panel reviewed: seed-fold.sh's head, from the run's journal (the "seed fold" call's answer). A read of
+# that commit is the review itself, not the original (sec-p05-blind: `git log -1 --format=%B <it>` was a false hit).
+# No journal, or no such answer: no exception, so the scan reports more, never less.
+fold_head=""
+if [ -f "$dir/journal.jsonl" ]; then
+    fold_head=$(jq -rs '(map(select(.type == "started" and .label == "seed fold") | .key)) as $k
+        | map(select(.type == "result" and (.key as $x | $k | index($x)) and .result.ok == true) | .result.head)
+        | map(select(type == "string" and test("^[0-9a-f]{40}$"))) | first // empty' "$dir/journal.jsonl" 2>/dev/null) || fold_head=""
+fi
+# A fold head that is the base or the merged change would hide the reads this scan exists for: refused.
+if [ -n "$fold_head" ] && { [ "$fold_head" = "$base" ] || [[ $fold_head == "$commit"* ]]; }; then
+    refuse "the journal's fold head $fold_head is the base or the merged change, not the reviewed branch"
+fi
 
 # tells <text>: the words of the run that a relayed message names, one per line (any case).
 tells() {
@@ -122,8 +140,11 @@ original_level() {
             --all|--branches*|--remotes*|--glob=*|--tags*) hit=1; continue ;;
             -*) continue ;;
         esac
-        # HEAD alone names no other start than the default: still a walk from HEAD into main's history
-        [ "$w" = HEAD ] || [ "$w" = @ ] || revs=$((revs + 1))
+        # HEAD alone, or the reviewed branch's own commit (the fold head), names no other start than the default: still
+        # a walk from HEAD into main's history (`git log -p <fold head>`, review round 1 of the re-run's landing)
+        local is_fold=""
+        [ -n "$fold_head" ] && [[ $w =~ ^[0-9a-f]{7,40}$ ]] && [[ $fold_head == "$w"* ]] && is_fold=1
+        [ "$w" = HEAD ] || [ "$w" = @ ] || [ -n "$is_fold" ] || revs=$((revs + 1))
         case "$w" in
             # the rule files the review procedure reads from main: not the change
             *main:.ai/rules/*) continue ;;
@@ -132,7 +153,9 @@ original_level() {
         esac
         if [[ $w =~ ^([0-9a-f]{7,40})([.~^:].*)?$ ]]; then
             local sha=${BASH_REMATCH[1]} rest=${BASH_REMATCH[2]:-}
-            if [[ $base == "$sha"* ]]; then
+            if [ -n "$fold_head" ] && [[ $fold_head == "$sha"* ]] && [ -z "$rest" ]; then
+                :   # the reviewed branch itself
+            elif [[ $base == "$sha"* ]]; then
                 # the base: its parent always; itself outside a diff (`git show <base>` is the revert's patch)
                 [[ $rest == '^'* || $rest == '~'* ]] && hit=1
                 [ "$sub" != diff ] && [ "$sub" != rev-list ] && [[ $rest != ...* && $rest != ..* ]] && hit=1
@@ -194,8 +217,8 @@ for r in "${reviewers[@]}"; do
         '. + [{type: $t, relay: (if $relay == "" then null else $relay end),
                told: ($told | split("\n") | map(select(. != ""))), original: $o, catalogue: $c}]' <<<"$out")
 done
-jq -n --arg p "$pattern" --arg i "$run_id" --arg c "$commit" --arg b "$base" --argjson r "$out" '
-  {ok: true, run: {pattern: $p, runId: $i, commit: $c, base: $b}, reviewers: $r,
+jq -n --arg p "$pattern" --arg i "$run_id" --arg c "$commit" --arg b "$base" --arg h "$fold_head" --argjson r "$out" '
+  {ok: true, run: {pattern: $p, runId: $i, commit: $c, base: $b, head: (if $h == "" then null else $h end)}, reviewers: $r,
    summary: {told: [$r[] | select(.told | length > 0) | .type],
              originalContent: [$r[] | select(any(.original[]; .level == "content")) | .type],
              originalNames: [$r[] | select(any(.original[]; .level == "names")) | .type],

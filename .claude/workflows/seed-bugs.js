@@ -166,6 +166,8 @@ async function measure() {
   }
   // Fixed (backlog #0-177): the defect sat in a commit of its own on top of the change, so `git show HEAD` was the
   // planted lines alone. seed-fold.sh makes the change and the edit one commit (the ground truth's line unchanged).
+  // The label 'seed fold' is read back from the run's journal by scripts/factory-admin/seed-scan.sh (the reviewed
+  // branch's head, backlog #0-179): renamed here, the scan reports a read of that commit as a hit again.
   const fold = await ops('seed-fold.sh', [BRANCH, seed.base, seed.head], 'seed fold')
   if (fold?.ok !== true || !SHA.test(String(fold.head))) {
     return finish({ outcome: 'FAILED', reason: `the seeder's edit was not folded: ${String(fold?.reason ?? JSON.stringify(fold)).slice(0, 300)}` })
