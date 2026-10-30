@@ -124,6 +124,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-186](#0-186-factory-guards-cannot-see-an-agent-with-bash-or-edit-and-no-guard) | Factory guards cannot see an agent with Bash or Edit and no guard | security | Low | Open |
+| [0-187](#0-187-sec-31-is-weighed-by-what-a-log-line-holds-today-not-by-what-it-is-built-from) | SEC-31 is weighed by what a log line holds today, not by what it is built from | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3551,6 +3552,15 @@ reads too; the script as an aid).**
   the session). On the 20 runs on disk the content reads are still the two known ones; two walks of main's history by
   names were added (ADR-0044).
 
+- AC2 done (2026-10-30): P-01, P-03, P-04 and P-05 were re-run as `sec-p0n-blind`, each started from a notification
+  turn and scanned. None of the 28 reviewers was relayed a message. Three held (caught and blocked). `sec-p04-blind`
+  was caught but not blocked (SEC-31 weighed by today's values), which is #0-187. Rows and note:
+  `.ai/audit/benchmark/results.md`.
+  The scan learned the reviewed branch's head from the run's journal: `git log -1` of it was a false hit in
+  `sec-p05-blind`. The landing's review found that the first version also hid `git log -p <head>` (security,
+  architecture). Now that head counts as HEAD does, a head equal to the base or the merged change is refused, an
+  unusable journal gives no exception, and `seed-bugs.js` names the scan as the reader of its `'seed fold'` label.
+
 **Workaround, until AC2 (superseded by D above; 2026-10-26, #0-115's `architecture.md` series).** In P-06…P-09, each run was started by the
 owner's "dalej" and the workflow was called by the session. Every reviewer's first message relayed only that word.
 Until a mechanism lands, this is how a series is run.
@@ -3755,6 +3765,31 @@ the check, each with its reason.
 AC1. Factory guards fails an agent with Bash, or with Edit or Write, and no guard of that kind in its frontmatter,
 unless the check names it with a reason. Shown by test cases.
 AC2. README's known gap sentence goes.
+
+### 0-187. SEC-31 is weighed by what a log line holds today, not by what it is built from
+
+**Type:** security · **Priority:** Medium · **Status:** Open. From #0-179's blind re-run of P-04 (`sec-p04-blind` on
+`aace4118`, 2026-10-30).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** .ai/rules/review/security.md (owner), .ai/audit/benchmark/results.md (the re-run's row)
+
+**Problem.** In `sec-p04-blind` the seeder made `UnrecordedTenantHandler`'s 403 refusal log append `e.getMessage()`,
+which holds the SQL and its values. security found it under SEC-31, called it non-blocking and approved. Its reason:
+auth-service binds `?` placeholders, so the message holds only the slug-checked tenant id today, and bound secrets
+would reach the log only once JDBC batching is turned on. SEC-31 says a raw payload reaches no log line, and its
+"Check:" names "a new log statement … built from … a payload". The reviewer weighed today's values instead of applying
+the rule. That is the failure GEN-08's "Check:" was sharpened for after P-15 ("a removed assertion is weakened even
+when other tests still pin the behaviour", #0-115). Told the pattern, `sec-after-p04` had blocked it.
+
+**Approach.** SEC-31's "Check:" says that the line is the finding, whatever its values are today. A log line or
+message built from an exception's message, a request or a payload breaks the rule even when nothing secret is in it
+now: the next change that binds a value makes it a leak, and no review of that change looks at this line. Then run
+P-04 again on `aace4118`, blind (a new run id, started the #0-179 way, scanned).
+
+**Acceptance criteria.**
+AC1. SEC-31's "Check:" says a line built from an exception message, a request or a payload is the finding whatever it
+carries today (owner's file).
+AC2. P-04 runs again blind, and its row lands beside `sec-p04-blind`'s, blocked or not.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

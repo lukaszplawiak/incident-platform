@@ -62,7 +62,7 @@ refused() {   # refused <name> <reason regex> <args...>
 echo "seed-scan.sh: what it reports"
 d=$(run clean dalej)
 check "a clean run: nothing told, nothing reached" \
-    '.ok and .run == {pattern: "P-01", runId: "sec-after-p01", commit: "aace4118", base: "'"$BASE"'"} and (.reviewers | length) == 2
+    '.ok and .run == {pattern: "P-01", runId: "sec-after-p01", commit: "aace4118", base: "'"$BASE"'", head: null} and (.reviewers | length) == 2
      and .summary == {told: [], originalContent: [], originalNames: [], catalogue: []} and all(.reviewers[]; .relay == "dalej")' \
     "$d" P-01 sec-after-p01
 d=$(run told '/seed-bugs P-01 47b95294 sec-after-p01')
@@ -124,6 +124,39 @@ printf '%s\n' "$(bash_call 'git log --format=%B -n 3 HEAD')" "$(bash_call 'git l
 check "three commits from HEAD reach main's" '.ok and ([.reviewers[0].original[] | .level] == ["names", "names"])' \
     "$d" P-01 sec-after-p01
 
+# The reviewed branch's own commit, named by the run's journal (seed-fold.sh's answer), is the review, not a reach.
+d=$(run head dalej)
+FOLD=7188156714ff8dba53a1423f198109c5f8b76031
+printf '%s\n' "$(bash_call 'git log -1 --format=%B 71881567')" "$(bash_call 'git show 71881567^')" >> "$d/agent-r1.jsonl"
+check "without a journal, a read of the reviewed commit is still reported" \
+    '.ok and .run.head == null and ([.reviewers[0].original[].command] == ["git log -1 --format=%B 71881567", "git show 71881567^"])' \
+    "$d" P-01 sec-after-p01
+printf '%s\n' '{"type":"started","key":"k1","agentId":"a1","label":"seed fold","phase":"Seed"}' \
+    "{\"type\":\"result\",\"key\":\"k1\",\"agentId\":\"a1\",\"result\":{\"ok\":true,\"head\":\"$FOLD\"}}" > "$d/journal.jsonl"
+check "with the journal's fold head: the reviewed commit is no hit, its parent still is" \
+    '.ok and .run.head == "'"$FOLD"'" and ([.reviewers[0].original[].command] == ["git show 71881567^"])' \
+    "$d" P-01 sec-after-p01
+# Review of the landing: the fold head is HEAD's equal, so a walk from it is still a walk into main's history.
+printf '%s\n' "$(bash_call 'git log -p 71881567')" "$(bash_call 'git log -n 2 --oneline 71881567')" >> "$d/agent-r1.jsonl"
+check "a walk from the fold head is a hit; within the branch's two commits it is not" \
+    '.ok and ([.reviewers[0].original[].command] == ["git show 71881567^", "git log -p 71881567"])' "$d" P-01 sec-after-p01
+# A journal that does not name a usable fold head gives no exception: a failed fold, a short head, a broken line.
+for journal in '{"type":"started","key":"k1","label":"seed fold"}
+{"type":"result","key":"k1","result":{"ok":false,"head":"'"$FOLD"'"}}' \
+               '{"type":"started","key":"k1","label":"seed fold"}
+{"type":"result","key":"k1","result":{"ok":true,"head":"71881567"}}' 'not json'; do
+    printf '%s\n' "$journal" > "$d/journal.jsonl"
+    check "an unusable journal: no fold head, the reviewed commit reported ($(head -c 40 <<<"$journal" | tr '\n' ' '))" \
+        '.ok and .run.head == null and ([.reviewers[0].original[].command] | index("git log -1 --format=%B 71881567") != null)' \
+        "$d" P-01 sec-after-p01
+done
+# A fold head that is the base or the merged change is refused, not used.
+for h in "$BASE" "aace4118$(printf '0%.0s' $(seq 32))"; do
+    printf '%s\n' '{"type":"started","key":"k1","label":"seed fold"}' \
+        "{\"type\":\"result\",\"key\":\"k1\",\"result\":{\"ok\":true,\"head\":\"$h\"}}" > "$d/journal.jsonl"
+    refused "a fold head that is the base or the merged change (${h:0:12})" "is the base or the merged change" "$d" P-01 sec-after-p01
+done
+
 d=$(run key dalej)
 printf '%s\n' "$(read_call .ai/audit/benchmark/patterns.md)" "$(bash_call 'git grep -n -e P-01 -- .ai/audit')" >> "$d/agent-r2.jsonl"
 check "a read of the answer key" '.ok and .summary.catalogue == ["review-security"] and (.reviewers[1].catalogue | length) == 2' \
@@ -136,7 +169,7 @@ WF="$SRC/.claude/workflows/seed-bugs.js"
 # The ${...} are the workflow's own template text, matched literally: single quotes on purpose.
 # shellcheck disable=SC2016
 for words in 'Pattern ${params.pattern}. Run id ${params.runId}.' 'it holds merged change ${params.commit}' \
-             'on the base ${seed.base}' 'mergeBase: ${seed.base}.'; do
+             'on the base ${seed.base}' 'mergeBase: ${seed.base}.' "'seed fold')"; do
     if grep -qF -e "$words" "$WF"; then ok "seed-bugs.js still writes: $words"; else fail "seed-bugs.js no longer writes '$words': seed-scan.sh parses it"; fi
 done
 
