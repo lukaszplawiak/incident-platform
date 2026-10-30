@@ -55,6 +55,12 @@ agent() {
     printf -- '---\nname: %s\ndescription: a test agent\ntools: Bash\n%s\n---\n\nBody.\n' "$1" "$2" > "$root/.claude/agents/$1.md"
 }
 H='"$CLAUDE_PROJECT_DIR"/.claude/hooks'
+# agent_tools <name> <tools line or -> <frontmatter hooks block> — the same, with its own `tools:` (- for none).
+agent_tools() {
+    local tools=""
+    [ "$2" = - ] || tools="tools: $2"$'\n'
+    printf -- '---\nname: %s\ndescription: a test agent\n%s%s\n---\n\nBody.\n' "$1" "$tools" "$3" > "$root/.claude/agents/$1.md"
+}
 
 echo "the repository's own entries"
 fresh; expect 0 "every entry of the repository blocks" "block when their hook fails"
@@ -212,6 +218,62 @@ fresh; agent t-new "hooks:
           command: '$H/readonly-bash.sh'
           onFailure: \"block\""
 expect 1 "a new agent's guard, not in its twin's --agent" 'is not the agents whose frontmatter runs it (acceptance-reviewer,defect-seeder,planner,ready-checker,review-architecture,review-docs,review-general,review-k8s,review-migration,review-performance,review-security,t-new)'
+
+echo "every agent with Bash or a file tool runs its guard (backlog #0-186)"
+fresh; agent_tools t-bare "Read, Grep, Bash" ""
+expect 1 "an agent with Bash and no guard at all (the defect-seeder's case)" '.claude/agents/t-bare.md: holds Bash but its frontmatter has no Bash guard'
+fresh; agent_tools t-edit "Read, Edit, Write" "hooks:
+  PreToolUse:
+    - matcher: \"Write\"
+      hooks:
+        - type: command
+          command: '$H/write-scope.sh .ai/audit/'
+          onFailure: \"block\""
+for f in settings.json settings.autopilot.json; do
+    jqi "$f" '.hooks.PreToolUse += [{matcher: "Write", hooks: [{type: "command", command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/write-scope.sh --agent t-edit .ai/audit/", onFailure: "block"}]}]'
+done
+expect 1 "a write guard whose matcher leaves out Edit" 't-edit.md: holds Edit, Write but its frontmatter has no write-scope.sh on a matcher with Edit, Write'
+fresh; agent_tools t-all - "hooks:
+  PreToolUse:
+    - matcher: \"Bash\"
+      hooks:
+        - type: command
+          command: '$H/readonly-bash.sh'
+          onFailure: \"block\""
+add_twin_name t-all
+expect 1 "an agent without tools: holds the file tools too" 't-all.md: declares no tools: (so holds every tool) but its frontmatter has no write-scope.sh'
+fresh; agent_tools t-spec "Read, Bash(git:*)" ""
+expect 1 "a tool with a specifier is that tool" 't-spec.md: holds Bash but its frontmatter has no Bash guard'
+fresh; agent_tools t-spec2 "Read, Bash(git log, git show)" ""
+expect 1 "a specifier with a comma is still one tool" 't-spec2.md: holds Bash but its frontmatter has no Bash guard'
+fresh; agent_tools t-empty '""' "hooks:
+  PreToolUse:
+    - matcher: \"Bash\"
+      hooks:
+        - type: command
+          command: '$H/readonly-bash.sh'
+          onFailure: \"block\""
+add_twin_name t-empty
+expect 1 "an empty tools: is read as every tool" 't-empty.md: declares no tools: (so holds every tool) but its frontmatter has no write-scope.sh'
+fresh; agent_tools t-read-guard "Read, Bash" "hooks:
+  PreToolUse:
+    - matcher: \"Read\"
+      hooks:
+        - type: command
+          command: '$H/readonly-bash.sh'
+          onFailure: \"block\""
+for f in settings.json settings.autopilot.json; do
+    jqi "$f" '.hooks.PreToolUse += [{matcher: "Read", hooks: [{type: "command", command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/readonly-bash.sh --agent t-read-guard", onFailure: "block"}]}]'
+done
+expect 1 "a Bash guard whose matcher leaves out Bash" 't-read-guard.md: holds Bash but its frontmatter has no Bash guard'
+fresh; mkdir -p "$root/.claude/agents/x" && sed 's/^name: .*/name: shipper/' "$root/.claude/agents/review-docs.md" > "$root/.claude/agents/x/other.md"
+expect 1 "two definitions with one name" 'are both the agent shipper: one name, one definition'
+fresh; agent_tools t-read "Read, Grep, Glob" ""
+expect 0 "an agent that only reads needs no guard" "block when their hook fails"
+fresh; rm "$root/.claude/agents/picker.md"
+expect 1 "an exception for an agent that is gone" 'UNGUARDED (check-hook-entries.rb) names picker, which is no agent'
+fresh; sed -i.bak 's/^tools: .*/tools: Read, Grep, Glob/' "$root/.claude/agents/shipper.md"
+expect 1 "an exception for an agent that needs no guard any more" 'shipper.md: has its guards, so its entry in UNGUARDED (check-hook-entries.rb) is stale'
 
 echo "the required session-level guards, one case each (backlog #0-164 AC4)"
 while IFS='|' read -r file cmd; do

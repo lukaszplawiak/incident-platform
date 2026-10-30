@@ -503,7 +503,10 @@ security boundary, so every rule that matters is also enforced outside the model
   and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`), in two layers: the agent's frontmatter and
   a twin in both settings files keyed on its `agent_type` (`--agent`), since Claude Code does not promise frontmatter
   hooks to the agents a `Workflow` spawns; Factory guards keeps the twins equal to the frontmatter and checks that
-  every session-wide guard is still wired (`check-hook-entries.rb`, backlog #0-164, ADR-0041). The `/seed-bugs`
+  every session-wide guard is still wired (`check-hook-entries.rb`, backlog #0-164, ADR-0041), and fails an agent
+  whose `tools:` hold Bash or a file tool with no guard of that kind in its frontmatter (rule 6, backlog #0-186);
+  the autopilot's implementer, implementer-light, picker and shipper are its named exceptions, bounded by the
+  autopilot session's denies and session-wide guards instead. The `/seed-bugs`
   defect-seeder runs the reviewers' read-only Bash (no branch, no commit, no redirect) and edits only the files of the
   change it plants in (`write-scope.sh --seed`, from the run's record `.ai/runs/SEED`); a factory script commits its
   edit (backlog #0-172, ADR-0047). They read files with the Read tool and
@@ -610,8 +613,9 @@ branch is already public, and an allow comment passes whatever its line holds (#
 session on a Claude Code older than 2.1.295 ignores the hooks' `onFailure` without a word, so there a hook that
 cannot start or times out does not block (only the autopilot's preflight checks the version; ADR-0039);
 an agent guard's session-level twin passes everything if Claude Code stops sending `agent_type` (its frontmatter
-hook stays for that, ADR-0041), and an agent that should have a guard but has none in its frontmatter is left to
-review; the reviewers read the rules from `origin/main` by instruction (`review-procedure`), which no hook
+hook stays for that, ADR-0041), and the autopilot's implementer, implementer-light, picker and shipper have no guard
+of their own: in an interactive session (not the autopilot's) only that session's denies and hooks bound them
+(#0-186); the reviewers read the rules from `origin/main` by instruction (`review-procedure`), which no hook
 enforces (#0-165); `/research` and `/ship` still pre-approve `git diff *` (and `/research` `git log/show *`), and no
 hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167).
 Layers and their limits: docs/ai-factory.md, "What isolates what".
