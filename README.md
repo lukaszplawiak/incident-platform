@@ -482,7 +482,9 @@ security boundary, so every rule that matters is also enforced outside the model
   run holds the lock) with
   its own Maven settings (`scripts/factory/maven-settings.xml`, no `~/.mavenrc`, no `MAVEN_OPTS`: nothing an
   agent's code can write in the home directory decides what runs), the file tools of an autopilot session
-  write only inside the repository (`guard-write-in-repo.sh`), and applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`).
+  write only inside the repository (`guard-write-in-repo.sh`), and applied Flyway migrations cannot be edited through the file tools in any session (`guard-migrations.sh`),
+  except on a `/seed-bugs` run's `review/<8 hex>` branch with no autopilot lock, where the guard compares with the run's
+  base, so a migration the merged change added can be edited there, in any session (backlog #0-172, ADR-0047).
   Every hook fails closed (backlog #0-162), because Claude Code runs a call after any exit status but 2: a helper
   (`_lib.sh`) that does not load, a crash (an `EXIT` trap turns any status but 0 and 2 into 2) and a JSON parser
   that fails or empty input (`json_get`/`json_checked`) refuse the call. Two exceptions, both in
@@ -501,7 +503,10 @@ security boundary, so every rule that matters is also enforced outside the model
   and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`), in two layers: the agent's frontmatter and
   a twin in both settings files keyed on its `agent_type` (`--agent`), since Claude Code does not promise frontmatter
   hooks to the agents a `Workflow` spawns; Factory guards keeps the twins equal to the frontmatter and checks that
-  every session-wide guard is still wired (`check-hook-entries.rb`, backlog #0-164, ADR-0041); they read files with the Read tool and
+  every session-wide guard is still wired (`check-hook-entries.rb`, backlog #0-164, ADR-0041). The `/seed-bugs`
+  defect-seeder runs the reviewers' read-only Bash (no branch, no commit, no redirect) and edits only the files of the
+  change it plants in (`write-scope.sh --seed`, from the run's record `.ai/runs/SEED`); a factory script commits its
+  edit (backlog #0-172, ADR-0047). They read files with the Read tool and
   search with `git grep`, and each refusal of the hook that a reading agent can hit names that alternative,
   per mode (backlog #0-123). No agent runs `kubectl` or `kubeconform` (backlog #0-182): the k8s reviewer reads the
   manifests as files, and CI renders and validates them. Its render could read what git does not track (a root or a

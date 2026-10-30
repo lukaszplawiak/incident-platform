@@ -117,13 +117,14 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
-| [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | Open |
+| [0-172](#0-172-the-defect-seeder-writes-and-commits-with-no-write-scope) | The defect-seeder writes and commits with no write scope | security | Low | In progress |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-179](#0-179-the-workflow-tool-shows-the-panel-the-seed-bugs-command-that-started-the-run) | The Workflow tool shows the panel the `/seed-bugs` command that started the run | ci | Medium | Open |
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
+| [0-186](#0-186-factory-guards-cannot-see-an-agent-with-bash-or-edit-and-no-guard) | Factory guards cannot see an agent with Bash or Edit and no guard | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3068,11 +3069,15 @@ AC2. The audit's benchmark section reports, per dimension, runs that measured no
 
 ### 0-172. The defect-seeder writes and commits with no write scope
 
-**Type:** security · **Priority:** Low · **Status:** Open — `nonBlocking` FAC-S03 of review-security in the `/review` of
-#0-170 (2026-10-25)
-**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
+**Type:** security · **Priority:** Low · **Status:** In progress (2026-10-30) — `nonBlocking` FAC-S03 of review-security in
+the `/review` of #0-170 (2026-10-25)
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium (was low: the seeder no longer commits, so the seed
+scripts and the workflow change too) · **Depends on:** —
 **Touches:** factory (.claude/agents/defect-seeder.md, .claude/settings.json, .claude/settings.autopilot.json,
-.claude/hooks/test-hooks.sh), ci (.github/scripts/check-hook-entries.rb)
+.claude/hooks/_lib.sh, write-scope.sh, test-hooks.sh, .claude/workflows/seed-bugs.js, scripts/factory/seed-branch.sh,
+seed-check.sh, seed-fold.sh, return-to-main.sh), ci (.github/scripts/test-seed-branch.sh, test-autopilot-workflow.mjs,
+test-hook-entries.sh),
+docs (ADR-0047, ADR-0044 status, docs/ai-factory.md, README "Infrastructure Hardening")
 
 **Problem.** `defect-seeder` has Bash and Edit and commits onto a `seed/` branch, but neither its frontmatter nor a
 session-level twin keyed on its `agent_type` runs `write-scope.sh` (ADR-0041): what it may write is bounded only by the
@@ -3112,6 +3117,35 @@ AC2. Factory guards fails when its guard is missing from one of its places.
 AC3. The defect-seeder cannot switch or create a branch, shown by a test case.
 AC4. A migration pattern can be planted with the seeder's normal Edit, and the seeder cannot write to a migration with
 Bash. Shown by test cases of `guard-migrations.sh` (and of the seeder's write guard).
+
+**Decided (owner, 2026-10-30: option C of the `/research`).** The seeder commits nothing, and its hooks read the run
+(ADR-0047). It is the change's real scope, not a fixed one (option A), because the migration guard needs the run's base
+anyway, and a fixed scope would still have left P-19 refused. The commit moves to a factory script instead of a
+`--seeder` Bash mode that allows `git add`/`git commit` (option B): `seed-fold.sh` threw away the seeder's commit
+message anyway. Running seeds only in an autopilot session (D) was rejected: that session allows `git switch`.
+- `seed-branch.sh` writes `.ai/runs/SEED` (`<branch> <base> <head>`), and `return-to-main.sh` removes it on `main`.
+  `seed_record` (`_lib.sh`) reads it only on the branch it names.
+- The seeder's Bash runs the plain `readonly-bash.sh` (frontmatter plus a twin on the reviewers' `--agent` list), so
+  `git switch`, `checkout`, `branch`, `commit`, `add` and redirects are refused (AC3, the Bash half of AC4).
+- Its Edit runs `write-scope.sh --seed` (frontmatter plus a `--agent defect-seeder --seed` twin in both settings files).
+  The hook allows exactly the change's files, `git diff --name-only --no-renames --diff-filter=d <base> <head>`, the
+  list `seed-check.sh` checks afterwards. `.ai/runs/` and the hooks are never in it (AC1).
+- `migration_base_ref` answers the record's base when no LOCK exists, so `guard-migrations.sh` lets the seeder edit a
+  migration the change added (the Edit half of AC4). Since LOCK comes first, `.ai/runs/SEED` needs no protected-paths
+  entry. The shared `base_ref` is unchanged, so the factory scripts' integrity check still compares with main.
+- Review round 1 (owner: "tak" on 1-4): the seed base was confined to the migration guard (architecture: through
+  `base_ref` it had also reached `factory_scripts_intact`); `seed_record` refuses a record naming commits the repository
+  does not hold (security: such a base sent `guard-migrations.sh` to its "base not found" exception); `seed-branch.sh`
+  notes that the fold expects its two commits (general); a long line of `docs/ai-factory.md` rewrapped (docs).
+- Review round 2: no blocking finding (general, security and docs APPROVE; architecture NEEDS_HUMAN, protected paths
+  only). Owner: "wprowadź". README "Infrastructure Hardening" names the guard's exception on a seed branch (architecture,
+  FAC-A05). Not done: a `--seed` row in the fail-closed table of `test-hooks.sh` (security). Its shared failure paths
+  come before the mode split and are covered by the existing row, and its own paths have their cases.
+- `seed-check.sh` refuses a seeder commit and an untracked file, and checks the uncommitted edit. `seed-fold.sh`
+  commits the working tree through an index of its own, and refuses a HEAD reflog with any entry above the switch
+  besides seed-branch.sh's two commits.
+- AC2: `check-hook-entries.rb` rule 4 fails when one layer of either guard is missing. It cannot see an agent with no
+  guard in either layer, this item's own case: that gap is #0-186.
 
 ---
 
@@ -3646,6 +3680,29 @@ AC1. The script renders the repository's overlays as CI does, and refuses a syml
 base; shown by its test, with a mutation of each refusal failing a case.
 AC2. Every attack of #0-182's rounds, replayed against the script, prints no file from outside the snapshot.
 AC3. README "Infrastructure Hardening" and `review-k8s.md` describe the render; `_common.md` names it (owner).
+
+### 0-186. Factory guards cannot see an agent with Bash or Edit and no guard
+
+**Type:** security · **Priority:** Low · **Status:** Open. From the `/research` of #0-172 (2026-10-30): the defect-seeder
+had Bash and Edit and no guard in either layer of ADR-0041, and nothing failed.
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
+**Touches:** ci (.github/scripts/check-hook-entries.rb, test-hook-entries.sh), security (README "Infrastructure
+Hardening", its known gap "an agent that should have a guard but has none in its frontmatter is left to review")
+
+**Problem.** `check-hook-entries.rb` rule 4 keeps an agent's guard and its session-level twin equal, so it fails when
+one of the two layers is missing. When an agent has neither, it sees nothing (its header says so: "What it does not
+see"). A new agent with `Bash` or `Edit`/`Write` in its `tools:` and no guard passes Factory guards. Only a reviewer
+can catch it, and for the seeder no one did from #0-170 to #0-172.
+
+**Approach (to analyse).** Factory guards fails an agent whose `tools:` holds `Bash` without a Bash guard in its
+frontmatter (`readonly-bash.sh` or `factory-ops-bash.sh`), or `Edit`/`Write` without `write-scope.sh`. The agents the
+autopilot's denies and session-wide hooks guard instead (implementer, implementer-light, picker, shipper) are named in
+the check, each with its reason.
+
+**Acceptance criteria.**
+AC1. Factory guards fails an agent with Bash, or with Edit or Write, and no guard of that kind in its frontmatter,
+unless the check names it with a reason. Shown by test cases.
+AC2. README's known gap sentence goes.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

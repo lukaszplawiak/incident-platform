@@ -5,8 +5,8 @@
 # where it ran (rule MIG-02). A migration that exists only on the current branch may still be edited.
 #
 # Registered in .claude/settings.json (every session) and .claude/settings.autopilot.json.
-# Base: the commit recorded by the autopilot's preflight (.ai/runs/LOCK), else $FACTORY_BASE_REF, else
-# origin/main, else main.
+# Base: the commit recorded by the autopilot's preflight (.ai/runs/LOCK), else on a /seed-bugs run's branch the run's
+# base (.ai/runs/SEED, backlog #0-172: migration_base_ref), else $FACTORY_BASE_REF, else origin/main, else main.
 # Fails open with a warning if neither jq nor python3 is installed (interactive sessions must not break);
 # the autopilot's devcontainer has jq; the same for a base ref that does not exist (below). Every other
 # failure refuses (backlog #0-162): a parser that fails, a git that fails, a crash, a helper that does not load.
@@ -38,7 +38,7 @@ root=$(git rev-parse --show-toplevel 2>/dev/null) || block "git cannot find the 
 rel=$(repo_rel "$file") || block "cannot resolve $file in the repository, so the edit of a migration is refused"
 case "$rel" in /*) exit 0 ;; esac          # outside this repository
 
-base=$(cd "$root" && base_ref)
+base=$(cd "$root" && migration_base_ref)
 # A base that does not exist (a clone without main or origin/main) cannot say what is applied: the edit goes
 # through with a warning, as without jq above; CI's edited-migration check (check-factory-guards.sh rule 4)
 # compares with the PR's base.

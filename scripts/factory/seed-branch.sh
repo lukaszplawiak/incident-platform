@@ -11,8 +11,13 @@
 # no read-scope.sh, the owner's session lost its verifier). Instead, on <branch> from main:
 #   commit A (the base the panel diffs against): the change's code reverted, as git's own `Revert "<subject>"`;
 #   commit B: the change's code back, under the change's own subject;
-# and the seeder then plants the defect in one of `files` and commits it, and seed-fold.sh folds that commit into B. The
-# panel reviews B and the defect as one change, as the benchmark means, under main's hooks, agents and rules.
+# and the seeder then plants the defect in one of `files`, left uncommitted, and seed-check.sh and seed-fold.sh make B
+# and the defect one commit (backlog #0-172). The panel reviews it as one change, as the benchmark means, under main's
+# hooks, agents and rules.
+# The run is recorded in .ai/runs/SEED (`<branch> <base> <head>`, gitignored like the rest of .ai/runs/), which the
+# hooks read on <branch> only (seed_record, .claude/hooks/_lib.sh): write-scope.sh --seed holds the seeder to `files`,
+# and guard-migrations.sh compares with <base>, where a migration the change added is new (#0-172, ADR-0047).
+# return-to-main.sh removes it.
 # Nothing the panel reads names the run (backlog #0-177): <branch> is `review/<8 hex>`, a name the workflow derives from
 # the pattern and the run id and the reviewers cannot read back, and A's message is the one `git revert` would write.
 # The P-10..P-12 runs had `seed/<pattern>-<run id>` in the panel's prompt and "seed base … (/seed-bugs, not for
@@ -39,6 +44,7 @@ undo() {   # undo <reason>: back to main, the half-made branch gone, then refuse
     git reset --quiet --hard >/dev/null 2>&1
     git switch --quiet main >/dev/null 2>&1
     [ -n "$branch" ] && git branch -D --quiet "$branch" >/dev/null 2>&1
+    [ -n "$branch" ] && rm -f "$RUNS_DIR/SEED"
     refuse "$1"
 }
 
@@ -88,9 +94,13 @@ branch=$branch_name
 git switch --quiet -c "$branch" "$head" || undo "cannot create $branch"
 git apply --index -R "$patch" 2>/dev/null || undo "the change no longer applies to main (its code changed since): choose a newer commit"
 # git revert's subject, without its "This reverts commit <sha>." line: that sha is on main, and would say the change is.
+# seed-fold.sh expects exactly these two commits above the switch in the HEAD reflog (any other git step here would make
+# every fold refuse: change both together).
 git commit --quiet -m "Revert \"$subject\"" || undo "cannot commit the base"
 base=$(git rev-parse HEAD)
 git apply --index "$patch" || undo "the change does not apply back on its base"
 git commit --quiet -m "$subject" || undo "cannot commit the change"
-jq -n --arg b "$branch" --arg base "$base" --arg h "$(git rev-parse HEAD)" --arg f "$kept" \
+change_head=$(git rev-parse HEAD) || undo "cannot read the change's commit"
+printf '%s %s %s\n' "$branch" "$base" "$change_head" >"$RUNS_DIR/SEED" || undo "cannot write the seed record ($RUNS_DIR/SEED)"
+jq -n --arg b "$branch" --arg base "$base" --arg h "$change_head" --arg f "$kept" \
     '{ok: true, branch: $b, base: $base, head: $h, files: ($f | split("\n") | map(select(. != "")))}'

@@ -599,7 +599,7 @@ const SEED_ARGS = { pattern: 'P-10', commit: 'abc1234', runId: 'r1' }
 // The branch of P-10, run r1: FNV-1a of "P-10\nr1" (seed-bugs.js, seedBranchOf; backlog #0-177).
 const BRANCH = 'review/0684d0a2'
 const SEEDED = { ok: true, branch: BRANCH, base: 'b'.repeat(40), head: 'c'.repeat(40), files: ['svc/src/main/java/A.java'] }
-const CHECKED = { ok: true, commit: 'd'.repeat(40), files: ['svc/src/main/java/A.java'] }
+const CHECKED = { ok: true, files: ['svc/src/main/java/A.java'] }
 const FOLDED = { ok: true, head: 'e'.repeat(40) }
 const RECORDED = { appended: true, file: '.ai/runs/benchmark/results.md' }
 async function seed(answers, ...given) {
@@ -667,6 +667,7 @@ test('seed-bugs: the branch comes from seed-branch.sh, never from the seeder, an
   assert.ok(at('ops:seed-branch.sh') >= 0 && at('ops:seed-branch.sh') < at('defect-seeder'), 'the branch is made before the seeder runs')
   assert.match(calls[at('ops:seed-branch.sh')].prompt, /seed-branch\.sh 'review\/0684d0a2' 'abc1234'$/)
   assert.match(calls[at('defect-seeder')].prompt, /review\/0684d0a2 is checked out[\s\S]*svc\/src\/main\/java\/A\.java/)
+  assert.match(calls[at('defect-seeder')].prompt, /Leave the edit uncommitted\./, 'the seeder commits nothing (#0-172)')
   const review = calls.find((c) => c.key === 'review-performance')
   assert.match(review.prompt, new RegExp(`mergeBase: ${SEEDED.base}`), 'the panel diffs against the seed base, not the old commit')
   assert.ok(at('defect-seeder') < at('ops:seed-check.sh') && at('ops:seed-check.sh') < at('review-performance'),
@@ -706,16 +707,16 @@ test('seed-bugs: the branch name is the same on a relaunch and differs between r
   assert.equal(await branchOf({ ...SEED_ARGS, pattern: 'P-11' }), 'review/7442af03')
 })
 
-test('seed-bugs: the seeder\'s commit is folded into the change after the check and before the panel (#0-177)', async () => {
+test('seed-bugs: the seeder\'s edit is folded into the change after the check and before the panel (#0-177, #0-172)', async () => {
   const { calls } = await seed({ 'defect-seeder': TRUTH })
   const at = (k) => calls.findIndex((c) => c.key === k)
   assert.ok(at('ops:seed-check.sh') < at('ops:seed-fold.sh') && at('ops:seed-fold.sh') < at('review-general'))
   assert.match(calls[at('ops:seed-fold.sh')].prompt,
-    new RegExp(`seed-fold\\.sh 'review/0684d0a2' '${SEEDED.base}' '${SEEDED.head}' '${CHECKED.commit}'$`))
-  for (const answer of [null, { ok: false, reason: 'HEAD is not the checked commit' }, { ok: true }, { ok: true, head: 'abc' }]) {
+    new RegExp(`seed-fold\\.sh 'review/0684d0a2' '${SEEDED.base}' '${SEEDED.head}'$`))
+  for (const answer of [null, { ok: false, reason: 'HEAD is not the change\'s commit' }, { ok: true }, { ok: true, head: 'abc' }]) {
     const run = await seed({ 'defect-seeder': TRUTH, 'ops:seed-fold.sh': answer })
     assert.equal(run.outcome.outcome, 'FAILED', JSON.stringify(answer))
-    assert.match(run.outcome.reason, /the seeder's commit was not folded/)
+    assert.match(run.outcome.reason, /the seeder's edit was not folded/)
     assert.ok(!run.calls.some((c) => c.key.startsWith('review-')), 'no panel on an unfolded branch')
     assert.equal(run.calls.at(-1).key, 'ops:return-to-main.sh')
   }
@@ -750,7 +751,7 @@ test('seed-bugs: the branch the workflow names is one the scripts accept (#0-177
 
 test('seed-bugs: the panel runs only on a tree seed-check.sh confirmed (#0-173, review round 1)', async () => {
   for (const answer of [null, { ok: false, reason: `the tree is on main, not on ${BRANCH}` },
-    { ok: true, files: ['svc/src/main/java/Other.java'] }, { ok: true }, { ...CHECKED, commit: undefined }, { ...CHECKED, commit: 'HEAD' }]) {
+    { ok: true, files: ['svc/src/main/java/Other.java'] }, { ok: true }, { ...CHECKED, files: [] }, { ...CHECKED, ok: 'true' }]) {
     const { outcome, calls } = await seed({ 'defect-seeder': TRUTH, 'ops:seed-check.sh': answer })
     assert.equal(outcome.outcome, 'FAILED', JSON.stringify(answer))
     assert.match(outcome.reason, /the seed branch is not as the seeder says/)
@@ -868,7 +869,7 @@ test('seed-bugs: each factory script\'s answer is typed, so the agent cannot han
   const printed = {
     'ops:seed-branch.sh': [SEEDED, { ok: false, reason: 'the working tree is not clean' }],
     'ops:seed-check.sh': [CHECKED, { ok: false, reason: 'the tree is on main' }],
-    'ops:seed-fold.sh': [FOLDED, { ok: false, reason: 'HEAD is not the checked commit' }],
+    'ops:seed-fold.sh': [FOLDED, { ok: false, reason: 'HEAD is not the change\'s commit' }],
     'ops:seed-record.sh': [RECORDED, { appended: false, reason: 'the run id r1 is in .ai/runs/benchmark/results.md already' }],
     'ops:return-to-main.sh': [{ onMain: true }, { onMain: true, left: BRANCH },
       { onMain: false, branch: BRANCH, reason: 'working tree not clean: left as it is for the owner' }],
@@ -881,7 +882,9 @@ test('seed-bugs: each factory script\'s answer is typed, so the agent cannot han
   // What factory-ops answered in the run of 2026-10-25 (P-10 on 76379e806fb4, run perf-after-p10).
   const answered = {
     'ops:seed-branch.sh': [{ ...SEEDED, ok: 'true' }, { ...SEEDED, files: JSON.stringify(SEEDED.files) }],
-    'ops:seed-check.sh': [{ ...CHECKED, ok: 'true' }, { ...CHECKED, files: JSON.stringify(CHECKED.files) }],
+    'ops:seed-check.sh': [{ ...CHECKED, ok: 'true' }, { ...CHECKED, files: JSON.stringify(CHECKED.files) },
+      // the answer of a seed-check.sh before #0-172, which named the seeder's commit: the field is gone
+      { ...CHECKED, commit: 'd'.repeat(40) }],
     'ops:return-to-main.sh': [{ parameter: '{"onMain": true, "left": "seed/P-10-r1"}' }, { onMain: 'true' }],
     // The same kind of answer for the scripts #0-177 added.
     'ops:seed-fold.sh': [{ ...FOLDED, ok: 'true' }],

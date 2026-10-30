@@ -685,6 +685,77 @@ expect 2 "--agent with an empty name (write)"               "$W" --agent '' .ai/
 expect 2 "--agent with an empty name (factory-ops)"         "$O" --agent '' -- "$(agent_call '' Bash command 'scripts/factory/preflight.sh')"
 expect 2 "an agent_type that does not parse"                "$R" --agent review-general -- '{"agent_type": '
 
+echo "the defect-seeder: a seed run's scope (backlog #0-172)"
+# A merged change that added a migration and a class, on `seedmain` (standing in for main: every migration of a
+# merged change is on it); its seed branch as seed-branch.sh makes it: the change reverted as the base, then back.
+SEED_BR=review/0684d0a2
+MIG=svc/src/main/resources/db/migration
+(
+    set -e
+    cd "$WORK/repo"
+    g() { git -c user.email=t@t -c user.name=t "$@"; }
+    git switch -q -c seedmain
+    mkdir -p svc/src/main/java
+    echo "create table s();" > "$MIG/V3__s.sql" && echo "class S {}" > svc/src/main/java/S.java
+    git add "$MIG/V3__s.sql" svc/src/main/java/S.java && g commit -q -m "feat(svc): the merged change"
+    git switch -q -c "$SEED_BR"
+    git rm -q "$MIG/V3__s.sql" svc/src/main/java/S.java && g commit -q -m 'Revert "feat(svc): the merged change"'
+    base=$(git rev-parse HEAD)
+    git checkout -q seedmain -- "$MIG/V3__s.sql" svc/src/main/java/S.java && g commit -q -m "feat(svc): the merged change"
+    mkdir -p .ai/runs && echo "$SEED_BR $base $(git rev-parse HEAD)" > .ai/runs/SEED
+) || { echo "::error::cannot set up the seed branch in $WORK/repo"; exit 1; }
+seeder() { agent_call defect-seeder "$1" file_path "$2"; }
+expect 0 "seeder edits the change's class"            "$W" --seed -- "$(seeder Edit svc/src/main/java/S.java)"
+expect 0 "seeder edits the change's migration"        "$W" --seed -- "$(seeder Edit "$MIG/V3__s.sql")"
+expect 0 "seeder, by absolute path"                   "$W" --seed -- "$(seeder Edit "$WORK/repo/svc/src/main/java/S.java")"
+expect 2 "seeder edits a file the change did not touch" "$W" --seed -- "$(seeder Edit "$MIG/V1__a.sql")"
+expect 2 "seeder writes a new file"                   "$W" --seed -- "$(seeder Write svc/src/main/java/New.java)"
+expect 2 "seeder writes the seed record"              "$W" --seed -- "$(seeder Write .ai/runs/SEED)"
+expect 2 "seeder writes a run's row"                  "$W" --seed -- "$(seeder Write .ai/runs/benchmark/results.md)"
+expect 2 "seeder edits a hook"                        "$W" --seed -- "$(seeder Edit .claude/hooks/write-scope.sh)"
+expect 2 "seeder: .. out of the change's file"        "$W" --seed -- "$(seeder Edit svc/src/main/java/../../../../.ai/runs/SEED)"
+expect 2 "seeder writes outside the repository"       "$W" --seed -- "$(seeder Write "$HOME/.claude/settings.json")"
+expect 2 "--seed takes no prefix"                     "$W" --seed svc/ -- "$(seeder Edit svc/src/main/java/S.java)"
+expect 0 "twin: the seeder, the change's class"       "$W" --agent defect-seeder --seed -- "$(seeder Edit svc/src/main/java/S.java)"
+expect 2 "twin: the seeder, outside the change"       "$W" --agent defect-seeder --seed -- "$(seeder Edit "$MIG/V1__a.sql")"
+expect 0 "twin: another agent is not its business"    "$W" --agent defect-seeder --seed -- "$(agent_call implementer Edit file_path "$MIG/V1__a.sql")"
+# The migration guard compares with the run's base on its branch: the change's migration is new there.
+expect 0 "migration: the change's, on the seed base"  env FACTORY_BASE_REF=refs/heads/seedmain "$M" -- "$(seeder Edit "$MIG/V3__s.sql")"
+expect 2 "migration: one on the seed base too"        env FACTORY_BASE_REF=refs/heads/seedmain "$M" -- "$(seeder Edit "$MIG/V1__a.sql")"
+(cd "$WORK/repo" && echo "R1 $(git rev-parse seedmain)" > .ai/runs/LOCK)
+expect 2 "migration: an autopilot lock comes first"   "$M" -- "$(seeder Edit "$MIG/V3__s.sql")"
+(cd "$WORK/repo" && rm -f .ai/runs/LOCK)
+# The seed base is the migration guard's alone (architecture review round 1): base_ref, which the factory scripts'
+# integrity check reads, stays main's on the run's branch.
+got=$(cd "$WORK/repo" && FACTORY_BASE_REF=refs/heads/seedmain "$BASH" -c '. "$1"/_lib.sh; base_ref' _ "$HOOKS")
+if [ "$got" = refs/heads/seedmain ]; then echo "  ok: base_ref is not the seed base"
+else echo "::error::base_ref on the seed branch answered $got, not refs/heads/seedmain"; failures=$((failures+1)); fi
+# A record naming commits this repository does not hold (security review round 1): no write, and main's base, not the
+# migration guard's "base not found" exception.
+(cd "$WORK/repo" && cp .ai/runs/SEED "$WORK/seed.good" && echo "$SEED_BR $(printf 'a%.0s' $(seq 40)) $(printf 'b%.0s' $(seq 40))" > .ai/runs/SEED)
+expect 2 "a record of commits that do not exist: the seeder writes nothing" "$W" --seed -- "$(seeder Edit svc/src/main/java/S.java)"
+expect 2 "a record of commits that do not exist: main's base" env FACTORY_BASE_REF=refs/heads/seedmain "$M" -- "$(seeder Edit "$MIG/V3__s.sql")"
+(cd "$WORK/repo" && cp "$WORK/seed.good" .ai/runs/SEED)
+# The seeder's Bash is read-only (readonly-bash.sh): no branch, no commit, no redirect into a migration.
+for c in 'git switch main' 'git checkout -b other' 'git checkout seedmain' 'git branch other' 'git commit -qam x' \
+         "git add $MIG/V3__s.sql" "printf 'x' >> $MIG/V1__a.sql" 'git stash' 'git reset --hard'; do
+    expect 2 "seeder's Bash: $c" "$R" --agent defect-seeder -- "$(agent_call defect-seeder Bash command "$c")"
+done
+for c in 'git show --stat HEAD' 'git show HEAD' 'git status' 'git grep -n -e class -- svc'; do
+    expect 0 "seeder's Bash: $c" "$R" --agent defect-seeder -- "$(agent_call defect-seeder Bash command "$c")"
+done
+# Off the run's branch, or with a record that is not one, the seeder writes nothing and the base is main's again.
+(cd "$WORK/repo" && git switch -q seedmain)
+expect 2 "seeder on another branch: nothing"          "$W" --seed -- "$(seeder Edit svc/src/main/java/S.java)"
+expect 2 "migration: off the run's branch, main's base" env FACTORY_BASE_REF=refs/heads/seedmain "$M" -- "$(seeder Edit "$MIG/V3__s.sql")"
+(cd "$WORK/repo" && git switch -q "$SEED_BR" && echo "$SEED_BR not-a-sha" > .ai/runs/SEED)
+expect 2 "a record that is not one: the seeder writes nothing" "$W" --seed -- "$(seeder Edit svc/src/main/java/S.java)"
+expect 2 "a record that is not one: main's base"      env FACTORY_BASE_REF=refs/heads/seedmain "$M" -- "$(seeder Edit "$MIG/V3__s.sql")"
+(cd "$WORK/repo" && rm -f .ai/runs/SEED)
+expect 2 "no record: the seeder writes nothing"       "$W" --seed -- "$(seeder Edit svc/src/main/java/S.java)"
+expect 2 "no record: main's base (P-19's refusal)"    env FACTORY_BASE_REF=refs/heads/seedmain "$M" -- "$(seeder Edit "$MIG/V3__s.sql")"
+(cd "$WORK/repo" && git switch -q feat/x)
+
 echo "every hook fails closed (backlog #0-162)"
 # Claude Code runs the call after any exit status but 2, so each way a hook can fail must end in 2. One row per
 # hook in this directory: its arguments and a call it allows, so that a 2 below can only come from the failure.

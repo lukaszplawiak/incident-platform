@@ -211,7 +211,7 @@ fresh; agent t-new "hooks:
         - type: command
           command: '$H/readonly-bash.sh'
           onFailure: \"block\""
-expect 1 "a new agent's guard, not in its twin's --agent" 'is not the agents whose frontmatter runs it (acceptance-reviewer,planner,ready-checker,review-architecture,review-docs,review-general,review-k8s,review-migration,review-performance,review-security,t-new)'
+expect 1 "a new agent's guard, not in its twin's --agent" 'is not the agents whose frontmatter runs it (acceptance-reviewer,defect-seeder,planner,ready-checker,review-architecture,review-docs,review-general,review-k8s,review-migration,review-performance,review-security,t-new)'
 
 echo "the required session-level guards, one case each (backlog #0-164 AC4)"
 while IFS='|' read -r file cmd; do
