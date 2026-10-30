@@ -26,6 +26,7 @@
 | sec-p03-blind | P-03 | SEC-03 | security | yes | yes | general, architecture | — |
 | sec-p04-blind | P-04 | SEC-31 | security | yes | no | general, docs | — |
 | sec-p05-blind | P-05 | SEC-10 | security | yes | yes | general, docs | — |
+| sec-p04-blind-r2 | P-04 | SEC-31 | security | yes | yes | general | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -117,3 +118,9 @@ slug-checked tenant id, so nothing secret leaks until JDBC batching is turned on
 log line, whatever it holds today. Told the pattern, sec-after-p04 had blocked it, so that told row overstated this
 result (backlog #0-187). The told rows stay as history. `.ai/rules/audit.md` reads a marked row as an upper bound, so
 the audit counts these four.
+
+sec-p04-blind-r2 (2026-10-30, blind, scanned clean) ran P-04 again on `aace4118` once SEC-31's "Check:" named the
+message of an exception the platform did not write as a source, the line being the finding whatever it carries today
+(backlog #0-187). The seeder planted the same edit at the same line. This time security asked for changes and listed
+it as blocking under SEC-31, naming Hibernate's and the PostgreSQL driver's message (the SQL and the `Detail` with
+row values). The two runs differ only in the rule's text.
