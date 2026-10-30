@@ -122,7 +122,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
-| [0-186](#0-186-factory-guards-cannot-see-an-agent-with-bash-or-edit-and-no-guard) | Factory guards cannot see an agent with Bash or Edit and no guard | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -3745,7 +3744,7 @@ AC3. README "Infrastructure Hardening" and `review-k8s.md` describe the render; 
 
 ### 0-186. Factory guards cannot see an agent with Bash or Edit and no guard
 
-**Type:** security · **Priority:** Low · **Status:** Open. From the `/research` of #0-172 (2026-10-30): the defect-seeder
+**Type:** security · **Priority:** Low · **Status:** Done, PR #558 (kept for the decision history and its two rule gaps). From the `/research` of #0-172 (2026-10-30): the defect-seeder
 had Bash and Edit and no guard in either layer of ADR-0041, and nothing failed.
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
 **Touches:** ci (.github/scripts/check-hook-entries.rb, test-hook-entries.sh), security (README "Infrastructure
@@ -3765,6 +3764,44 @@ the check, each with its reason.
 AC1. Factory guards fails an agent with Bash, or with Edit or Write, and no guard of that kind in its frontmatter,
 unless the check names it with a reason. Shown by test cases.
 AC2. README's known gap sentence goes.
+
+**Decided (owner, 2026-10-30: option A of the `/research`).** Rule 6 of `check-hook-entries.rb`, on the model of
+`check-web-access.sh`'s rule 1 (only the verifier may hold WebFetch), and in the parser that already reads every
+agent's frontmatter rather than a second script (ARC-02):
+- Bash in `tools:` needs `readonly-bash.sh` or `factory-ops-bash.sh` on a matcher with Bash.
+- Edit, Write, MultiEdit or NotebookEdit need `write-scope.sh` on a matcher with each of them, so a guard on `Write`
+  alone leaves an `Edit` agent failing.
+- No `tools:` means every tool.
+- The exceptions are named in `UNGUARDED`, each with its reason: implementer, implementer-light, picker and shipper,
+  bounded by the autopilot session's denies and session-wide guards. An exception for no agent, or for one that has
+  its guards after all, fails.
+- Tested in `test-hook-entries.sh`, 5 mutations caught. ADR-0041 amended. README's known gap now names the residual:
+  in an interactive session those four have no guard of their own.
+- Rejected:
+  - B, a separate script: a second frontmatter parser.
+  - C, a frontmatter guard for the four: a second list of the protected paths in a hook. It changes how they run in
+    the owner's session, and is a decision of its own.
+- Review round 1, no reviewer blocking but docs (owner: "tak" on 1-7):
+  - ADR-0041's "Not covered" no longer says an unguarded agent is the reviewer's to catch (docs, blocking);
+  - the amendment names the script's rule numbers, and the index row the new rule (architecture);
+  - the message reads "has no …";
+  - a tool with a specifier (`Bash(git:*)`) counts as that tool, and a `tools:` naming none as every tool (security,
+    architecture);
+  - two definitions with one `name:` fail, since the twins and the exceptions are keyed on it (security);
+  - a test for a Bash guard on a matcher without Bash (architecture);
+  - README's residual says the session's own denies and hooks still apply (docs);
+  - `factory.md` FAC-A04's "Check:" drafted for the owner.
+
+- Review round 2: docs' blocking finding resolved (docs APPROVE, architecture NEEDS_HUMAN, protected paths only).
+  Owner: "popraw". ADR-0041's "rule 3" names the script's rule 4; the header is rewrapped; a string `tools:` is split
+  on commas outside a specifier. The old split already read `Bash(a, b)` as Bash, and its extra name changed no
+  outcome, so no test can tell the two apart (its mutation survives).
+
+**Also (review round 1, rule gaps, not in this item).**
+- An agent whose `tools:` hold `Agent`/`Task` (or an MCP tool) could start a subagent with Bash or file tools outside
+  its own guards. None has one today, and no rule asks for a reason (security).
+- A skill or command whose `allowed-tools` pre-approves Bash or a file tool in a forked context is not read by
+  rule 6, which reads `.claude/agents/` only (architecture).
 
 ### 0-187. SEC-31 is weighed by what a log line holds today, not by what it is built from
 

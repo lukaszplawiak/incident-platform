@@ -1,7 +1,8 @@
 # ADR-0041: An agent's guard runs in two layers, its frontmatter and a session-level twin keyed on its agent_type, and Factory guards keeps them equal (backlog #0-164)
 
-- **Status:** Accepted (2026-10-25)
-- **Backlog:** #0-164
+- **Status:** Accepted (2026-10-25); amended by #0-186 (2026-10-30): Factory guards also fails an agent with Bash or a
+  file tool and no guard in either layer, unless it is one of the listed autopilot stages
+- **Backlog:** #0-164, #0-186
 - **Date:** 2026-10-25
 - **Author:** human (owner chose A1 + B1 + C1 of the research, a spike first, a new ADR; written up by Claude Code in the owner's session)
 - **Reversible:** yes
@@ -66,12 +67,24 @@ look like the main session's, which a guard must let through. The frontmatter ho
 
 ## Consequences
 
+- **Amended (#0-186, owner, 2026-10-30).** `check-hook-entries.rb`'s rule 4 (the twin check above) compares a guard
+  with its twin, so an agent with neither passed it: the defect-seeder had Bash and Edit unguarded from #0-170 to
+  #0-172. The script's rule 6 fails such an agent:
+  - Bash in `tools:` needs `readonly-bash.sh` or `factory-ops-bash.sh` on a matcher with Bash;
+  - Edit, Write, MultiEdit or NotebookEdit need `write-scope.sh` on a matcher with each of them;
+  - an agent without `tools:` holds them all.
+  The autopilot's own stages are named in `UNGUARDED` with the reason each runs without a scope of its own:
+  implementer, implementer-light, picker and shipper. `settings.autopilot.json`'s denies and session-wide guards
+  (the script's rule 5, the required guards above) bound them. Two definitions with one `name:` fail too: the twins
+  and the exceptions are keyed on it. An exception for no agent, or for one that has its guards, is stale. In the owner's
+  interactive session those four run unbounded: a residual, in README's known gaps. Giving them a frontmatter guard
+  would need a second list of the protected paths in a hook, and was left out.
 - A new agent with a frontmatter guard, or a new guard, needs its twin in both settings files, or Factory guards
   fails and names the line to add. A twin changes with its frontmatter.
 - Every Bash call of any agent runs five more hooks and every write three more (once each: the two files' identical
   commands are deduplicated, spike 3), each ending at `agent_type` for an agent it does not guard.
 - The `factory-ops-bash.sh` twin was added too: the backlog item named `readonly-bash.sh` and `write-scope.sh`, but
-  rule 3 covers every frontmatter guard, and factory-ops' was frontmatter-only as well.
-- Not covered: an agent that should have a guard and has none in its frontmatter (a new agent with Bash and no
-  `readonly-bash.sh`) is the reviewer's to catch; and a Claude Code that drops both frontmatter hooks and
-  `agent_type` at once would leave the session-wide guards only.
+  rule 3 (the script's rule 4) covers every frontmatter guard, and factory-ops' was frontmatter-only as well.
+- Not covered: a Claude Code that drops both frontmatter hooks and `agent_type` at once would leave the session-wide
+  guards only; and whether a guard's arguments are the right scope for its agent is the reviewer's to judge. (An
+  agent with Bash or a file tool and no guard at all is covered since #0-186, above.)

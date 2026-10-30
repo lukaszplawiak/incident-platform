@@ -106,8 +106,9 @@ a new channel, a new combination of powers).
   files keyed on `agent_type`, besides the agent's frontmatter: Claude Code promises frontmatter hooks only to
   agents of the Agent tool, an @-mention or `--agent`, never in `claude -p`, and not to the agents the `Workflow`
   runtime spawns (review round 2 of #0-160, ADR-0041). Backed by: `check-hook-entries.rb` (each frontmatter guard
-  has its twin in both settings files, and the required session-wide guards are wired). Check: a new agent, or an
-  agent's new tool, that needs a guard and has none in its frontmatter, which the check cannot see.
+  has its twin in both settings files, the required session-wide guards are wired, and an agent with Bash or a file
+  tool has its guard unless `UNGUARDED` names it, #0-186). Check: a guard whose scope is wrong for its agent's task
+  (the check sees only that one exists), and a new `UNGUARDED` entry and its reason.
 - **FAC-A05 A weaker layer is named.** A change that removes or weakens a control (a deny becomes an allow with a
   hook, a check becomes a warning) says so in its ADR and in README "Infrastructure Hardening" (CLAUDE.md "Security
   inventory"), naming what now holds it (#0-160: the bare WebFetch deny). Check: every removed deny, check, guard or

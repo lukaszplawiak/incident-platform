@@ -23,15 +23,21 @@
 #      takes no `--agent`; a twin naming an agent whose frontmatter has no such guard is stale;
 #   5. every session-level guard of REQUIRED below is wired in its settings file, on a matcher that covers its
 #      tools (#0-164 AC4): a deleted entry, or one moved to another matcher, would pass the rules above.
+#   6. every agent whose `tools:` holds Bash runs a Bash guard in its frontmatter (readonly-bash.sh or
+#      factory-ops-bash.sh) on a matcher that covers Bash, and every agent holding Edit, Write, MultiEdit or
+#      NotebookEdit runs write-scope.sh on a matcher that covers each of them; an agent whose `tools:` names
+#      no tool (absent, empty) holds them all, and `Bash(git:*)` is Bash. No two definitions share a `name:`.
+#      The only exceptions are the agents of UNGUARDED below, each with its reason, and an exception that names
+#      no agent, or an agent that has its guards after all, is stale (backlog #0-186): rule 4 compares an
+#      agent's guard with its twin, so an agent with neither passed it (the defect-seeder, from #0-170 to #0-172).
 # The YAML and JSON are parsed, not matched as text: a field one indent off, or in flow style, is what Claude
 # Code reads, so it is what this reads. A file that does not parse, a frontmatter that does not close, a hooks
 # block of another shape and a key repeated in one map fail the check. Of a repeated key Ruby keeps the last
 # value, and which one Claude Code's parser keeps (or whether it refuses the file) is not documented: `onFailure`
 # written twice could pass here and not hold there, so no file may repeat a key (review round 2).
 #
-# What it does not see: whether an agent that should have a guard has one in its frontmatter (a new agent with
-# Bash and no readonly-bash.sh is the reviewer's to catch), and a hook a session gets from elsewhere (the user's
-# own settings, a plugin).
+# What it does not see: whether a guard's arguments are the right scope for its agent (a reviewer's to judge), and
+# a hook a session gets from elsewhere (the user's own settings, a plugin).
 # Usage: ruby check-hook-entries.rb [<repository root>] (Factory guards, after test-hook-entries.sh).
 # Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
@@ -67,6 +73,25 @@ REQUIRED = {
     ['guard-migrations.sh', %w[Edit Write MultiEdit NotebookEdit]]
   ]
 }.freeze
+# Rule 6 (backlog #0-186): the guards that bound an agent's Bash and its file tools, and the agents that run without
+# them, each with the reason. These are the autopilot's own stages: "Autopilot only" by their definitions, they run in a
+# session of settings.autopilot.json, whose denies and session-wide guards (REQUIRED, rule 5) bound them instead of a
+# scope of their own; in the owner's interactive session they would run unbounded (README "Infrastructure
+# Hardening", known gaps).
+BASH_GUARDS = %w[readonly-bash.sh factory-ops-bash.sh].freeze
+WRITE_GUARDS = %w[write-scope.sh].freeze
+WRITE_TOOLS = %w[Edit Write MultiEdit NotebookEdit].freeze
+UNGUARDED = {
+  'implementer' => 'writes the item\'s code and tests anywhere but the protected paths; settings.autopilot.json\'s denies, ' \
+                   'guard-write-in-repo.sh, guard-protected-bash.sh, guard-tests.sh and guard-migrations.sh bound it',
+  'implementer-light' => 'the implementer on a lighter model, bounded the same way',
+  'picker' => 'creates the item\'s branch and working files; bounded like the implementer, and guard-factory-scripts.sh',
+  'shipper' => 'pushes the run\'s branch and opens its pull request; bounded like the implementer, and guard-git-push.sh ' \
+               '(the run\'s own branch only)'
+}.freeze
+# Every agent definition read, for rule 6: {name:, where:, tools: [names] or nil (no `tools:`, every tool)}.
+@agents = []
+
 # Every hook entry read, for rules 4 and 5: {owner: 'settings.json' | 'agent:<name>' | nil, where:, event:,
 # tools: [matcher's tools], hook:, args: [words]}.
 @entries = []
@@ -227,6 +252,15 @@ def check_markdown(file, rows, required, agent = false)
     return 0
   end
   owner = agent ? "agent:#{front['name'] || File.basename(file, '.md')}" : nil
+  if agent
+    # A tool is named by what precedes a specifier (`Bash(git:*)` is Bash, review round 1 of #0-186), and `tools:`
+    # that names none (absent, empty, blank) is read as every tool: whatever Claude Code makes of it, the check then
+    # asks for every guard rather than none.
+    tools = front['tools']
+    tools = tools.scan(/(?:[^,(]|\([^)]*\))+/) if tools.is_a?(String)   # commas inside a specifier split nothing
+    tools = tools.is_a?(Array) ? tools.map { |t| t.to_s.sub(/\(.*\z/m, '').strip }.reject(&:empty?) : []
+    @agents << { name: owner.sub('agent:', ''), where: where, tools: tools.empty? ? nil : tools }
+  end
   front.key?('hooks') ? check_hooks(where, front['hooks'], rows, owner) : 0
 rescue SystemCallError => e
   fail!("cannot read #{where}: #{e.message}")
@@ -292,9 +326,46 @@ REQUIRED.each do |file, wants|
   end
 end
 
+# 6. Every agent with Bash or a file tool has its guard, or is one of UNGUARDED (backlog #0-186).
+guarded = 0
+@agents.each do |a|
+  tools = a[:tools] || (['Bash'] + WRITE_TOOLS)
+  mine = @entries.select { |e| e[:owner] == "agent:#{a[:name]}" && e[:event] == 'PreToolUse' }
+  writes = tools & WRITE_TOOLS
+  missing = []
+  if tools.include?('Bash') && mine.none? { |e| BASH_GUARDS.include?(e[:hook]) && e[:tools].include?('Bash') }
+    missing << "Bash guard (#{BASH_GUARDS.join(' or ')}) on a matcher with Bash"
+  end
+  if !writes.empty? && mine.none? { |e| WRITE_GUARDS.include?(e[:hook]) && (writes - e[:tools]).empty? }
+    missing << "#{WRITE_GUARDS.join(' or ')} on a matcher with #{writes.join(', ')}"
+  end
+  what = a[:tools] ? "holds #{(tools & (['Bash'] + WRITE_TOOLS)).join(', ')}" : 'declares no tools: (so holds every tool)'
+  if UNGUARDED.key?(a[:name])
+    fail!("#{a[:where]}: has its guards, so its entry in UNGUARDED (check-hook-entries.rb) is stale") if missing.empty?
+  elsif missing.empty?
+    guarded += 1 unless (tools & (['Bash'] + WRITE_TOOLS)).empty?
+  else
+    fail!("#{a[:where]}: #{what} but its frontmatter has no #{missing.join(', and no ')}: add the guard, or name the " \
+          'agent in UNGUARDED with the reason it runs without one (backlog #0-186)')
+  end
+end
+# One name, one definition: rule 4's twins (agent_type) and UNGUARDED are keyed on it, so a second file reusing
+# `shipper` would pass as excepted (review round 1 of #0-186).
+@agents.group_by { |a| a[:name] }.each do |name, defs|
+  next if defs.size == 1
+
+  fail!("#{defs.map { |d| d[:where] }.join(' and ')} are both the agent #{name}: one name, one definition")
+end
+UNGUARDED.each_key do |name|
+  next if @agents.any? { |a| a[:name] == name }
+
+  fail!("UNGUARDED (check-hook-entries.rb) names #{name}, which is no agent of .claude/agents/: a stale exception")
+end
+
 if @failures > 0
   puts "#{@failures} hook entry problem(s)"
   exit 1
 end
 puts "Hook entries: all #{total} block when their hook fails, each a hook of the fail-closed table; " \
-     "#{twins} session-level twin(s) match the agents' guards, and the #{REQUIRED.values.flatten(1).size} required guards are wired."
+     "#{twins} session-level twin(s) match the agents' guards, the #{REQUIRED.values.flatten(1).size} required guards are wired, " \
+     "and #{guarded} agent(s) with Bash or a file tool run their guards (#{UNGUARDED.size} autopilot stage(s) excepted)."
