@@ -106,6 +106,36 @@ A run that had gone through would have had the panel review under older agents a
        review unusual; giving the prompt an autopilot item's shape would mean inventing one.
        More than unusual (#0-185, 2026-10-28): the seeded tree differs from `main` in the defect alone, and the
        `Revert` holds the original lines. In #0-115's `factory.md` measure, every reviewer read one of the two.
+       **Checked and decided (#0-185, owner, 2026-10-29).** The scan:
+       - What was read: the Bash calls of the 122 reviewers of the 20 `/seed-bugs` runs before F1 (P-10…P-12 and
+         the security, architecture, general, migration, docs and k8s series), each a `git diff/show/log/cat-file/
+         rev-list/blame` that names `main`, `origin/main`, `HEAD~`/`^`, the base's parent, the base without
+         `--stat`, or another commit.
+       - 116 read only `<base>...HEAD` and the rule files from `origin/main`.
+       - 4 read a commit's `--stat` or message: file names and a subject that the diff shows anyway.
+       - 2 reached more, and neither was the expected dimension's:
+         - general in `arch-after-p07` read the host's patch of one file (`git show aace4118 -- …`);
+         - architecture in `mig-after-p13` listed the files that differ from `main` (`git diff origin/main HEAD
+           --stat`), which names the planted file but not its lines.
+       - F1 (`/review 27` by hand, the plant uncommitted, an Owner-only diff) went the other way: 4 of 4. Most
+         likely because of its path: a manual review of an Owner-only change compares it with `main`.
+       Decided:
+       - Each series' transcripts are scanned this way by hand before its rows land (no script: as above, their format
+         is not a contract). A row whose expected reviewer reached the original is marked in its "Caught by expected"
+         cell, and one whose other reviewer did in its "Also caught by" cell, as #0-179 marks a relayed command.
+       - `.ai/rules/audit.md` reads a marked row as an upper bound, not a hard fact.
+       - A measure by hand commits the plant into the change (as `seed-fold.sh` does) and gives the panel the
+         autopilot prompt (`Branch … mergeBase: <the revert>. round: 1.`), not a manual `/review` of uncommitted
+         changes. The prompt also says that `factory.md` applies (the diff touches Owner-only paths): an autopilot
+         item never does, so a reviewer must not read the prompt's shape as a reason to leave it out.
+       - The way to close it: the panel runs in a clone with no history of the change and `origin/main` set to the
+         revert, as SWE-bench removed the future commits from its images. It is not built: the Workflow's agents, their
+         hooks and settings run in the project directory, so it means changes to `seed-bugs.js` and the hooks. It is
+         built once a scan finds an expected reviewer that reached the original.
+       - Rejected:
+         - refusing those revisions in `readonly-bash.sh`: it leaks (`cat-file`, `rev-list`, the reflog), as #0-182's
+           guard did, and the procedure itself reads `origin/main`;
+         - planting only into an unmerged change: it cannot be replayed, and the host is not yet reviewed.
      - `.ai/runs/benchmark/results.md` is in reach of the reviewers during a series, and says a measure is running.
      - **The message that started the run (found 2026-10-26, in the `security.md` series of #0-115).** The Workflow
        tool starts every agent's first message with `[Workflow harness — user request]`, which holds the user's

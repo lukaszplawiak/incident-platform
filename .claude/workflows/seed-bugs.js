@@ -146,9 +146,12 @@ async function measure() {
   }
   // The Record phase matches findings to the file and line, and the panel reviews the branch: both must be this run's
   // (review round 1 of #0-170: without a line every catch read as a miss), and the file one of the change's. The rule
-  // reaches seed-record.sh's command line (#0-177), so it must be a rule id and nothing else.
+  // reaches seed-record.sh's command line (#0-177), so it must be a rule id and nothing else (FAC-A02's letter after
+  // the dash too, #0-185, as seed-record.sh and check-rule-claims.rb read it). A FAC- truth is not measured here
+  // today: the panel prompt below does not say that factory.md applies, and seed-branch.sh refuses an Owner-only host,
+  // so such a row would read as a miss. A factory.md measure is run by hand (ADR-0044 decision 6).
   if (truth.branch !== seed.branch || !seed.files.includes(truth.file) || typeof truth.line !== 'number'
-      || !/^[A-Z][A-Z0-9]*-[0-9]+$/.test(String(truth.rule)) || !PANEL.includes(truth.dimension)) {
+      || !/^[A-Z][A-Z0-9]*-[A-Z]?[0-9]+$/.test(String(truth.rule)) || !PANEL.includes(truth.dimension)) {
     return finish({ outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` })
   }
   // The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the

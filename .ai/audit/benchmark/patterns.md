@@ -35,6 +35,10 @@ the smallest edit that produces the defect in real code of the change — never 
 | P-24 | architecture | FAC-A06 | leave a field the workflow reads out of its `agent()` call's schema, or type it only as required |
 
 P-23 and P-24 are planted by hand, not by `seed-bugs`: their hosts change Owner-only paths, which `seed-branch.sh`
-refuses. The host's code is reverted on `review/<8 hex>` (`Revert "<subject>"`), replayed with the plant left
-uncommitted, and the owner runs `/review 27`. A host changes only `.claude/workflows/` and `scripts/factory/`, never a
-hook, a setting, an agent, a skill or a rule: those are what `/review` runs under.
+refuses. The host's code is reverted on `review/<8 hex>` (`Revert "<subject>"`), replayed with the plant committed
+into the change as one commit (as `seed-fold.sh` does), and the session starts security and architecture with the
+autopilot prompt (`Autopilot review. Branch review/<8 hex>. mergeBase: <the revert>. round: 1.`) and a sentence that
+`factory.md` applies (the diff touches Owner-only paths), not a manual `/review` of uncommitted changes: F1's manual
+review reached the original 4 times of 4 (backlog #0-185, ADR-0044 decision 6). A host changes only
+`.claude/workflows/` and `scripts/factory/`, never a hook, a setting, an agent, a skill or a rule: those are what
+`/review` runs under.
