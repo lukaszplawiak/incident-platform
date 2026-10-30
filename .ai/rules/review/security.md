@@ -111,7 +111,15 @@ the attack scenario: a specific, concrete way this could be exploited or trigger
 - **SEC-31 No secret or raw payload is logged or returned.** A token, secret, password, key or raw payload reaches no
   log line (at any level), exception message, audit metadata, dead-letter reason or anything a client can read; a
   provider's text goes to the log only, never to a tenant-readable record (#0-93). Check: a new log statement,
-  exception message or reason built from a credential, a request or a payload.
+  exception message or reason built from a credential, a request, a payload, or a message the platform did not
+  write: a database, driver, parser or client exception's, or one wrapped in the platform's own exception, quotes
+  what its query, call or input held. Such a line is the finding whatever it carries today: the next change that
+  binds a secret there turns it into a leak no review of that change looks for. The platform's own content-free
+  messages are kept; any other exception is named by its type and frame, as `KafkaFailures.reason` and `describe`
+  do (#0-96, backlog #0-187). Not this rule's: the throwable passed to a logger, whose message reaches
+  `error.message` and `error.stack_trace` as the library wrote it (README "Infrastructure Hardening", known gap,
+  backlog #0-188), unless the change itself puts a credential or payload into what that exception quotes (a URL or
+  query a client names in its I/O error, a header it echoes).
 - **SEC-32** retired — merged into SEC-30 (the named secrets are read from configuration), 2026-10-26.
 - **SEC-33 A gitignored secret file never reaches a jar or an image** (backlog #0-100, #0-141, ADR-0030).
   `.gitignore` keeps a developer's secret files out of git, not out of a build: Maven packages whatever is

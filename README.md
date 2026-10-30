@@ -1023,7 +1023,7 @@ Open items from the audit and earlier, most important first within each area. Ea
     start otherwise, unless a deployment outside this repository sets `PLATFORM_LOGGING_PLAINTEXT` on purpose
     (logged as a warning at every start). auth-service's break-glass command logs JSON too.
     An exception's message still reaches the log as the library wrote it (`error.message`,
-    `error.stack_trace`): escaped, not filtered.
+    `error.stack_trace`): escaped, not filtered (backlog #0-188).
   - The MFA recovery of a customer tenant's only admin (#0-90) verifies the person by procedure only: the platform
     holds no contact of the tenant independent of the admin's own mailbox, and checks no DNS record itself:
     backlog #0-98. Whoever holds the admin's mailbox can cancel every such recovery, and whoever holds the
