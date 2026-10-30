@@ -1,6 +1,6 @@
 # ADR-0047: The defect-seeder edits the seed run's change and nothing else, and a factory script makes the commit; the hooks read the run from `.ai/runs/SEED`
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-30)
 - **Backlog:** #0-172
 - **Date:** 2026-10-30
 - **Author:** human (owner chose option C of the research; drafted by Claude Code in the owner's session)
