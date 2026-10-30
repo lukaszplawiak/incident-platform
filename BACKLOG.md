@@ -123,7 +123,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-186](#0-186-factory-guards-cannot-see-an-agent-with-bash-or-edit-and-no-guard) | Factory guards cannot see an agent with Bash or Edit and no guard | security | Low | Open |
-| [0-187](#0-187-sec-31-is-weighed-by-what-a-log-line-holds-today-not-by-what-it-is-built-from) | SEC-31 is weighed by what a log line holds today, not by what it is built from | security | Medium | In progress |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -3769,8 +3768,9 @@ AC2. README's known gap sentence goes.
 
 ### 0-187. SEC-31 is weighed by what a log line holds today, not by what it is built from
 
-**Type:** security · **Priority:** Medium · **Status:** In progress (2026-10-30). From #0-179's blind re-run of P-04
-(`sec-p04-blind` on `aace4118`, 2026-10-30).
+**Type:** security · **Priority:** Medium · **Status:** Done, PRs #555 and #556 (kept for the decision history: the
+rule's three wordings across two review rounds, and the throwable split out to #0-188). From #0-179's blind re-run of
+P-04 (`sec-p04-blind` on `aace4118`, 2026-10-30).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** .ai/rules/review/security.md (owner), .ai/audit/benchmark/results.md (the re-run's row)
 
