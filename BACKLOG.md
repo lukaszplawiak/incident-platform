@@ -119,7 +119,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | In progress |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
@@ -3578,7 +3577,7 @@ measurement data (a benchmark row) must be in the data the audit's script reads,
 
 ### 0-180. `/seed-bugs` measures catches, never false alarms
 
-**Type:** design · **Priority:** Low · **Status:** In progress (2026-10-31). The owner's question on P-07 of #0-115's `architecture.md`
+**Type:** design · **Priority:** Low · **Status:** Done, PRs #559, #560, #561 (kept for the decision history). The owner's question on P-07 of #0-115's `architecture.md`
 series (2026-10-26): the code has deliberate exceptions to a rule, so does the measure check that the panel leaves
 them alone?
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
@@ -3666,8 +3665,14 @@ clean runs.
   first proposed in `seed-record.sh`, moved to `seed-check.sh` by the owner since a refusal after the panel would
   have left a measure under the wrong rule. 12 cases, 9 mutations caught. ADR-0044 decision 7 says why a finding
   with no rule id from another dimension is raised (nb 2).
-- Left for after the merge: the first series (C-01 on a host that touches a `@Scheduled` job, e.g. `aace4118`'s
-  `OperatorTenantBootstrap`, rotated with a defect run).
+- First series (2026-10-31, after PR #560, both blind, started from a notification turn, scanned clean), on
+  `aace4118`'s `OperatorTenantBootstrap`:
+  - `clean-c01-r2` (C-01): no false alarm. architecture approved the per-replica gauge job and said it meets ARC-23,
+    and general raised GEN-01 (no test). Landed in `.ai/audit/benchmark/clean.md`.
+  - `arch-p07-ctl` (P-07, the defect control on the same file and rule): caught and blocked by architecture under
+    ARC-23 at the plant, also by general, security and docs. Landed in `.ai/audit/benchmark/results.md`.
+  C-02 (ARC-29) and C-03 (SEC-08) are in `patterns.md` for the next series; AC1 asks for the patterns, not for a run of
+  each.
 
 ### 0-181. `/seed-bugs` scores a catch by one line, and never compiles the plant
 
@@ -3682,7 +3687,9 @@ clean runs.
    it (`seed-bugs.js`, `near`). Some defects have two places: P-17 is a method's code and its stale Javadoc. In
    `docs-after-p17` the seeder named the code's line (266), docs blocked the Javadoc (257) under DOC-11, and the row
    says "not caught". The same holds for any pattern where a rule's finding points at the other half (a doc against
-   code, a test against the code it pins, a migration against its entity).
+   code, a test against the code it pins, a migration against its entity). A plant longer than the window has the
+   same gap: in `clean-c01-r2` (#0-180, 2026-10-31) the seeder named the new method's line (152), performance noted
+   the job at its Javadoc (145) and the row does not name it as raised.
 2. Nothing compiles the plant. In `docs-after-p17` the `private static` method read the instance field `id`, so
    incident-service would not compile; security and architecture said so. The panel then measures a defect easier to
    see than the one in the pattern, and a reviewer may block for the build, not for the rule.
