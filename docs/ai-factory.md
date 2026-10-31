@@ -254,7 +254,10 @@ The agents' instructions are not a boundary; these are, each with its limit:
   confirms the tree after the seeder (on the branch at the change's commit, its edit uncommitted and in the change's
   files only, and its rule and dimension its pattern's row of `patterns.md` on `origin/main`, #0-180; it returns the
   edit's hunks, the run's ground truth, with at most two unedited places the seeder names, #0-181), and
-  `scripts/factory/seed-fold.sh` makes the change and the edit one commit before the panel runs.
+  `scripts/factory/seed-fold.sh` makes the change and the edit one commit before the panel runs. Then
+  `scripts/factory/seed-compile.sh` compiles the modules the edit reaches, offline, with their tests (`-am`, and `-amd`
+  for `shared`; not for an edit that changes a `pom.xml` or holds no `.java`): a plant that does not build fails the run
+  with the compiler's first error, never reaching the panel (#0-181, ADR-0044 decision 9).
   Nothing the panel reads names the run (#0-177): the branch is `review/<8 hex>` (derived from the pattern and the run
   id), the base says `Revert "<subject>"`, and the change and the defect are one commit, with the run's reflog entries
   dropped (the branch's, and HEAD's above the switch onto it; the rest of your HEAD reflog stays). The catalogue

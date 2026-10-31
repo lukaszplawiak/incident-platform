@@ -40,6 +40,9 @@ if [ "$goal" = dependency:tree ]; then
     exit 0
 fi
 echo "[INFO] stub verify $mods"
+# The gate's Maven call is _common.sh's factory_mvn (backlog #0-181): the environment's options never reach Maven.
+[ -n "${MAVEN_OPTS:-}${JAVA_TOOL_OPTIONS:-}" ] && { echo "[ERROR] the environment's options reached Maven"; exit 1; }
+[ "$mode" = nodocker ] && { echo "[ERROR] Could not find a valid Docker environment"; echo "BUILD FAILURE"; exit 1; }
 [ "$mode" = fail ] && { echo "[ERROR] Tests run: 3, Failures: 1"; echo "BUILD FAILURE"; exit 1; }
 [ "$mode" = stale ] && exit 0
 [ "$mode" = touch ] && echo changed >> README.md
@@ -129,6 +132,10 @@ artifact "the dependency tree was written and is named" '.dependencyTree != null
 tree=$(jq -r '.dependencyTree' "$(printf '%s' "$LAST" | jq -r .artifact)")
 if grep -q 'notification-service' "$tree"; then ok "the dependency tree file holds the modules"; else fail "dependency tree file '$tree' is empty or wrong"; fi
 
+LAST_OPTS=$(MAVEN_OPTS=-DskipTests JAVA_TOOL_OPTIONS=-Dx MVN_MODE=ok FACTORY_BASE_REF=main scripts/factory/run-tests.sh 0-1 1-10)
+if jq -e '.status == "pass"' <<<"$LAST_OPTS" >/dev/null; then ok "MAVEN_OPTS and JAVA_TOOL_OPTIONS do not reach Maven (factory_mvn, #0-181)"
+else fail "the environment reached Maven: $LAST_OPTS"; fi
+expect "no Docker: stop for a human, not fixable (_common.sh's MAVEN_ENV_ERRORS)" '.status == "stop" and .artifact == null' nodocker 0-1 1-11
 expect "a green build whose reports hold failures (testFailureIgnore) passes" '.status == "pass"' ignored 0-1 1-9
 artifact "the artifact reports the failures from the reports, not the exit code" '.totals == {tests:7, failures:1, errors:1, skipped:1}'
 

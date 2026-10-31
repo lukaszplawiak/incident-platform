@@ -73,6 +73,8 @@ const ANSWERS = {
     hunks: { type: 'array', items: { type: 'object', additionalProperties: false,
       properties: { file: { type: 'string' }, start: { type: 'number' }, end: { type: 'number' } } } } }),
   'seed-fold.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, head: SHA_FIELD }),
+  'seed-compile.sh': answerOf({ ok: { type: 'boolean' }, compiled: { type: 'boolean' }, modules: { type: 'string' },
+    reason: { type: 'string' } }),
   'seed-record.sh': answerOf({ appended: { type: 'boolean' }, reason: { type: 'string' }, file: { type: 'string' } }),
   'return-to-main.sh': answerOf({ onMain: { type: 'boolean' }, branch: { type: 'string' }, left: { type: 'string' },
     reason: { type: 'string' } }),
@@ -134,6 +136,7 @@ if (seed.ok !== true || seed.branch !== BRANCH || !SHA.test(String(seed.base))
 // run needs the seeder to say `kind: "clean"` itself (review round 2): one that left it out may have planted a defect,
 // and a dimension that rightly blocked it would read as a false alarm. A defect run may leave it out.
 const CLEAN = /^C-[0-9]+$/.test(params.pattern)
+const compiledOf = (built) => (built.compiled ? { compiled: true } : { compiled: false, notCompiled: String(built.reason ?? 'no reason given').slice(0, 200) })
 async function measure() {
   const truth = await as('defect-seeder', [
     `Pattern ${params.pattern}. Run id ${params.runId}. The branch ${seed.branch} is checked out: it holds merged change ${params.commit}`,
@@ -208,6 +211,17 @@ async function measure() {
   if (fold?.ok !== true || !SHA.test(String(fold.head))) {
     return finish({ outcome: 'FAILED', reason: `the seeder's edit was not folded: ${String(fold?.reason ?? JSON.stringify(fold)).slice(0, 300)}` })
   }
+  // Fixed (backlog #0-181): nothing compiled the plant. In docs-after-p17 the seeder's static method read an instance
+  // field, incident-service did not build, and two reviewers said so: the panel was measured on a defect easier to see
+  // than the pattern's. seed-compile.sh compiles the modules the edit reaches (offline, with their tests; skipped for a
+  // POM or no Java). A plant that does not build is the seeder's mistake, FAILED with the compiler's first error (not
+  // SKIPPED, #0-170); an environment that cannot build is FAILED with its cause. Never a retry (ADR-0044 decision 9).
+  const built = await ops('seed-compile.sh', [BRANCH, seed.head, fold.head], 'seed compile')
+  if (built?.ok !== true || typeof built.compiled !== 'boolean') {
+    return finish({ outcome: 'FAILED', reason: `the plant does not build: ${String(built?.reason ?? built?.error ?? JSON.stringify(built)).slice(0, 300)}` })
+  }
+  // Whether the plant was compiled reaches the outcome (FAC-A03, review round 1): a POM plant (P-20/P-21) or Java outside a
+  // module is measured uncompiled, and the owner who lands the row says so in its note.
 
   phase('Review')
   // The reviewers see the merged change plus the planted defect, as one change: base = the seed branch's base commit.
@@ -260,12 +274,12 @@ async function measure() {
     falseAlarmBy: answered.filter(Boolean).filter(falseAlarm).map((v) => v.dimension),
     raisedBy: answered.filter(Boolean).filter((v) => !falseAlarm(v) && [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension),
     blockingElsewhere: answered.filter(Boolean).filter((v) => v.blocking.some((f) => !near(f))).map((v) => v.dimension),
-    noAnswer, onlyAtAlso,
+    noAnswer, onlyAtAlso, ...compiledOf(built),
   } : {
     runId: params.runId, pattern: params.pattern, rule: truth.rule, expected: truth.dimension,
     caughtByExpected: caughtBy.includes(truth.dimension), caughtBy, blockingByExpected:
       answered.filter(Boolean).some((v) => v.dimension === truth.dimension && stops(v)),
-    noAnswer, onlyAtAlso,
+    noAnswer, onlyAtAlso, ...compiledOf(built),
   }
   // Back on main before the row is written, so a run never ends on its branch. The row goes to the gitignored
   // .ai/runs/benchmark/results.md (backlog #0-177): it never dirties main, so the next run needs no commit first.

@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Maven settings of the autopilot's test gate (scripts/factory/run-tests.sh passes it as both -s and -gs).
+  Maven settings of the factory's Maven calls: the autopilot's test gate (scripts/factory/run-tests.sh) and the compile
+  of a /seed-bugs plant (scripts/factory/seed-compile.sh, backlog #0-181) pass it as both -s and -gs, through
+  _common.sh's factory_mvn.
   Empty on purpose: Maven's defaults (Maven Central, ~/.m2/repository). The gate must not read
   ~/.m2/settings.xml or the distribution's conf/settings.xml, which code run by an agent could rewrite (an active profile setting
   maven.test.skip, a mirror serving altered artifacts). Lives under scripts/factory/, so a branch that

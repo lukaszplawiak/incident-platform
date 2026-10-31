@@ -4,7 +4,7 @@
   nothing since #0-172 (ADR-0047, 2026-10-30): where this ADR folds "the seeder's commit", the fold now takes its edit;
   decision 6's scans by hand are helped by a script and a run starts from a turn with no user message, since #0-179
   (2026-10-30); decision 7 (clean runs) added by #0-180 (2026-10-31) and amended after `clean-c01` (2026-10-31);
-  decision 8 (the truth is the edit) added by #0-181 (2026-10-31)
+  decision 8 (the truth is the edit) and decision 9 (the plant is compiled) added by #0-181 (2026-10-31)
 - **Backlog:** #0-173, #0-177, #0-179, #0-180, #0-181
 - **Date:** 2026-10-25
 - **Author:** human (owner chose F2 of the research, then the proposals of review round 1; for #0-177, 1a with a script,
@@ -251,6 +251,28 @@ A run that had gone through would have had the panel review under older agents a
      read both, and that a catch only at an `also` place rests on the seeder's word.
    - Not taken: a wider window (no reason in it, and more of the host's code falls into it) and a list of places from
      the seeder alone (#0-181's first sketch: the whole truth on an agent's word again).
+9. **The plant is compiled before the panel (#0-181, owner, 2026-10-31).** Nothing built a plant before: in
+   `docs-after-p17` the seeder's `private static` method read the instance field `id`, so incident-service did not
+   compile, security and architecture said so, and the panel was measured on a defect easier to see than the
+   pattern's. The seeder cannot build (its Bash is read-only git, ADR-0047), so a factory script does.
+   - `scripts/factory/seed-compile.sh`, through factory-ops after `seed-fold.sh`: `test-compile` offline (`-o`) of the
+     modules the edit reaches (`-am`; `-amd` too when it reaches `shared` or `service-parent`, as `needs_all_modules`
+     reads it: a broken signature in `shared` breaks the services, owner), through `_common.sh`'s `factory_mvn`, the
+     test gate's hardened call, so both strip one list. About 10 s for every module from cold (2026-10-31).
+   - Only when the edit holds a `.java` file and no `pom.xml`: the k8s patterns plant in a POM, and an offline build
+     of a POM made wrong on purpose would measure the build, not the panel.
+   - A compiler error ends the run FAILED with its first error: the seeder's mistake, not a pattern that does not fit
+     (FAILED, not SKIPPED, as #0-170 decided). An environment error (`_common.sh`'s `MAVEN_ENV_ERRORS`, a dependency
+     not in the local repository offline among them) ends it FAILED with its cause. The log stays in `.ai/runs/` on a
+     failure and is removed on success, so nothing of the run waits there for a reviewer. A first compiler error in a
+     file the seeder did not edit is named as outside its edit (a caller the plant broke, or a host that no longer
+     compiles on `main`), not as the plant's (review round 1).
+   - A run measured without a compile (a POM plant, no Java) says so in its outcome (`compiled: false`, `notCompiled`
+     with the reason; FAC-A03, review round 1): the row's columns are unchanged, and the landing pull request's note
+     names such runs.
+   - Not taken: the full test gate (minutes and Docker per run, and a defect the tests catch would never reach the
+     panel in the autopilot) and a retry by the seeder (a second plant shaped by the compiler is not the pattern's
+     smallest realistic edit).
 
 ## Alternatives considered
 
@@ -278,7 +300,8 @@ A run that had gone through would have had the panel review under older agents a
 - A measure needs a recent commit: one whose code still applies to `main`. The owner picks it (#0-173's AC3 uses
   `76379e80`).
 - A series takes one pull request for its rows, after its last run (#0-177; before, a commit between each pair of runs).
-- Four factory scripts more (`seed-branch.sh`, `seed-check.sh`; `seed-fold.sh`, `seed-record.sh` from #0-177). They are tested in Factory guards
+- Five factory scripts more (`seed-branch.sh`, `seed-check.sh`; `seed-fold.sh`, `seed-record.sh` from #0-177;
+  `seed-compile.sh` from #0-181). They are tested in Factory guards
   (`test-seed-branch.sh`), and `factory-ops` runs them only while they are identical to `origin/main`, so they work
   from their merge on.
 - The seeder still writes on the shared tree without a write scope (#0-172): `seed-check.sh` catches the result, not the

@@ -38,6 +38,9 @@ refusal, verbatim>"}` (backlog #0-170: a refusal reported as a skip measured not
 3. Leave the edit uncommitted. The workflow checks the tree after you (`scripts/factory/seed-check.sh`): on that
    branch, at the change's commit, your edit in the listed files only; anything else fails the run. Then it makes the
    change and your edit one commit, under the change's subject (`seed-fold.sh`, #0-177), so the panel sees one change.
+   It then compiles the modules your edit reaches, with their tests (`seed-compile.sh`, backlog #0-181), and fails the
+   run if the plant does not build: the defect is in what the code does, never a compiler error a reviewer could block
+   for instead. You cannot build it yourself, so read what your edit uses (a static context, the types, the imports).
 4. Answer with the ground truth, which the workflow keeps outside the branch:
 
 ```json
