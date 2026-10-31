@@ -28,6 +28,7 @@
 | sec-p05-blind | P-05 | SEC-10 | security | yes | yes | general, docs | — |
 | sec-p04-blind-r2 | P-04 | SEC-31 | security | yes | yes | general | — |
 | mig-after-p19 | P-19 | MIG-05 | migration | yes | no (the plant is within MIG-05, see note) | architecture, performance | — |
+| arch-p07-ctl | P-07 | ARC-23 | architecture | yes | yes | general, security, docs | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -136,3 +137,10 @@ EXCLUSIVE` on `tenants` and the nine tables, then backfills the missing tenants,
 with a check that no row violates it" of MIG-05's second branch, and the rule allows it. The host is the miss, not the
 panel. P-19 needs a key on an existing table whose rows nothing has checked. The row is kept as the record of the
 run, not as a measure of MIG-05: no violation was planted, so its "no" in "Blocking" is not a miss.
+
+arch-p07-ctl (2026-10-31, P-07 on `aace4118`, #0-180) is the defect control run of the first clean series: the same
+host, file and rule as clean-c01-r2 (`clean.md`), so a panel that only learned to leave `@Scheduled` jobs alone would
+show here. It was blind (started from a notification turn, scanned clean). The seeder removed `@SchedulerLock` from
+`scheduledReconcile`, a job that writes (`OperatorTenantBootstrap.java:112`). architecture blocked it under ARC-23 at
+that line; general (GEN-24) and docs (DOC-11, the Javadoc still promising the lock) blocked near it; security
+noted it. Unlike arch-after-p07, nobody read the host's original.
