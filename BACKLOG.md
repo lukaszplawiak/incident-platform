@@ -119,7 +119,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | In progress |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
@@ -3676,8 +3675,8 @@ clean runs.
 
 ### 0-181. `/seed-bugs` scores a catch by one line, and never compiles the plant
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress (2026-10-31). Found in #0-115's `docs.md` series (2026-10-27,
-`docs-after-p17`).
+**Type:** ci · **Priority:** Medium · **Status:** Done, PRs #562, #563, #564 (kept for the decision history: A3 and B1, ADR-0044
+decisions 8 and 9). Found in #0-115's `docs.md` series (2026-10-27, `docs-after-p17`).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/workflows/seed-bugs.js, .claude/agents/defect-seeder.md, scripts/factory/seed-check.sh,
 .github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh; for the compile step also a new
@@ -3770,6 +3769,9 @@ AC3. P-17 run again on `fc368943` after the change records docs as caught withou
   - Rule gap (architecture): `audit.md` does not say that rows before this step may have been measured on a plant that
     did not build (`docs-after-p17`). Recorded here, no item.
   - #0-181 stays In progress until AC3 (P-17 on `fc368943`, a new run id).
+- **AC3 (2026-10-31, `docs-p17-r2`, blind, scanned clean):** the plant compiled; docs caught and blocked it under DOC-11
+  at line 266, inside the seeder's edit, with no hand reading (`onlyAtAlso` empty); general and architecture also
+  caught it. Row and note in `.ai/audit/benchmark/results.md`.
 
 ### 0-182. The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option
 

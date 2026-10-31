@@ -29,6 +29,7 @@
 | sec-p04-blind-r2 | P-04 | SEC-31 | security | yes | yes | general | — |
 | mig-after-p19 | P-19 | MIG-05 | migration | yes | no (the plant is within MIG-05, see note) | architecture, performance | — |
 | arch-p07-ctl | P-07 | ARC-23 | architecture | yes | yes | general, security, docs | — |
+| docs-p17-r2 | P-17 | DOC-11 | docs | yes | yes | general, architecture | — |
 
 perf-after-p12 (2026-10-25, P-12 on `47b95294`) was recorded by hand from the run's journal: its Record phase stopped
 on an error before writing the row (backlog #0-176). The seeder replaced the paged query of
@@ -144,3 +145,11 @@ show here. It was blind (started from a notification turn, scanned clean). The s
 `scheduledReconcile`, a job that writes (`OperatorTenantBootstrap.java:112`). architecture blocked it under ARC-23 at
 that line; general (GEN-24) and docs (DOC-11, the Javadoc still promising the lock) blocked near it; security
 noted it. Unlike arch-after-p07, nobody read the host's original.
+
+docs-p17-r2 (2026-10-31, P-17 on `fc368943`, #0-181's AC3) reran docs-after-p17 after the truth became the seeder's
+edit and the plant is compiled before the panel. It was blind (started from a notification turn, scanned clean). The
+seeder made the same change: `Incident.minutesBetween` throws instead of returning `null` (the edit, line 266), and
+named the stale Javadoc it left (line 257) in `also`. This time the plant compiled (`seed-compile.sh`, incident-service).
+docs blocked it under DOC-11 at line 266, inside the edit, so the row needs no hand reading and `onlyAtAlso` is empty;
+general blocked it at the same line (GEN-30, GEN-24) and architecture noted it there. Nobody blocked for the build, as
+security and architecture had in docs-after-p17.
