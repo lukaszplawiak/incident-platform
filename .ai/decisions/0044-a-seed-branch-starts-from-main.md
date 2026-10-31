@@ -3,8 +3,9 @@
 - **Status:** Accepted (2026-10-25); decision 5 amended and decision 6 added by #0-177 (2026-10-26); the seeder commits
   nothing since #0-172 (ADR-0047, 2026-10-30): where this ADR folds "the seeder's commit", the fold now takes its edit;
   decision 6's scans by hand are helped by a script and a run starts from a turn with no user message, since #0-179
-  (2026-10-30); decision 7 (clean runs) added by #0-180 (2026-10-31) and amended after `clean-c01` (2026-10-31)
-- **Backlog:** #0-173, #0-177, #0-179, #0-180
+  (2026-10-30); decision 7 (clean runs) added by #0-180 (2026-10-31) and amended after `clean-c01` (2026-10-31);
+  decision 8 (the truth is the edit) added by #0-181 (2026-10-31)
+- **Backlog:** #0-173, #0-177, #0-179, #0-180, #0-181
 - **Date:** 2026-10-25
 - **Author:** human (owner chose F2 of the research, then the proposals of review round 1; for #0-177, 1a with a script,
   A, A+ and B2 of its research; written up by Claude Code in the owner's session)
@@ -229,6 +230,27 @@ A run that had gone through would have had the panel review under older agents a
      autopilot it stops the item as a blocking finding does.
    - A clean run's transcripts are scanned before its row lands, as a defect run's are: `seed-scan.sh` takes a `C-`
      pattern, and a relayed `C-` id is a tell (review round 1).
+8. **The ground truth is the seeder's edit, not its one line (#0-181, owner, 2026-10-31).** A finding counted as at the
+   plant within 5 lines of the line the seeder named. A plant longer than that window lost the rest of it: in
+   `clean-c01-r2` performance noted the per-replica job at its Javadoc, seven lines above the named line, and the row
+   does not name it; in a clean run a stop there would not have counted as a false alarm, the error the measure exists
+   to find. And a defect with an unedited half lost that half: in `docs-after-p17` docs blocked the stale Javadoc nine
+   lines above the code the seeder named, and the row says "not caught" (read by hand).
+   - `seed-check.sh` returns the edit's hunks (`git diff -U0 HEAD`, line numbers of the tree the panel reads; a
+     deletion is the line where it was), and they are the truth: a finding within 5 lines of any hunk is at the plant.
+     The seeder's line must lie in one of them, or the run fails: its word and the tree disagree. Like the kind
+     (decision 7) and the rule (`seed-check.sh`, #0-180), the truth comes from the tree, not from the seeder's answer,
+     as Defects4J's is the lines its fix changed.
+   - The half the seeder leaves unedited on purpose (P-17's stale Javadoc, P-18's missing README line) is the one word
+     still taken: at most two places in `also`, each a regular file at HEAD (no symlink, no directory) and a line it
+     has (`seed-check.sh`), never inside the edit, within 5 lines too. An unrelated place outside the edit cannot be
+     told from a right one: the cap of two is the only bound there (review round 1). The outcome names the dimensions
+     that reached only such a place (`onlyAtAlso`), for the owner reading the row; the row's columns are unchanged, and
+     the row's note in the landing pull request names them.
+   - Rows from #0-181 on are scored on the edit; the rows before it on the one line. `.ai/rules/audit.md` says how to
+     read both, and that a catch only at an `also` place rests on the seeder's word.
+   - Not taken: a wider window (no reason in it, and more of the host's code falls into it) and a list of places from
+     the seeder alone (#0-181's first sketch: the whole truth on an agent's word again).
 
 ## Alternatives considered
 

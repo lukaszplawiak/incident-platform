@@ -228,6 +228,14 @@ and never merged. A row whose "Caught by expected" cell carries a note, such as 
 original in reach` (#0-185), is an upper bound, not a hard fact: count it as caught, never let it raise a
 recommendation's confidence. The same note in "Also caught by" applies to that reviewer only (ADR-0044 decision 6).
 
+From #0-181 on (ADR-0044 decision 8), a row of either table is scored on the seeder's whole edit, every line it added
+or changed within 5 lines, and on at most two places it left unedited on purpose; the rows before it on the one line the
+seeder named, within 5 lines. An earlier "no", or a dimension missing from "Also caught by" or "Raised by", may be a
+finding at another line of the plant: read the row's note before counting it as a miss. A dimension that reached the
+plant only at an `also` place (the run's outcome lists it as `onlyAtAlso`, and the row's note names it) rests on the
+seeder's word: count it as caught, raised or a false alarm as the row says, but, like `told the pattern`, never let it
+raise a recommendation's confidence.
+
 Clean runs (`.ai/audit/benchmark/clean.md`, backlog #0-180) plant a rule's deliberate exception, a correct change
 (the `C-` patterns). A dimension in "False alarm by" stopped a correct change under the pattern's rule: count it as
 a false alarm of that dimension, beside the owner's `human:fp-<dimension>` labels, once the owner has read the row.
