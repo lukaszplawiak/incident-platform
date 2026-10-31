@@ -6,7 +6,8 @@
 # addition, a merge commit is its whole pull request, and every refusal leaves the tree on a clean main without the
 # branch, and the run is recorded in .ai/runs/SEED until return-to-main.sh (#0-172); seed-check.sh confirms the
 # seeder's uncommitted edit on that branch, in the change's files, and refuses anything else (a commit of its own
-# included, #0-172); seed-fold.sh makes the change and the edit one commit; nothing on the branch names the run (#0-177); and
+# included, #0-172); seed-fold.sh makes the change and the edit one commit; nothing on the branch names the run (#0-177);
+# seed-compile.sh compiles the modules the edit reaches, offline, and fails the run on a plant that does not build (#0-181); and
 # seed-record.sh appends a run's row to the gitignored .ai/runs/benchmark/results.md, which leaves main clean.
 # Run: .github/scripts/test-seed-branch.sh   (also run by .github/workflows/factory-guards.yml)
 # ============================================================
@@ -403,5 +404,113 @@ rm -f .ai/audit/benchmark/clean.md
 crecord "the wrong number of arguments" "usage" c4 C-01 ARC-23 architecture - - -
 if on_clean_main; then ok "main stays clean: the clean rows are gitignored"; else fail "the clean rows dirty main: $(git status --porcelain)"; fi
 
-if [ "$failures" -gt 0 ]; then echo "$failures seed-branch/seed-check/seed-fold/seed-record test(s) failed"; exit 1; fi
-echo "All seed-branch, seed-check, seed-fold and seed-record tests passed."
+echo "seed-compile.sh: the plant is compiled before the panel (#0-181)"
+# Its own repository: the modules modules_of knows (shared, a *-service) and a stub ./mvnw that records how it was
+# called and answers as $MVN_MODE says. A fold is made the way seed-fold.sh makes it: one commit on the change's parent,
+# with the change's tree and the seeder's edit, checked out on the branch.
+C=$WORK/compile
+git init -q -b main "$C"
+cd "$C" || exit 1
+git config user.email t@t && git config user.name t
+mkdir -p scripts/factory shared/src demo-service/src docs
+cp "$SRC"/scripts/factory/_common.sh "$SRC"/scripts/factory/seed-compile.sh "$SRC"/scripts/factory/maven-settings.xml scripts/factory/
+printf '.ai/runs/\n' > .gitignore
+cat > mvnw <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$MVN_CALLS"
+printf 'MAVEN_OPTS=%s JAVA_TOOL_OPTIONS=%s MAVEN_SKIP_RC=%s\n' "${MAVEN_OPTS:-}" "${JAVA_TOOL_OPTIONS:-}" "${MAVEN_SKIP_RC:-}" >> "$MVN_CALLS"
+case "${MVN_MODE:-ok}" in
+    ok) echo "[INFO] BUILD SUCCESS"; exit 0 ;;
+    compile) echo "[ERROR] COMPILATION ERROR : "
+             echo "[ERROR] $PWD/demo-service/src/A.java:[3,12] non-static variable id cannot be referenced from a static context"
+             echo "[ERROR] $PWD/demo-service/src/A.java:[4,1] second"; exit 1 ;;
+    env) echo "[ERROR] Failed to execute goal on project demo-service: Could not resolve dependencies: Cannot access central (https://repo) in offline mode"; exit 1 ;;
+    other) echo "[ERROR] Failed to execute goal enforcer: rule failed"; exit 1 ;;
+    caller) echo "[ERROR] $PWD/demo-service/src/Caller.java:[7,3] cannot find symbol"
+            echo "[ERROR] $PWD/demo-service/src/A.java:[3,12] second"; exit 1 ;;
+    module) echo "[ERROR] $PWD/shared/src/S.java:[1,7] duplicate class: S"; exit 1 ;;
+    dirty) echo changed >> docs/README.md; exit 0 ;;
+esac
+STUB
+chmod +x mvnw
+printf 'class A {}\n' > demo-service/src/A.java && printf 'class S {}\n' > shared/src/S.java && printf '<project/>\n' > demo-service/pom.xml
+printf 'doc\n' > docs/README.md && printf 'x\n' > Tool.java
+git add -A && git commit -qm base
+printf 'class A { int id; }\n' > demo-service/src/A.java && git add -A && git commit -qm "feat(demo): the change"
+cchange=$(git rev-parse HEAD)
+export MVN_CALLS=$WORK/mvn-calls
+CB=review/aaaaaaaa
+plant() {   # plant <file> <text>: back on main, the branch at a fold of the change and the edit
+    git switch -q main 2>/dev/null; git branch -q -D "$CB" 2>/dev/null
+    git switch -q -c "$CB" "$cchange" && printf '%s\n' "$2" >> "$1" && git add -A
+    cfold=$(git commit-tree "$(git write-tree)" -p "$cchange^1" -m "feat(demo): the change")
+    git reset -q --hard "$cfold"
+}
+SCC=scripts/factory/seed-compile.sh
+compiled() {   # compiled <name> <jq test> [MVN_MODE]
+    local out; rm -f "$MVN_CALLS"
+    out=$(MVN_MODE=${3:-ok} MAVEN_OPTS=-Dskip JAVA_TOOL_OPTIONS=-Dx "$SCC" "$CB" "$cchange" "$cfold")
+    if jq -e "$2" <<<"$out" >/dev/null; then ok "$1"; else fail "$1: $out"; fi
+}
+called() { grep -qE -- "$1" "$MVN_CALLS" 2>/dev/null; }
+
+plant demo-service/src/A.java 'class B { static int f() { return 1; } }'
+compiled "a Java plant in a service: compiled" '.ok == true and .compiled == true and .modules == "demo-service"'
+if called '^-B -ntp -s scripts/factory/maven-settings.xml -gs scripts/factory/maven-settings.xml -o test-compile -pl demo-service -am$'; then
+    ok "offline test-compile of the module and what it depends on, with the factory's settings"
+else fail "the Maven call: $(cat "$MVN_CALLS")"; fi
+if called '^MAVEN_OPTS= JAVA_TOOL_OPTIONS= MAVEN_SKIP_RC=true$'; then ok "the environment's Maven options are stripped"
+else fail "the environment reached Maven: $(cat "$MVN_CALLS")"; fi
+if [ -z "$(ls .ai/runs/seed-compile-* 2>/dev/null)" ]; then ok "a build that passed leaves no log"; else fail "log left: $(ls .ai/runs)"; fi
+compiled "a compiler error: the first one, from the repository's root" \
+    '.ok == false and .reason == "the plant does not compile (log .ai/runs/seed-compile-aaaaaaaa.log): [ERROR] demo-service/src/A.java:[3,12] non-static variable id cannot be referenced from a static context"' compile
+if [ -s .ai/runs/seed-compile-aaaaaaaa.log ]; then ok "a failed build keeps its log"; else fail "no log after a failure"; fi
+compiled "a first error in a file the seeder did not edit: not named the plant's" \
+    '.ok == false and (.reason | startswith("the build fails outside the seeder'"'"'s edit, in demo-service/src/Caller.java: ")) and (.reason | test("\\[7,3\\] cannot find symbol$"))' caller
+compiled "a first error in another module: outside the edit too (review round 2)" \
+    '.ok == false and (.reason | startswith("the build fails outside the seeder'"'"'s edit, in shared/src/S.java: "))' module
+compiled "an environment that cannot build offline is not the seeder's error" \
+    '.ok == false and (.reason | startswith("the build environment failed (log .ai/runs/seed-compile-aaaaaaaa.log): [ERROR] ")) and (.reason | test("in offline mode"))' env
+compiled "any other failure: its first [ERROR]" \
+    '.ok == false and (.reason | test("^the build failed with exit code 1 .*: \\[ERROR\\] Failed to execute goal enforcer"))' other
+compiled "a build that changes a tracked file is refused" '.ok == false and (.reason | test("changed the working tree or HEAD"))' dirty
+git checkout -q -- docs/README.md
+
+plant shared/src/S.java 'class T {}'
+compiled "a plant in shared: its dependents too" '.ok == true and .compiled == true and .modules == "shared"'
+if called '-pl shared -am -amd$'; then ok "-amd for shared"; else fail "shared without -amd: $(cat "$MVN_CALLS")"; fi
+plant demo-service/pom.xml '<!-- planted -->'
+compiled "a POM in the edit: not compiled" '.ok == true and .compiled == false and (.reason | test("changes a POM"))'
+if [ ! -e "$MVN_CALLS" ]; then ok "no Maven for a POM plant"; else fail "Maven ran: $(cat "$MVN_CALLS")"; fi
+plant docs/README.md 'planted'
+compiled "no Java in the edit: not compiled" '.ok == true and .compiled == false and (.reason | test("no Java file"))'
+plant Tool.java 'planted'
+compiled "Java outside a module: not compiled" '.ok == true and .compiled == false and (.reason | test("no Java file of the edit is in a Maven module"))'
+if [ ! -e "$MVN_CALLS" ]; then ok "no Maven when nothing is in a module"; else fail "Maven ran: $(cat "$MVN_CALLS")"; fi
+
+plant demo-service/src/A.java 'class C {}'
+crefused() {   # crefused <name> <reason regex> <args...>
+    local name=$1 re=$2 out; shift 2; rm -f "$MVN_CALLS"
+    out=$("$SCC" "$@")
+    if jq -e --arg re "$re" '.ok == false and (.reason | test($re))' <<<"$out" >/dev/null && [ ! -e "$MVN_CALLS" ]; then ok "$name"
+    else fail "$name: $out"; fi
+}
+crefused "the wrong number of arguments" "usage" "$CB" "$cchange"
+crefused "a bad branch name" "not a seed branch name" seed/x "$cchange" "$cfold"
+crefused "a bad commit" "not a commit" "$CB" HEAD "$cfold"
+crefused "not the folded commit" "HEAD is not the folded commit" "$CB" "$cchange" "$cchange"
+git switch -q main
+crefused "not on the branch" "on main, not on $CB" "$CB" "$cchange" "$cfold"
+git switch -q "$CB"
+other=$(git commit-tree "$(git write-tree)" -p "$cchange" -m other) && git reset -q --hard "$other"
+crefused "a commit that is not the fold of the change" "is not the fold of" "$CB" "$cchange" "$other"
+git reset -q --hard "$cfold"
+echo dirty >> docs/README.md
+crefused "a tree that is not clean" "not clean" "$CB" "$cchange" "$cfold"
+git checkout -q -- docs/README.md
+nofold=$(git commit-tree "$cchange^{tree}" -p "$cchange^1" -m same) && git reset -q --hard "$nofold"
+crefused "a fold with no edit" "holds no edit" "$CB" "$cchange" "$nofold"
+cd "$R" || exit 1
+
+if [ "$failures" -gt 0 ]; then echo "$failures seed-branch/seed-check/seed-fold/seed-compile/seed-record test(s) failed"; exit 1; fi
+echo "All seed-branch, seed-check, seed-fold, seed-compile and seed-record tests passed."

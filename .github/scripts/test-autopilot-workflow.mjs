@@ -602,11 +602,13 @@ const SEEDED = { ok: true, branch: BRANCH, base: 'b'.repeat(40), head: 'c'.repea
 // seed-check.sh's hunks: the seeder's edit, lines 38-42 of A.java (backlog #0-181); TRUTH's line 40 is inside.
 const CHECKED = { ok: true, files: ['svc/src/main/java/A.java'], hunks: [{ file: 'svc/src/main/java/A.java', start: 38, end: 42 }] }
 const FOLDED = { ok: true, head: 'e'.repeat(40) }
+// seed-compile.sh's answer: the planted module built (backlog #0-181).
+const COMPILED = { ok: true, compiled: true, modules: 'svc' }
 const RECORDED = { appended: true, file: '.ai/runs/benchmark/results.md' }
 async function seed(answers, ...given) {
   const args = given.length ? given[0] : SEED_ARGS   // not a default parameter: a test passes undefined itself
   const fake = fakeAgent({ 'ops:seed-branch.sh': SEEDED, 'ops:seed-check.sh': CHECKED, 'ops:seed-fold.sh': FOLDED,
-    'ops:seed-record.sh': RECORDED, 'ops:return-to-main.sh': { onMain: true }, ...answers })
+    'ops:seed-compile.sh': COMPILED, 'ops:seed-record.sh': RECORDED, 'ops:return-to-main.sh': { onMain: true }, ...answers })
   const outcome = await evaluate(strip(SEED), { args, agent: fake.agent, logs: [] })
   return { outcome, calls: fake.calls }
 }
@@ -871,6 +873,46 @@ test('seed-bugs: the seeder\'s edit is folded into the change after the check an
   }
 })
 
+test('seed-bugs: the plant is compiled after the fold and before the panel, and one that does not build ends the run (#0-181)', async () => {
+  const { outcome, calls } = await seed({ 'defect-seeder': TRUTH })
+  assert.equal(outcome.outcome, 'MEASURED')
+  assert.equal(outcome.compiled, true)
+  assert.ok(!('notCompiled' in outcome))
+  const at = (k) => calls.findIndex((c) => c.key === k)
+  assert.ok(at('ops:seed-fold.sh') < at('ops:seed-compile.sh'), 'the folded commit is the one compiled')
+  for (const dim of ['general', 'architecture', 'security', 'performance', 'migration', 'docs', 'k8s']) {
+    assert.ok(at('ops:seed-compile.sh') < at(`review-${dim}`), `compiled before ${dim} reviews`)
+  }
+  // The change's head (without the defect) and the folded head: seed-compile.sh reads the edit as their diff.
+  assert.match(calls[at('ops:seed-compile.sh')].prompt,
+    new RegExp(`seed-compile\\.sh 'review/0684d0a2' '${SEEDED.head}' '${FOLDED.head}'$`))
+  for (const answer of [null, { ok: false, reason: 'the plant does not compile (log x): [ERROR] A.java:[40,9] cannot find symbol' },
+    { ok: false, reason: 'the build environment failed (log x): Cannot access central in offline mode' },
+    { ok: true }, { ok: 'true', compiled: true }, { ok: true, compiled: 'true' }, { error: 'timed out', exitCode: 124 }]) {
+    const run = await seed({ 'defect-seeder': TRUTH, 'ops:seed-compile.sh': answer })
+    assert.equal(run.outcome.outcome, 'FAILED', JSON.stringify(answer))
+    assert.match(run.outcome.reason, /^the plant does not build: /)
+    if (answer?.reason) assert.ok(run.outcome.reason.includes(answer.reason), 'the script\'s reason is kept')
+    if (answer?.error) assert.match(run.outcome.reason, /timed out/)
+    assert.ok(!run.calls.some((c) => c.key.startsWith('review-')), 'no panel on a plant that does not build')
+    assert.ok(!run.calls.some((c) => c.key === 'ops:seed-record.sh'), 'no row')
+    assert.equal(run.outcome.cleanup, `git branch -D ${BRANCH}`)
+    assert.equal(run.calls.at(-1).key, 'ops:return-to-main.sh')
+  }
+  // Nothing to compile (a POM in the edit, no Java): the panel runs.
+  const skipped = await seed({ 'defect-seeder': TRUTH,
+    'ops:seed-compile.sh': { ok: true, compiled: false, modules: '', reason: 'the edit changes a POM: not compiled' } })
+  assert.equal(skipped.outcome.outcome, 'MEASURED')
+  assert.ok(skipped.calls.some((c) => c.key === 'review-general'))
+  // ... and the outcome says it was measured uncompiled, with why (FAC-A03, review round 1), a clean run's too.
+  assert.equal(skipped.outcome.compiled, false)
+  assert.equal(skipped.outcome.notCompiled, 'the edit changes a POM: not compiled')
+  const cleanSkipped = await cleanSeed({ 'ops:seed-compile.sh': { ok: true, compiled: false, modules: '', reason: 'no Java file in the edit: nothing to compile' } })
+  assert.equal(cleanSkipped.outcome.kind, 'clean')
+  assert.equal(cleanSkipped.outcome.compiled, false)
+  assert.match(cleanSkipped.outcome.notCompiled, /no Java file/)
+})
+
 test('seed-bugs: seed-record.sh accepts exactly the panel\'s dimensions (#0-177, review round 1)', () => {
   // Two lists, one in each language: a dimension added to PANEL alone would have every row naming it refused. And the
   // same dimensions as the audit's ALL and the rule files of the autopilot's RULE_FILE_OF, factory.md aside (#0-115's
@@ -930,7 +972,8 @@ test('seed-bugs: a run that cannot get back to main says where it left the tree 
 test('seed-bugs: a failed run that made the branch says how to delete it (#0-173, review round 2)', async () => {
   for (const answers of [{ 'defect-seeder': { blocked: true, reason: 'x' } }, { 'defect-seeder': { skipped: true, reason: 'y' } },
     { 'defect-seeder': TRUTH, 'ops:seed-check.sh': { ok: false, reason: 'z' } }, { 'ops:seed-branch.sh': { ...SEEDED, base: 'abc' } },
-    { 'defect-seeder': TRUTH, 'ops:seed-fold.sh': { ok: false, reason: 'w' } }]) {
+    { 'defect-seeder': TRUTH, 'ops:seed-fold.sh': { ok: false, reason: 'w' } },
+    { 'defect-seeder': TRUTH, 'ops:seed-compile.sh': { ok: false, reason: 'v' } }]) {
     const { outcome } = await seed(answers)
     assert.equal(outcome.cleanup, `git branch -D ${BRANCH}`, JSON.stringify(answers))
   }
@@ -1019,6 +1062,8 @@ test('seed-bugs: each factory script\'s answer is typed, so the agent cannot han
     'ops:seed-branch.sh': [SEEDED, { ok: false, reason: 'the working tree is not clean' }],
     'ops:seed-check.sh': [CHECKED, { ok: false, reason: 'the tree is on main' }],
     'ops:seed-fold.sh': [FOLDED, { ok: false, reason: 'HEAD is not the change\'s commit' }],
+    'ops:seed-compile.sh': [COMPILED, { ok: true, compiled: false, modules: '', reason: 'no Java file in the edit: nothing to compile' },
+      { ok: false, reason: 'the plant does not compile (log x): [ERROR] A.java:[40,9] cannot find symbol' }],
     'ops:seed-record.sh': [RECORDED, { appended: false, reason: 'the run id r1 is in .ai/runs/benchmark/results.md already' }],
     'ops:return-to-main.sh': [{ onMain: true }, { onMain: true, left: BRANCH },
       { onMain: false, branch: BRANCH, reason: 'working tree not clean: left as it is for the owner' }],
@@ -1037,6 +1082,8 @@ test('seed-bugs: each factory script\'s answer is typed, so the agent cannot han
     'ops:return-to-main.sh': [{ parameter: '{"onMain": true, "left": "seed/P-10-r1"}' }, { onMain: 'true' }],
     // The same kind of answer for the scripts #0-177 added.
     'ops:seed-fold.sh': [{ ...FOLDED, ok: 'true' }],
+    // #0-181's compile step, the same way.
+    'ops:seed-compile.sh': [{ ...COMPILED, ok: 'true' }, { ...COMPILED, compiled: 'true' }, { ...COMPILED, log: 'x' }],
     'ops:seed-record.sh': [{ ...RECORDED, appended: 'true' }, { parameter: JSON.stringify(RECORDED) }],
   }
   for (const [key, answers] of Object.entries(answered)) {
@@ -1090,7 +1137,7 @@ test('seed-bugs: a verdict that is not one counts as no answer, and the run stil
 test('seed-bugs: an error after the branch exists ends the run on main and names the branch (#0-176)', async () => {
   const boom = () => { throw new Error('boom') }
   for (const answers of [{ 'defect-seeder': boom }, { 'defect-seeder': TRUTH, 'ops:seed-check.sh': boom },
-    { 'defect-seeder': TRUTH, 'ops:seed-fold.sh': boom }]) {
+    { 'defect-seeder': TRUTH, 'ops:seed-fold.sh': boom }, { 'defect-seeder': TRUTH, 'ops:seed-compile.sh': boom }]) {
     const { outcome, calls } = await seed(answers)
     assert.equal(outcome.outcome, 'FAILED', Object.keys(answers).join())
     assert.match(outcome.reason, /the run stopped on an error: boom/)

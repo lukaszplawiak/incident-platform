@@ -3681,7 +3681,8 @@ clean runs.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/workflows/seed-bugs.js, .claude/agents/defect-seeder.md, scripts/factory/seed-check.sh,
 .github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh; for the compile step also a new
-scripts/factory/seed-compile.sh, scripts/factory/_common.sh and scripts/factory/run-tests.sh), .ai/audit/benchmark/patterns.md
+scripts/factory/seed-compile.sh, scripts/factory/_common.sh, scripts/factory/run-tests.sh, .github/scripts/test-run-tests.sh
+and a comment in .github/workflows/factory-guards.yml), .ai/audit/benchmark/patterns.md
 and .ai/rules/audit.md (owner), docs (docs/ai-factory.md, ADR-0044)
 
 **Problem.**
@@ -3746,6 +3747,29 @@ AC3. P-17 run again on `fc368943` after the change records docs as caught withou
   leaves it unquoted and ends the `+++` header with a tab, confirmed in session) is refused with its reason instead of
   "line is not in its edit". Checked by hand on a scratch repo: the fixture's change has no such path, and adding one
   would change every seed-branch case.
+- **Second PR: the compile step (2026-10-31).** `scripts/factory/seed-compile.sh` runs through factory-ops after
+  `seed-fold.sh` (ADR-0044 decision 9): `factory_mvn -o test-compile -pl <modules of the edit's .java> -am`, `-amd` too
+  when the edit reaches `shared` (owner, 2026-10-31: a broken signature there breaks the services). `run-tests.sh`'s
+  hardened Maven call and its environment-error list moved to `_common.sh` (`factory_mvn`, `MAVEN_ENV_ERRORS`, the
+  offline forms added); the gate behaves as before but for those two forms, which it now reads as a stop too (it runs
+  online, so they would only appear on a real resolution failure: more stop, never more pass; review round 1). Measured: every module from cold in about 10 s offline; a real
+  P-17-like plant gives `[ERROR] incident-service/…/Incident.java:[295,50] non-static variable id cannot be referenced
+  from a static context`, and an empty local repository `… in offline mode`.
+  - AC2 shown by tests: `test-autopilot-workflow.mjs` (compiled after the fold and before every reviewer, with the
+    change's and the folded head; a failure, a malformed or an error answer is FAILED with no panel and no row; a
+    skipped compile runs the panel), `test-seed-branch.sh` (24 seed-compile cases: offline call, settings, stripped
+    environment, `-amd`, POM and no-Java skips, compiler, environment and other errors, the log, every refusal) and
+    `test-run-tests.sh` (the environment stripped, no Docker is a stop). 15 mutations caught.
+  - Review round 1 (`/review 17`): general APPROVE, architecture NEEDS_HUMAN (Owner-only paths only), no blocking;
+    ci-local caught SC2015 in `seed-compile.sh` (fixed). Owner: "1-3 + maven-settings": a skipped compile reaches the
+    outcome (`compiled`, `notCompiled`; FAC-A03); a first compiler error outside the seeder's edit is named so, not as
+    the plant's; this note's "behaves as before" qualified; `maven-settings.xml`'s header names both callers. 5 more
+    mutations caught.
+  - Review round 2 (`/review 17`): general APPROVE, architecture NEEDS_HUMAN (Owner-only paths only), every round 1
+    finding resolved, no blocking. Owner: "popraw": a first error in another module than the plant's is tested too.
+  - Rule gap (architecture): `audit.md` does not say that rows before this step may have been measured on a plant that
+    did not build (`docs-after-p17`). Recorded here, no item.
+  - #0-181 stays In progress until AC3 (P-17 on `fc368943`, a new run id).
 
 ### 0-182. The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option
 

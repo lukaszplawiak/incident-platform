@@ -75,7 +75,8 @@ jobs:
 
       # The seed branch of /seed-bugs starts from main, never the merged commit, and is checked after the seeder
       # (seed-branch.sh, seed-check.sh; backlog #0-173, ADR-0044); nothing on it names the run, the defect is folded
-      # into the change, and a run's row goes to the gitignored .ai/runs/ (seed-fold.sh, seed-record.sh; #0-177).
+      # into the change, and a run's row goes to the gitignored .ai/runs/ (seed-fold.sh, seed-record.sh; #0-177); the plant
+      # is compiled before the panel (seed-compile.sh, #0-181).
       - name: Seed branch script tests
         run: .github/scripts/test-seed-branch.sh
 
