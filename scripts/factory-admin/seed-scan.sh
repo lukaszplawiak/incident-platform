@@ -36,7 +36,8 @@ command -v jq >/dev/null 2>&1 || { echo '{"ok":false,"reason":"jq is not install
 
 [ $# -eq 3 ] || refuse "usage: seed-scan.sh <workflow transcript dir> <pattern> <run id>"
 dir=$1 pattern=$2 run_id=$3
-[[ $pattern =~ ^P-[0-9]+$ ]] || refuse "not a pattern id: ${pattern:0:40}"
+# A defect pattern P- or a clean one C- (backlog #0-180): the scan reads both kinds of run the same way.
+[[ $pattern =~ ^[PC]-[0-9]+$ ]] || refuse "not a pattern id: ${pattern:0:40}"
 [[ $run_id =~ ^[A-Za-z0-9._-]+$ ]] || refuse "not a run id: ${run_id:0:40}"
 [ -d "$dir" ] || refuse "no such directory: ${dir:0:200}"
 
@@ -63,7 +64,7 @@ done
 # The run, from the seeder's prompt (seed-bugs.js): "Pattern <p>. Run id <id>. The branch <b> is checked out: it holds
 # merged change <commit>\nas its last commit, on the base <base>."
 task=$(messages "$seeder" | jq -rs 'join("\n")') || refuse "cannot read the seeder's transcript"
-[[ $task =~ Pattern\ (P-[0-9]+)\.\ Run\ id\ ([A-Za-z0-9._-]+)\. ]] || refuse "the seeder's prompt names no pattern and run id"
+[[ $task =~ Pattern\ ([PC]-[0-9]+)\.\ Run\ id\ ([A-Za-z0-9._-]+)\. ]] || refuse "the seeder's prompt names no pattern and run id"
 [ "${BASH_REMATCH[1]}" = "$pattern" ] && [ "${BASH_REMATCH[2]}" = "$run_id" ] \
     || refuse "this directory is the run of ${BASH_REMATCH[1]} ${BASH_REMATCH[2]}, not of $pattern $run_id"
 [[ $task =~ merged\ change\ ([0-9a-f]{7,40}) ]] || refuse "the seeder's prompt names no merged change"
@@ -91,7 +92,7 @@ tells() {
     for w in seed benchmark plant patterns.md -after-p "$pattern" "$run_id"; do
         [[ $text == *"$w"* ]] && printf '%s\n' "$w"
     done
-    [[ $text =~ (^|[^A-Za-z0-9])P-[0-9][0-9]([^0-9]|$) ]] && printf '%s\n' "a pattern id"
+    [[ $text =~ (^|[^A-Za-z0-9])[PC]-[0-9][0-9]([^0-9]|$) ]] && printf '%s\n' "a pattern id"
     shopt -u nocasematch
     return 0
 }

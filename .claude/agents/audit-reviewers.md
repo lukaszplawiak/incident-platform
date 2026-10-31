@@ -53,14 +53,15 @@ labels are the record.
 Escaped defects; false alarms confirmed by the owner; extra rounds caused, and how many ended in a
 trivial change; items BLOCKED by this reviewer; findings outside its dimension; blocking findings without
 an `impact` scenario or a `ruleId`; overlap with another reviewer in the same round; seeded defects
-caught and missed; rules and calibration lines that never fired (removal candidates).
+caught and missed; clean runs this reviewer stopped (`seededClean`, its false alarms on a rule's deliberate
+exception, #0-180); rules and calibration lines that never fired (removal candidates).
 
 ## Answer (JSON)
 
 ```json
 { "dimension": "security",
   "metrics": { "escaped": 0, "falseAlarms": 1, "extraRounds": 2, "blockedItems": 0, "outOfDimension": 0,
-               "noImpact": 0, "overlap": 1, "seededCaught": 3, "seededMissed": 1 },
+               "noImpact": 0, "overlap": 1, "seededCaught": 3, "seededMissed": 1, "seededFalseAlarms": 0 },
   "findings": [ { "severity": "high|medium|low", "confidence": "high|medium|low",
                   "description": "…", "cases": ["PR #131 sec-7f3a", "…"] } ],
   "recommendations": [ "<markdown block in the format of .ai/rules/audit.md>" ],

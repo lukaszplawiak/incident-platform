@@ -70,6 +70,17 @@ check "a relayed command names the run, to every reviewer" \
     '.ok and (.summary.told | sort) == ["review-general", "review-security"]
      and (.reviewers[0].told | index("seed") and index("P-01") and index("sec-after-p01") and index("a pattern id"))' \
     "$d" P-01 sec-after-p01
+# A clean run (backlog #0-180): a C- pattern is scanned as a defect's is, and a relayed C- id is a tell too.
+d=$(run cleanrun 'dalej') && agent "$d" s1 defect-seeder "$(user "$TASK_HEAD
+  Pattern C-01. Run id clean-c01. The branch review/0684d0a2 is checked out: it holds merged change $HOST
+  as its last commit, on the base $BASE. Plant the pattern in one of the change's files: svc/A.java.")"
+check "a clean run is scanned like a defect's" '.ok and .run.pattern == "C-01" and .run.runId == "clean-c01" and .summary.told == []' \
+    "$d" C-01 clean-c01
+d=$(run told-clean 'dalej z C-02') && agent "$d" s1 defect-seeder "$(user "$TASK_HEAD
+  Pattern C-01. Run id clean-c01. The branch review/0684d0a2 is checked out: it holds merged change $HOST
+  as its last commit, on the base $BASE. Plant the pattern in one of the change's files: svc/A.java.")"
+check "a relayed clean pattern id is a tell" '.ok and (.reviewers[0].told == ["a pattern id"])' "$d" C-01 clean-c01
+
 d=$(run another-pattern 'dalej, teraz P-07')
 check "a relayed message with any pattern id" '.ok and (.reviewers[0].told == ["a pattern id"])' "$d" P-01 sec-after-p01
 d=$(run none -)

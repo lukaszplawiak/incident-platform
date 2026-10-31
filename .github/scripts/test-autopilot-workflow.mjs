@@ -612,6 +612,62 @@ async function seed(answers, ...given) {
 const TRUTH = { branch: BRANCH, pattern: 'P-10', dimension: 'performance', rule: 'PERF-01',
   file: 'svc/src/main/java/A.java', line: 40 }
 
+// A clean run (backlog #0-180): a C- pattern, the rule's deliberate exception planted with its reason.
+const CLEAN_ARGS = { pattern: 'C-01', commit: 'abc1234', runId: 'c1' }
+const CLEAN_TRUTH = { branch: 'review/' + 'x', pattern: 'C-01', kind: 'clean', dimension: 'architecture', rule: 'ARC-23',
+  file: 'svc/src/main/java/A.java', line: 40 }
+const cleanSeed = async (answers) => {
+  const first = await seed({ 'defect-seeder': CLEAN_TRUTH }, CLEAN_ARGS)
+  const branch = first.calls.find((c) => c.key === 'ops:seed-branch.sh').prompt.match(/review\/[0-9a-f]{8}/)[0]
+  return seed({ ...answers, 'defect-seeder': { ...CLEAN_TRUTH, branch }, 'ops:seed-branch.sh': { ...SEEDED, branch } }, CLEAN_ARGS)
+}
+const recordArgs = (calls) => [...calls.find((c) => c.key === 'ops:seed-record.sh').prompt.matchAll(/'([^']*)'/g)].map((m) => m[1])
+
+test('seed-bugs: a clean run no dimension stops is a pass, recorded in its own table (#0-180)', async () => {
+  const noted = approve('architecture', { nonBlocking: [{ issue: 'per replica on purpose', file: CLEAN_TRUTH.file, line: 41 }] })
+  const elsewhere = approve('general', { verdict: 'CHANGES_REQUESTED', blocking: [{ issue: 'another file', file: 'svc/B.java', line: 3 }] })
+  const { outcome, calls } = await cleanSeed({ 'review-architecture': noted, 'review-general': elsewhere })
+  assert.equal(outcome.outcome, 'MEASURED')
+  assert.equal(outcome.kind, 'clean')
+  assert.deepEqual(outcome.falseAlarmBy, [])
+  assert.deepEqual(outcome.raisedBy, ['architecture'])
+  assert.deepEqual(outcome.blockingElsewhere, ['general'])
+  assert.equal(outcome.caughtByExpected, undefined, 'a clean run has no catch to count')
+  assert.deepEqual(recordArgs(calls), ['--clean', 'c1', 'C-01', 'ARC-23', 'architecture', '-', 'architecture', 'general', '-'])
+  assert.match(outcome.cleanup, /\.ai\/runs\/benchmark\/clean\.md into \.ai\/audit\/benchmark\/clean\.md/)
+})
+
+test('seed-bugs: a clean run a dimension stops is its false alarm, by blocking or by NEEDS_HUMAN (#0-180)', async () => {
+  const blocks = approve('architecture', { verdict: 'CHANGES_REQUESTED', blocking: [{ issue: 'no lock', file: CLEAN_TRUTH.file, line: 40 }] })
+  const human = approve('security', { verdict: 'NEEDS_HUMAN', nonBlocking: [{ issue: 'is it safe?', file: CLEAN_TRUTH.file, line: 39 }] })
+  const { outcome, calls } = await cleanSeed({ 'review-architecture': blocks, 'review-security': human })
+  assert.deepEqual(outcome.falseAlarmBy.sort(), ['architecture', 'security'])
+  assert.deepEqual(outcome.raisedBy, [])
+  assert.equal(recordArgs(calls)[5], 'architecture,security')
+})
+
+test('seed-bugs: the kind comes from the pattern id, never from the seeder (#0-180)', async () => {
+  const first = await seed({ 'defect-seeder': CLEAN_TRUTH }, CLEAN_ARGS)
+  const branch = first.calls.find((c) => c.key === 'ops:seed-branch.sh').prompt.match(/review\/[0-9a-f]{8}/)[0]
+  const said = await seed({ 'defect-seeder': { ...CLEAN_TRUTH, branch, kind: 'defect' }, 'ops:seed-branch.sh': { ...SEEDED, branch } }, CLEAN_ARGS)
+  assert.equal(said.outcome.outcome, 'FAILED')
+  const { kind, ...unsaid } = CLEAN_TRUTH
+  const silent = await seed({ 'defect-seeder': { ...unsaid, branch }, 'ops:seed-branch.sh': { ...SEEDED, branch } }, CLEAN_ARGS)
+  assert.equal(silent.outcome.outcome, 'FAILED', 'a clean run needs kind: clean said, not assumed (review round 2)')
+  assert.equal((await seed({ 'defect-seeder': TRUTH })).outcome.outcome, 'MEASURED', 'a defect run may leave kind out')
+  const defect = await seed({ 'defect-seeder': { ...TRUTH, kind: 'clean' } })
+  assert.equal(defect.outcome.outcome, 'FAILED')
+  assert.ok(!defect.calls.some((c) => c.key.startsWith('review-')), 'no panel on a ground truth of the other kind')
+})
+
+test('seed-bugs: NEEDS_HUMAN with the planted line counts as blocking (#0-180 Also)', async () => {
+  const human = approve('performance', { verdict: 'NEEDS_HUMAN', nonBlocking: [{ issue: 'N+1?', file: TRUTH.file, line: 41 }] })
+  const { outcome } = await seed({ 'defect-seeder': TRUTH, 'review-performance': human })
+  assert.equal(outcome.blockingByExpected, true)
+  const elsewhere = approve('performance', { verdict: 'NEEDS_HUMAN', nonBlocking: [{ issue: 'other', file: 'svc/B.java', line: 1 }] })
+  assert.equal((await seed({ 'defect-seeder': TRUTH, 'review-performance': elsewhere })).outcome.blockingByExpected, false)
+})
+
 test('seed-bugs: a blocked seeder is a failed run with its reason, not a skip', async () => {
   const { outcome, calls } = await seed({ 'defect-seeder': { blocked: true, reason: 'git -C /workspace show: refused' } })
   assert.equal(outcome.outcome, 'FAILED')

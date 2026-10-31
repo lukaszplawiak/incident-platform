@@ -16,7 +16,8 @@
 #      phrases are narrow on purpose: security.md's "planted by" is a CI step that plants a file, not the measure.
 #      factory.md is read only on a diff touching an Owner-only path, which /seed-bugs refuses; its measure is run
 #      by hand and rarely (#0-115's F1), so its file stays out (a residual, ADR-0044 decision 6).
-#   3. Every pattern of .ai/audit/benchmark/patterns.md that is not retired cites a live id of its dimension's file
+#   3. Every pattern of .ai/audit/benchmark/patterns.md (a defect P-, or a clean change C-, #0-180) that is not
+#      retired cites a live id of its dimension's file
 #      (#0-178 "Also"): retiring ARC-20 left P-06...P-08 citing it, and nothing failed. The file is the dimension's
 #      name, except an FAC- id: FAC-S is security's and FAC-A architecture's, both in factory.md (the mapping of
 #      backlog-autopilot.js's RULE_FILE_OF, backlog #0-161).
@@ -288,7 +289,8 @@ def check_patterns(rules_by_file)
   text = read(PATTERNS) or return
   rows = 0
   text.each_line.with_index(1) do |l, n|
-    next unless (m = l.match(/\A\| (P-\d+) \| ([a-z0-9]+) \| ([^|]+?) \| (.*) \|\s*\z/))
+    # P- a defect to plant, C- a clean change (a rule's deliberate exception, backlog #0-180): both cite a rule.
+    next unless (m = l.match(/\A\| ([PC]-\d+) \| ([a-z0-9]+) \| ([^|]+?) \| (.*) \|\s*\z/))
 
     rows += 1
     pattern, dimension, id, defect = m.captures

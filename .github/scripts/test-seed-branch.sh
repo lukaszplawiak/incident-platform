@@ -313,5 +313,33 @@ record "a factory run" ok r10 P-23 FAC-A02 architecture yes yes architecture,sec
 if [ "$(tail -1 "$rows")" = '| r10 | P-23 | FAC-A02 | architecture | yes | yes | security | — |' ]; then ok "the factory row"
 else fail "factory row: $(tail -1 "$rows")"; fi
 
+echo "seed-record.sh --clean: a clean run's row in .ai/runs/benchmark/clean.md (backlog #0-180)"
+clean_rows=.ai/runs/benchmark/clean.md
+crecord() {   # crecord <name> <reason regex | ok> <args...>
+    local name=$1 re=$2 out; shift 2
+    out=$("$SR" --clean "$@")
+    if [ "$re" = ok ]; then
+        if jq -e --arg f "$clean_rows" '.appended == true and .file == $f' <<<"$out" >/dev/null; then ok "$name"; else fail "$name: $out"; fi
+    elif jq -e --arg re "$re" '.appended == false and (.reason | test($re))' <<<"$out" >/dev/null; then ok "$name"
+    else fail "$name: $out"; fi
+}
+crecord "a clean run no dimension stopped" ok c1 C-01 ARC-23 architecture - architecture general -
+crecord "a clean run two dimensions stopped" ok c2 C-02 ARC-29 architecture architecture,general - - docs
+expected='| Run | Pattern | Rule | Expected | False alarm by | Raised, not blocking, by | Blocking elsewhere | No answer |
+|---|---|---|---|---|---|---|---|
+| c1 | C-01 | ARC-23 | architecture | — | architecture | general | — |
+| c2 | C-02 | ARC-29 | architecture | architecture, general | — | — | docs |'
+if [ "$(cat "$clean_rows")" = "$expected" ]; then ok "the clean table: its own header, one row per run"; else fail "clean rows: $(cat "$clean_rows")"; fi
+if ! grep -q '^| c[12] ' "$rows"; then ok "a clean row never reaches the defects' table"; else fail "a clean row in $rows"; fi
+crecord "a defect pattern is not a clean one" "not a clean pattern id" c3 P-07 ARC-23 architecture - - - -
+crecord "a bad list of false alarms" "not a list of dimensions" c3 C-01 ARC-23 architecture 'general;rm' - - -
+crecord "a run id of the defects' table" "r1 is in \\.ai/runs/benchmark/results\\.md already" r1 C-01 ARC-23 architecture - - - -
+record "a defect run id of the clean table" "c1 is in \\.ai/runs/benchmark/clean\\.md already" c1 P-07 ARC-23 architecture yes yes - -
+mkdir -p .ai/audit/benchmark && printf '| c9 | C-01 | ARC-23 | architecture | — | — | — | — |\n' > .ai/audit/benchmark/clean.md
+crecord "a run id landed in the tracked clean table" "c9 is in \\.ai/audit/benchmark/clean\\.md already" c9 C-01 ARC-23 architecture - - - -
+rm -rf .ai/audit
+crecord "the wrong number of arguments" "usage" c4 C-01 ARC-23 architecture - - -
+if on_clean_main; then ok "main stays clean: the clean rows are gitignored"; else fail "the clean rows dirty main: $(git status --porcelain)"; fi
+
 if [ "$failures" -gt 0 ]; then echo "$failures seed-branch/seed-check/seed-fold/seed-record test(s) failed"; exit 1; fi
 echo "All seed-branch, seed-check, seed-fold and seed-record tests passed."

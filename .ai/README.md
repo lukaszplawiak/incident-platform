@@ -183,6 +183,8 @@ Who writes and who reads each file. One writer per file per stage; `progress.md`
 | `.ai/audit/benchmark/patterns.md` | owner | `seed-bugs` workflow |
 | `.ai/runs/benchmark/results.md` (gitignored) | `seed-record.sh`, one row per `/seed-bugs` run (#0-177) | owner, who lands a series' rows in `.ai/audit/benchmark/results.md` in one PR |
 | `.ai/audit/benchmark/results.md` | owner (a series' PR) | `audit-data.sh` (the audit's seeded defects) |
+| `.ai/runs/benchmark/clean.md` (gitignored) | `seed-record.sh --clean`, one row per clean `/seed-bugs` run (#0-180) | owner, who lands a series' rows in `.ai/audit/benchmark/clean.md` in one PR |
+| `.ai/audit/benchmark/clean.md` | owner (a series' PR) | `audit-data.sh` (`seededClean`, the panel's false alarms on a rule's deliberate exception) |
 | `.ai/STOP` | owner, circuit breaker | autopilot at start |
 | PR description (verdicts in `<details>`), PR labels | shipper; `human:*` labels by the owner | auditors |
 

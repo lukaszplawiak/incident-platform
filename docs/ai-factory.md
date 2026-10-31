@@ -276,11 +276,15 @@ The agents' instructions are not a boundary; these are, each with its limit:
   writes the row, and an outcome that could not (a dirty tree) says where it left it (`leftOn`). The commit's code must still
   apply to `main`, so choose a recent one. Rotate patterns; after each run delete its branch (the outcome's `cleanup`
   names it). Runs follow one another with no commit between them; after a series, copy its rows from
-  `.ai/runs/benchmark/results.md` into `.ai/audit/benchmark/results.md` in one pull request (the audit reads only that
-  file), then delete `.ai/runs/benchmark/results.md`; a run id already in either file is refused, so a landed one
-  stays refused. The seeder cannot write a row (its scope is the change's files, #0-172). A run that measured nothing
+  `.ai/runs/benchmark/results.md` into `.ai/audit/benchmark/results.md` in one pull request (the audit reads the tracked
+  files only), then delete `.ai/runs/benchmark/results.md`; a run id already in any of the four tables (both kinds, as
+  a series gathers them and as they land) is refused, so a landed one stays refused. The seeder cannot write a row (its scope is the change's files, #0-172). A run that measured nothing
   says so (#0-170): a seeder that was refused a command, a skip without a reason and an answer without its branch,
   file, line or rule end it FAILED, not SKIPPED.
+  A clean run (#0-180, ADR-0044 decision 7) takes a `C-` pattern, a rule's deliberate exception planted with its
+  reason, and measures false alarms instead of catches: a dimension that stops the change at the planted line is a
+  false alarm, one that only notes it applied the rule. Its row goes to `.ai/runs/benchmark/clean.md` (then
+  `.ai/audit/benchmark/clean.md`). The panel's prompt is the same, so rotate clean and defect runs in a series.
 - **What the rule files claim** (backlog #0-184, ADR-0046): Factory guards' "Review rule claims are true"
   (`.github/scripts/check-rule-claims.rb`) fails a label naming a script, test or guard that does not exist, an
   "Enforced by" whose check runs in no required job on a pull request, only while continuing on error or only in
