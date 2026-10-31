@@ -637,13 +637,33 @@ test('seed-bugs: a clean run no dimension stops is a pass, recorded in its own t
   assert.match(outcome.cleanup, /\.ai\/runs\/benchmark\/clean\.md into \.ai\/audit\/benchmark\/clean\.md/)
 })
 
-test('seed-bugs: a clean run a dimension stops is its false alarm, by blocking or by NEEDS_HUMAN (#0-180)', async () => {
+test('seed-bugs: a clean run a dimension stops under its rule is its false alarm, by blocking or by NEEDS_HUMAN (#0-180)', async () => {
   const blocks = approve('architecture', { verdict: 'CHANGES_REQUESTED', blocking: [{ issue: 'no lock', file: CLEAN_TRUTH.file, line: 40 }] })
-  const human = approve('security', { verdict: 'NEEDS_HUMAN', nonBlocking: [{ issue: 'is it safe?', file: CLEAN_TRUTH.file, line: 39 }] })
+  const human = approve('security', { verdict: 'NEEDS_HUMAN', nonBlocking: [{ ruleId: 'ARC-23', issue: 'no lock?', file: CLEAN_TRUTH.file, line: 39 }] })
   const { outcome, calls } = await cleanSeed({ 'review-architecture': blocks, 'review-security': human })
   assert.deepEqual(outcome.falseAlarmBy.sort(), ['architecture', 'security'])
   assert.deepEqual(outcome.raisedBy, [])
   assert.equal(recordArgs(calls)[5], 'architecture,security')
+})
+
+test('seed-bugs: a stop at the plant under another rule is raised, not a false alarm (clean-c01)', async () => {
+  const test = approve('general', { verdict: 'NEEDS_HUMAN', blocking: [{ ruleId: 'GEN-01', issue: 'no test', file: CLEAN_TRUTH.file, line: 41 }] })
+  const other = approve('security', { verdict: 'CHANGES_REQUESTED', blocking: [{ issue: 'something else', file: CLEAN_TRUTH.file, line: 40 }] })
+  const { outcome } = await cleanSeed({ 'review-general': test, 'review-security': other })
+  assert.deepEqual(outcome.falseAlarmBy, [], 'another rule, or another dimension without a rule id, is not the exception\'s false alarm')
+  assert.deepEqual(outcome.raisedBy.sort(), ['general', 'security'])
+})
+
+test('seed-bugs: a clean run matches the rule id trimmed, in any case, as a prefix, never a longer id (#0-180 r1)', async () => {
+  const at = (dimension, ruleId) => approve(dimension, { verdict: 'CHANGES_REQUESTED', blocking: [{ ruleId, issue: 'stop', file: CLEAN_TRUTH.file, line: 40 }] })
+  const { outcome } = await cleanSeed({
+    'review-architecture': at('architecture', '   '),
+    'review-security': at('security', ` ${CLEAN_TRUTH.rule.toLowerCase()} (exception) `),
+    'review-general': at('general', `${CLEAN_TRUTH.rule}0`),
+    'review-performance': at('performance', `PERF-01, not ${CLEAN_TRUTH.rule}`),
+  })
+  assert.deepEqual(outcome.falseAlarmBy.sort(), ['architecture', 'security'], 'a blank id falls back to the expected dimension')
+  assert.deepEqual(outcome.raisedBy.sort(), ['general', 'performance'], 'a longer id, or one cited second, is another rule')
 })
 
 test('seed-bugs: the kind comes from the pattern id, never from the seeder (#0-180)', async () => {
@@ -728,7 +748,8 @@ test('seed-bugs: the branch comes from seed-branch.sh, never from the seeder, an
   assert.match(review.prompt, new RegExp(`mergeBase: ${SEEDED.base}`), 'the panel diffs against the seed base, not the old commit')
   assert.ok(at('defect-seeder') < at('ops:seed-check.sh') && at('ops:seed-check.sh') < at('review-performance'),
     'the tree is checked after the seeder, before the panel')
-  assert.match(calls[at('ops:seed-check.sh')].prompt, new RegExp(`seed-check\\.sh 'review/0684d0a2' '${SEEDED.base}' '${SEEDED.head}'$`))
+  assert.match(calls[at('ops:seed-check.sh')].prompt, new RegExp(`seed-check\\.sh 'review/0684d0a2' '${SEEDED.base}' '${SEEDED.head}' 'P-10' 'PERF-01' 'performance'$`),
+    'the seeder\'s rule and dimension go to seed-check.sh, which holds them to the pattern\'s row (#0-180 r2)')
   assert.ok(at('ops:return-to-main.sh') > at('review-performance') && at('ops:return-to-main.sh') < at('ops:seed-record.sh'),
     'back on main before the row is written')
   assert.equal(calls.at(-1).key, 'ops:seed-record.sh')

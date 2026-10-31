@@ -31,6 +31,10 @@ cp "$SRC"/scripts/factory/_common.sh "$SRC"/scripts/factory/_protected.sh "$SRC"
 cp "$SRC"/.ai/rules/protected-paths.md .ai/rules/
 printf '.ai/runs/\n' > .gitignore
 printf 'v1\n' > svc/A.java && printf 'backlog 1\n' > BACKLOG.md && printf 'x\n' > .claude/x
+# The patterns seed-check.sh holds the seeder's rule and dimension to, read from origin/main (#0-180's rule scope).
+mkdir -p .ai/audit/benchmark && printf '%s\n' '| Id | Dimension | Rule | Defect to plant |' '|---|---|---|---|' \
+    '| P-10 | performance | PERF-01 | a query in a loop |' '| C-01 | architecture | ARC-23 | a per-replica gauge |' \
+    '| P-77 | general | GEN-01 | twice |' '| P-77 | general | GEN-01 | twice |' > .ai/audit/benchmark/patterns.md
 printf 'b\n' > svc/B.java && printf 'd\n' > svc/D.java && printf 'e\n' > svc/E.java && printf 'm1\n' > svc/M.java
 git add -A && git commit -qm base
 printf 'v2\n' > svc/A.java && printf 'backlog 2\n' > BACKLOG.md
@@ -88,7 +92,7 @@ git checkout -q -- svc/A.java
 # The tracked results.md is changed only by a series' pull request now (#0-177): changed by hand, it is dirt like any other.
 mkdir -p .ai/audit/benchmark && printf '| row |\n' > .ai/audit/benchmark/results.md
 reason "an uncommitted results.md is not clean" "^the working tree is not clean$" "$B1" "$change"
-rm -rf .ai/audit
+rm -f .ai/audit/benchmark/results.md
 mkdir -p .ai/runs && echo "R1 $(git rev-parse HEAD)" > .ai/runs/LOCK
 refused "an autopilot run holds the lock" "holds the lock" "$B1" "$change"
 rm -f .ai/runs/LOCK
@@ -134,24 +138,47 @@ check() {   # check <name> <reason regex | ok> <args...>
     elif jq -e --arg re "$re" '.ok == false and (.reason | test($re))' <<<"$out" >/dev/null; then ok "$name"
     else fail "$name: $out"; fi
 }
-check "no edit yet" "changed nothing" "$B1" "$base" "$head"
+T=(P-10 PERF-01 performance)   # the seeder's truth: its pattern, rule and dimension
+check "no edit yet" "changed nothing" "$B1" "$base" "$head" "${T[@]}"
 printf 'v2 planted\n' > svc/A.java
-check "the seeder's edit, uncommitted, in the change's file" ok "$B1" "$base" "$head"
+check "the seeder's edit, uncommitted, in the change's file" ok "$B1" "$base" "$head" "${T[@]}"
 git add svc/A.java
-check "the same edit, staged" ok "$B1" "$base" "$head"
+check "the same edit, staged" ok "$B1" "$base" "$head" "${T[@]}"
 git reset -q
-check "bad base" "not a base commit" "$B1" abc "$head"
-check "a bad branch name" "not a seed branch name" seed/P-10-r1 "$base" "$head"
-check "a base that is not under the head" "is not the commit on top of" "$B1" "$(git rev-parse main)" "$head"
-check "another run's branch" "not on $B9" "$B9" "$base" "$head"
+check "a clean pattern's truth" ok "$B1" "$base" "$head" C-01 ARC-23 architecture
+check "a rule that is not the pattern's" "truth \\(performance, PERF-02\\) is not P-10's \\(performance, PERF-01\\)" "$B1" "$base" "$head" P-10 PERF-02 performance
+check "a dimension that is not the pattern's" "is not C-01's \\(architecture, ARC-23\\)" "$B1" "$base" "$head" C-01 ARC-23 general
+check "a pattern with no row" "P-99 is not one row of" "$B1" "$base" "$head" P-99 PERF-01 performance
+check "a pattern with two rows" "P-77 is not one row of" "$B1" "$base" "$head" P-77 GEN-01 general
+check "a pattern id that is a prefix of another's" "P-1 is not one row of" "$B1" "$base" "$head" P-1 PERF-01 performance
+check "a bad pattern id" "not a pattern id" "$B1" "$base" "$head" 'P-.*' PERF-01 performance
+check "a bad rule id" "not a rule id" "$B1" "$base" "$head" P-10 'PERF-01 x' performance
+check "a bad dimension" "not a dimension" "$B1" "$base" "$head" P-10 PERF-01 'performance;x'
+check "the old three arguments" "usage" "$B1" "$base" "$head"
+git show refs/remotes/origin/main:.ai/audit/benchmark/patterns.md > "$WORK/patterns.md"
+printf '| P-10 | performance | PERF-02 | the branch says otherwise |\n' > .ai/audit/benchmark/patterns.md
+check "the patterns of origin/main, not of the tree" "is not P-10's \\(performance, PERF-01\\)" "$B1" "$base" "$head" P-10 PERF-02 performance
+cp "$WORK/patterns.md" .ai/audit/benchmark/patterns.md
+# And not of HEAD: origin/main moved on to a P-10 of another rule, the branch still has the old one.
+main_was=$(git rev-parse refs/remotes/origin/main)
+blob=$(sed 's/| PERF-01 |/| PERF-02 |/' "$WORK/patterns.md" | git hash-object -w --stdin)
+GIT_INDEX_FILE=$WORK/index git read-tree "$main_was" \
+    && GIT_INDEX_FILE=$WORK/index git update-index --cacheinfo "100644,$blob,.ai/audit/benchmark/patterns.md"
+git update-ref refs/remotes/origin/main "$(git commit-tree -p "$main_was" -m "docs: P-10 moved" "$(GIT_INDEX_FILE=$WORK/index git write-tree)")"
+check "the patterns of origin/main, not of HEAD" ok "$B1" "$base" "$head" P-10 PERF-02 performance
+git update-ref refs/remotes/origin/main "$main_was"
+check "bad base" "not a base commit" "$B1" abc "$head" "${T[@]}"
+check "a bad branch name" "not a seed branch name" seed/P-10-r1 "$base" "$head" "${T[@]}"
+check "a base that is not under the head" "is not the commit on top of" "$B1" "$(git rev-parse main)" "$head" "${T[@]}"
+check "another run's branch" "not on $B9" "$B9" "$base" "$head" "${T[@]}"
 git commit -qam "refactor(svc): simplify"
-check "a seeder that committed" "the seeder committed" "$B1" "$base" "$head"
+check "a seeder that committed" "the seeder committed" "$B1" "$base" "$head" "${T[@]}"
 git reset -q --hard "$head" && printf 'z\n' > svc/Z.java
-check "a file git does not track" "files git does not track: svc/Z.java" "$B1" "$base" "$head"
+check "a file git does not track" "files git does not track: svc/Z.java" "$B1" "$base" "$head" "${T[@]}"
 rm -f svc/Z.java && printf 'v2 planted\n' > svc/A.java && printf 'w\n' > .claude/x
-check "the evaluator, outside the change" "outside the change: \\.claude/x" "$B1" "$base" "$head"
+check "the evaluator, outside the change" "outside the change: \\.claude/x" "$B1" "$base" "$head" "${T[@]}"
 git checkout -q -- .claude/x && printf 'n\n' > svc/M.java
-check "a file outside the change" "outside the change: svc/M.java" "$B1" "$base" "$head"
+check "a file outside the change" "outside the change: svc/M.java" "$B1" "$base" "$head" "${T[@]}"
 git reset -q --hard "$head"
 
 echo "seed-fold.sh: the change and the defect as one commit"
@@ -208,7 +235,7 @@ if [ "$(git reflog show --format='%H %gs' HEAD | tail -n +2)" = "$reflog_before"
 else fail "HEAD reflog: $(git reflog show --format=%gs HEAD | head -5 | tr '\n' '|')"; fi
 git reset -q --hard "$head"
 git switch -q main
-check "not on the seed branch" "on main, not on $B1" "$B1" "$base" "$head"
+check "not on the seed branch" "on main, not on $B1" "$B1" "$base" "$head" "${T[@]}"
 reason "the branch exists already" "exists already" "$B1" "$change"
 if [ "$(git rev-parse "$B1")" = "$head" ] && on_clean_main; then ok "an existing branch is left as it was"; else fail "an existing branch was touched"; fi
 git branch -D -q "$B1"
@@ -223,7 +250,7 @@ if git cat-file -e "$base:svc/B.java" && git cat-file -e "$base:svc/D.java" && !
     ok "the base has B and D back, the head moves B to C and drops D"
 else fail "rename base/head trees"; fi
 printf 'b again\n' > svc/B.java && git add svc/B.java
-check "a file the change deleted, brought back" "outside the change: svc/B.java" "$B3" "$base" "$head"
+check "a file the change deleted, brought back" "outside the change: svc/B.java" "$B3" "$base" "$head" "${T[@]}"
 git reset -q --hard "$head"
 # Git that ran on the branch since seed-branch.sh (a switch away and back, the edit carried along): the newest switch
 # is not the run's, an entry sits above seed-branch.sh's two commits. Refused, the branch where it was.
@@ -291,7 +318,7 @@ record "a run id landed already" "r7 is in \\.ai/audit/benchmark/results\\.md al
 { printf '| r8 | P-12 | PERF-02 | performance | yes | yes | — | — |\n'
   for i in $(seq 1 50000); do printf '| x%s | P-01 | SEC-06 | security | yes | yes | — | — |\n' "$i"; done; } > .ai/audit/benchmark/results.md
 record "a run id landed already, in a long file" "r8 is in \\.ai/audit/benchmark/results\\.md already" r8 P-12 PERF-02 performance yes yes - -
-rm -rf .ai/audit
+rm -f .ai/audit/benchmark/results.md
 record "a bad run id" "not a run id" "r 1" P-10 PERF-01 performance yes yes - -
 record "a bad pattern" "not a pattern id" P-1x r3 PERF-01 performance yes yes - -
 record "a bad rule" "not a rule id" r3 P-10 "PERF-01'" performance yes yes - -
@@ -325,7 +352,7 @@ crecord() {   # crecord <name> <reason regex | ok> <args...>
 }
 crecord "a clean run no dimension stopped" ok c1 C-01 ARC-23 architecture - architecture general -
 crecord "a clean run two dimensions stopped" ok c2 C-02 ARC-29 architecture architecture,general - - docs
-expected='| Run | Pattern | Rule | Expected | False alarm by | Raised, not blocking, by | Blocking elsewhere | No answer |
+expected='| Run | Pattern | Rule | Expected | False alarm by | Raised by | Blocking elsewhere | No answer |
 |---|---|---|---|---|---|---|---|
 | c1 | C-01 | ARC-23 | architecture | — | architecture | general | — |
 | c2 | C-02 | ARC-29 | architecture | architecture, general | — | — | docs |'
@@ -337,7 +364,7 @@ crecord "a run id of the defects' table" "r1 is in \\.ai/runs/benchmark/results\
 record "a defect run id of the clean table" "c1 is in \\.ai/runs/benchmark/clean\\.md already" c1 P-07 ARC-23 architecture yes yes - -
 mkdir -p .ai/audit/benchmark && printf '| c9 | C-01 | ARC-23 | architecture | — | — | — | — |\n' > .ai/audit/benchmark/clean.md
 crecord "a run id landed in the tracked clean table" "c9 is in \\.ai/audit/benchmark/clean\\.md already" c9 C-01 ARC-23 architecture - - - -
-rm -rf .ai/audit
+rm -f .ai/audit/benchmark/clean.md
 crecord "the wrong number of arguments" "usage" c4 C-01 ARC-23 architecture - - -
 if on_clean_main; then ok "main stays clean: the clean rows are gitignored"; else fail "the clean rows dirty main: $(git status --porcelain)"; fi
 

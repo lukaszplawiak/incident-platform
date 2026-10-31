@@ -48,9 +48,10 @@ subject (#0-177), so its message was thrown away.
    (architecture review round 1). If the record cannot be read, or names a commit the repository does not hold, the
    guard falls back to `base_ref`, the stricter answer, and `write-scope.sh --seed` refuses (security review
    round 1).
-5. **A factory script makes the commit.** `seed-check.sh <branch> <base> <head>` requires HEAD at `<head>` (a seeder
-   commit is refused), no untracked file, and changes only in the change's files. `seed-fold.sh <branch> <base>
-   <head>` writes the working tree through an index of its own and commits it on `<base>` under the change's subject.
+5. **A factory script makes the commit.** `seed-check.sh <branch> <base> <head>` (since #0-180's rule scope also
+   `<pattern> <rule> <dimension>`, ADR-0044 decision 4) requires HEAD at `<head>` (a seeder commit is refused), no
+   untracked file, and changes only in the change's files. `seed-fold.sh <branch> <base> <head>` writes the working
+   tree through an index of its own and commits it on `<base>` under the change's subject.
    It requires exactly seed-branch.sh's two commits in the HEAD reflog above the run's switch, so any git that ran
    on the branch since is refused. The reflog trimming of ADR-0044 decision 6 stays.
 

@@ -47,7 +47,8 @@ review reached the original 4 times of 4 (backlog #0-185, ADR-0044 decision 6). 
 
 A clean pattern plants a correct change that a careless reading of its rule would block: the rule's deliberate
 exception, with the reason the rule asks for. The run measures false alarms, not catches: a dimension that stops the
-change at the planted line is a false alarm, one that only notes it applied the rule as written. Plant the change so
+change at the planted line under the pattern's rule is a false alarm, one that notes it, or stops it under another rule
+(a test asked for under GEN-01), is recorded as raised. Plant the change so
 that it is right, as the existing example it names is; a plant that is not right measures nothing (the owner reads the
 row before it lands). The panel's prompt is the same as for a defect: rotate clean and defect runs in a series.
 

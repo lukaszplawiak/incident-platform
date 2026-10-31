@@ -3650,6 +3650,22 @@ clean runs.
 - Review round 2: architecture's blocking finding resolved (architecture APPROVE). Owner: "popraw". A clean run now
   needs the seeder to say `kind: "clean"`. A `C-` answer without it fails, since it may have planted a defect that a
   dimension rightly blocked. A defect run may still leave it out. Test and mutation added.
+- First clean run, `clean-c01` (2026-10-31, C-01 on `aace4118`, blind, scanned clean):
+  - architecture, the expected dimension, approved the per-replica gauge (no false alarm on ARC-23's exception);
+  - performance noted it (PERF-22, non-blocking);
+  - general stopped it under GEN-01: the planted method had no test, which is a right finding.
+  Under decision 7's first wording that read as general's false alarm. The owner chose A: a false alarm is a stop under
+  the pattern's rule only (its id, or the expected dimension's finding with no id), and a stop under another rule is
+  raised. The row was dropped and C-01 runs again under the fixed measure. 4 mutations caught.
+- Review round 1 of the fix (`/review 17`): general and architecture APPROVE, nothing blocking. Owner: "1-4". The rule
+  id is matched trimmed, in any case and as a prefix, never a longer id or one cited second (test, 5 mutations
+  caught); ADR-0044 says why catches and false alarms are scored differently, and its status names the amendment.
+- Review round 2 (`/review 17`): general and architecture APPROVE, nothing blocking. Owner: "A and the sentence of
+  nb 2". `seed-check.sh` now holds the seeder's rule and dimension to its pattern's row of `patterns.md` on
+  `origin/main`, before the panel (architecture's nb 1, FAC-A02: the false-alarm measure rested on the seeder's word);
+  first proposed in `seed-record.sh`, moved to `seed-check.sh` by the owner since a refusal after the panel would
+  have left a measure under the wrong rule. 12 cases, 9 mutations caught. ADR-0044 decision 7 says why a finding
+  with no rule id from another dimension is raised (nb 2).
 - Left for after the merge: the first series (C-01 on a host that touches a `@Scheduled` job, e.g. `aace4118`'s
   `OperatorTenantBootstrap`, rotated with a defect run).
 
