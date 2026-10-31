@@ -119,7 +119,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | In progress |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
@@ -3578,7 +3577,7 @@ measurement data (a benchmark row) must be in the data the audit's script reads,
 
 ### 0-180. `/seed-bugs` measures catches, never false alarms
 
-**Type:** design · **Priority:** Low · **Status:** In progress (2026-10-31). The owner's question on P-07 of #0-115's `architecture.md`
+**Type:** design · **Priority:** Low · **Status:** Done, PRs #559, #560, #561 (kept for the decision history). The owner's question on P-07 of #0-115's `architecture.md`
 series (2026-10-26): the code has deliberate exceptions to a rule, so does the measure check that the panel leaves
 them alone?
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
