@@ -3770,6 +3770,9 @@ AC3. P-17 run again on `fc368943` after the change records docs as caught withou
   - Rule gap (architecture): `audit.md` does not say that rows before this step may have been measured on a plant that
     did not build (`docs-after-p17`). Recorded here, no item.
   - #0-181 stays In progress until AC3 (P-17 on `fc368943`, a new run id).
+- **AC3 (2026-10-31, `docs-p17-r2`, blind, scanned clean):** the plant compiled; docs caught and blocked it under DOC-11
+  at line 266, inside the seeder's edit, with no hand reading (`onlyAtAlso` empty); general and architecture also
+  caught it. Row and note in `.ai/audit/benchmark/results.md`.
 
 ### 0-182. The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option
 
