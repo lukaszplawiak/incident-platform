@@ -168,8 +168,9 @@ async function measure() {
   // seed branch at the change's commit, with the seeder's edit uncommitted in the change's files only. Fixed (backlog
   // #0-172): the seeder committed, with a Bash and an Edit no hook held (it could switch, write any file, append to a
   // migration); now its hooks hold it to read-only git and to the change's files (readonly-bash.sh, write-scope.sh
-  // --seed), and a factory script makes the commit (ADR-0047).
-  const check = await ops('seed-check.sh', [BRANCH, seed.base, seed.head], 'seed check')
+  // --seed), and a factory script makes the commit (ADR-0047). It also holds the seeder's rule and dimension to its
+  // pattern's row (review round 2 of #0-180's rule scope): a clean run's false alarm counts under that rule only.
+  const check = await ops('seed-check.sh', [BRANCH, seed.base, seed.head, params.pattern, truth.rule, truth.dimension], 'seed check')
   if (check?.ok !== true || !Array.isArray(check.files) || !check.files.includes(truth.file)) {
     return finish({ outcome: 'FAILED', reason: `the seed branch is not as the seeder says: ${String(check?.reason ?? JSON.stringify(check)).slice(0, 300)}` })
   }
@@ -199,13 +200,27 @@ async function measure() {
   // there: in the autopilot NEEDS_HUMAN stops the item too (GEN-08, ARC-01, ARC-05, ARC-06 ask for it; #0-180's Also).
   const stops = (v) => v.blocking.some(near) || (v.verdict === 'NEEDS_HUMAN' && v.nonBlocking.some(near))
   const noAnswer = PANEL.filter((d, i) => !answered[i])
+  // A clean run's false alarm is a stop under the pattern's rule: a finding at the planted line that cites it, or, with
+  // no rule id, the expected dimension's. A stop there under another rule is that rule applied to the plant, not a false
+  // alarm of the exception (clean-c01: general rightly asked a test of the new method under GEN-01; review of the first
+  // clean run).
+  // A reviewer's rule id is matched the ways reviewers write it: trimmed, in any case, and as a prefix ("ARC-23
+  // (exception)"), but never a longer id ("ARC-230") or one cited after another ("GEN-01, not ARC-23"); truth.rule is
+  // checked above to hold letters, digits and dashes only (review r1 of the first clean run).
+  const citesRule = (id) => new RegExp(`^${truth.rule}\\b`, 'i').test(id)
+  const onRule = (v) => (f) => {
+    const id = String(f.ruleId ?? '').trim()
+    return near(f) && (id ? citesRule(id) : v.dimension === truth.dimension)
+  }
+  const falseAlarm = (v) => v.blocking.some(onRule(v)) || (v.verdict === 'NEEDS_HUMAN' && v.nonBlocking.some(onRule(v)))
   const result = CLEAN ? {
-    // A clean run (#0-180): the change at the planted line is right. A dimension that stops it is a false alarm; one
-    // that only notes it did what the rule asks. A blocking finding elsewhere is the host's, not this run's: recorded,
-    // not counted (19 of 71 blocking findings of the defect runs before it were the host's or the plant's other half).
+    // A clean run (#0-180): the change at the planted line is right under its rule. A dimension that stops it under that
+    // rule is a false alarm; one that notes it, or stops it under another rule, is recorded as raised. A blocking
+    // finding elsewhere is the host's, not this run's: recorded, not counted (19 of 71 blocking findings of the defect
+    // runs before it were the host's or the plant's other half).
     runId: params.runId, pattern: params.pattern, kind: 'clean', rule: truth.rule, expected: truth.dimension,
-    falseAlarmBy: answered.filter(Boolean).filter(stops).map((v) => v.dimension),
-    raisedBy: answered.filter(Boolean).filter((v) => !stops(v) && [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension),
+    falseAlarmBy: answered.filter(Boolean).filter(falseAlarm).map((v) => v.dimension),
+    raisedBy: answered.filter(Boolean).filter((v) => !falseAlarm(v) && [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension),
     blockingElsewhere: answered.filter(Boolean).filter((v) => v.blocking.some((f) => !near(f))).map((v) => v.dimension),
     noAnswer,
   } : {

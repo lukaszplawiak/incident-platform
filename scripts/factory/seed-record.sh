@@ -78,7 +78,7 @@ if [ -n "$clean" ]; then
     CLEAN_FILE="$RUNS_DIR/benchmark/clean.md"
     mkdir -p "$(dirname "$CLEAN_FILE")" || refuse "cannot make $(dirname "$CLEAN_FILE")"
     if [ ! -s "$CLEAN_FILE" ]; then
-        printf '%s\n%s\n' '| Run | Pattern | Rule | Expected | False alarm by | Raised, not blocking, by | Blocking elsewhere | No answer |' \
+        printf '%s\n%s\n' '| Run | Pattern | Rule | Expected | False alarm by | Raised by | Blocking elsewhere | No answer |' \
             '|---|---|---|---|---|---|---|---|' > "$CLEAN_FILE" || refuse "cannot write $CLEAN_FILE"
     fi
     printf '| %s | %s | %s | %s | %s | %s | %s | %s |\n' "$run" "$pattern" "$rule" "$expected" "$falsealarm" "$raised" \

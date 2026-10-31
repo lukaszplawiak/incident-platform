@@ -252,7 +252,7 @@ The agents' instructions are not a boundary; these are, each with its limit:
   Edit reaches only the change's files (`write-scope.sh --seed`, from the run's record `.ai/runs/SEED`, which also gives
   `guard-migrations.sh` the run's base, so a migration the change added can be planted in). `scripts/factory/seed-check.sh`
   confirms the tree after the seeder (on the branch at the change's commit, its edit uncommitted and in the change's
-  files only), and `scripts/factory/seed-fold.sh` makes the change and the edit one commit before the panel runs.
+  files only, and its rule and dimension its pattern's row of `patterns.md` on `origin/main`, #0-180), and `scripts/factory/seed-fold.sh` makes the change and the edit one commit before the panel runs.
   Nothing the panel reads names the run (#0-177): the branch is `review/<8 hex>` (derived from the pattern and the run
   id), the base says `Revert "<subject>"`, and the change and the defect are one commit, with the run's reflog entries
   dropped (the branch's, and HEAD's above the switch onto it; the rest of your HEAD reflog stays). The catalogue
@@ -282,9 +282,10 @@ The agents' instructions are not a boundary; these are, each with its limit:
   says so (#0-170): a seeder that was refused a command, a skip without a reason and an answer without its branch,
   file, line or rule end it FAILED, not SKIPPED.
   A clean run (#0-180, ADR-0044 decision 7) takes a `C-` pattern, a rule's deliberate exception planted with its
-  reason, and measures false alarms instead of catches: a dimension that stops the change at the planted line is a
-  false alarm, one that only notes it applied the rule. Its row goes to `.ai/runs/benchmark/clean.md` (then
-  `.ai/audit/benchmark/clean.md`). The panel's prompt is the same, so rotate clean and defect runs in a series.
+  reason, and measures false alarms instead of catches: a dimension that stops the change at the planted line under
+  the pattern's rule is a false alarm, one that notes it, or stops it under another rule, is recorded as raised. Its
+  row goes to `.ai/runs/benchmark/clean.md` (then `.ai/audit/benchmark/clean.md`). The panel's prompt is the same, so
+  rotate clean and defect runs in a series.
 - **What the rule files claim** (backlog #0-184, ADR-0046): Factory guards' "Review rule claims are true"
   (`.github/scripts/check-rule-claims.rb`) fails a label naming a script, test or guard that does not exist, an
   "Enforced by" whose check runs in no required job on a pull request, only while continuing on error or only in

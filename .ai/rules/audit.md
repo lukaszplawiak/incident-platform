@@ -229,13 +229,14 @@ original in reach` (#0-185), is an upper bound, not a hard fact: count it as cau
 recommendation's confidence. The same note in "Also caught by" applies to that reviewer only (ADR-0044 decision 6).
 
 Clean runs (`.ai/audit/benchmark/clean.md`, backlog #0-180) plant a rule's deliberate exception, a correct change
-(the `C-` patterns). A dimension in "False alarm by" stopped a correct change: count it as a false alarm of that
-dimension, beside the owner's `human:fp-<dimension>` labels, once the owner has read the row. "Raised, not blocking,
-by" is the rule applied as written, not a false alarm. "Blocking elsewhere" is the host's code, not the run's: not
-counted. "No answer" on a clean run is no measure for that dimension, not a pass. A clean run is never a missed
-catch, and a defect row never a false alarm. From #0-180 on, a defect row's "Blocking" also counts `NEEDS_HUMAN` with
-a finding at the planted line (it stops the item in the autopilot as a blocking finding does); the rows before it
-counted blocking findings only, so a `no` there may be a `NEEDS_HUMAN` the old scoring missed.
+(the `C-` patterns). A dimension in "False alarm by" stopped a correct change under the pattern's rule: count it as
+a false alarm of that dimension, beside the owner's `human:fp-<dimension>` labels, once the owner has read the row.
+"Raised by" is the rule applied as written, or another rule applied to the plant (a test asked for
+under GEN-01), not a false alarm. "Blocking elsewhere" is the host's code, not the run's: not counted. "No answer"
+on a clean run is no measure for that dimension, not a pass. A clean run is never a missed catch, and a defect row
+never a false alarm. From #0-180 on, a defect row's "Blocking" also counts `NEEDS_HUMAN` with a finding at the
+planted line (it stops the item in the autopilot as a blocking finding does); the rows before it counted blocking
+findings only, so a `no` there may be a `NEEDS_HUMAN` the old scoring missed.
 
 ## Calibration
 

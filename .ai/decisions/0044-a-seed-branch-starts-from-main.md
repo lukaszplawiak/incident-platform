@@ -3,7 +3,7 @@
 - **Status:** Accepted (2026-10-25); decision 5 amended and decision 6 added by #0-177 (2026-10-26); the seeder commits
   nothing since #0-172 (ADR-0047, 2026-10-30): where this ADR folds "the seeder's commit", the fold now takes its edit;
   decision 6's scans by hand are helped by a script and a run starts from a turn with no user message, since #0-179
-  (2026-10-30); decision 7 (clean runs) added by #0-180 (2026-10-31)
+  (2026-10-30); decision 7 (clean runs) added by #0-180 (2026-10-31) and amended after `clean-c01` (2026-10-31)
 - **Backlog:** #0-173, #0-177, #0-179, #0-180
 - **Date:** 2026-10-25
 - **Author:** human (owner chose F2 of the research, then the proposals of review round 1; for #0-177, 1a with a script,
@@ -59,6 +59,9 @@ A run that had gone through would have had the panel review under older agents a
      - that commit touches only the change's files.
    - The workflow then checks that the ground truth's file is among the files the commit touched. Anything else fails
      the run.
+   - Since #0-180's rule scope it takes `<branch> <base> <head> <pattern> <rule> <dimension>` (the `<branch> <base>
+     <head>` of ADR-0047, and the seeder's rule and dimension, which must be the pattern's row of `patterns.md` on
+     `origin/main`; decision 7 says why).
    - The seeder keeps `git switch` among its allowed commands: its instructions forbid the switch and this check
      catches one after the fact (the run ends FAILED with `leftOn`). A guard that refuses it before the call is #0-172's.
    - The files the seeder may touch leave out the ones the change deleted, as in `seed-branch.sh`'s `files`.
@@ -201,8 +204,21 @@ A run that had gone through would have had the panel review under older agents a
    Benchmark, which score both rates).
    - The kind comes from the pattern id, never from the seeder. A seeder whose `kind` is not its pattern's fails the
      run. The panel's prompt is the same as a defect's, so a series rotates both.
-   - A dimension that stops the change at the planted line (a blocking finding there, or `NEEDS_HUMAN` with a finding
-     there) is a false alarm. One that only notes it applied the rule as written.
+   - A dimension that stops the change at the planted line under the pattern's rule is a false alarm: a blocking
+     finding there citing that rule (or, with no rule id, the expected dimension's), or `NEEDS_HUMAN` with such a
+     finding. One that only notes it, or stops it under another rule, is recorded as raised: in the first clean run
+     (`clean-c01`, 2026-10-31) general rightly asked for a test of the planted method under GEN-01, which is that rule
+     applied to the plant, not a false alarm of ARC-23's exception. Catches and false alarms are scored differently on
+     purpose: a defect run's catch counts under any rule (the defect is wrong whichever rule names it), a clean run's
+     false alarm only under the pattern's rule (the exception is right under that rule alone).
+     - A blocking finding at the plant with no rule id, from a dimension other than the expected one, is raised, not a
+       false alarm: `_common.md` holds a blocking finding without a rule id invalid, so it names no rule the
+       exception could be wrong under. This is the generous reading of a false-alarm measure, chosen on purpose
+       (review round 2).
+     - The rule and the dimension come from the pattern, not from the seeder: `seed-check.sh` fails the run, before
+       the panel, when the seeder's are not its pattern's row of `patterns.md` on `origin/main` (review round 2). A
+       seeder naming another rule would turn a false alarm into "raised", and a defect run would score its catch
+       against another dimension.
    - A blocking finding elsewhere is recorded and not counted: of the 71 blocking findings of the 25 defect runs
      before it, 19 were not at the plant. They were the host's own code (general's GEN-04 on `47b95294` four times, a
      real gap: #0-189), the plant's other half (#0-181) and an old host's artifact.

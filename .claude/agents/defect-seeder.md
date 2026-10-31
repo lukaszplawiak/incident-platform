@@ -46,7 +46,8 @@ refusal, verbatim>"}` (backlog #0-170: a refusal reported as a skip measured not
 ```
 
 Every field is needed: the workflow fails a run whose answer lacks the branch, the file (one your task listed), the
-line or the rule.
+line or the rule. The dimension and the rule are your pattern's, as its row of `patterns.md` names them: any other
+fails the run (`seed-check.sh`, #0-180).
 
 **A clean pattern** (an id starting `C-`, backlog #0-180) is not a defect: it is a correct change that a careless
 reading of its rule would block, the rule's deliberate exception planted with the reason the rule asks for. Plant it so
