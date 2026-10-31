@@ -122,6 +122,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
+| [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4022,6 +4023,35 @@ tenant filter holds and the status filter applies only when given.
 AC1. A repository integration test runs `findByTenantIdAndOptionalStatus` with a status and with none, and shows the
 tenant and status filters (another tenant's schedules never returned).
 AC2. Removing the tenant predicate or the status predicate fails it.
+
+### 0-190. A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Found in `clean-c01-r3` (2026-10-31): the seeder named line 134,
+the host's own per-replica job, not its plant at 148-165, and `seed-bugs.js` failed the run ("the seeder's line is not
+in its edit", #0-181), rightly.
+**Autopilot:** not-ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (scripts/factory/return-to-main.sh, .claude/workflows/seed-bugs.js,
+.github/scripts/test-seed-branch.sh, .github/scripts/test-autopilot-workflow.mjs), docs (ADR-0044, docs/ai-factory.md)
+
+**Problem.** Every failure after the seeder's edit (`seed-check.sh` refuses it, the line is not in it, an `also`
+place is wrong, the fold or the compile fails) ends with the seeder's edit uncommitted on the seed branch.
+`return-to-main.sh` never discards work (`working tree not clean: left as it is for the owner`), so the run ends on
+`review/<hex>` and the owner restores the file, runs `return-to-main.sh` and deletes the branch by hand
+(`clean-c01-r3`). Until then the session runs on the seed branch, with `.ai/runs/SEED` still holding the seeder's
+scope, and the next run is refused. The edit is the run's own: a throwaway plant on a throwaway branch.
+
+**Approach (to analyse).**
+- `return-to-main.sh` takes an explicit mode for a seed run that discards only a tracked edit of the change's files on
+  the branch named in `.ai/runs/SEED` (never untracked files, never another branch, never on `main`), then returns.
+  The autopilot's call keeps "never discards work".
+- Or `seed-bugs.js` keeps the plant's diff in the outcome (for the owner to read) and asks a new `seed-discard.sh`.
+- Either way, the outcome says what was discarded, so a failed run's plant can still be read.
+
+**Acceptance criteria.**
+AC1. A seed run that fails after the seeder's edit ends on a clean `main`, the branch deleted and `.ai/runs/SEED`
+gone; shown by tests.
+AC2. Nothing but the run's tracked edit on its own branch is ever discarded (untracked files, another branch, `main`
+and an autopilot run keep today's refusal); shown by tests.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
