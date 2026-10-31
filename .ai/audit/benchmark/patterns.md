@@ -6,6 +6,8 @@ recently merged change, runs the review panel on it and records who caught it. A
 
 Each pattern: an id, the dimension that must catch it, the rule it violates, and how to plant it. Plant
 the smallest edit that produces the defect in real code of the change — never a comment that announces it.
+A defect with a half the seeder leaves unedited on purpose says so ("also: …"): the seeder names that place in its
+answer, and a finding there counts as at the plant (backlog #0-181, ADR-0044 decision 8).
 
 | Id | Dimension | Rule | Defect to plant |
 |---|---|---|---|
@@ -25,8 +27,8 @@ the smallest edit that produces the defect in real code of the change — never 
 | P-14 | migration | MIG-02 | retired 2026-10-26 (#0-115): cannot be planted, since the seeder may touch only the change's files and a migration the change adds is not yet on the base |
 | P-15 | general | GEN-03 | replace a state assertion in a test with a bare `verify(...)` |
 | P-16 | general | GEN-08 | add `@Disabled` to a failing test without a reason |
-| P-17 | docs | DOC-11 | change a method to throw instead of returning `null`, leave its Javadoc `@return null if…` |
-| P-18 | docs | DOC-01 | add a required config key without the README "Step 2" template line |
+| P-17 | docs | DOC-11 | change a method to throw instead of returning `null`, leave its Javadoc `@return null if…` (also: that Javadoc line) |
+| P-18 | docs | DOC-01 | add a required config key without the README "Step 2" template line (also: the README template's line where it belongs) |
 | P-19 | migration | MIG-05 | add a `FOREIGN KEY` or `UNIQUE` constraint to an existing table in one step: drop its `NOT VALID` (validated later), or skip the check that no row violates it; on a host where nothing else guarantees the rows (V31 locks and backfills first, so dropping `NOT VALID` there is within MIG-05: mig-after-p19) |
 | P-20 | k8s | K8S-08 | add a `<repository>`, `<pluginRepository>` or `<plugin>` to a `pom.xml` the change touches |
 | P-21 | k8s | K8S-10 | drop `@{argLine}` from a surefire `<argLine>`, or replace it with `${argLine}` |

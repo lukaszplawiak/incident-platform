@@ -599,7 +599,8 @@ const SEED_ARGS = { pattern: 'P-10', commit: 'abc1234', runId: 'r1' }
 // The branch of P-10, run r1: FNV-1a of "P-10\nr1" (seed-bugs.js, seedBranchOf; backlog #0-177).
 const BRANCH = 'review/0684d0a2'
 const SEEDED = { ok: true, branch: BRANCH, base: 'b'.repeat(40), head: 'c'.repeat(40), files: ['svc/src/main/java/A.java'] }
-const CHECKED = { ok: true, files: ['svc/src/main/java/A.java'] }
+// seed-check.sh's hunks: the seeder's edit, lines 38-42 of A.java (backlog #0-181); TRUTH's line 40 is inside.
+const CHECKED = { ok: true, files: ['svc/src/main/java/A.java'], hunks: [{ file: 'svc/src/main/java/A.java', start: 38, end: 42 }] }
 const FOLDED = { ok: true, head: 'e'.repeat(40) }
 const RECORDED = { appended: true, file: '.ai/runs/benchmark/results.md' }
 async function seed(answers, ...given) {
@@ -734,6 +735,77 @@ test('seed-bugs: a planted defect is measured and recorded', async () => {
   assert.equal(outcome.recorded, true)
   const missed = await seed({ 'defect-seeder': TRUTH })
   assert.equal(missed.outcome.caughtByExpected, false)
+})
+
+// The ground truth is the seeder's edit (backlog #0-181): seed-check.sh's hunks, plus at most two places the seeder left
+// unedited on purpose; a finding within 5 lines of any of them is at the plant.
+const A = 'svc/src/main/java/A.java'
+const hunked = (hunks, files = [A]) => ({ 'ops:seed-check.sh': { ok: true, files, hunks } })
+const finding = (dimension, line, file = A, extra = {}) => approve(dimension, { verdict: 'CHANGES_REQUESTED',
+  blocking: [{ issue: 'stop', file, line, ...extra }] })
+
+test('seed-bugs: a finding anywhere in the edit, or within 5 lines of it, is at the plant (#0-181)', async () => {
+  // A method and its Javadoc, lines 30-42; the seeder named line 40 (clean-c01-r2: a note at the Javadoc, line 145,
+  // seven lines above the named line 152, was out of the row).
+  const { outcome } = await seed({ 'defect-seeder': TRUTH, ...hunked([{ file: A, start: 30, end: 42 }]),
+    'review-performance': finding('performance', 25), 'review-docs': finding('docs', 47),
+    'review-general': finding('general', 24), 'review-security': finding('security', 48) })
+  assert.equal(outcome.caughtByExpected, true, 'performance at line 25: 5 above the hunk')
+  assert.deepEqual(outcome.caughtBy.sort(), ['docs', 'performance'], 'lines 24 and 48 are 6 away: not at the plant')
+  // Two hunks, the second in another file the seeder changed.
+  const two = await seed({ 'defect-seeder': TRUTH, ...hunked([{ file: A, start: 40, end: 40 }, { file: 'svc/B.java', start: 7, end: 9 }],
+    [A, 'svc/B.java']), 'review-docs': finding('docs', 8, 'svc/B.java') })
+  assert.deepEqual(two.outcome.caughtBy, ['docs'])
+  assert.deepEqual(two.outcome.onlyAtAlso, [], 'a hunk is the edit, not a named place')
+})
+
+test('seed-bugs: a clean run counts a stop at its Javadoc as a false alarm, not only at the named line (#0-181)', async () => {
+  const javadoc = approve('architecture', { verdict: 'CHANGES_REQUESTED', blocking: [{ ruleId: 'ARC-23', issue: 'no lock', file: A, line: 31 }] })
+  const first = await seed({ 'defect-seeder': CLEAN_TRUTH }, CLEAN_ARGS)
+  const branch = first.calls.find((c) => c.key === 'ops:seed-branch.sh').prompt.match(/review\/[0-9a-f]{8}/)[0]
+  const { outcome } = await seed({ 'defect-seeder': { ...CLEAN_TRUTH, branch }, 'ops:seed-branch.sh': { ...SEEDED, branch },
+    ...hunked([{ file: A, start: 31, end: 40 }]), 'review-architecture': javadoc }, CLEAN_ARGS)
+  assert.deepEqual(outcome.falseAlarmBy, ['architecture'], 'line 31 is 9 above the named line 40, inside the edit')
+})
+
+test('seed-bugs: a place the seeder left unedited counts, and the outcome says who reached only it (#0-181)', async () => {
+  const truth = { ...TRUTH, also: [{ file: 'README.md', line: 120 }, { file: A, line: 7 }] }
+  const { outcome, calls } = await seed({ 'defect-seeder': truth, 'review-docs': finding('docs', 123, 'README.md'),
+    'review-performance': finding('performance', 41), 'review-general': finding('general', 3) })
+  assert.match(calls.find((c) => c.key === 'ops:seed-check.sh').prompt, / 'performance' 'README\.md:120' 'svc\/src\/main\/java\/A\.java:7'$/,
+    'each place reaches seed-check.sh, which checks it is a regular file at HEAD with the line')
+  assert.deepEqual(outcome.caughtBy.sort(), ['docs', 'general', 'performance'])
+  assert.deepEqual(outcome.onlyAtAlso.sort(), ['docs', 'general'], 'performance reached the edit itself')
+  // A place in another file at a line the edit's file has in a hunk is not inside the edit.
+  const other = await seed({ 'defect-seeder': { ...TRUTH, also: [{ file: 'README.md', line: 40 }] } })
+  assert.equal(other.outcome.outcome, 'MEASURED', JSON.stringify(other.outcome))
+})
+
+test('seed-bugs: a truth the edit does not hold, or places that are not at most two plain ones, fail the run (#0-181)', async () => {
+  for (const [name, answers, reason] of [
+    ['the named line outside the edit', { 'defect-seeder': { ...TRUTH, line: 44 } }, /line is not in its edit/],
+    ['no hunks', hunked([]), /line is not in its edit/],
+    ['hunks missing', { 'ops:seed-check.sh': { ok: true, files: [A] } }, /line is not in its edit/],
+    ['a hunk in a file the seeder did not change', hunked([{ file: A, start: 38, end: 42 }, { file: 'svc/C.java', start: 1, end: 1 }]), /line is not in its edit/],
+    ['a hunk that ends before it starts', hunked([{ file: A, start: 38, end: 42 }, { file: A, start: 9, end: 5 }]), /line is not in its edit/],
+    ['a hunk at line 0', hunked([{ file: A, start: 38, end: 42 }, { file: A, start: 0, end: 0 }]), /line is not in its edit/],
+    ['a hunk as strings', hunked([{ file: A, start: '38', end: '42' }]), /line is not in its edit/],
+    ['three places', { 'defect-seeder': { ...TRUTH, also: [1, 2, 3].map((line) => ({ file: A, line })) } }, /at most two/],
+    ['a place above the tree', { 'defect-seeder': { ...TRUTH, also: [{ file: '../x', line: 1 }] } }, /at most two/],
+    ['a place in a dot-dot directory', { 'defect-seeder': { ...TRUTH, also: [{ file: 'a/../b', line: 1 }] } }, /at most two/],
+    ['an absolute place', { 'defect-seeder': { ...TRUTH, also: [{ file: '/etc/passwd', line: 1 }] } }, /at most two/],
+    ['a place with a quote', { 'defect-seeder': { ...TRUTH, also: [{ file: "a' 'b", line: 1 }] } }, /at most two/],
+    ['a place at line 0', { 'defect-seeder': { ...TRUTH, also: [{ file: A, line: 0 }] } }, /at most two/],
+    ['places not a list', { 'defect-seeder': { ...TRUTH, also: { file: A, line: 1 } } }, /at most two/],
+    ['a place inside the edit', { 'defect-seeder': { ...TRUTH, also: [{ file: A, line: 42 }] } }, /inside its edit/],
+  ]) {
+    const { outcome } = await seed({ 'defect-seeder': TRUTH, ...answers })
+    assert.equal(outcome.outcome, 'FAILED', name)
+    assert.match(outcome.reason, reason, name)
+  }
+  // A line beside a deletion is in the edit: a removed line leaves a hunk of one line where it was.
+  const del = await seed({ 'defect-seeder': { ...TRUTH, line: 41 }, ...hunked([{ file: A, start: 40, end: 40 }]) })
+  assert.equal(del.outcome.outcome, 'MEASURED', JSON.stringify(del.outcome))
 })
 
 test('seed-bugs: the branch comes from seed-branch.sh, never from the seeder, and the run ends on main (#0-173)', async () => {

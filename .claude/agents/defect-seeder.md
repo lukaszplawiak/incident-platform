@@ -45,6 +45,12 @@ refusal, verbatim>"}` (backlog #0-170: a refusal reported as a skip measured not
   "file": "path/File.java", "line": 42, "description": "what was planted, one line" }
 ```
 
+The line is one line of your edit: the workflow reads the whole edit from the tree (`seed-check.sh`, backlog #0-181)
+and fails a run whose line is not in it. If the pattern's defect also has a half you leave unedited on purpose (the
+Javadoc that still says `@return null`, the README line you did not add), name it in
+`"also": [{"file": "path", "line": 12}]`, at most two places, each a line the file has; never a place you edited (the
+run fails), and never one only to widen the measure.
+
 Every field is needed: the workflow fails a run whose answer lacks the branch, the file (one your task listed), the
 line or the rule. The dimension and the rule are your pattern's, as its row of `patterns.md` names them: any other
 fails the run (`seed-check.sh`, #0-180).

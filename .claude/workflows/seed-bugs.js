@@ -69,7 +69,9 @@ const FILES_FIELD = { type: 'array', items: { type: 'string' } }
 const ANSWERS = {
   'seed-branch.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, branch: { type: 'string' }, base: SHA_FIELD,
     head: SHA_FIELD, files: FILES_FIELD }),
-  'seed-check.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, files: FILES_FIELD }),
+  'seed-check.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, files: FILES_FIELD,
+    hunks: { type: 'array', items: { type: 'object', additionalProperties: false,
+      properties: { file: { type: 'string' }, start: { type: 'number' }, end: { type: 'number' } } } } }),
   'seed-fold.sh': answerOf({ ok: { type: 'boolean' }, reason: { type: 'string' }, head: SHA_FIELD }),
   'seed-record.sh': answerOf({ appended: { type: 'boolean' }, reason: { type: 'string' }, file: { type: 'string' } }),
   'return-to-main.sh': answerOf({ onMain: { type: 'boolean' }, branch: { type: 'string' }, left: { type: 'string' },
@@ -141,7 +143,8 @@ async function measure() {
     schema: { type: 'object', properties: { skipped: { type: 'boolean' }, blocked: { type: 'boolean' }, reason: { type: 'string' },
       branch: { type: 'string' }, pattern: { type: 'string' }, kind: { type: 'string', enum: ['defect', 'clean'] },
       dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' },
-      line: { type: 'number' }, description: { type: 'string' } } },
+      line: { type: 'number' }, description: { type: 'string' },
+      also: { type: 'array', items: { type: 'object', properties: { file: { type: 'string' }, line: { type: 'number' } } } } } },
   })
   // Fixed (backlog #0-170): the first run on record came back SKIPPED with no reason, measuring nothing: the seeder's
   // commands had been refused (`git -C …` matches none of the session's allow rules), and a blocked tool and "this
@@ -164,15 +167,38 @@ async function measure() {
       || (CLEAN ? truth.kind !== 'clean' : (truth.kind ?? 'defect') !== 'defect')) {
     return finish({ outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` })
   }
+  // The half of a defect the seeder left unedited on purpose (backlog #0-181: P-17's stale Javadoc, P-18's missing README
+  // line), at most two places: each reaches seed-check.sh's command line as <file>:<line>, which checks it is a
+  // regular file at HEAD with the line. The rest of the truth is the edit itself, from seed-check.sh's hunks.
+  const also = truth.also ?? []
+  if (!Array.isArray(also) || also.length > 2 || !also.every((p) => p && /^[A-Za-z0-9._@+-]+(\/[A-Za-z0-9._@+-]+)*$/.test(String(p.file))
+      && !`/${p.file}/`.includes('/../') && Number.isInteger(p.line) && p.line >= 1)) {
+    return finish({ outcome: 'FAILED', reason: `defect-seeder's other places are not at most two <file>, <line>: ${JSON.stringify(truth.also).slice(0, 300)}` })
+  }
   // The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the
   // seed branch at the change's commit, with the seeder's edit uncommitted in the change's files only. Fixed (backlog
   // #0-172): the seeder committed, with a Bash and an Edit no hook held (it could switch, write any file, append to a
   // migration); now its hooks hold it to read-only git and to the change's files (readonly-bash.sh, write-scope.sh
   // --seed), and a factory script makes the commit (ADR-0047). It also holds the seeder's rule and dimension to its
   // pattern's row (review round 2 of #0-180's rule scope): a clean run's false alarm counts under that rule only.
-  const check = await ops('seed-check.sh', [BRANCH, seed.base, seed.head, params.pattern, truth.rule, truth.dimension], 'seed check')
+  const check = await ops('seed-check.sh', [BRANCH, seed.base, seed.head, params.pattern, truth.rule, truth.dimension,
+    ...also.map((p) => `${p.file}:${p.line}`)], 'seed check')
   if (check?.ok !== true || !Array.isArray(check.files) || !check.files.includes(truth.file)) {
     return finish({ outcome: 'FAILED', reason: `the seed branch is not as the seeder says: ${String(check?.reason ?? JSON.stringify(check)).slice(0, 300)}` })
+  }
+  // The ground truth is the edit (backlog #0-181): every hunk seed-check.sh read, each in a file the seeder changed, and
+  // the seeder's own line inside one of them (a line beside a deletion counts), or its word and the tree disagree.
+  const hunks = check.hunks
+  const inHunk = (h, line) => line >= h.start - 1 && line <= h.end + 1
+  if (!Array.isArray(hunks) || !hunks.every((h) => h && check.files.includes(h.file)
+      && Number.isInteger(h.start) && Number.isInteger(h.end) && h.start >= 1 && h.end >= h.start)
+      || !hunks.some((h) => h.file === truth.file && inHunk(h, truth.line))) {
+    return finish({ outcome: 'FAILED', reason: `the seeder's line is not in its edit: ${JSON.stringify({ file: truth.file, line: truth.line, hunks }).slice(0, 300)}` })
+  }
+  // A place the seeder names is the half it left unedited: one inside its edit is a misreading of `also` (review round
+  // 1). An unrelated place outside it cannot be told from a right one: the cap of two is the only bound there.
+  if (also.some((p) => hunks.some((h) => h.file === p.file && p.line >= h.start && p.line <= h.end))) {
+    return finish({ outcome: 'FAILED', reason: `a place the seeder names is inside its edit: ${JSON.stringify(also).slice(0, 300)}` })
   }
   // Fixed (backlog #0-177): the defect sat in a commit of its own on top of the change, so `git show HEAD` was the
   // planted lines alone. seed-fold.sh makes the change and the edit one commit (the ground truth's line unchanged).
@@ -194,7 +220,19 @@ async function measure() {
   const answered = verdicts.map((v, i) => (v && Array.isArray(v.blocking) && Array.isArray(v.nonBlocking) ? { ...v, dimension: PANEL[i] } : null))
 
   phase('Record')
-  const near = (f) => f.file === truth.file && (typeof f.line !== 'number' || Math.abs(f.line - (truth.line ?? 0)) <= 5)
+  // A finding is at the plant when it is within WINDOW lines of a hunk of the edit or of a place the seeder named
+  // (backlog #0-181; before it, within 5 lines of the seeder's one line), or in such a file with no line.
+  const WINDOW = 5
+  const places = [...hunks, ...also.map((p) => ({ file: p.file, start: p.line, end: p.line }))]
+  const at = (list) => (f) => list.some((p) => f.file === p.file
+    && (typeof f.line !== 'number' || (f.line >= p.start - WINDOW && f.line <= p.end + WINDOW)))
+  const near = at(places)
+  // The dimensions that reached the plant only at a place the seeder named, not at its edit: in the outcome, for the
+  // owner who reads the row (the row's columns are unchanged).
+  const onlyAtAlso = answered.filter(Boolean).filter((v) => {
+    const fs = [...v.blocking, ...v.nonBlocking]
+    return !fs.some(at(hunks)) && fs.some(near)
+  }).map((v) => v.dimension)
   const caughtBy = answered.filter(Boolean).filter((v) => [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension)
   // A verdict stops the change at the planted line when it lists it as blocking, or answers NEEDS_HUMAN with a finding
   // there: in the autopilot NEEDS_HUMAN stops the item too (GEN-08, ARC-01, ARC-05, ARC-06 ask for it; #0-180's Also).
@@ -222,12 +260,12 @@ async function measure() {
     falseAlarmBy: answered.filter(Boolean).filter(falseAlarm).map((v) => v.dimension),
     raisedBy: answered.filter(Boolean).filter((v) => !falseAlarm(v) && [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension),
     blockingElsewhere: answered.filter(Boolean).filter((v) => v.blocking.some((f) => !near(f))).map((v) => v.dimension),
-    noAnswer,
+    noAnswer, onlyAtAlso,
   } : {
     runId: params.runId, pattern: params.pattern, rule: truth.rule, expected: truth.dimension,
     caughtByExpected: caughtBy.includes(truth.dimension), caughtBy, blockingByExpected:
       answered.filter(Boolean).some((v) => v.dimension === truth.dimension && stops(v)),
-    noAnswer,
+    noAnswer, onlyAtAlso,
   }
   // Back on main before the row is written, so a run never ends on its branch. The row goes to the gitignored
   // .ai/runs/benchmark/results.md (backlog #0-177): it never dirties main, so the next run needs no commit first.

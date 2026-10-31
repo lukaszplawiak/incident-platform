@@ -35,6 +35,8 @@ printf 'v1\n' > svc/A.java && printf 'backlog 1\n' > BACKLOG.md && printf 'x\n' 
 mkdir -p .ai/audit/benchmark && printf '%s\n' '| Id | Dimension | Rule | Defect to plant |' '|---|---|---|---|' \
     '| P-10 | performance | PERF-01 | a query in a loop |' '| C-01 | architecture | ARC-23 | a per-replica gauge |' \
     '| P-77 | general | GEN-01 | twice |' '| P-77 | general | GEN-01 | twice |' > .ai/audit/benchmark/patterns.md
+# A tracked symlink and a directory: places seed-check.sh refuses (only a regular file has lines to score, #0-181).
+ln -s ../BACKLOG.md svc/link
 printf 'b\n' > svc/B.java && printf 'd\n' > svc/D.java && printf 'e\n' > svc/E.java && printf 'm1\n' > svc/M.java
 git add -A && git commit -qm base
 printf 'v2\n' > svc/A.java && printf 'backlog 2\n' > BACKLOG.md
@@ -145,6 +147,39 @@ check "the seeder's edit, uncommitted, in the change's file" ok "$B1" "$base" "$
 git add svc/A.java
 check "the same edit, staged" ok "$B1" "$base" "$head" "${T[@]}"
 git reset -q
+# The edit's hunks, the run's ground truth (backlog #0-181): `git diff -U0 HEAD`, line numbers of the tree as the panel
+# reads it. hunks <name> <expected hunks JSON> <args...>
+hunks() {
+    local name=$1 want=$2 out; shift 2
+    out=$("$SC" "$@")
+    if jq -e --argjson w "$want" '.ok == true and .hunks == $w' <<<"$out" >/dev/null; then ok "$name"; else fail "$name: $out"; fi
+}
+hunks "a one-line edit: its line" '[{"file":"svc/A.java","start":1,"end":1}]' "$B1" "$base" "$head" "${T[@]}"
+printf 'v2\nadded one\nadded two\n' > svc/A.java
+hunks "lines added below: the added lines" '[{"file":"svc/A.java","start":2,"end":3}]' "$B1" "$base" "$head" "${T[@]}"
+printf 'top\nv2\nadded one\nmid\nadded two\n' > svc/A.java
+hunks "two hunks in one file" '[{"file":"svc/A.java","start":1,"end":1},{"file":"svc/A.java","start":3,"end":5}]' "$B1" "$base" "$head" "${T[@]}"
+# An added line whose text starts `++ ` shows as `+++ b/…` in the diff: never a file header (review round 1).
+printf 'top\n++ b/BACKLOG.md\nv2\nmid\n' > svc/A.java
+hunks "a line that reads like a diff header" '[{"file":"svc/A.java","start":1,"end":2},{"file":"svc/A.java","start":4,"end":4}]' "$B1" "$base" "$head" "${T[@]}"
+: > svc/A.java
+hunks "a line removed: where it was" '[{"file":"svc/A.java","start":1,"end":1}]' "$B1" "$base" "$head" "${T[@]}"
+git checkout -q -- svc/A.java && chmod +x svc/A.java
+check "a mode change only: no hunk to score" "no hunk to score" "$B1" "$base" "$head" "${T[@]}"
+chmod -x svc/A.java && rm svc/A.java
+check "a file deleted: no line to score" "deleted a file" "$B1" "$base" "$head" "${T[@]}"
+git checkout -q -- svc/A.java && printf 'v2 planted\n' > svc/A.java
+# The places the seeder left unedited: tracked, with the line, plain paths, at most two.
+check "a place the branch tracks, at a line it has" ok "$B1" "$base" "$head" "${T[@]}" BACKLOG.md:1 svc/A.java:1
+check "a place past the file's end" "BACKLOG\\.md has no line 2 \\(it has 1\\)" "$B1" "$base" "$head" "${T[@]}" BACKLOG.md:2
+check "a place git does not track" "nope\\.md is not a file the branch tracks" "$B1" "$base" "$head" "${T[@]}" nope.md:1
+check "a gitignored place" "is not a file the branch tracks" "$B1" "$base" "$head" "${T[@]}" .ai/runs/SEED:1
+check "a symlink: its target is outside the tree's count" "svc/link is not a regular file \\(mode 120000\\)" "$B1" "$base" "$head" "${T[@]}" svc/link:1
+check "a directory" "svc is not a regular file \\(mode 040000\\)" "$B1" "$base" "$head" "${T[@]}" svc:1
+for place in ../x:1 a/../BACKLOG.md:1 /etc/passwd:1 BACKLOG.md:0 BACKLOG.md BACKLOG.md:1x "BACKLOG.md:1 x"; do
+    check "not a plain <file>:<line>: '$place'" "not a <file>:<line>" "$B1" "$base" "$head" "${T[@]}" "$place"
+done
+check "three places" "usage" "$B1" "$base" "$head" "${T[@]}" BACKLOG.md:1 BACKLOG.md:1 BACKLOG.md:1
 check "a clean pattern's truth" ok "$B1" "$base" "$head" C-01 ARC-23 architecture
 check "a rule that is not the pattern's" "truth \\(performance, PERF-02\\) is not P-10's \\(performance, PERF-01\\)" "$B1" "$base" "$head" P-10 PERF-02 performance
 check "a dimension that is not the pattern's" "is not C-01's \\(architecture, ARC-23\\)" "$B1" "$base" "$head" C-01 ARC-23 general

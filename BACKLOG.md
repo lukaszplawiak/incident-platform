@@ -119,7 +119,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
+| [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | In progress |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
@@ -3676,11 +3676,13 @@ clean runs.
 
 ### 0-181. `/seed-bugs` scores a catch by one line, and never compiles the plant
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. Found in #0-115's `docs.md` series (2026-10-27,
+**Type:** ci · **Priority:** Medium · **Status:** In progress (2026-10-31). Found in #0-115's `docs.md` series (2026-10-27,
 `docs-after-p17`).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/workflows/seed-bugs.js, .claude/agents/defect-seeder.md, scripts/factory/seed-check.sh,
-.github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh), docs (docs/ai-factory.md, ADR-0044)
+.github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-seed-branch.sh; for the compile step also a new
+scripts/factory/seed-compile.sh, scripts/factory/_common.sh and scripts/factory/run-tests.sh), .ai/audit/benchmark/patterns.md
+and .ai/rules/audit.md (owner), docs (docs/ai-factory.md, ADR-0044)
 
 **Problem.**
 1. The ground truth is one file and one line, and the Record phase counts a finding as a catch only within 5 lines of
@@ -3706,6 +3708,44 @@ clean runs.
 AC1. A finding at any place of the ground truth counts as a catch; shown by a workflow test with a two-place truth.
 AC2. A plant that does not compile ends the run before the panel, with a recorded reason; shown by a test.
 AC3. P-17 run again on `fc368943` after the change records docs as caught without a hand reading.
+
+**Decided (owner, 2026-10-31: A3 and B1 of the `/research`, two pull requests).**
+- **The truth is the edit** (first PR, ADR-0044 decision 8). `seed-check.sh` returns the seeder's hunks
+  (`git diff -U0 HEAD`), and a finding within 5 lines of any hunk is at the plant. The seeder's own line must lie in
+  one of them, or the run fails. The half it leaves unedited on purpose is named in `also`: at most two places, each a
+  regular file at HEAD and a line it has (review round 1). The outcome's `onlyAtAlso` names the dimensions that
+  reached only such a place; the row's columns are unchanged.
+  - Why not the first sketch (a list of places from the seeder): the whole truth would rest on an agent's word again,
+    after #0-180 took the kind and the rule from the pattern.
+  - Evidence (the 40 run journals on disk): one main-column miss (P-17, docs at the Javadoc), and two secondary ones
+    (`arch-after-p07`: docs at the class Javadoc; `clean-c01-r2`: performance at the job's Javadoc). For clean runs it
+    matters more: a plant there is a method with its reason, longer than the window.
+  - AC1 reads, from this decision: a finding anywhere in the seeder's edit, within 5 lines, or at a place it names in
+    `also`, counts as at the plant; shown by workflow tests with a long hunk, two hunks and an `also` place.
+- **The plant is compiled** (second PR). A new `seed-compile.sh`, run through factory-ops after `seed-fold.sh`:
+  - `test-compile` offline (`-o`) of the planted module (`-am`), with `run-tests.sh`'s hardened Maven call moved to
+    `_common.sh` so both use one list of what is stripped;
+  - only when the edit holds a `.java` file and no `pom.xml`;
+  - a compiler error ends the run FAILED with its first error (a seeder's mistake, #0-170: not SKIPPED), an
+    environment error FAILED with its cause.
+  - Not taken: the full test gate (minutes and Docker per run, and a defect the tests catch would never reach the
+    panel in the autopilot) and a retry by the seeder.
+- AC3 after the first PR.
+- Review round 1 of the first PR (`/review 17`): general APPROVE; architecture blocked (arc-5c1e, FAC-A03): ADR-0044
+  decision 8 pointed to `audit.md`, which said nothing of the new scoring, so the next audit would read rows from
+  before and after it as one measure. Owner: "1-5".
+  - `audit.md` (drafted for the owner) says how rows before and after #0-181 differ, and that a catch only at an
+    `also` place rests on the seeder's word (as `told the pattern`, it never raises a recommendation's confidence).
+  - Confirmed in session (architecture's out-of-scope): an added line whose text starts `++ ` showed as `+++ b/…` and
+    was read as a file header. The diff now marks the text's lines `>`/`<`. A place must be a regular file at HEAD:
+    a tracked symlink had awk read its target outside the tree, and a directory passed with a misleading reason.
+  - A place inside the edit fails the run. An unrelated one outside it cannot be checked; the cap of two bounds it.
+  - Rule gap (architecture): no rule says a change of how `/seed-bugs` scores a row updates `audit.md`'s reading of
+    the rows in the same pull request; FAC-A03 caught it here through the ADR's pointer. Recorded here, no item.
+- Review round 2: general and architecture APPROVE, arc-5c1e resolved. Owner: "wprowadź": a path with a space (git
+  leaves it unquoted and ends the `+++` header with a tab, confirmed in session) is refused with its reason instead of
+  "line is not in its edit". Checked by hand on a scratch repo: the fixture's change has no such path, and adding one
+  would change every seed-branch case.
 
 ### 0-182. The k8s reviewer's guard lets `kubectl kustomize` and `kubeconform` take any option
 
