@@ -42,3 +42,18 @@ autopilot prompt (`Autopilot review. Branch review/<8 hex>. mergeBase: <the reve
 review reached the original 4 times of 4 (backlog #0-185, ADR-0044 decision 6). A host changes only
 `.claude/workflows/` and `scripts/factory/`, never a hook, a setting, an agent, a skill or a rule: those are what
 `/review` runs under.
+
+## Clean changes (backlog #0-180)
+
+A clean pattern plants a correct change that a careless reading of its rule would block: the rule's deliberate
+exception, with the reason the rule asks for. The run measures false alarms, not catches: a dimension that stops the
+change at the planted line is a false alarm, one that only notes it applied the rule as written. Plant the change so
+that it is right, as the existing example it names is; a plant that is not right measures nothing (the owner reads the
+row before it lands). The panel's prompt is the same as for a defect: rotate clean and defect runs in a series.
+
+| Id | Dimension | Rule | Correct change to plant |
+|---|---|---|---|
+| C-01 | architecture | ARC-23 | add a `@Scheduled` method that only reads and keeps a per-replica value (a gauge, a local cache), with no ShedLock and a Javadoc saying why it runs on every replica, as `OperatorTenantBootstrap.refreshPendingGauge` does; it writes, sends and claims nothing |
+| C-02 | architecture | ARC-29 | change a row that has one writer by a state-guarded conditional UPDATE (`WHERE id = ? AND status = ?`, row count checked) instead of `@Version`, as `AuthToken.markUsedIfUnused` does; only where the change's own code shows that writer is the only one |
+| C-03 | security | SEC-08 | add a write path a suspended tenant must still reach (one that only ends its own session) to `tenant-status.read-only.allowed-writes`, with the reason beside it; never a path that changes the tenant's data |
+

@@ -3,8 +3,8 @@
 - **Status:** Accepted (2026-10-25); decision 5 amended and decision 6 added by #0-177 (2026-10-26); the seeder commits
   nothing since #0-172 (ADR-0047, 2026-10-30): where this ADR folds "the seeder's commit", the fold now takes its edit;
   decision 6's scans by hand are helped by a script and a run starts from a turn with no user message, since #0-179
-  (2026-10-30)
-- **Backlog:** #0-173, #0-177, #0-179
+  (2026-10-30); decision 7 (clean runs) added by #0-180 (2026-10-31)
+- **Backlog:** #0-173, #0-177, #0-179, #0-180
 - **Date:** 2026-10-25
 - **Author:** human (owner chose F2 of the research, then the proposals of review round 1; for #0-177, 1a with a script,
   A, A+ and B2 of its research; written up by Claude Code in the owner's session)
@@ -159,7 +159,8 @@ A run that had gone through would have had the panel review under older agents a
          - refusing those revisions in `readonly-bash.sh`: it leaks (`cat-file`, `rev-list`, the reflog), as #0-182's
            guard did, and the procedure itself reads `origin/main`;
          - planting only into an unmerged change: it cannot be replayed, and the host is not yet reviewed.
-     - `.ai/runs/benchmark/results.md` is in reach of the reviewers during a series, and says a measure is running.
+     - `.ai/runs/benchmark/results.md` is in reach of the reviewers during a series, and says a measure is running;
+       so is `.ai/runs/benchmark/clean.md` (#0-180), which also says that some runs plant a correct change.
      - **The message that started the run (found 2026-10-26, in the `security.md` series of #0-115).** The Workflow
        tool starts every agent's first message with `[Workflow harness — user request]`, which holds the user's
        message that started the run, word for word. Started by the owner's `/seed-bugs P-01 47b95294 sec-after-p01`,
@@ -192,6 +193,26 @@ A run that had gone through would have had the panel review under older agents a
      - The seeder still has no write scope (#0-172) and `seed-check.sh` cannot see a gitignored file, so it could
        write rows into `.ai/runs/benchmark/results.md`, or its own run id, which makes the real row refused
        (`recorded: false`). The owner reads the rows before landing them; #0-172's write scope closes it.
+
+7. **A clean run measures false alarms (#0-180, owner, 2026-10-31).** A defect run measures catches only, so a panel
+   that blocks too much passes it too: one that blocks every missing `@SchedulerLock` scores on P-07 and still stops
+   `refreshPendingGauge`, which runs per replica on purpose. A `C-` pattern of `patterns.md` plants a rule's
+   deliberate exception with its reason, a correct change (the negative controls of SAST benchmarks such as the OWASP
+   Benchmark, which score both rates).
+   - The kind comes from the pattern id, never from the seeder. A seeder whose `kind` is not its pattern's fails the
+     run. The panel's prompt is the same as a defect's, so a series rotates both.
+   - A dimension that stops the change at the planted line (a blocking finding there, or `NEEDS_HUMAN` with a finding
+     there) is a false alarm. One that only notes it applied the rule as written.
+   - A blocking finding elsewhere is recorded and not counted: of the 71 blocking findings of the 25 defect runs
+     before it, 19 were not at the plant. They were the host's own code (general's GEN-04 on `47b95294` four times, a
+     real gap: #0-189), the plant's other half (#0-181) and an old host's artifact.
+   - The rows go to their own table (`seed-record.sh --clean`, `.ai/runs/benchmark/clean.md`, then
+     `.ai/audit/benchmark/clean.md`). `audit-data.sh` passes it apart as `seededClean`, so a pass is never read as a
+     missed catch. A run id is unique across both tables.
+   - Also for defect runs (#0-180's Also): `NEEDS_HUMAN` with a finding at the planted line counts as blocking. In the
+     autopilot it stops the item as a blocking finding does.
+   - A clean run's transcripts are scanned before its row lands, as a defect run's are: `seed-scan.sh` takes a `C-`
+     pattern, and a relayed `C-` id is a tell (review round 1).
 
 ## Alternatives considered
 

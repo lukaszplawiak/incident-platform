@@ -4,7 +4,12 @@
 #   {"appended": true, "file"}   or   {"appended": false, "reason"}
 #
 #   seed-record.sh <run id> <pattern> <rule> <expected> <caught yes|no> <blocking yes|no> <caught by> <no answer>
-#   <caught by>, <no answer>: dimensions joined by commas, or - for none
+#   seed-record.sh --clean <run id> <C-pattern> <rule> <expected> <false alarm by> <raised by> <blocking elsewhere> <no answer>
+#   <caught by>, <no answer> and the --clean lists: dimensions joined by commas, or - for none
+#
+# A clean run (backlog #0-180: a `C-` pattern, a rule's deliberate exception planted with its reason) goes to its own
+# table, .ai/runs/benchmark/clean.md (and after its series .ai/audit/benchmark/clean.md), so neither the audit nor the
+# synthesis can read a pass there as a missed catch. A run id is refused if it is in any of the four files.
 #
 # The row used to go to the tracked .ai/audit/benchmark/results.md, on main: seed-branch.sh then refused the next run
 # until the owner had committed it, and main takes changes only through a pull request, so a series meant a merge
@@ -36,13 +41,53 @@ dimensions() {
     printf '%s' "$out"
 }
 
-[ $# -eq 8 ] || refuse "usage: seed-record.sh <run id> <pattern> <rule> <expected> <caught yes|no> <blocking yes|no> <caught by> <no answer>"
-run=$1 pattern=$2 rule=$3 expected=$4 caught=$5 blocking=$6 by=$7 none=$8
+clean=""
+if [ "${1:-}" = --clean ]; then clean=1; shift; fi
+[ $# -eq 8 ] || refuse "usage: seed-record.sh <run id> <pattern> <rule> <expected> <caught yes|no> <blocking yes|no> <caught by> <no answer>, or --clean <run id> <C-pattern> <rule> <expected> <false alarm by> <raised by> <blocking elsewhere> <no answer>"
+run=$1 pattern=$2 rule=$3 expected=$4
 [[ $run =~ ^[A-Za-z0-9._-]+$ ]] || refuse "not a run id: ${run:0:40}"
-[[ $pattern =~ ^P-[0-9]+$ ]] || refuse "not a pattern id: ${pattern:0:40}"
+if [ -n "$clean" ]; then
+    [[ $pattern =~ ^C-[0-9]+$ ]] || refuse "not a clean pattern id (C-<n>): ${pattern:0:40}"
+else
+    [[ $pattern =~ ^P-[0-9]+$ ]] || refuse "not a pattern id: ${pattern:0:40}"
+fi
 # A factory id has a letter after the dash (FAC-A02, FAC-S03; #0-185), as check-rule-claims.rb reads them.
 [[ $rule =~ ^[A-Z][A-Z0-9]*-[A-Z]?[0-9]+$ ]] || refuse "not a rule id: ${rule:0:40}"
 case "$DIMENSIONS" in *" $expected "*) ;; *) refuse "not a dimension: ${expected:0:40}" ;; esac
+
+# Every file a run id may already be in: both tables, as a series gathers them and as they land.
+ALL_FILES=("$FILE" "$TRACKED" "$RUNS_DIR/benchmark/clean.md" .ai/audit/benchmark/clean.md)
+seen_before() {
+    local f ids
+    for f in "${ALL_FILES[@]}"; do
+        [ -f "$f" ] || continue
+        # Read whole, then searched: in `cut | grep -q` under pipefail, grep's early exit gives cut a SIGPIPE, and the
+        # pipeline's failure read as "no such id" (review round 3).
+        ids=$(cut -d'|' -f2 "$f") || refuse "cannot read $f"
+        grep -qxF -e " $run " <<<"$ids" && refuse "the run id $run is in $f already"
+    done
+    return 0
+}
+
+if [ -n "$clean" ]; then
+    falsealarm=$(dimensions "$5") || refuse "not a list of dimensions: ${5:0:80}"
+    raised=$(dimensions "$6") || refuse "not a list of dimensions: ${6:0:80}"
+    elsewhere=$(dimensions "$7") || refuse "not a list of dimensions: ${7:0:80}"
+    none=$(dimensions "$8") || refuse "not a list of dimensions: ${8:0:80}"
+    seen_before
+    CLEAN_FILE="$RUNS_DIR/benchmark/clean.md"
+    mkdir -p "$(dirname "$CLEAN_FILE")" || refuse "cannot make $(dirname "$CLEAN_FILE")"
+    if [ ! -s "$CLEAN_FILE" ]; then
+        printf '%s\n%s\n' '| Run | Pattern | Rule | Expected | False alarm by | Raised, not blocking, by | Blocking elsewhere | No answer |' \
+            '|---|---|---|---|---|---|---|---|' > "$CLEAN_FILE" || refuse "cannot write $CLEAN_FILE"
+    fi
+    printf '| %s | %s | %s | %s | %s | %s | %s | %s |\n' "$run" "$pattern" "$rule" "$expected" "$falsealarm" "$raised" \
+        "$elsewhere" "$none" >> "$CLEAN_FILE" || refuse "cannot write $CLEAN_FILE"
+    jq -n --arg f "$CLEAN_FILE" '{appended: true, file: $f}'
+    exit 0
+fi
+
+caught=$5 blocking=$6 by=$7 none=$8
 for v in "$caught" "$blocking"; do case "$v" in yes|no) ;; *) refuse "not yes or no: ${v:0:40}" ;; esac; done
 [[ $by =~ ^(-|[a-z][a-z0-9]*(,[a-z][a-z0-9]*)*)$ ]] || refuse "not a list of dimensions: ${by:0:80}"
 # "Also caught by": the dimensions that caught it besides the expected one.
@@ -53,13 +98,7 @@ none=$(dimensions "$none") || refuse "not a list of dimensions: ${none:0:80}"
 
 # The run id is the first column; matched literally there only (review round 1: a run id that is also a dimension, a
 # pattern or yes/no matched another column and was refused).
-for f in "$FILE" "$TRACKED"; do
-    [ -f "$f" ] || continue
-    # Read whole, then searched: in `cut | grep -q` under pipefail, grep's early exit gives cut a SIGPIPE, and the
-    # pipeline's failure read as "no such id" (review round 3).
-    ids=$(cut -d'|' -f2 "$f") || refuse "cannot read $f"
-    grep -qxF -e " $run " <<<"$ids" && refuse "the run id $run is in $f already"
-done
+seen_before
 mkdir -p "$(dirname "$FILE")" || refuse "cannot make $(dirname "$FILE")"
 if [ ! -s "$FILE" ]; then
     printf '%s\n%s\n' '| Run | Pattern | Rule | Expected | Caught by expected | Blocking | Also caught by | No answer |' \

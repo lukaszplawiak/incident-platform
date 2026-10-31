@@ -7,7 +7,8 @@ export const meta = {
 // ============================================================================================
 // Run in an autopilot session, from a clean main at origin/main, args
 //   { pattern: 'P-01', commit: '<sha of a merged autopilot change>', runId: '<any unique id>' }
-// or the same three words in that order, as `/seed-bugs P-01 <sha> <run id>` passes them (one string).
+// or the same three words in that order, as `/seed-bugs P-01 <sha> <run id>` passes them (one string). A `C-` pattern
+// (backlog #0-180) is a clean run: a correct change planted, its false alarms recorded in .ai/runs/benchmark/clean.md.
 // The commit's code must still apply to main (seed-branch.sh refuses it otherwise): choose a recent one.
 // The script cannot pick at random (relaunch must repeat the same calls): choose the pattern and the
 // commit yourself, rotating through .ai/audit/benchmark/patterns.md. Never pushed, never merged; the
@@ -125,6 +126,12 @@ if (seed.ok !== true || seed.branch !== BRANCH || !SHA.test(String(seed.base))
 // and `.some` threw in the Record phase) ended the script on the seed branch, with no row and no cleanup named. Every
 // step after the branch is made runs in measure(), and an error there ends the run like any failure: back on main, the
 // branch named for deletion.
+// A clean run (backlog #0-180): a `C-` pattern is a correct change that a careless reading of a rule would block, the
+// rule's deliberate exception planted with its reason. The kind comes from the pattern id the owner passed, never from
+// the seeder's answer; the panel's prompt is the same as for a defect, so a reviewer cannot tell the two apart. A clean
+// run needs the seeder to say `kind: "clean"` itself (review round 2): one that left it out may have planted a defect,
+// and a dimension that rightly blocked it would read as a false alarm. A defect run may leave it out.
+const CLEAN = /^C-[0-9]+$/.test(params.pattern)
 async function measure() {
   const truth = await as('defect-seeder', [
     `Pattern ${params.pattern}. Run id ${params.runId}. The branch ${seed.branch} is checked out: it holds merged change ${params.commit}`,
@@ -132,7 +139,8 @@ async function measure() {
     'Leave the edit uncommitted.',
   ].join('\n'), {
     schema: { type: 'object', properties: { skipped: { type: 'boolean' }, blocked: { type: 'boolean' }, reason: { type: 'string' },
-      branch: { type: 'string' }, pattern: { type: 'string' }, dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' },
+      branch: { type: 'string' }, pattern: { type: 'string' }, kind: { type: 'string', enum: ['defect', 'clean'] },
+      dimension: { type: 'string' }, rule: { type: 'string' }, file: { type: 'string' },
       line: { type: 'number' }, description: { type: 'string' } } },
   })
   // Fixed (backlog #0-170): the first run on record came back SKIPPED with no reason, measuring nothing: the seeder's
@@ -152,7 +160,8 @@ async function measure() {
   // today: the panel prompt below does not say that factory.md applies, and seed-branch.sh refuses an Owner-only host,
   // so such a row would read as a miss. A factory.md measure is run by hand (ADR-0044 decision 6).
   if (truth.branch !== seed.branch || !seed.files.includes(truth.file) || typeof truth.line !== 'number'
-      || !/^[A-Z][A-Z0-9]*-[A-Z]?[0-9]+$/.test(String(truth.rule)) || !PANEL.includes(truth.dimension)) {
+      || !/^[A-Z][A-Z0-9]*-[A-Z]?[0-9]+$/.test(String(truth.rule)) || !PANEL.includes(truth.dimension)
+      || (CLEAN ? truth.kind !== 'clean' : (truth.kind ?? 'defect') !== 'defect')) {
     return finish({ outcome: 'FAILED', reason: `defect-seeder's ground truth is incomplete: ${JSON.stringify(truth).slice(0, 300)}` })
   }
   // The panel runs on the checked-out tree, not on the seeder's word (review round 1 of #0-173): the tree must be on the
@@ -186,11 +195,24 @@ async function measure() {
   phase('Record')
   const near = (f) => f.file === truth.file && (typeof f.line !== 'number' || Math.abs(f.line - (truth.line ?? 0)) <= 5)
   const caughtBy = answered.filter(Boolean).filter((v) => [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension)
-  const result = {
+  // A verdict stops the change at the planted line when it lists it as blocking, or answers NEEDS_HUMAN with a finding
+  // there: in the autopilot NEEDS_HUMAN stops the item too (GEN-08, ARC-01, ARC-05, ARC-06 ask for it; #0-180's Also).
+  const stops = (v) => v.blocking.some(near) || (v.verdict === 'NEEDS_HUMAN' && v.nonBlocking.some(near))
+  const noAnswer = PANEL.filter((d, i) => !answered[i])
+  const result = CLEAN ? {
+    // A clean run (#0-180): the change at the planted line is right. A dimension that stops it is a false alarm; one
+    // that only notes it did what the rule asks. A blocking finding elsewhere is the host's, not this run's: recorded,
+    // not counted (19 of 71 blocking findings of the defect runs before it were the host's or the plant's other half).
+    runId: params.runId, pattern: params.pattern, kind: 'clean', rule: truth.rule, expected: truth.dimension,
+    falseAlarmBy: answered.filter(Boolean).filter(stops).map((v) => v.dimension),
+    raisedBy: answered.filter(Boolean).filter((v) => !stops(v) && [...v.blocking, ...v.nonBlocking].some(near)).map((v) => v.dimension),
+    blockingElsewhere: answered.filter(Boolean).filter((v) => v.blocking.some((f) => !near(f))).map((v) => v.dimension),
+    noAnswer,
+  } : {
     runId: params.runId, pattern: params.pattern, rule: truth.rule, expected: truth.dimension,
     caughtByExpected: caughtBy.includes(truth.dimension), caughtBy, blockingByExpected:
-      answered.filter(Boolean).some((v) => v.dimension === truth.dimension && v.blocking.some(near)),
-    noAnswer: PANEL.filter((d, i) => !answered[i]),
+      answered.filter(Boolean).some((v) => v.dimension === truth.dimension && stops(v)),
+    noAnswer,
   }
   // Back on main before the row is written, so a run never ends on its branch. The row goes to the gitignored
   // .ai/runs/benchmark/results.md (backlog #0-177): it never dirties main, so the next run needs no commit first.
@@ -204,21 +226,25 @@ async function measure() {
   // carries it, for the owner to record by hand, instead of a FAILED that drops it.
   const list = (dims) => (dims.length ? dims.join(',') : '-')
   const yes = (b) => (b ? 'yes' : 'no')
+  const rows = CLEAN ? '.ai/runs/benchmark/clean.md' : '.ai/runs/benchmark/results.md'
   let row
   try {
-    row = await ops('seed-record.sh', [params.runId, params.pattern, truth.rule, truth.dimension, yes(result.caughtByExpected),
-      yes(result.blockingByExpected), list(result.caughtBy), list(result.noAnswer)], 'record result')
+    row = await ops('seed-record.sh', CLEAN
+      ? ['--clean', params.runId, params.pattern, truth.rule, truth.dimension, list(result.falseAlarmBy), list(result.raisedBy),
+        list(result.blockingElsewhere), list(result.noAnswer)]
+      : [params.runId, params.pattern, truth.rule, truth.dimension, yes(result.caughtByExpected),
+        yes(result.blockingByExpected), list(result.caughtBy), list(result.noAnswer)], 'record result')
   } catch (e) {
     row = { appended: false, reason: String(e?.message ?? e) }
   }
   if (row?.appended !== true) {
     return { outcome: 'MEASURED', recorded: false, ...result,
       reason: `the row was not written: ${String(row?.reason ?? JSON.stringify(row)).slice(0, 200)}`,
-      cleanup: `git branch -D ${BRANCH}; record the row by hand in .ai/runs/benchmark/results.md` }
+      cleanup: `git branch -D ${BRANCH}; record the row by hand in ${rows}` }
   }
 
   return { outcome: 'MEASURED', recorded: true, ...result,
-    cleanup: `git branch -D ${BRANCH}; after the series, copy its rows from .ai/runs/benchmark/results.md into .ai/audit/benchmark/results.md in one pull request` }
+    cleanup: `git branch -D ${BRANCH}; after the series, copy its rows from ${rows} into ${rows.replace('.ai/runs/', '.ai/audit/')} in one pull request` }
 }
 try {
   return await measure()

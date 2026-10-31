@@ -163,6 +163,10 @@ while IFS= read -r line; do
 done < <(jq -rn --argjson a "$escaped" --argjson b "$escaped_new" '$a + $b | unique[]')
 seeded='[]'
 [ -f .ai/audit/benchmark/results.md ] && seeded=$(grep -E '^\|' .ai/audit/benchmark/results.md | jq -R . | jq -s .)
+# The clean runs (backlog #0-180): a rule's deliberate exception planted, the panel's false alarms on it. A table of
+# their own, passed apart, so a pass there never reads as a missed catch.
+seeded_clean='[]'
+[ -f .ai/audit/benchmark/clean.md ] && seeded_clean=$(grep -E '^\|' .ai/audit/benchmark/clean.md | jq -R . | jq -s .)
 state=$(state_init; cat "$STATE_FILE")
 proj_dir="$HOME/.claude/projects/$(printf '%s' "$FACTORY_ROOT" | sed 's#[/.]#-#g')"
 
@@ -170,7 +174,7 @@ proj_dir="$HOME/.claude/projects/$(printf '%s' "$FACTORY_ROOT" | sed 's#[/.]#-#g
 jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready_file" --argjson escaped "$escaped" \
       --argjson escapedNew "$escaped_new" --slurpfile events "$events_file" --arg owner "$owner" \
       --argjson ownerIsAutopilot "$owner_is_autopilot" --slurpfile vouch "$vouch_file" \
-      --argjson seeded "$seeded" --argjson state "$state" --arg transcripts "$proj_dir" '
+      --argjson seeded "$seeded" --argjson seededClean "$seeded_clean" --argjson state "$state" --arg transcripts "$proj_dir" '
   def first_match($re): [match($re).captures[0].string] | first;
   def item_of: (.headRefName // "") | first_match("/(0-[0-9]+)-");
   # The /ready PR of an item, the newest first, with whether it carries a "Ready check" section.
@@ -242,7 +246,7 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
                          | ($vouch[0][$l] // {commit: null, verified: false, reason: "not checked"})
                          | select(.verified != true) | {line: $l, commit, reason}],
      prs: $prsV, readyPrs: [$ready[0][] | select(.mergedAt != null)], escaped: [$escaped[] | select(vouched)],
-     seeded: $seeded, state: $state,
+     seeded: $seeded, seededClean: $seededClean, state: $state,
      cases: ($prCases + $stateCases + $escapedCases), transcriptsDir: $transcripts}' > "$out"
 
 jq -n --arg file "$out" --argjson n "$(jq length "$prs_file")" --arg transcripts "$proj_dir" \

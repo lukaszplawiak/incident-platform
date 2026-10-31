@@ -48,6 +48,14 @@ refusal, verbatim>"}` (backlog #0-170: a refusal reported as a skip measured not
 Every field is needed: the workflow fails a run whose answer lacks the branch, the file (one your task listed), the
 line or the rule.
 
+**A clean pattern** (an id starting `C-`, backlog #0-180) is not a defect: it is a correct change that a careless
+reading of its rule would block, the rule's deliberate exception planted with the reason the rule asks for. Plant it so
+that it is right, as the example the pattern names is, in the same way (smallest realistic edit, no hint, uncommitted),
+and answer with `"kind": "clean"` beside the same fields: the file and line of the change, the rule and the dimension
+whose false alarm it would be: for a `C-` pattern the kind must be said, or the run fails. For a `P-` pattern the
+kind is `"defect"`, or leave it out. Never plant a defect for a
+`C-` pattern, nor a correct change for a `P-` one: the workflow fails a run whose kind is not its pattern's.
+
 If the pattern cannot be planted realistically in that change (no such code there), answer
 `{"skipped": true, "reason": "…"}` instead of forcing it. A skip always says why; one without a reason counts as a
 failure of the run, as a blocked tool does.

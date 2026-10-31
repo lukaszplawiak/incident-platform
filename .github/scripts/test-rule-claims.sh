@@ -64,7 +64,8 @@ layout() {
         '| P-05 | security | SEC-10 | drop the `@PreAuthorize` \| or a path |' \
         '| P-06 | architecture | ARC-22 | send directly |' \
         '| P-14 | migration | MIG-02 | retired 2026-10-26 (#0-115): cannot be planted |' \
-        '| P-23 | architecture | FAC-A02 | drop the `!answer \|\|` of a guard |'
+        '| P-23 | architecture | FAC-A02 | drop the `!answer \|\|` of a guard |' \
+        '| C-01 | architecture | ARC-22 | send through the outbox, as the rule asks |'
     put .github/repository-settings/rulesets/main.json \
         '{"rules": [{"type": "required_status_checks", "parameters": {"required_status_checks": [' \
         '{"context": "Build"}, {"context": "Validate K8s"}, {"context": "Factory guards"}]}}]}'
@@ -210,6 +211,8 @@ MSG="P-05 is security's, and FAC-X01 is no rule of security" \
     case_ fail "an FAC- id of neither half" edit .ai/audit/benchmark/patterns.md 's/| SEC-10 |/| FAC-X01 |/'
 MSG="P-05 cites \"sec 10\", which is no rule id" \
     case_ fail "a rule cell that is no id" edit .ai/audit/benchmark/patterns.md 's/| SEC-10 |/| sec 10 |/'
+MSG="C-01 cites ARC-98, which .ai/rules/review/architecture.md does not define" \
+    case_ fail "a clean pattern cites an id its file does not define (#0-180)" edit .ai/audit/benchmark/patterns.md 's/| C-01 | architecture | ARC-22 |/| C-01 | architecture | ARC-98 |/'
 MSG="P-14 cites MIG-02, which .ai/rules/review/migration.md does not define" \
     case_ fail "a pattern no longer retired is read" edit .ai/audit/benchmark/patterns.md 's/| retired 2026-10-26/| plant it/'
 

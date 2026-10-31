@@ -119,10 +119,11 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | Open |
+| [0-180](#0-180-seed-bugs-measures-catches-never-false-alarms) | `/seed-bugs` measures catches, never false alarms | design | Low | In progress |
 | [0-181](#0-181-seed-bugs-scores-a-catch-by-one-line-and-never-compiles-the-plant) | `/seed-bugs` scores a catch by one line, and never compiles the plant | ci | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
+| [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3577,7 +3578,7 @@ measurement data (a benchmark row) must be in the data the audit's script reads,
 
 ### 0-180. `/seed-bugs` measures catches, never false alarms
 
-**Type:** design · **Priority:** Low · **Status:** Open. The owner's question on P-07 of #0-115's `architecture.md`
+**Type:** design · **Priority:** Low · **Status:** In progress (2026-10-31). The owner's question on P-07 of #0-115's `architecture.md`
 series (2026-10-26): the code has deliberate exceptions to a rule, so does the measure check that the panel leaves
 them alone?
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
@@ -3620,6 +3621,37 @@ AC2. A clean run records a false alarm when a dimension blocks it, and a pass wh
 of the workflow and of `seed-record.sh`.
 AC3. `audit-data.sh` reports clean results apart from catches, shown by its test. `docs/ai-factory.md` describes the
 clean runs.
+
+**Decided (owner, 2026-10-31: option A of the `/research`, with the Also).** ADR-0044 decision 7.
+- The kind comes from the pattern id (`C-` is clean), never from the seeder. A seeder whose `kind` is not its
+  pattern's fails the run.
+- A false alarm is a dimension that stops the change *at the planted line*: a blocking finding there, or `NEEDS_HUMAN`
+  with a finding there. Unlike this item's first sketch, a blocking finding anywhere else is not one: of the 71
+  blocking findings of the 25 defect runs before, 19 were not at the plant. They were the host's code, the plant's
+  other half (#0-181) and an old host's artifact. Those are recorded ("Blocking elsewhere") and not counted.
+- The rows have their own table, written by `seed-record.sh --clean` to `.ai/runs/benchmark/clean.md` and landed in
+  `.ai/audit/benchmark/clean.md`, and are passed by `audit-data.sh` as `seededClean`. A separate table rather than a
+  "Kind" column, so neither the audit nor the synthesis can read a pass as a missed catch, and the 27 existing rows
+  keep their schema. A run id is unique across both tables.
+- `check-rule-claims.rb` checks that a `C-` pattern cites a live rule, as a `P-` pattern does. The audit of a reviewer
+  counts `seededFalseAlarms`.
+- Also: `NEEDS_HUMAN` with a finding at the planted line counts as blocking in a defect run.
+- The owner's files are drafted: `patterns.md` gets C-01 (ARC-23), C-02 (ARC-29) and C-03 (SEC-08); `audit.md` gets
+  how to read the clean table.
+- Tested: workflow (4 cases), `seed-record.sh --clean` (8 calls, 11 assertions), `audit-data.sh`,
+  `check-rule-claims.rb`; 8 mutations caught.
+- Review round 1 (owner: "tak" on 1-5):
+  - `seed-scan.sh` takes `C-` runs, so their transcripts are scanned before a row lands, and a relayed `C-` id is a
+    tell. 3 mutations caught. This was architecture's blocking finding.
+  - `docs/ai-factory.md` says the audit reads the tracked tables and a run id is unique across all four.
+  - ADR-0044 decision 6 names `clean.md` as in reach of the reviewers during a series.
+  - `audit.md` (drafted for the owner) says the "Blocking" column counts `NEEDS_HUMAN` at the plant from #0-180 on,
+    and that "No answer" on a clean run is no measure, not a pass.
+- Review round 2: architecture's blocking finding resolved (architecture APPROVE). Owner: "popraw". A clean run now
+  needs the seeder to say `kind: "clean"`. A `C-` answer without it fails, since it may have planted a defect that a
+  dimension rightly blocked. A defect run may still leave it out. Test and mutation added.
+- Left for after the merge: the first series (C-01 on a host that touches a `@Scheduled` job, e.g. `aace4118`'s
+  `OperatorTenantBootstrap`, rotated with a defect run).
 
 ### 0-181. `/seed-bugs` scores a catch by one line, and never compiles the plant
 
@@ -3878,6 +3910,29 @@ AC1. A decision, as an ADR, on what a logged throwable may carry.
 AC2. If it filters, a test per service type of exception shows a foreign message absent from `error.message` and
 `error.stack_trace`, and the platform's own message kept.
 AC3. README's known gap sentence names the outcome.
+
+### 0-189. The on-call schedules' optional-status query has no repository test
+
+**Type:** tech-debt · **Priority:** Medium · **Status:** Open. Found in #0-180's `/research` (2026-10-31): review-general
+raised it as blocking (GEN-04) in four `/seed-bugs` runs on host `47b95294`, each time in the host's own code, not in
+the plant.
+**Autopilot:** not-ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** oncall-service (src/test: a repository integration test)
+
+**Problem.** `OncallScheduleRepository.findByTenantIdAndOptionalStatus` (line 122) filters with
+`(:status IS NULL OR s.status = :status)` on an enum parameter. Its only tests mock the repository
+(`OncallScheduleServiceTest`), so no test runs the query against PostgreSQL. A nullable parameter in an
+`IS NULL OR` clause is where Hibernate 6 and the JDBC driver disagree on the bound type of a null. A wrong binding
+fails only at run time, on the path without a status.
+
+**Approach.** A Testcontainers test (`postgres:16-alpine`, as the module's `OncallScheduleOverlapIntegrationTest`)
+that runs the query with a status and without one, on schedules of two tenants and both statuses. It asserts the
+tenant filter holds and the status filter applies only when given.
+
+**Acceptance criteria.**
+AC1. A repository integration test runs `findByTenantIdAndOptionalStatus` with a status and with none, and shows the
+tenant and status filters (another tenant's schedules never returned).
+AC2. Removing the tenant predicate or the status predicate fails it.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

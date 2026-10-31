@@ -154,9 +154,16 @@ cat > .ai/runs/state.json <<'EOF'
  {"t":"2026-10-10T02:00:00Z","item":"0-1","outcome":"blocked","pr":"","stage":"implement"}]}
 EOF
 
+# The two benchmark tables (#0-180): the defects' rows and the clean runs', passed apart.
+mkdir -p .ai/audit/benchmark
+printf '| Run | Pattern |\n|---|---|\n| r1 | P-07 |\n' > .ai/audit/benchmark/results.md
+printf '| Run | Pattern |\n|---|---|\n| c1 | C-01 |\n' > .ai/audit/benchmark/clean.md
+
 echo "audit-data: cases"
 summary=$(scripts/factory/audit-data.sh 2026-10-09)
 F=.ai/runs/audit/audit-data-2026-10-09.json
+expect_jq "the defects' rows, without the clean ones" "$F" '.seeded == ["| Run | Pattern |", "|---|---|", "| r1 | P-07 |"]'
+expect_jq "the clean runs' rows, apart (#0-180)"     "$F" '.seededClean == ["| Run | Pattern |", "|---|---|", "| c1 | C-01 |"]'
 if printf '%s' "$summary" | jq -e '.prs == 9 and .readyPrs == 2 and .cases == 13 and .prsWithHumanLabels == 4 and .unverifiedHumanLabels == 3 and .ownerIsAutopilot == false and .unverifiedEscapes == 8' >/dev/null; then ok "summary counts PRs, /ready PRs and cases"
 else fail "summary: $summary"; fi
 expect_jq "a clean PR is not a case"                  "$F" '[.cases[].pr] | index(10) | not'
