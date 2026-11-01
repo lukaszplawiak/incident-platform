@@ -127,6 +127,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Low | Open |
+| [0-196](#0-196-incidents-and-ingestions-route-walks-get-0-192s-shape) | incident's and ingestion's route walks get #0-192's shape | security | Low | Open |
+| [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4160,8 +4162,8 @@ AC9. The walk sends every `RequestMethod` for a mapping with no method condition
 
 **Shape (from the review of #0-191's PR #572, 2026-11-01).** AC8 and AC9 are what that review found short in
 `IncidentDenyByDefaultTest` and `IngestionDenyByDefaultTest` (a purpose token's 401 that proves nothing without a token
-that validates; a method-less mapping walked as GET only; ingestion's exact-match exempt set). The two existing
-tests get the same shape in an item of their own.
+that validates; a method-less mapping walked as GET only; ingestion's exact-match exempt set). #0-196 gives the two
+existing tests the same shape.
 
 ### 0-193. Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do
 
@@ -4178,6 +4180,14 @@ postmortem build their chain with `SharedSecurityAutoConfiguration.buildCommonSe
 a new fork by SEC-12 checks a step the existing ones do not have. `ApiKeyAuthFilter` is also a `@Bean`
 `OncePerRequestFilter` with no `FilterRegistrationBean`, so Spring Boot may register it as a servlet filter outside the
 security chain in every service; to verify.
+
+**Seen in the security review of PR #572 (#0-191, 2026-11-01).** Spring Boot also registers the auth filter beans
+(`JwtAuthFilter`, and `ApiKeyAuthFilter` in incident, whose chain does not add it) as plain servlet filters, so they run
+outside the security chain as well; no test shows it either way. `JwtAuthFilter`'s Javadoc ("Why no @Component") says
+the `@Bean` in `SharedSecurityAutoConfiguration` "ensures exactly one registration", which a `@Bean` of a `Filter` does
+not: Boot registers every `Filter` bean unless a `FilterRegistrationBean` disables it. Whichever of A or B is chosen,
+the registrations are settled with a test (a `FilterRegistrationBean` with `setEnabled(false)`, or proof that none is
+needed) and the Javadoc says what is true.
 
 **Approach (to decide).** (A) `buildCommonSecurity` adds `ApiKeyAuthFilter`, so every chain has it from one place,
 and the servlet registration question is settled with it; or (B) SEC-12 and CLAUDE.md say what `architecture.md`
@@ -4247,6 +4257,67 @@ AC2. `picker.md` and the workflow name the prefixes in one place.
 **Touches:** `.claude/workflows/backlog-autopilot.js`, `.claude/agents/picker.md`,
 `.github/scripts/test-autopilot-workflow.mjs`, `scripts/factory/next-item.sh` (if the type is read there),
 `docs/ai-factory.md`.
+
+### 0-196. incident's and ingestion's route walks get #0-192's shape
+
+**Type:** security · **Priority:** Low · **Status:** Open. From the owner's review of PR #572 (#0-191, 2026-11-01).
+**Autopilot:** not-ready · **Risk:** low · **Complexity:** low · **Depends on:** #0-191
+
+**Problem.** `IncidentDenyByDefaultTest` and `IngestionDenyByDefaultTest` (#0-191) fall short of ADR-0048 as amended
+(rules 2, 3 and 7) and of the shape #0-192 copies:
+- no positive control: a purpose token's 401 passes too if no token validates in the test's context;
+- `IngestionDenyByDefaultTest`'s Javadoc says "the 401 for an unknown key is the real filter's", but nothing shows the
+  mocked `ApiKeyLookupService` was asked: with `ApiKeyAuthFilter` taken out of ingestion's chain the test still passes
+  (the 401 is then the entry point's), and every real integration key stops working;
+- a mapping with no method condition is walked as `GET` only (`IncidentDenyByDefaultTest:308`,
+  `IngestionDenyByDefaultTest:290`);
+- the two copies differ: incident's `isExempt` understands `/**` keys, ingestion's `EXEMPT.containsKey` matches exact
+  patterns only;
+- incident's `/ws/**` entry names no `RequestMappingHandlerMapping` route and would exempt a later REST mapping under
+  `/ws/`.
+
+**Approach.** Each test gets ADR-0048 rule 7's positive control, the walk sends every `RequestMethod` for a method-less
+mapping, ingestion takes incident's `isExempt`, incident's `/ws/**` entry goes (the WebSocket handshake is not a
+handler-mapping route), and ingestion verifies the lookup was asked. Test code only.
+
+**Acceptance criteria (draft).**
+AC1. Each of the two tests has a positive control: a valid user token from `JwtUtils.generateToken` (its tenant `FULL`)
+     gets a status other than 401 on a known route (403 counts).
+AC2. `IngestionDenyByDefaultTest` shows the mocked `ApiKeyLookupService` was asked for the unknown key, in both forms;
+     with `ApiKeyAuthFilter` taken out of ingestion's chain the test fails.
+AC3. Both walks send every `RequestMethod` for a mapping with no method condition, and both read their exempt set
+     with incident's `isExempt` (a `/**` key covers the patterns below it).
+AC4. Incident's exempt set is `/error` only, and a test shows the walk would report a REST mapping under `/ws/`.
+AC5. Both tests pass on `main`.
+
+**Touches:** incident-service (src/test: incident/api), ingestion-service (src/test: ingestion/api), root (BACKLOG.md).
+
+### 0-197. auth-service's route walks exempt their routes through `PUBLIC_PATHS`
+
+**Type:** security · **Priority:** Medium · **Status:** Open. Named in ADR-0048 (#0-191, 2026-11-01), "Alternatives
+considered".
+**Autopilot:** not-ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+
+**Problem.** `ApiKeyDenyByDefaultTest` (`:201`) and `IntrospectionTokenDenyByDefaultTest` (`:189`) skip every route
+matching `SharedSecurityAutoConfiguration.PUBLIC_PATHS`. A new entry there that matches a controller route of
+auth-service would exempt exactly the route it opens, so the two tests meant to catch it would pass. #0-191 chose a
+literal exempt set with a reason per entry for that reason (ADR-0048 rule 3); auth-service's tests predate it. They
+also walk a mapping with no method condition as `GET` only (`ApiKeyDenyByDefaultTest:166`,
+`IntrospectionTokenDenyByDefaultTest:158`), the gap ADR-0048's amended rule 2 closes.
+
+**Approach.** Each test reads a literal exempt set (`Map<String, String>`, pattern to reason) with ADR-0048 rule 3's
+matching, in place of `PUBLIC_PATHS`, the walk sends every `RequestMethod` for a method-less mapping, and it names a
+route that answers otherwise. Whether the two walks become
+one auth-service test in ADR-0048's full shape (three callers, positive control) is the owner's call at `/ready`.
+
+**Acceptance criteria (draft).**
+AC1. Neither test refers to `PUBLIC_PATHS`; each has a literal exempt set with a reason beside each entry.
+AC2. A route added to `PUBLIC_PATHS` in the test's context that matches a controller route of auth-service makes the
+     walk fail and name it, shown by a test.
+AC3. Both walks send every `RequestMethod` for a mapping with no method condition.
+AC4. Both tests pass on `main`.
+
+**Touches:** auth-service (src/test: auth/api), root (BACKLOG.md).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
