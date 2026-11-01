@@ -126,6 +126,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-191](#0-191-every-service-with-an-api-refuses-an-unauthenticated-caller-on-every-route) | Every service with an API refuses an unauthenticated caller on every route | security | Medium | Open |
 | [0-192](#0-192-notification-oncall-and-postmortem-refuse-an-unauthenticated-caller-on-every-route) | notification, oncall and postmortem refuse an unauthenticated caller on every route | security | Medium | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
+| [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4208,6 +4209,43 @@ already does (only a service that accepts keys adds it). #0-191's tests show the
 
 **Touches:** shared (security, with A; then `.ai/context/architecture.md` too), `.ai/rules/review/security.md`
 (owner), CLAUDE.md "Invariants" (owner).
+
+### 0-194. The autopilot's preflight does not refuse a session outside the devcontainer or without its settings
+
+**Type:** security · **Priority:** Medium · **Status:** Open. Found 2026-11-01: `/backlog-autopilot` was started
+in the owner's host session (macOS, plain `claude`, auto mode), not as `docs/ai-factory.md` "Running it" says.
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
+
+**Problem.** The run was stopped only by chance: `preflight.sh` refused it for `.claude/settings.local.json`, an open
+`autopilot-stop` issue and Docker being off. None of its refusals checks where it runs or how the session was started.
+On the host, with a clean `main`, Docker up and no personal settings file, the autopilot would start:
+- outside the devcontainer's firewall, with the owner's files, credentials and network (`docs/ai-factory.md`, the
+  "Devcontainer + firewall" row of the controls table);
+- under the owner's identity: the owner's git config and `gh` token, not the bot's (`devcontainer.json` sets the bot's
+  `GIT_*` only in the container, #0-113), so its PR would be the owner's and the `human:*` labels meaningless;
+- without `settings.autopilot.json`: no `dontAsk`, none of its deny rules or `--agent` hook entries, and the limits it
+  sets (`FACTORY_MAX_BLOCKED`, `FACTORY_AUDIT_EVERY`, `FACTORY_MAX_MERGES_PER_DAY`) fall back to `preflight.sh`'s
+  defaults without a word.
+
+**Approach (to decide).** Two refusals, each from a signal only the intended setup gives:
+1. Not in the devcontainer: e.g. a variable set only by `devcontainer.json` `containerEnv` (a new one, such as
+   `FACTORY_DEVCONTAINER=1`), the working directory being `/workspace`, or the firewall's own test (a host off its
+   allow-list is unreachable, as `init-firewall.sh`'s self-test checks with `example.com`). The firewall test is the
+   strongest (it is what the container is for) but costs a network timeout on a correct run.
+2. Not started with `settings.autopilot.json`: a variable its `env` sets (the three limits today, or a new
+   `FACTORY_AUTOPILOT_SETTINGS=1`), and no default in `preflight.sh` for the limits once it is required.
+A signal can be set by hand, so this guards against a mistake, not an adversary; that is the gap it closes.
+
+**Acceptance criteria (draft).**
+AC1. `preflight.sh` refuses to start outside the devcontainer, naming the signal it missed; `test-preflight.sh` shows
+     it.
+AC2. It refuses a session not started with `settings.autopilot.json`, and the limits have no silent default.
+AC3. A correct run in the devcontainer starts as today.
+AC4. `docs/ai-factory.md` "Running it" and README "Infrastructure Hardening" name the new refusals.
+
+**Touches:** `scripts/factory/preflight.sh`, `.github/scripts/test-preflight.sh`, `.claude/settings.autopilot.json`
+(`env`), `.devcontainer/devcontainer.json` (`containerEnv`), `docs/ai-factory.md`, README "Infrastructure
+Hardening".
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
