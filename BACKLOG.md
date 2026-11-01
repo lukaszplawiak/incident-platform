@@ -4155,14 +4155,36 @@ AC7. (reviewer-checked) README "Infrastructure Hardening" lists the control and 
 ### 0-192. notification, oncall and postmortem refuse an unauthenticated caller on every route
 
 **Type:** security · **Priority:** Medium · **Status:** Open. Split off #0-191 (owner, 2026-11-01, `/ready #0-191`).
-**Autopilot:** not-ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-191
+**Autopilot:** not-ready (ready once #0-191 is Done) · **Risk:** low · **Complexity:** medium · **Depends on:** #0-191
+**Touches:** notification-service (src/test: notification/api), oncall-service (src/test: oncall/api), postmortem-service (src/test: postmortem/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
 
 **Problem.** #0-191's, for the three services it leaves out: notification-service (`SlackWebhookController`, one
 route, exempt: Slack signature), oncall-service (`OncallScheduleController`) and postmortem-service
 (`PostmortemController`). Each forks its `SecurityFilterChain` and tests listed endpoints only.
 
 **Approach.** A `<Service>DenyByDefaultTest` in each, copying the shape #0-191 sets for incident-service and
-ingestion-service. Acceptance criteria and Touches come with its own `/ready` (`docs/backlog-ready-0-192`).
+ingestion-service.
+
+**Acceptance criteria.**
+AC1. `OncallDenyByDefaultTest` and `PostmortemDenyByDefaultTest` each go through the service's real `SecurityConfig`
+     and, for every route and method of `RequestMappingHandlerMapping` not in its exempt set: with no `Authorization`
+     header get 401; with a purpose token from `JwtUtils.generatePurposeToken` get 401 or 403; with an unknown API
+     key, in both forms `ApiKeyAuthFilter` reads (`ApiKey <key>` and `Bearer ipl_…`), get 401 (these chains have no
+     `ApiKeyAuthFilter`, #0-193, and must answer 401 all the same). Both pass on `main`.
+AC2. `NotificationDenyByDefaultTest` checks two targets: a path no controller maps, which reaches the chain's
+     `anyRequest()` rule and gets AC1's three answers; and the exempt `/api/v1/slack/actions` with no Slack signature,
+     which gets 401 (as `SlackWebhookControllerSecurityTest` shows). It passes on `main`.
+AC3. Each of the three tests has a negative case: a test-only controller route and a test chain that permits it make
+     the same check fail, and the failure names that route.
+AC4. A route answering anything but the expected status is named in the failure (method, pattern, status).
+AC5. Each test asserts how many routes it checked and names at least one known route, so an enumeration that finds
+     nothing fails: oncall `/api/v1/oncall/current/by-user/{userId}` and a `/schedules` route; postmortem a route
+     under `/api/v1/postmortems`; notification that its exempt set is exactly `/api/v1/slack/actions` and that the
+     enumeration finds that route.
+AC6. (reviewer-checked) The exempt set is a literal in each test with the reason beside each entry, and no test refers
+     to `SharedSecurityAutoConfiguration.PUBLIC_PATHS`.
+AC7. (reviewer-checked) README "Infrastructure Hardening" names the three tests, in the entry #0-191 adds (CLAUDE.md
+     "Security inventory").
 
 ### 0-193. Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do
 
