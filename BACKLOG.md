@@ -109,7 +109,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-105](#0-105-the-email-channels-worst-case-send-is-not-checked-against-the-scheduler-lock) | The email channel's worst-case send is not checked against the scheduler lock | performance | Low | Open |
 | [0-106](#0-106-kubernetes-has-no-observability-stack) | Kubernetes has no observability stack | design | Medium | Open |
 | [0-107](#0-107-no-alert-reads-log-content) | No alert reads log content | design | Low | Open |
-| [0-108](#0-108-architecture-tests-archunit-for-the-invariants-in-claudemd) | Architecture tests (ArchUnit) for the invariants in CLAUDE.md | ci | Medium | Open |
+| [0-108](#0-108-architecture-tests-archunit-for-the-decided-patterns) | Architecture tests (ArchUnit) for the decided patterns | ci | Medium | Open |
 | [0-110](#0-110-maven-enforcer-allowed-repositories-and-pinned-plugin-versions) | Maven Enforcer: allowed repositories and pinned plugin versions | ci | Low | Open |
 | [0-111](#0-111-openapi-contract-diff-on-pull-requests) | OpenAPI contract diff on pull requests | ci | Low | Open |
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
@@ -123,6 +123,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
+| [0-191](#0-191-every-service-with-an-api-refuses-an-unauthenticated-caller-on-every-route) | Every service with an API refuses an unauthenticated caller on every route | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -1867,33 +1868,70 @@ Prometheus rule alerts on. Only for signals no metric gives.
 
 ---
 
-### 0-108. Architecture tests (ArchUnit) for the invariants in CLAUDE.md
+### 0-108. Architecture tests (ArchUnit) for the decided patterns
 
 **Type:** ci · **Priority:** Medium · **Status:** Open
-**Autopilot:** not-ready · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Autopilot:** not-ready (human-only: `architecture-tests/` and `.ai/rules/` are Owner-only) · **Risk:** low ·
+**Complexity:** medium · **Depends on:** —
 
-**Problem.** The invariants in CLAUDE.md ("Invariants: the short version", `.ai/context/architecture.md`)
-are enforced only by review. Several have been broken before (#0-47 `= 0L` on `@Version`, #0-83 a bulk
-`@Modifying` without `flushAutomatically`, the forked security chains of `d80541f`/`ec4eae4`). With
-unattended agents writing code, a rule that only a reviewer checks is a rule a reviewer can miss.
+**Problem.** The decided patterns of `.ai/rules/review/architecture.md` §3 and SEC-04 are enforced only by review.
+Several have been broken before (#0-47 `= 0L` on `@Version`, #0-83 a bulk `@Modifying` without
+`flushAutomatically`), and the seeded-defect benchmark plants exactly these (P-06 ARC-22, P-07 ARC-23, P-08 ARC-25).
+With unattended agents writing code, a rule that only a reviewer checks is a rule a reviewer can miss; a test that
+fails in the autopilot's test gate (`run-tests.sh`, before the panel) also costs a round less than a finding.
 
-**Approach.** A test module `architecture-tests` (test scope only, depends on every service) with ArchUnit
-rules, each pointing to the invariant it guards. Existing violations are frozen
-(`FreezingArchRule`, store committed) so the build is green on day one and only new violations fail.
-Candidate rules, to be confirmed by the owner before the item is `ready`:
-1. Every method annotated `@Scheduled` is also annotated `@SchedulerLock` (ShedLock).
-2. No class outside `TenantRecords` / `DeadLetterPublisher` calls `KafkaTemplate.send` directly.
-3. A `@Version` field is of type `Long` (and has no initialiser, checked by a source-level test).
-4. Every `@Modifying(clearAutomatically = true)` also sets `flushAutomatically = true`.
-5. No `@KafkaListener` method is `@Transactional`.
-6. No class of one service depends on a package of another service; `shared` depends on no service.
-The module and the frozen store are human-owned paths in `.github/CODEOWNERS`, and the rules are listed
-in `.ai/rules/review/architecture.md` as "enforced by tests, do not review by hand".
+**Approach.** A test module `architecture-tests` (test scope only, depends on `shared` and every service) with one
+ArchUnit rule per invariant, each `.because("<rule id>: <why in one sentence>")`, so the failure names the rule a
+change broke. Candidates, re-checked against `main` on 2026-11-01 (a grep, not ArchUnit: the module's first run
+gives the real count):
+1. **ARC-23.** A `@Scheduled` method's class takes its lock: the method has `@SchedulerLock`, or its class holds a
+   `LockingTaskExecutor` (`AuditOutboxRelay`, `PausedTenantsSync` lock programmatically), or the method is marked
+   per-replica (see Decided below). Today two jobs run on every replica on purpose (`TenantWebSocketSessions`,
+   `OperatorTenantBootstrap.refreshPendingGauge`), with the reason only in Javadoc, which ArchUnit cannot read.
+   Label: Backed by (whether a job changes shared state, and whether the executor wraps the body, stay reviewed).
+2. **ARC-22, SEC-04.** `KafkaTemplate.send` is called only with a `ProducerRecord` (no `send(topic, ...)`
+   overload) and only from the sender classes of today: `AlertKafkaProducer`, `AuditEventKafkaSender`,
+   `IncidentEventKafkaSender`, `DeadLetterPublisher`. (The first wording, "only `TenantRecords` /
+   `DeadLetterPublisher`", was false: three senders call `send(record)` with a record `TenantRecords` built.)
+   Catches P-06 (a direct send from a new class). Label: Backed by (that the record comes from
+   `TenantRecords.forTenant` is data flow, not visible to ArchUnit).
+3. **ARC-25.** A `@Version` field is `Long`, and no constructor of its class writes it (a field initialiser
+   `= 0L` compiles to a write in every constructor, so a bytecode rule sees it; no source-level test needed).
+   Catches P-08. Label: Backed by (whether a new entity needs `@Version` at all is ARC-25's judgement).
+4. **ARC-26.** Every `@Modifying(clearAutomatically = true)` also sets `flushAutomatically = true`. The rule is
+   the whole invariant. Label: Enforced by (`build-and-test`, a required check of `main`).
+5. **ARC-24.** No `@KafkaListener` method, and no class holding one, is `@Transactional`
+   (`IncidentEscalationEventConsumer` was, and was fixed). Label: Backed by (acknowledgement paths stay reviewed).
+
+Dropped from the first list: "no class of one service depends on a package of another; `shared` on none". Every
+service is its own Maven module, so such a dependency needs a POM entry (`review-k8s`, Factory guards' POM step),
+and `shared` → service is a cycle Maven does not build: the rule would guard what the build already guards.
+
+Violations of `main` are fixed or marked per-replica in the same PR, not frozen: `FreezingArchRule` and its store
+only if the first run finds a violation that cannot be fixed there, each one listed in this item with its reason
+(a store is a file a change could edit to pass).
+
+**Decided (owner, 2026-11-01).**
+- All five candidates go in.
+- A per-replica job is marked by an annotation in `shared` (e.g. `@PerReplica("<reason>")`), which the ArchUnit rule
+  accepts and the reviewer judges: ARC-23's "says why" moves from Javadoc to the annotation. Not an allow-list in the
+  test: `architecture-tests/` is Owner-only, so every item adding a legitimate per-replica job (clean pattern C-01)
+  would stop at the test gate and wait for the owner.
 
 **Acceptance criteria.**
-AC1. `./mvnw verify` runs the architecture tests in CI ("Build, Test & Coverage") and they pass on `main`.
-AC2. Each confirmed rule fails a test fixture that violates it (one negative test per rule).
-AC3. `.ai/rules/review/architecture.md` lists the enforced rules; CODEOWNERS covers the module.
+AC1. `./mvnw verify` runs the architecture tests in "Build, Test & Coverage" and they pass on `main`.
+AC2. Each rule fails a fixture that violates it (one negative test per rule), and its message starts with the rule id.
+AC3. `.ai/rules/review/architecture.md` (and `security.md` for SEC-04) carries each rule's label, "Enforced by" or
+     "Backed by", naming the test; `check-rule-claims.rb` passes. CODEOWNERS covers the module
+     (`check-protected-paths.sh`).
+AC4. The benchmark stays true: `seed-bugs` runs no test gate before the panel (only `seed-compile.sh`, #0-181), and a
+     reviewer spends no finding on an "Enforced by" rule (`_common.md`). Every pattern of `patterns.md` whose rule
+     becomes "Enforced by" is retired with that reason; a "Backed by" pattern stays (the rule is still reviewed).
+AC5. README "Infrastructure Hardening" lists the control.
+
+**Touches:** `architecture-tests/` (new), root `pom.xml` (`<modules>`), `.github/CODEOWNERS`,
+`.ai/rules/review/architecture.md`, `.ai/rules/review/security.md`, `.ai/audit/benchmark/patterns.md`, README
+"Infrastructure Hardening", `shared` (the annotation) and the two per-replica jobs.
 
 ---
 
@@ -4052,6 +4090,50 @@ AC1. A seed run that fails after the seeder's edit ends on a clean `main`, the b
 gone; shown by tests.
 AC2. Nothing but the run's tracked edit on its own branch is ever discarded (untracked files, another branch, `main`
 and an autopilot run keep today's refusal); shown by tests.
+
+### 0-191. Every service with an API refuses an unauthenticated caller on every route
+
+**Type:** security · **Priority:** Medium · **Status:** Open
+**Autopilot:** not-ready · **Risk:** low · **Complexity:** medium · **Depends on:** —
+
+**Problem.** Only auth-service checks its whole API at once: `ApiKeyDenyByDefaultTest` and
+`IntrospectionTokenDenyByDefaultTest` enumerate every route of `RequestMappingHandlerMapping` through the real filter
+chain, so a route added later is checked without anyone adding it. The other services with an API (incident,
+ingestion, notification, oncall, postmortem) test listed endpoints only (`*ControllerSecurityTest` and a few
+controller tests, such as `IncidentAuditControllerTest` and `OncallServiceTokenAuthenticationTest`), and all five fork
+the `SecurityFilterChain` (SEC-12), whose one test, `AuthenticatedExceptPurposeTokensTest`, checks "the helper itself,
+not that a chain uses it". A new controller, a `permitAll()` added to a service's chain, or a `PUBLIC_PATHS` entry
+that matches a real route (P-05's second form) is caught by review alone (SEC-10, SEC-12). escalation-service has no
+controller (actuator only) and is out of scope until it has one.
+
+**Approach.** One `<Service>DenyByDefaultTest` per service, in the shape of `ApiKeyDenyByDefaultTest`: `@WebMvcTest`
+with the service's real `SecurityConfig`, every route and method of `RequestMappingHandlerMapping` (path variables
+filled, JSON body `{}`), and for each route not exempt:
+- no `Authorization` header → 401;
+- a purpose token (an MFA or introspection token, `authenticatedExceptPurposeTokens()`) → 401 or 403;
+- an unknown API key → 401 (ingestion-service resolves keys through auth-service: its lookup mocked as `Invalid`).
+
+Exempt: a literal set in the test of each service's public routes with the reason beside each (notification
+`/api/v1/slack/actions`: Slack signature; incident `/ws/**`: STOMP authenticates the CONNECT frame), never a reference
+to `SharedSecurityAutoConfiguration.PUBLIC_PATHS`: a new entry there that matches a controller's route must make the
+test fail, not exempt the route. (`PUBLIC_PATHS` holds actuator, OpenAPI and `/error` only, none a controller route.)
+The test asserts the number of routes it checked and names a few known ones, so an enumeration that finds nothing
+fails (as `ApiKeyDenyByDefaultTest` does). Each service has its own copy: shared test code (a test-jar of `shared`) is a
+new dependency between modules, `NEEDS_HUMAN` (`_common.md`), and can follow once the five exist.
+
+**Acceptance criteria.**
+AC1. incident, ingestion, notification, oncall and postmortem each have a `<Service>DenyByDefaultTest` checking every
+     route of their controllers as above; all pass on `main`.
+AC2. Each test has a negative case: a test-only controller and a test chain that permits it, which the check reports
+     (the check, not only the assertion, is shown to work).
+AC3. A route answering anything but the expected status is named in the failure (method, pattern, status).
+AC4. README "Infrastructure Hardening" lists the control.
+
+**After merge (owner, `.ai/rules/` is Owner-only):** SEC-10 and SEC-12 in `security.md` get "Backed by:
+`<Service>DenyByDefaultTest`" (a route a test sees refused; whether its role is right stays SEC-10's review).
+
+**Touches:** `incident-service/src/test/`, `ingestion-service/src/test/`, `notification-service/src/test/`,
+`oncall-service/src/test/`, `postmortem-service/src/test/`, README "Infrastructure Hardening", `BACKLOG.md`.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
