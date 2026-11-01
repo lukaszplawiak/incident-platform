@@ -60,22 +60,28 @@ the attack scenario: a specific, concrete way this could be exploited or trigger
 
 - **SEC-10 Every endpoint states who may call it.** A new endpoint has an explicit requirement: `@PreAuthorize`, or a
   filter-chain rule that names its path and role (the shared chain's catch-all `authenticatedExceptPurposeTokens()`
-  admits every role, so it is not one); nothing is added to `PUBLIC_PATHS` without a reason in the PR. Check: a new
-  mapping without `@PreAuthorize` or such a rule, a removed one, or a new `PUBLIC_PATHS` entry.
+  admits every role, so it is not one); nothing is added to `PUBLIC_PATHS` without a reason in the PR. Backed by:
+  `IncidentDenyByDefaultTest`, `IngestionDenyByDefaultTest` (every route of the service outside the test's literal
+  exempt set refuses an unauthenticated caller; whether its role is right is not seen; until #0-196 they have no
+  positive control; ADR-0048, #0-192 adds notification, oncall and postmortem). Check: a new mapping without
+  `@PreAuthorize` or such a rule, a removed one, or a new `PUBLIC_PATHS` entry.
 - **SEC-11 A role is written in the form its reader expects.** `@PreAuthorize` and filter-chain rules use the
   non-prefixed `hasRole("ADMIN")` / `SecurityRoles.*_NAME`; JWT claims and `UserPrincipal.hasRole` the `ROLE_`
   prefix. A mismatch fails silently, open or closed. Check: a new role string and where it is compared.
 - **SEC-12 A forked `SecurityFilterChain` stays as strict as the shared one.** A service that declares its own chain
   (instead of extending the shared one) keeps CORS and `PUBLIC_PATHS`, adds `ApiKeyAuthFilter` itself, and ends in
   `authenticatedExceptPurposeTokens()`, not `authenticated()`; the most common way auth gets weakened here. Backed by:
-  `AuthenticatedExceptPurposeTokensTest` (the helper itself, not that a chain uses it). Check: a new or changed
-  `SecurityFilterChain` bean.
+  `AuthenticatedExceptPurposeTokensTest` (the helper itself, not that a chain uses it) and `IncidentDenyByDefaultTest`,
+  `IngestionDenyByDefaultTest` (that those services' chains refuse an anonymous caller, a purpose token and an unknown
+  key on every route; ADR-0048; until #0-196 they have no positive control, and ingestion's does not show its key lookup
+  was asked). Check: a new or changed `SecurityFilterChain` bean.
 - **SEC-13 Access by id checks the owner.** Reading or changing a resource by id checks its tenant, team or role, not
   only that the row exists (IDOR). Check: a new `findById` or path id behind an endpoint, and what it compares.
 - **SEC-14 An API key reaches only the routes its scope allows.** A new auth-service route open to keys appears in
   `SecurityConfig` with its scope (`ApiKeyAccess`); an endpoint open to `ROLE_SERVICE` never dereferences a `null`
-  `@AuthenticationPrincipal UserPrincipal`. Backed by: `ApiKeyDenyByDefaultTest` (routes not listed are refused).
-  Check: a new route meant for keys or services, and its principal handling.
+  `@AuthenticationPrincipal UserPrincipal`. Backed by: `ApiKeyDenyByDefaultTest` (routes not listed are refused; its
+  exempt routes come from `PUBLIC_PATHS` until #0-197). Check: a new route meant for keys or services, and its principal
+  handling.
 - **SEC-15 A service-to-service call carries the target's token and fails safely.** The token is minted for the
   target (`ServiceTokenProvider.getToken(tenantId, ServiceNames.<TARGET>)`), the client has a connect and a read
   timeout, and a fail-open fallback calls `ClientFallbackMetrics.record`. Check: a new client or call between services.
