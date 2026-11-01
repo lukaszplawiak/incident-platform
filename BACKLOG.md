@@ -127,8 +127,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Low | Open |
-| [0-196](#0-196-incidents-and-ingestions-route-walks-get-0-192s-shape) | incident's and ingestion's route walks get #0-192's shape | security | Low | Open |
+| [0-196](#0-196-incidents-route-walk-gets-0-192s-shape) | incident's route walk gets #0-192's shape | security | Low | Open |
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
+| [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4162,8 +4163,8 @@ AC9. The walk sends every `RequestMethod` for a mapping with no method condition
 
 **Shape (from the review of #0-191's PR #572, 2026-11-01).** AC8 and AC9 are what that review found short in
 `IncidentDenyByDefaultTest` and `IngestionDenyByDefaultTest` (a purpose token's 401 that proves nothing without a token
-that validates; a method-less mapping walked as GET only; ingestion's exact-match exempt set). #0-196 gives the two
-existing tests the same shape.
+that validates; a method-less mapping walked as GET only; ingestion's exact-match exempt set). #0-196 (incident) and
+#0-198 (ingestion) give the two existing tests the same shape.
 
 ### 0-193. Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do
 
@@ -4258,66 +4259,127 @@ AC2. `picker.md` and the workflow name the prefixes in one place.
 `.github/scripts/test-autopilot-workflow.mjs`, `scripts/factory/next-item.sh` (if the type is read there),
 `docs/ai-factory.md`.
 
-### 0-196. incident's and ingestion's route walks get #0-192's shape
+### 0-196. incident's route walk gets #0-192's shape
 
-**Type:** security · **Priority:** Low · **Status:** Open. From the owner's review of PR #572 (#0-191, 2026-11-01).
-**Autopilot:** not-ready · **Risk:** low · **Complexity:** low · **Depends on:** #0-191
+**Type:** security · **Priority:** Low · **Status:** Open. From the owner's review of PR #572 (#0-191, 2026-11-01);
+ingestion's half split off as #0-198 at `/ready` (owner, 2026-11-01: one service per item, ready.md point 4).
+**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-192
+**Touches:** incident-service (src/test: incident/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
 
-**Problem.** `IncidentDenyByDefaultTest` and `IngestionDenyByDefaultTest` (#0-191) fall short of ADR-0048 as amended
-(rules 2, 3 and 7) and of the shape #0-192 copies:
+**Problem.** `IncidentDenyByDefaultTest` (#0-191) falls short of ADR-0048 as amended (rules 2, 3 and 7) and of the
+shape #0-192 copies:
 - no positive control: a purpose token's 401 passes too if no token validates in the test's context;
-- `IngestionDenyByDefaultTest`'s Javadoc says "the 401 for an unknown key is the real filter's", but nothing shows the
-  mocked `ApiKeyLookupService` was asked: with `ApiKeyAuthFilter` taken out of ingestion's chain the test still passes
-  (the 401 is then the entry point's), and every real integration key stops working;
-- a mapping with no method condition is walked as `GET` only (`IncidentDenyByDefaultTest:308`,
-  `IngestionDenyByDefaultTest:290`);
-- the two copies differ: incident's `isExempt` understands `/**` keys, ingestion's `EXEMPT.containsKey` matches exact
-  patterns only;
-- incident's `/ws/**` entry names no `RequestMappingHandlerMapping` route and would exempt a later REST mapping under
-  `/ws/`.
+- a mapping with no method condition is walked as `GET` only (`IncidentDenyByDefaultTest:308`);
+- its `/ws/**` exempt entry (`:121`) names no `RequestMappingHandlerMapping` route (`WebSocketConfig` registers `/ws`
+  as a STOMP endpoint) and would exempt a later REST mapping under `/ws/`, which the real chain permits
+  (`SecurityConfig`: `.requestMatchers("/ws/**").permitAll()`).
 
-**Approach.** Each test gets ADR-0048 rule 7's positive control, the walk sends every `RequestMethod` for a method-less
-mapping, ingestion takes incident's `isExempt`, incident's `/ws/**` entry goes (the WebSocket handshake is not a
-handler-mapping route), and ingestion verifies the lookup was asked. Test code only.
+**Approach.** The test gets ADR-0048 rule 7's positive control, the walk sends every `RequestMethod` for a method-less
+mapping, and the `/ws/**` entry goes. Test code only; no chain changes.
 
-**Acceptance criteria (draft).**
-AC1. Each of the two tests has a positive control: a valid user token from `JwtUtils.generateToken` (its tenant `FULL`)
-     gets a status other than 401 on a known route (403 counts).
-AC2. `IngestionDenyByDefaultTest` shows the mocked `ApiKeyLookupService` was asked for the unknown key, in both forms;
-     with `ApiKeyAuthFilter` taken out of ingestion's chain the test fails.
-AC3. Both walks send every `RequestMethod` for a mapping with no method condition, and both read their exempt set
-     with incident's `isExempt` (a `/**` key covers the patterns below it).
-AC4. Incident's exempt set is `/error` only, and a test shows the walk would report a REST mapping under `/ws/`.
-AC5. Both tests pass on `main`.
+**Acceptance criteria.**
+AC1. `IncidentDenyByDefaultTest` has a positive control: a valid user token from `JwtUtils.generateToken` (its tenant
+     `FULL` through the mocked `TenantStatusProvider`) gets a status other than 401 on `GET /api/v1/incidents/{id}`.
+     403 counts: it is past authentication.
+AC2. For a mapping with no method condition the walk sends every `RequestMethod`, not `GET` alone. A test shows it:
+     a method-less test-only mapping in a `@Nested` context with `@NestedTestConfiguration(OVERRIDE)` (the existing
+     `OpenRoute` context may be reused) is reported for a method other than `GET`, e.g. `POST`.
+AC3. The exempt set is `/error` only, with no `/ws/**` entry, and `isExempt` keeps its rule-3 matching (a `/**` key
+     covers the patterns below it).
+AC4. A test shows the walk reports a REST mapping under `/ws/`: a test-only controller at `/ws/test-only` in a
+     `@Nested` context with `@NestedTestConfiguration(OVERRIDE)` and the real `SecurityConfig` (no test chain: its
+     `permitAll("/ws/**")` opens it) makes the walk fail, and the failure names `GET /ws/test-only`.
+AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 added, no longer names incident's
+     `/ws/**` as an exempt entry and says incident's test has a positive control (CLAUDE.md "Security inventory"),
+     consistent with what #0-192 wrote there.
+AC6. `./mvnw test -pl incident-service` passes on the branch.
 
-**Touches:** incident-service (src/test: incident/api), ingestion-service (src/test: ingestion/api), root (BACKLOG.md).
+**After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) say "until #0-196"; the
+clause about incident goes once #0-196 and #0-198 are both Done (protected path: not the autopilot's).
+
+**Order.** `Depends on: #0-192` because #0-192, #0-196, #0-198 and #0-197 each edit the same README paragraph
+(owner, 2026-11-01: a chain, not queue order alone): #0-192 → #0-196 → #0-198 → #0-197.
 
 ### 0-197. auth-service's route walks exempt their routes through `PUBLIC_PATHS`
 
 **Type:** security · **Priority:** Medium · **Status:** Open. Named in ADR-0048 (#0-191, 2026-11-01), "Alternatives
 considered".
-**Autopilot:** not-ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-198
+**Touches:** auth-service (src/test: auth/api), root (README.md "Infrastructure Hardening", .ai/decisions/0048-every-route-is-walked-deny-by-default.md, BACKLOG.md)
 
 **Problem.** `ApiKeyDenyByDefaultTest` (`:201`) and `IntrospectionTokenDenyByDefaultTest` (`:189`) skip every route
-matching `SharedSecurityAutoConfiguration.PUBLIC_PATHS`. A new entry there that matches a controller route of
-auth-service would exempt exactly the route it opens, so the two tests meant to catch it would pass. #0-191 chose a
-literal exempt set with a reason per entry for that reason (ADR-0048 rule 3); auth-service's tests predate it. They
-also walk a mapping with no method condition as `GET` only (`ApiKeyDenyByDefaultTest:166`,
-`IntrospectionTokenDenyByDefaultTest:158`), the gap ADR-0048's amended rule 2 closes.
+matching `SharedSecurityAutoConfiguration.PUBLIC_PATHS`, by `startsWith`. A new entry there that matches a controller
+route of auth-service would exempt exactly the route it opens, so the two tests meant to catch it would pass. #0-191
+chose a literal exempt set with a reason per entry for that reason (ADR-0048 rule 3); auth-service's tests predate
+it. Their other exemptions are not literal with a reason either: `PUBLIC_POSTS` (both tests: POST only, no reason per
+entry) and, in `ApiKeyDenyByDefaultTest` (`:195`), the routes a key may reach as a `/api/v1/teams` prefix
+(`startsWith("/api/v1/teams/")`). They also walk a mapping with no method condition as `GET` only
+(`ApiKeyDenyByDefaultTest:166`, `IntrospectionTokenDenyByDefaultTest:158`), the gap ADR-0048's amended rule 2
+closes, and neither has a negative case (rule 5). Both already have a positive control (rule 7):
+`ApiKeyDenyByDefaultTest.jwtUnaffected` (200) and `IntrospectionTokenDenyByDefaultTest.introspectionRefusesAdmin`
+(403).
 
-**Approach.** Each test reads a literal exempt set (`Map<String, String>`, pattern to reason) with ADR-0048 rule 3's
-matching, in place of `PUBLIC_PATHS`, the walk sends every `RequestMethod` for a method-less mapping, and it names a
-route that answers otherwise. Whether the two walks become
-one auth-service test in ADR-0048's full shape (three callers, positive control) is the owner's call at `/ready`.
+**Decided (owner, 2026-11-01, `/ready`).** The two tests stay two and are fixed in place, not merged into one test
+in ADR-0048's full shape. An exemption that holds for one method only keeps its method: the exempt set is keyed by
+`"<METHOD> <pattern>"`, so `GET /api/v1/auth/login` stays walked.
 
-**Acceptance criteria (draft).**
-AC1. Neither test refers to `PUBLIC_PATHS`; each has a literal exempt set with a reason beside each entry.
-AC2. A route added to `PUBLIC_PATHS` in the test's context that matches a controller route of auth-service makes the
-     walk fail and name it, shown by a test.
-AC3. Both walks send every `RequestMethod` for a mapping with no method condition.
-AC4. Both tests pass on `main`.
+**Acceptance criteria.**
+AC1. Neither test refers to `PUBLIC_PATHS` or matches a route by `startsWith`. Each reads a literal exempt set,
+     `Map<String, String>` from `"<METHOD> <pattern>"` (or a bare pattern for every method) to its reason, with
+     ADR-0048 rule 3's matching for a `/**` key; `PUBLIC_POSTS` becomes entries of it. A test fails if an entry's
+     reason is blank.
+AC2. In `ApiKeyDenyByDefaultTest` the routes a key may reach are a literal set of exact patterns with a reason each,
+     in place of the `/api/v1/teams` prefix; the existing `teamsReadScope` / `jwtUnaffected` checks still pass.
+AC3. For a mapping with no method condition both walks send every `RequestMethod`, not `GET` alone; a route that
+     answers otherwise is named in the failure (method, pattern, status).
+AC4. `ApiKeyDenyByDefaultTest` has a negative case: a test-only controller route (e.g. `/api/v1/test-only/open`) and a
+     test chain at `HIGHEST_PRECEDENCE` that permits it, in a `@Nested` context with
+     `@NestedTestConfiguration(OVERRIDE)`, make the same walk fail, and the failure names that route (ADR-0048 rule 5). The outer context's walk does not
+     see the route.
+AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 added, says auth-service's walks too
+     use a literal exempt set with a reason per entry, never `PUBLIC_PATHS` (CLAUDE.md "Security inventory").
+AC6. (reviewer-checked) ADR-0048's Context and "Alternatives considered" no longer say the auth-service tests exempt
+     through `PUBLIC_PATHS` (they say they did, until #0-197).
+AC7. `./mvnw test -pl auth-service` passes on the branch.
 
-**Touches:** auth-service (src/test: auth/api), root (BACKLOG.md).
+**After merge (owner).** `.ai/rules/review/security.md` SEC-14 (`:83`) says "its exempt routes come from
+`PUBLIC_PATHS` until #0-197": that clause goes (protected path: not the autopilot's).
+
+### 0-198. ingestion's route walk gets #0-192's shape
+
+**Type:** security · **Priority:** Low · **Status:** Open. Split off #0-196 at `/ready` (owner, 2026-11-01).
+**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-196
+**Touches:** ingestion-service (src/test: ingestion/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
+
+**Problem.** `IngestionDenyByDefaultTest` (#0-191) falls short of ADR-0048 as amended (rules 2, 3 and 7):
+- no positive control: a purpose token's 401 passes too if no token validates in the test's context;
+- its Javadoc says "the 401 for an unknown key is the real filter's", but nothing shows the mocked
+  `ApiKeyLookupService` (`:133`, stubbed in `@BeforeEach` at `:140`) was asked: with `ApiKeyAuthFilter` taken out of
+  ingestion's chain (`SecurityConfig`) the test still passes (the 401 is then the entry point's), and every real
+  integration key stops working;
+- a mapping with no method condition is walked as `GET` only (`:290`);
+- its exempt set is read by `EXEMPT.containsKey(pattern)` (`:287`), exact patterns only, unlike incident's
+  `isExempt` (rule 3: a `/**` key covers the patterns below it).
+
+**Approach.** As #0-196 for incident, plus a `verify` of the lookup. Test code only; no chain changes.
+
+**Acceptance criteria.**
+AC1. `IngestionDenyByDefaultTest` has a positive control: a valid user token from `JwtUtils.generateToken` (its tenant
+     `FULL` through the mocked `TenantStatusProvider`) gets a status other than 401 on `POST /api/v1/alerts/{source}`.
+     403 counts (`AlertIngestionController`'s `@PreAuthorize` admits `INGESTOR`/`ADMIN`/…): it is past
+     authentication.
+AC2. The unknown-key test verifies that the mocked `ApiKeyLookupService.lookup` was called with `UNKNOWN_KEY`, once for
+     each form (`ApiKey ipl_…` and `Bearer ipl_…`, e.g. `verify(…, atLeastOnce())` after each walk with
+     `clearInvocations` between, or an `ArgumentCaptor`), so the test fails if `ApiKeyAuthFilter` is not in the chain.
+AC3. The exempt set is read with incident's `isExempt` (rule-3 matching), in place of `EXEMPT.containsKey`.
+AC4. For a mapping with no method condition the walk sends every `RequestMethod`, not `GET` alone; a test shows it, as
+     #0-196 AC2 (the existing `OpenRoute` context may be reused).
+AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 added, says ingestion's test has a
+     positive control and shows its key lookup was asked (CLAUDE.md "Security inventory").
+AC6. `./mvnw test -pl ingestion-service` passes on the branch.
+
+**After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) "until #0-196" clauses go
+(with #0-196's; protected path: not the autopilot's).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

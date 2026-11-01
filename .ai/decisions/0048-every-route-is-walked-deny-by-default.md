@@ -73,6 +73,7 @@ Each service with an API has `<Service>DenyByDefaultTest` in its `api` test pack
   naming it. Whether its *role* is right stays SEC-10's review.
 - A new exempt entry is a reviewed literal with its reason; a reviewer treats an entry without one, or a reference to
   `PUBLIC_PATHS`, as a violation (SEC-10).
-- #0-192 copies this shape for notification, oncall and postmortem, and #0-196 brings #0-191's two tests to rules 2, 3
-  and 7; incident's and the other forks' lack of `ApiKeyAuthFilter` is #0-193 (the tests pin 401 either way).
+- #0-192 copies this shape for notification, oncall and postmortem, and #0-196 (incident) and #0-198 (ingestion) bring
+  #0-191's two tests to rules 2, 3 and 7; incident's and the other forks' lack of `ApiKeyAuthFilter` is #0-193 (the
+  tests pin 401 either way).
   escalation-service has no controller and no test until it has one.
