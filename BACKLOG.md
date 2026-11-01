@@ -123,7 +123,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
-| [0-191](#0-191-every-service-with-an-api-refuses-an-unauthenticated-caller-on-every-route) | Every service with an API refuses an unauthenticated caller on every route | security | Medium | Open |
 | [0-192](#0-192-notification-oncall-and-postmortem-refuse-an-unauthenticated-caller-on-every-route) | notification, oncall and postmortem refuse an unauthenticated caller on every route | security | Medium | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
@@ -4113,65 +4112,6 @@ AC1. A seed run that fails after the seeder's edit ends on a clean `main`, the b
 gone; shown by tests.
 AC2. Nothing but the run's tracked edit on its own branch is ever discarded (untracked files, another branch, `main`
 and an autopilot run keep today's refusal); shown by tests.
-
-### 0-191. Every service with an API refuses an unauthenticated caller on every route
-
-**Type:** security · **Priority:** Medium · **Status:** In progress — autopilot run 20261101-154451
-**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** —
-**Touches:** incident-service (src/test: incident/api or incident/config), ingestion-service (src/test: ingestion/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
-
-**Problem.** Only auth-service checks its whole API at once: `ApiKeyDenyByDefaultTest` and
-`IntrospectionTokenDenyByDefaultTest` enumerate every route of `RequestMappingHandlerMapping` through the real filter
-chain, so a route added later is checked without anyone adding it. The other services with an API (incident,
-ingestion, notification, oncall, postmortem) test listed endpoints only (`*ControllerSecurityTest` and a few
-controller tests, such as `IncidentAuditControllerTest` and `OncallServiceTokenAuthenticationTest`), and all five fork
-the `SecurityFilterChain` (SEC-12), whose one test, `AuthenticatedExceptPurposeTokensTest`, checks "the helper itself,
-not that a chain uses it". A new controller, a `permitAll()` added to a service's chain, or a `PUBLIC_PATHS` entry
-that matches a real route (P-05's second form) is caught by review alone (SEC-10, SEC-12). escalation-service has no
-controller (actuator only) and is out of scope until it has one.
-
-**Approach.** One `<Service>DenyByDefaultTest` per service, in the shape of `ApiKeyDenyByDefaultTest`: `@WebMvcTest`
-with the service's real `SecurityConfig`, every route and method of `RequestMappingHandlerMapping` (path variables
-filled, JSON body `{}`), and for each route not exempt:
-- no `Authorization` header → 401;
-- a purpose token (an MFA or introspection token, `authenticatedExceptPurposeTokens()`) → 401 or 403;
-- an unknown API key → 401 (ingestion-service resolves keys through auth-service: its lookup mocked as `Invalid`).
-
-Exempt: a literal set in the test of each service's public routes with the reason beside each (notification
-`/api/v1/slack/actions`: Slack signature; incident `/ws/**`: STOMP authenticates the CONNECT frame), never a reference
-to `SharedSecurityAutoConfiguration.PUBLIC_PATHS`: a new entry there that matches a controller's route must make the
-test fail, not exempt the route. (`PUBLIC_PATHS` holds actuator, OpenAPI and `/error` only, none a controller route.)
-The test asserts the number of routes it checked and names a few known ones, so an enumeration that finds nothing
-fails (as `ApiKeyDenyByDefaultTest` does). Each service has its own copy: shared test code (a test-jar of `shared`) is a
-new dependency between modules, `NEEDS_HUMAN` (`_common.md`), and can follow once the five exist.
-
-**Split (owner, 2026-11-01, `/ready`).** This item is incident-service and ingestion-service, the two with cases of
-their own (`/ws/**`, the dev profile, ingestion's API keys). notification-service, oncall-service and
-postmortem-service are #0-192, which copies this item's shape.
-
-**Acceptance criteria.**
-AC1. incident-service and ingestion-service each have a `<Service>DenyByDefaultTest` (`IncidentDenyByDefaultTest`,
-     `IngestionDenyByDefaultTest`) that goes through the service's real `SecurityConfig` and, for every route and
-     method of `RequestMappingHandlerMapping` not in its exempt set: with no `Authorization` header gets 401; with a
-     purpose token from `JwtUtils.generatePurposeToken` gets 401 or 403; with an unknown API key, in both forms
-     `ApiKeyAuthFilter` reads (`ApiKey <key>` and `Bearer ipl_…`), gets 401 (ingestion: its `ApiKeyLookupService`
-     mocked as `Invalid`; incident's chain has no `ApiKeyAuthFilter`, #0-193, and must answer 401 all the same).
-     Both pass on `main`.
-AC2. Each test has a negative case: a test-only controller route and a test chain that permits it make the same check
-     fail, and the failure names that route.
-AC3. A route answering anything but the expected status is named in the failure (method, pattern, status).
-AC4. Each test asserts how many routes it checked and names at least one known route (incident: one of
-     `IncidentController` and one of `IncidentAuditController`; ingestion: one of `AlertIngestionController`), so an
-     enumeration that finds nothing fails.
-AC5. incident's test runs with no profile and asserts that `DevSecurityConfig` (`@Profile({"local","dev"})`,
-     `anyRequest().permitAll()`) is not in its context.
-AC6. (reviewer-checked) The exempt set is a literal in each test with the reason beside each entry, and no test refers
-     to `SharedSecurityAutoConfiguration.PUBLIC_PATHS`.
-AC7. (reviewer-checked) README "Infrastructure Hardening" lists the control and the two tests (CLAUDE.md "Security
-     inventory").
-
-**After merge (owner, `.ai/rules/` is Owner-only):** SEC-10 and SEC-12 in `security.md` get "Backed by:
-`<Service>DenyByDefaultTest`" (a route a test sees refused; whether its role is right stays SEC-10's review).
 
 ### 0-192. notification, oncall and postmortem refuse an unauthenticated caller on every route
 
