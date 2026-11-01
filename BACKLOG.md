@@ -4118,7 +4118,7 @@ and an autopilot run keep today's refusal); shown by tests.
 
 ### 0-192. notification, oncall and postmortem refuse an unauthenticated caller on every route
 
-**Type:** security · **Priority:** Medium · **Status:** Open. Split off #0-191 (owner, 2026-11-01, `/ready #0-191`).
+**Type:** security · **Priority:** Medium · **Status:** In progress — autopilot run 20261101-231039. Split off #0-191 (owner, 2026-11-01, `/ready #0-191`).
 **Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-191
 **Touches:** notification-service (src/test: notification/api), oncall-service (src/test: oncall/api), postmortem-service (src/test: postmortem/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
 
