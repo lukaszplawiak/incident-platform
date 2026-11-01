@@ -4116,7 +4116,7 @@ and an autopilot run keep today's refusal); shown by tests.
 
 ### 0-191. Every service with an API refuses an unauthenticated caller on every route
 
-**Type:** security · **Priority:** Medium · **Status:** Open
+**Type:** security · **Priority:** Medium · **Status:** In progress — autopilot run 20261101-154451
 **Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** incident-service (src/test: incident/api or incident/config), ingestion-service (src/test: ingestion/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
 
