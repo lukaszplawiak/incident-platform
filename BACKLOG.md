@@ -127,6 +127,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-192](#0-192-notification-oncall-and-postmortem-refuse-an-unauthenticated-caller-on-every-route) | notification, oncall and postmortem refuse an unauthenticated caller on every route | security | Medium | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
+| [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3301,7 +3302,7 @@ AC3. `/seed-bugs` P-10 on `76379e806fb4` plants the pattern and records a row (w
 ### 0-175. The other workflows cannot start from their commands, and read untyped factory-ops answers
 
 **Type:** ci · **Priority:** Medium (Low until review round 2 of #0-174: once FAC-A06 is on main, `:481` breaks it) ·
-**Status:** Open — found with #0-174 (2026-10-25)
+**Status:** In progress — PR 1 (AC2 for `backlog-autopilot.js`, 2026-11-01); found with #0-174 (2026-10-25)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-174
 **Touches:** factory (.claude/workflows/audit.js, .claude/workflows/docs-audit.js,
 .claude/workflows/backlog-autopilot.js), .ai/rules/review/factory.md (owner: FAC-A06 to "Enforced by checks"), ci
@@ -3329,6 +3330,25 @@ violation, without its reason. One failure shape for `_common.sh` and every scri
 **Acceptance criteria.**
 AC1. Each of `/audit` and `/docs-audit` starts from its command's words, and refuses a wrong count, shown by tests.
 AC2. Every factory-ops answer a workflow reads has a typed schema, and a test fails when one does not.
+
+**It happened (2026-11-01).** The first autopilot run in the devcontainer since #0-174, `wf_8c632098-97c` on #0-191,
+stopped at "could not record the run's branch": `state.sh branch` printed `{"branch": …}`, and `factory-ops` handed
+it back as a string under a key of its own, which `ANY_OBJECT` let through, so `pinned.branch` was missing. Its
+`unlock` came back the same way (`{"output": "{\"unlocked\":true}"}`), unread. The run left the local branch
+`feat/0-191-deny-by-default-tests` (its start commit), for the owner to delete.
+
+**PR 1 (owner, 2026-11-01): AC2 for `backlog-autopilot.js`.** Every one of its 13 untyped `ops()` calls, read or not,
+gets `answerOf` (`seed-bugs.js`' form: the script's fields and nothing else); `ERROR_FIELDS` also takes `_common.sh`'s
+`{ok:false, reasons}`, whose reasons reach the branch stop (this item's "Also" of review round 3 of #0-177, for this
+workflow). `test-autopilot-workflow.mjs` reads every `ops()` call from the script's text and fails on one whose schema
+names no fields or lets a key of the agent's own through, and checks each schema against what its script prints and
+what the agent answered. FAC-A06 stays "Backed by", not "Enforced by" as Touches first said: `factory.md` has no
+"Enforced by" rule, since the owner merges these paths through the bypass (its intro). Left for PR 2: AC1;
+`audit.js`' `notify.sh` answer (`:107`, untyped and unread; `audit-data.sh`'s is typed); `seed-bugs.js`'
+`ERROR_FIELDS` without `ok` and `reasons`, so its schemas still refuse `_common.sh`'s failure and the two `answerOf`
+copies differ; and `backlog-autopilot.js`' `PREFLIGHT`, `TESTS`, `PATHS` and `NEXT`, typed by `required` keys but
+not closed (`additionalProperties: false`, as FAC-A06 says, needs each script's full output checked first), whose
+`TESTS` and `PATHS` also refuse `_common.sh`'s failure, so that stop has no reason (review round 1 of PR 1).
 
 ---
 
@@ -4246,6 +4266,31 @@ AC4. `docs/ai-factory.md` "Running it" and README "Infrastructure Hardening" nam
 **Touches:** `scripts/factory/preflight.sh`, `.github/scripts/test-preflight.sh`, `.claude/settings.autopilot.json`
 (`env`), `.devcontainer/devcontainer.json` (`containerEnv`), `docs/ai-factory.md`, README "Infrastructure
 Hardening".
+
+### 0-195. The workflow does not check the branch prefix the picker gives an item
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Found 2026-11-01 in run `wf_8c632098-97c` (#0-175).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+
+**Problem.** `picker.md` ("Prepare the branch") names the prefix by the item's type (`bug`/`security` → `fix/`,
+`tech-debt` → `refactor/`, `ci` → `ci/`, `docs` → `docs/`, otherwise `feat/`). For #0-191, a `security` item, the
+picker made `feat/0-191-deny-by-default-tests`. `backlog-autopilot.js` checks the branch only against
+`^[a-z]+/<item>-[A-Za-z0-9._-]+$`, so any prefix passes. The prefix is what Conventional Commits, the PR's title and a
+reader of the branch list go by; a wrong one misleads, it breaks nothing.
+
+**Approach.** The workflow knows the type (the picker answers it, `PICK.type`; `next-item.sh` could read it from the
+base commit as it reads risk and complexity): it derives the prefix with `picker.md`'s table and stops the item when
+the picker's branch has another, before `state.sh branch` records it. The table then lives in the workflow, and
+`picker.md` points to it, so the two cannot drift.
+
+**Acceptance criteria (draft).**
+AC1. A picker branch whose prefix does not match the item's type stops the item before its branch is recorded, shown
+     by a test in `test-autopilot-workflow.mjs`; a matching one passes, for each type.
+AC2. `picker.md` and the workflow name the prefixes in one place.
+
+**Touches:** `.claude/workflows/backlog-autopilot.js`, `.claude/agents/picker.md`,
+`.github/scripts/test-autopilot-workflow.mjs`, `scripts/factory/next-item.sh` (if the type is read there),
+`docs/ai-factory.md`.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

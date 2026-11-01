@@ -104,7 +104,34 @@ function ops(script, argv, schema, label) {
   return as('factory-ops', `Run exactly: ${command}`, { schema, label: label ?? script })
 }
 
+// The type of an item inside an agent's answer whose fields no code reads (a plan, a disputed finding): never the
+// schema of a factory script's answer, see answerOf below.
 const ANY_OBJECT = { type: 'object' }
+
+// Each factory script's answer has its fields typed and nothing else: what the script prints, factory-ops' own error
+// answer, or _common.sh's failure ({"ok":false,"reasons":[…]}: no jq, not inside the repository), which then reaches
+// the stop reason instead of failing the schema without one (#0-175's "Also" of review round 3 of #0-177).
+// Fixed (backlog #0-175): with the bare `{ type: 'object' }` (seed-bugs.js's #0-174, one workflow later), the
+// agent answered state.sh's {"branch": …} as a string under a key of its own, so run wf_8c632098-97c (2026-11-01,
+// #0-191) stopped at "could not record the run's branch" on a branch it had recorded; its `unlock` came back the same
+// way, unread ({"output": "{\"unlocked\":true}"}). `additionalProperties: false` refuses a wrapper key and a
+// typed field a string, so the runtime asks again. The check that no ops() call goes untyped: test-autopilot-workflow.mjs.
+const ERROR_FIELDS = { error: { type: 'string' }, exitCode: { type: 'number' }, ok: { type: 'boolean' },
+  reasons: { type: 'array', items: { type: 'string' } } }
+const answerOf = (fields) => ({ type: 'object', additionalProperties: false, properties: { ...fields, ...ERROR_FIELDS } })
+const STATE_BRANCH = answerOf({ branch: { type: 'string' } })
+const STATE_UNLOCKED = answerOf({ unlocked: { type: 'boolean' } })
+// `record` prints the whole state file (_common.sh writes it; state-reset.sh sets lastAudit, a time). Its history
+// (up to 200 entries) is unread here: typed loosely, so one entry the agent copies wrong does not fail the last call
+// of a shipped run (review round 1).
+const STATE_RECORDED = answerOf({ consecutiveBlocked: { type: 'number' }, shippedSinceAudit: { type: 'number' },
+  lastAudit: { type: ['string', 'null'] }, note: { type: 'string' }, history: { type: 'array', items: ANY_OBJECT } })
+const BACK_TO_MAIN = answerOf({ onMain: { type: 'boolean' }, left: { type: 'string' }, branch: { type: 'string' },
+  reason: { type: 'string' } })
+const NOTIFIED = answerOf({ sent: { type: 'boolean' }, reason: { type: 'string' } })
+// `result` is the local model's answer: `claude -p --output-format json`'s text, or its whole output if it has none.
+const LOCAL_REVIEW = answerOf({ ran: { type: 'boolean' }, model: { type: 'string' }, result: { type: ['string', 'object'] },
+  reason: { type: 'string' } })
 
 const PREFLIGHT = {
   type: 'object', required: ['ok', 'reasons'],
@@ -196,14 +223,14 @@ const NEXT = {
 }
 
 async function notStarted(reasons, outcome = 'NOT_STARTED') {
-  await ops('state.sh', ['unlock'], ANY_OBJECT, 'state')
-  await ops('return-to-main.sh', [], ANY_OBJECT, 'back to main')
+  await ops('state.sh', ['unlock'], STATE_UNLOCKED, 'state')
+  await ops('return-to-main.sh', [], BACK_TO_MAIN, 'back to main')
   return outcome === 'NOT_STARTED' ? { outcome, reasons } : { outcome, reason: reasons.join('; ') }
 }
 
 async function notify(event, detail) {
   // Event and detail are identifiers only (no free text reaches the shell).
-  await ops('notify.sh', [event, detail ?? '-'], ANY_OBJECT, 'notify')
+  await ops('notify.sh', [event, detail ?? '-'], NOTIFIED, 'notify')
 }
 
 // The phase the run is in, recorded with a BLOCKED item so the audit sees where the pipeline stopped it
@@ -226,10 +253,10 @@ async function stopItem(item, reason) {
       `Reason: ${reason}`,
       `Review record so far (JSON): ${JSON.stringify(record)}`,
     ].join('\n'), { schema: SHIP })
-    await ops('state.sh', ['record', 'blocked', item.id, prArg(draft?.prUrl), stage], ANY_OBJECT, 'state')
+    await ops('state.sh', ['record', 'blocked', item.id, prArg(draft?.prUrl), stage], STATE_RECORDED, 'state')
   } else {
-    await ops('state.sh', ['unlock'], ANY_OBJECT, 'state')
-    await ops('return-to-main.sh', [], ANY_OBJECT, 'back to main')
+    await ops('state.sh', ['unlock'], STATE_UNLOCKED, 'state')
+    await ops('return-to-main.sh', [], BACK_TO_MAIN, 'back to main')
   }
   await notify('blocked', item?.id ?? 'run')
   return { outcome: 'BLOCKED', item: item?.itemId ?? null, reason, agentCalls: calls }
@@ -417,7 +444,7 @@ const iso = await as('review-general',
   'Isolation check, no review: list the names of the tools available to you in this session, and say whether your instructions are the review-general agent definition. Answer JSON only.',
   { schema: ISOLATION, label: 'isolation check' })
 if (!iso || iso.definitionLoaded !== true || iso.tools.some((t) => /^(Edit|Write|MultiEdit|NotebookEdit)$/.test(t))) {
-  await ops('state.sh', ['unlock'], ANY_OBJECT, 'state')
+  await ops('state.sh', ['unlock'], STATE_UNLOCKED, 'state')
   return { outcome: 'NOT_STARTED', reasons: [`agent isolation check failed (tools: ${iso?.tools?.join(', ') ?? 'no answer'}): set AGENT_TYPE_OPTION in .claude/workflows/backlog-autopilot.js`] }
 }
 
@@ -456,8 +483,8 @@ if (args?.branch) {
 }
 if (!item) return stopItem(null, 'picker gave no answer')
 if (item.none) {
-  await ops('state.sh', ['unlock'], ANY_OBJECT, 'state')
-  await ops('return-to-main.sh', [], ANY_OBJECT, 'back to main')
+  await ops('state.sh', ['unlock'], STATE_UNLOCKED, 'state')
+  await ops('return-to-main.sh', [], BACK_TO_MAIN, 'back to main')
   return { outcome: 'NOTHING_TO_DO', reason: item.reason }
 }
 // Fail closed on an incomplete answer; `id` is the bare number used in script arguments and paths.
@@ -478,9 +505,10 @@ if (!new RegExp(`^[a-z]+/${item.id}-[A-Za-z0-9._-]+$`).test(item.branch)) {
 if (args?.branch && item.branch !== args.branch) {
   return stopItem(null, `picker answered the branch ${item.branch}, not ${args.branch} the run resumes (no state recorded, check the branches)`)
 }
-const pinned = await ops('state.sh', ['branch', item.branch], ANY_OBJECT, 'state')
+const pinned = await ops('state.sh', ['branch', item.branch], STATE_BRANCH, 'state')
 if (!pinned || pinned.branch !== item.branch) {
-  return stopItem(null, `could not record the run's branch ${item.branch} (no state recorded, check the branches): ${String(pinned?.error ?? 'no answer').slice(0, 200)}`)
+  const why = pinned?.error ?? (Array.isArray(pinned?.reasons) && pinned.reasons.length ? pinned.reasons.join('; ') : null)
+  return stopItem(null, `could not record the run's branch ${item.branch} (no state recorded, check the branches): ${String(why ?? 'no answer').slice(0, 200)}`)
 }
 record.item = item.itemId
 // Complexity: low → the lighter implementer (same definition, Sonnet); anything else, or missing → Opus.
@@ -556,7 +584,7 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
     if (pg.paths.migrationTouched) dimensions.push('migration')
     if (pg.paths.k8sOrBuildTouched) dimensions.push('k8s')
     if (args?.localReview) {
-      record.local = await ops('local-review.sh', [item.id, base.ref], ANY_OBJECT, 'local second opinion')
+      record.local = await ops('local-review.sh', [item.id, base.ref], LOCAL_REVIEW, 'local second opinion')
     }
   }
 
@@ -667,12 +695,12 @@ const shipped = await as('shipper', [
 if (!shipped || !shipped.prUrl) return stopItem(item, `shipper failed: ${shipped?.error ?? 'no answer'}`)
 if (shipped.error) {
   // The PR exists; do not run blocked mode on a published PR. Record it and leave the decision to the owner.
-  await ops('state.sh', ['record', 'blocked', item.id, prArg(shipped.prUrl), stage], ANY_OBJECT, 'state')
+  await ops('state.sh', ['record', 'blocked', item.id, prArg(shipped.prUrl), stage], STATE_RECORDED, 'state')
   await notify('ship-error', String(shipped.prNumber ?? item.id))
   return { outcome: 'SHIPPED_WITH_ERROR', item: item.itemId, pr: shipped.prUrl, error: shipped.error, agentCalls: calls }
 }
 
-await ops('state.sh', ['record', 'shipped', item.id, prArg(shipped.prUrl)], ANY_OBJECT, 'state')
+await ops('state.sh', ['record', 'shipped', item.id, prArg(shipped.prUrl)], STATE_RECORDED, 'state')
 await notify(SHADOW || riskHigh ? 'pr-ready' : 'pr-auto-merge', String(shipped.prNumber ?? item.id))
 // Follow-ups wait for the owner's /ready; tell the owner they exist.
 const followUps = (shipped.followUpsCreated ?? []).map((f) => String(f).replace(/^#/, '')).filter((f) => /^0-\d+$/.test(f))

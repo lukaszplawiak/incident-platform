@@ -368,10 +368,14 @@ test("the run's branch is recorded in the lock before any agent works on it, or 
   assert.ok(at > calls.findIndex((c) => c.key === 'picker') && at < calls.findIndex((c) => c.key === 'architect'))
   const resumed = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' } })
   assert.ok(resumed.calls.some((c) => /state\.sh 'branch' 'fix\/0-1-an-item'/.test(c.prompt)), 'a resumed run records it too')
-  for (const answer of [{ error: 'this run already recorded its branch (fix/0-9-x)' }, { branch: 'fix/0-9-other' }, null]) {
+  // The last two: what factory-ops answered in run wf_8c632098-97c (the schema refuses it now, so the runtime asks
+  // again; were it to get through, the run still stops), and _common.sh's own failure (backlog #0-175).
+  for (const answer of [{ error: 'this run already recorded its branch (fix/0-9-x)' }, { branch: 'fix/0-9-other' }, null,
+    { output: '{"branch": "fix/0-1-an-item"}' }, { ok: false, reasons: ['jq is not installed'] }]) {
     const { outcome, calls: c } = await run({ answers: { 'ops:state.sh': ({ prompt }) => (/'branch'/.test(prompt) ? answer : {}) } })
     assert.equal(outcome.outcome, 'BLOCKED')
     assert.match(outcome.reason, /could not record the run's branch fix\/0-1-an-item/)
+    if (answer?.reasons) assert.match(outcome.reason, /jq is not installed/, 'the stop names _common.sh\'s reason')
     assert.ok(!c.some((x) => x.key === 'architect' || x.key === 'shipper'), 'nothing works on, or pushes, a branch the lock does not name')
   }
 })
@@ -1203,4 +1207,101 @@ test('seed-bugs: its verdict schema types what backlog-autopilot.js\'s does, but
   }
   assert.deepEqual(finding.required, ['issue'])
   assert.deepEqual(ours.properties.nonBlocking.items, finding, 'non-blocking findings are typed like blocking ones')
+})
+
+// ---------------------------------------------------------------- backlog-autopilot.js: the factory scripts' answers
+
+// Every ops('<script>', <argv>, <schema>, …) call of backlog-autopilot.js, read from its text: the schema argument
+// (the third, split at the call's own commas, not those inside brackets, strings or templates).
+function opsSchemaArgs(src) {
+  const found = []
+  const re = /(?<![\w.])ops\(/g
+  for (let m; (m = re.exec(src));) {
+    if (/function\s+$/.test(src.slice(Math.max(0, m.index - 12), m.index))) continue      // the definition
+    if (/^\s*(\/\/|\/\*|\*)/.test(src.slice(src.lastIndexOf('\n', m.index) + 1, m.index))) continue   // a comment's words
+    const parts = []; let depth = 0, quote = null, cur = ''
+    for (let i = m.index + 4; i < src.length; i++) {
+      const c = src[i]
+      if (quote) { cur += c; if (c === '\\') { cur += src[++i]; continue } if (c === quote) quote = null; continue }
+      if (c === "'" || c === '"' || c === '`') { quote = c; cur += c; continue }
+      if ('([{'.includes(c)) depth++
+      if (')]}'.includes(c)) { if (depth === 0) { parts.push(cur.trim()); break } depth-- }
+      if (c === ',' && depth === 0) { parts.push(cur.trim()); cur = ''; continue }
+      cur += c
+    }
+    found.push({ at: src.slice(0, m.index).split('\n').length, script: parts[0], schema: parts[2] })
+  }
+  return found
+}
+
+// The schemas of the helpers' scope, by name.
+async function schemasNamed(names) {
+  return evaluate(`${strip(SRC.slice(0, RUN_AT))}\nreturn { ${[...new Set(names)].join(', ')} }`,
+    { args: {}, agent: fakeAgent({}).agent, logs: [] })
+}
+
+test('backlog-autopilot: no factory script\'s answer goes untyped (#0-175)', async () => {
+  // The scan sees every factory script only if every one goes through ops(): factory-ops is called in one place
+  // (review round 1: a direct as('factory-ops', …) would pass the scan unseen).
+  assert.equal(SRC.match(/\bas\(\s*['"`]factory-ops['"`]/g)?.length, 1, "as('factory-ops', …) is called only inside ops()")
+  const sites = opsSchemaArgs(SRC)
+  assert.ok(sites.length >= 19, `the scan found ${sites.length} ops() calls: it no longer reads the script`)
+  for (const s of sites) assert.match(s.schema ?? '', /^[A-Z_]+$/, `line ${s.at} (${s.script}): the schema is a named constant`)
+  const schemas = await schemasNamed(sites.map((s) => s.schema))
+  for (const s of sites) {
+    const schema = schemas[s.schema]
+    assert.notEqual(s.schema, 'ANY_OBJECT', `line ${s.at} (${s.script}): ANY_OBJECT lets the agent wrap or stringify the answer`)
+    assert.equal(schema?.type, 'object', `line ${s.at} (${s.script}): ${s.schema} is an object schema`)
+    assert.ok(Object.keys(schema.properties ?? {}).length > 0, `line ${s.at} (${s.script}): ${s.schema} names its fields`)
+    assert.ok((schema.required ?? []).length > 0 || schema.additionalProperties === false,
+      `line ${s.at} (${s.script}): ${s.schema} refuses a key of the agent's own (required fields, or no others)`)
+  }
+})
+
+test('the scan of ops() calls finds an untyped one, and an argument with commas inside', () => {
+  const sites = opsSchemaArgs("const r = await ops('a.sh', x ? [b, c] : [d], ANY_OBJECT, 'l')\n" +
+    "function ops(script, argv, schema) {}\nops('b.sh', [`${e}, f`, g('h', i)], TYPED)\nnotops('c.sh', [], X)\n" +
+    "// every ops() call is typed\nx.ops('d.sh', [], Y)\n  /* ops('e.sh', [], Z) */\n * ops('f.sh', [], W)\n" +
+    "const u = 'https://x//y'; ops('g.sh', [], URL_TYPED)")
+  assert.deepEqual(sites.map((s) => [s.script, s.schema]),
+    [["'a.sh'", 'ANY_OBJECT'], ["'b.sh'", 'TYPED'], ["'g.sh'", 'URL_TYPED']])
+})
+
+test('backlog-autopilot: each factory script\'s answer accepts what it prints and refuses what the agent made of it (#0-175)', async () => {
+  const S = await schemasNamed(['STATE_BRANCH', 'STATE_UNLOCKED', 'STATE_RECORDED', 'BACK_TO_MAIN', 'NOTIFIED', 'LOCAL_REVIEW'])
+  // What every script can also print: factory-ops' own error answer, and _common.sh's failure.
+  const failures = [{ error: 'jq: command not found', exitCode: 127 }, { ok: false, reasons: ['jq is not installed'] }]
+  const printed = {
+    STATE_BRANCH: [{ branch: 'fix/0-191-deny-by-default-tests' }, { error: 'no run holds the lock' }],
+    STATE_UNLOCKED: [{ unlocked: true }],
+    STATE_RECORDED: [{ consecutiveBlocked: 0, shippedSinceAudit: 3, lastAudit: null,
+      history: [{ t: '2026-10-10T09:36:08Z', item: '0-124', outcome: 'shipped', pr: 'https://github.com/o/r/pull/482' },
+        { t: '2026-10-11T09:00:00Z', item: '0-8', outcome: 'blocked', pr: '', stage: 'review' }] },
+    { consecutiveBlocked: 99, shippedSinceAudit: 0, lastAudit: null, history: [], note: 'state file was unreadable' },
+    { consecutiveBlocked: 0, shippedSinceAudit: 0, lastAudit: '2026-10-20T10:00:00Z', history: [] },
+    { error: 'state update failed; state file left unchanged' }],
+    BACK_TO_MAIN: [{ onMain: true }, { onMain: true, left: 'fix/0-1-x' },
+      { onMain: false, branch: 'fix/0-1-x', reason: 'working tree not clean: left as it is for the owner' }],
+    NOTIFIED: [{ sent: true }, { sent: false, reason: 'FACTORY_NTFY_TOPIC not set' }, { sent: false, reason: 'curl failed' }],
+    LOCAL_REVIEW: [{ ran: false, reason: 'Ollama not reachable' }, { ran: true, model: 'gemma3:27b', result: '{"verdict":"APPROVE"}' },
+      { ran: true, model: 'gemma3:27b', result: { type: 'result' } },
+      { ran: true, error: 'the working tree changed during the local review: discard the result' },
+      { ran: false, reason: 'no parseable output' }],
+  }
+  for (const [name, answers] of Object.entries(printed)) {
+    for (const answer of [...answers, ...failures]) assert.ok(conforms(answer, S[name]), `${name} accepts ${JSON.stringify(answer)}`)
+  }
+  // What factory-ops answered in run wf_8c632098-97c (2026-11-01, #0-191): the script's JSON as a string under a key of
+  // its own; and the other way #0-174 saw, every value a string.
+  const answered = {
+    STATE_BRANCH: [{ output: '{"branch": "feat/0-191-deny-by-default-tests"}' }, { branch: 'fix/0-1-x', recorded: true }],
+    STATE_UNLOCKED: [{ output: '{"unlocked":true}' }, { unlocked: 'true' }],
+    STATE_RECORDED: [{ output: '{"consecutiveBlocked":0}' }, { consecutiveBlocked: '0' }, { history: '[]' }],
+    BACK_TO_MAIN: [{ parameter: '{"onMain": true}' }, { onMain: 'true' }],
+    NOTIFIED: [{ output: '{"sent":true}' }, { sent: 'true' }],
+    LOCAL_REVIEW: [{ output: '{"ran":false}' }, { ran: 'false' }],
+  }
+  for (const [name, answers] of Object.entries(answered)) {
+    for (const answer of answers) assert.ok(!conforms(answer, S[name]), `${name} refuses ${JSON.stringify(answer)}`)
+  }
 })
