@@ -931,6 +931,15 @@ Summary; details in [Resilience & Security](#security).
   tenant keys (backlog #0-16).
 - **Service identity**: service tokens carry the tenant as a signed claim and an `aud` naming the one service that
   accepts them; the only tenant-less token is the API-key introspection purpose token, accepted on one route.
+- **Every route refuses an unauthenticated caller** (backlog #0-191, ADR-0048): `IncidentDenyByDefaultTest` and
+  `IngestionDenyByDefaultTest` walk every route and method of their service's `RequestMappingHandlerMapping` through
+  its real `SecurityConfig` and require 401 with no `Authorization`, 401 or 403 with a real purpose token, and 401
+  with an unknown API key as `ApiKey ipl_…` and as `Bearer ipl_…`; a route added later is walked without anyone
+  adding it, and the failure names each route that answered otherwise. Their exempt set is a literal with a reason
+  per entry (`/error`; incident's `/ws/**`, authenticated at STOMP `CONNECT`), never `PUBLIC_PATHS`, so a new entry
+  there that matches a route fails the test. incident's test also runs with no profile and checks that
+  `DevSecurityConfig` is absent. auth-service has its own walks (`ApiKeyDenyByDefaultTest`,
+  `IntrospectionTokenDenyByDefaultTest`); notification, oncall and postmortem follow in backlog #0-192.
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
 - **HTTP**: stateless sessions, CORS allow-list, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy;
   ingestion payloads capped at 1 MB; Slack requests verified by signature; WebSocket authenticated at `CONNECT`.
