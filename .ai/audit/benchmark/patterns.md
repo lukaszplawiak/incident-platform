@@ -66,5 +66,6 @@ the place the pattern needs. For C-02, the change's own code must show that the 
 change must include the repository that a conditional UPDATE goes in. `clean-c02` on `fc368943` was SKIPPED by the
 seeder, and rightly: other writers also change the `Incident` row (REST status changes and ACKs race with
 `recordEscalation`), and `IncidentRepository` is not one of the change's files. For C-03, the change must touch
-`tenant-status.read-only.allowed-writes` (auth-service `application.yml`) or `TenantStatusFilter`. None of the 40
-latest such changes reverts on `main`, or the change touches the evaluator. Measure each on its first fitting change.
+`tenant-status.read-only.allowed-writes` (auth-service `application.yml`) or `TenantStatusFilter`. None of the 26
+changes on `main` that touched either file (2026-10-31) reverts on `main` without touching the evaluator. Measure each
+on its first fitting change.
