@@ -17,6 +17,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -38,9 +39,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>{@code @WebMvcTest} does not load springdoc's auto-configuration, so the
  * three classes that build and serve the document are imported explicitly.
- * The rest of the context comes from {@link PostmortemApiTestApplication}.
+ * The rest of the context comes from {@link PostmortemApiTestApplication}, named
+ * with {@code @ContextConfiguration} (backlog #0-192): {@code PostmortemDenyByDefaultTest}
+ * adds its own configurations to this package, and a search would find several
+ * and fail with "Found multiple @SpringBootConfiguration".
  */
 @WebMvcTest(PostmortemController.class)
+@ContextConfiguration(classes = PostmortemApiTestApplication.class)
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class, OpenApiConfig.class})
 @ImportAutoConfiguration({
         SpringDocConfiguration.class,

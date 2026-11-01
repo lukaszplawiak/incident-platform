@@ -21,6 +21,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -49,9 +50,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>The application context comes from {@link PostmortemApiTestApplication},
  * shared by every {@code @WebMvcTest} in this package (it replaced a nested
- * {@code TestApplication} that clashed with a second test class).
+ * {@code TestApplication} that clashed with a second test class). It is named
+ * with {@code @ContextConfiguration} (backlog #0-192): {@code PostmortemDenyByDefaultTest}
+ * adds its own configurations to this package, and a search would find several
+ * and fail with "Found multiple @SpringBootConfiguration".
  */
 @WebMvcTest(PostmortemController.class)
+@ContextConfiguration(classes = PostmortemApiTestApplication.class)
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",

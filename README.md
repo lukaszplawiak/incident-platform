@@ -939,7 +939,12 @@ Summary; details in [Resilience & Security](#security).
   per entry (`/error`; incident's `/ws/**`, authenticated at STOMP `CONNECT`), never `PUBLIC_PATHS`, so a new entry
   there that matches a route fails the test. incident's test also runs with no profile and checks that
   `DevSecurityConfig` is absent. auth-service has its own walks (`ApiKeyDenyByDefaultTest`,
-  `IntrospectionTokenDenyByDefaultTest`); notification, oncall and postmortem follow in backlog #0-192.
+  `IntrospectionTokenDenyByDefaultTest`). `OncallDenyByDefaultTest` and `PostmortemDenyByDefaultTest` (backlog
+  #0-192) do the same with `/error` as their only exemption; `NotificationDenyByDefaultTest` exempts `/error` and
+  `/api/v1/slack/actions`, checks that the Slack route answers 401 unsigned through the real `SlackSignatureVerifier`
+  (and 200 correctly signed), and, as its one route is exempt, sends the three callers to a path no controller maps.
+  These three walk every method of a mapping with no method condition and have a positive control: a valid user
+  token gets an answer other than 401.
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
 - **HTTP**: stateless sessions, CORS allow-list, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy;
   ingestion payloads capped at 1 MB; Slack requests verified by signature; WebSocket authenticated at `CONNECT`.
