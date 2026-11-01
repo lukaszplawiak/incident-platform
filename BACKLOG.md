@@ -4116,7 +4116,7 @@ and an autopilot run keep today's refusal); shown by tests.
 ### 0-192. notification, oncall and postmortem refuse an unauthenticated caller on every route
 
 **Type:** security · **Priority:** Medium · **Status:** Open. Split off #0-191 (owner, 2026-11-01, `/ready #0-191`).
-**Autopilot:** not-ready (ready once #0-191 is Done) · **Risk:** low · **Complexity:** medium · **Depends on:** #0-191
+**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-191
 **Touches:** notification-service (src/test: notification/api), oncall-service (src/test: oncall/api), postmortem-service (src/test: postmortem/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
 
 **Problem.** #0-191's, for the three services it leaves out: notification-service (`SlackWebhookController`, one
@@ -4131,21 +4131,37 @@ AC1. `OncallDenyByDefaultTest` and `PostmortemDenyByDefaultTest` each go through
      and, for every route and method of `RequestMappingHandlerMapping` not in its exempt set: with no `Authorization`
      header get 401; with a purpose token from `JwtUtils.generatePurposeToken` get 401 or 403; with an unknown API
      key, in both forms `ApiKeyAuthFilter` reads (`ApiKey <key>` and `Bearer ipl_…`), get 401 (these chains have no
-     `ApiKeyAuthFilter`, #0-193, and must answer 401 all the same). Both pass on `main`.
+     `ApiKeyAuthFilter`, #0-193, and must answer 401 all the same). Their exempt set is `/error` only: actuator,
+     `/v3/api-docs/**` and `/swagger-ui/**` are not `RequestMappingHandlerMapping` routes in the slice. Each test has
+     its own nested `@SpringBootApplication` scanning from the service's root package (ADR-0048 rule 1; not
+     postmortem's `PostmortemApiTestApplication`), so a controller in a new package is walked. Both pass on `main`.
 AC2. `NotificationDenyByDefaultTest` checks two targets: a path no controller maps, which reaches the chain's
      `anyRequest()` rule and gets AC1's three answers; and the exempt `/api/v1/slack/actions` with no Slack signature,
-     which gets 401 (as `SlackWebhookControllerSecurityTest` shows). It passes on `main`.
+     which gets 401 from the real `SlackSignatureVerifier`, with a test signing secret set in `@TestPropertySource`,
+     not a mock (`SlackWebhookControllerSecurityTest` mocks it). It passes on `main`.
 AC3. Each of the three tests has a negative case: a test-only controller route and a test chain that permits it make
-     the same check fail, and the failure names that route.
+     the same check fail, and the failure names that route (ADR-0048 rule 5: the chain at `HIGHEST_PRECEDENCE`, in a
+     `@Nested` context with `@NestedTestConfiguration(OVERRIDE)`).
 AC4. A route answering anything but the expected status is named in the failure (method, pattern, status).
 AC5. Each test asserts how many routes it checked and names at least one known route, so an enumeration that finds
-     nothing fails: oncall `/api/v1/oncall/current/by-user/{userId}` and a `/schedules` route; postmortem a route
-     under `/api/v1/postmortems`; notification that its exempt set is exactly `/api/v1/slack/actions` and that the
-     enumeration finds that route.
+     nothing fails: oncall `/api/v1/oncall/current/by-user/{userId}` and `GET /api/v1/oncall/schedules`; postmortem a
+     route under `/api/v1/postmortems`; notification that its exempt set is exactly `/api/v1/slack/actions` and that
+     the enumeration finds that route.
 AC6. (reviewer-checked) The exempt set is a literal in each test with the reason beside each entry, and no test refers
      to `SharedSecurityAutoConfiguration.PUBLIC_PATHS`.
 AC7. (reviewer-checked) README "Infrastructure Hardening" names the three tests, in the entry #0-191 adds (CLAUDE.md
      "Security inventory").
+AC8. Each test has a positive control: a valid user token from `JwtUtils.generateToken` (its tenant `FULL` through
+     the mocked `TenantStatusProvider`) gets a status other than 401 on a known route (notification: on the unmapped
+     path of AC2), so the 401s above come from refusing that caller, not from a context in which no token validates.
+     403 counts too (oncall's `/current/by-user/{userId}` admits only `SERVICE` and `ADMIN`): it is past authentication.
+AC9. The walk sends every `RequestMethod` for a mapping with no method condition, and an exempt key ending in `/**`
+     covers the patterns below it (incident's `isExempt`); no exemption beyond `/error` and AC2's Slack route.
+
+**Shape (from the review of #0-191's PR #572, 2026-11-01).** AC8 and AC9 are what that review found short in
+`IncidentDenyByDefaultTest` and `IngestionDenyByDefaultTest` (a purpose token's 401 that proves nothing without a token
+that validates; a method-less mapping walked as GET only; ingestion's exact-match exempt set). The two existing
+tests get the same shape in an item of their own.
 
 ### 0-193. Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do
 
