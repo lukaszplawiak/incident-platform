@@ -124,6 +124,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-191](#0-191-every-service-with-an-api-refuses-an-unauthenticated-caller-on-every-route) | Every service with an API refuses an unauthenticated caller on every route | security | Medium | Open |
+| [0-192](#0-192-notification-oncall-and-postmortem-refuse-an-unauthenticated-caller-on-every-route) | notification, oncall and postmortem refuse an unauthenticated caller on every route | security | Medium | Open |
+| [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4094,7 +4096,8 @@ and an autopilot run keep today's refusal); shown by tests.
 ### 0-191. Every service with an API refuses an unauthenticated caller on every route
 
 **Type:** security · **Priority:** Medium · **Status:** Open
-**Autopilot:** not-ready · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** incident-service (src/test: incident/api or incident/config), ingestion-service (src/test: ingestion/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
 
 **Problem.** Only auth-service checks its whole API at once: `ApiKeyDenyByDefaultTest` and
 `IntrospectionTokenDenyByDefaultTest` enumerate every route of `RequestMappingHandlerMapping` through the real filter
@@ -4121,19 +4124,68 @@ The test asserts the number of routes it checked and names a few known ones, so 
 fails (as `ApiKeyDenyByDefaultTest` does). Each service has its own copy: shared test code (a test-jar of `shared`) is a
 new dependency between modules, `NEEDS_HUMAN` (`_common.md`), and can follow once the five exist.
 
+**Split (owner, 2026-11-01, `/ready`).** This item is incident-service and ingestion-service, the two with cases of
+their own (`/ws/**`, the dev profile, ingestion's API keys). notification-service, oncall-service and
+postmortem-service are #0-192, which copies this item's shape.
+
 **Acceptance criteria.**
-AC1. incident, ingestion, notification, oncall and postmortem each have a `<Service>DenyByDefaultTest` checking every
-     route of their controllers as above; all pass on `main`.
-AC2. Each test has a negative case: a test-only controller and a test chain that permits it, which the check reports
-     (the check, not only the assertion, is shown to work).
+AC1. incident-service and ingestion-service each have a `<Service>DenyByDefaultTest` (`IncidentDenyByDefaultTest`,
+     `IngestionDenyByDefaultTest`) that goes through the service's real `SecurityConfig` and, for every route and
+     method of `RequestMappingHandlerMapping` not in its exempt set: with no `Authorization` header gets 401; with a
+     purpose token from `JwtUtils.generatePurposeToken` gets 401 or 403; with an unknown API key, in both forms
+     `ApiKeyAuthFilter` reads (`ApiKey <key>` and `Bearer ipl_…`), gets 401 (ingestion: its `ApiKeyLookupService`
+     mocked as `Invalid`; incident's chain has no `ApiKeyAuthFilter`, #0-193, and must answer 401 all the same).
+     Both pass on `main`.
+AC2. Each test has a negative case: a test-only controller route and a test chain that permits it make the same check
+     fail, and the failure names that route.
 AC3. A route answering anything but the expected status is named in the failure (method, pattern, status).
-AC4. README "Infrastructure Hardening" lists the control.
+AC4. Each test asserts how many routes it checked and names at least one known route (incident: one of
+     `IncidentController` and one of `IncidentAuditController`; ingestion: one of `AlertIngestionController`), so an
+     enumeration that finds nothing fails.
+AC5. incident's test runs with no profile and asserts that `DevSecurityConfig` (`@Profile({"local","dev"})`,
+     `anyRequest().permitAll()`) is not in its context.
+AC6. (reviewer-checked) The exempt set is a literal in each test with the reason beside each entry, and no test refers
+     to `SharedSecurityAutoConfiguration.PUBLIC_PATHS`.
+AC7. (reviewer-checked) README "Infrastructure Hardening" lists the control and the two tests (CLAUDE.md "Security
+     inventory").
 
 **After merge (owner, `.ai/rules/` is Owner-only):** SEC-10 and SEC-12 in `security.md` get "Backed by:
 `<Service>DenyByDefaultTest`" (a route a test sees refused; whether its role is right stays SEC-10's review).
 
-**Touches:** `incident-service/src/test/`, `ingestion-service/src/test/`, `notification-service/src/test/`,
-`oncall-service/src/test/`, `postmortem-service/src/test/`, README "Infrastructure Hardening", `BACKLOG.md`.
+### 0-192. notification, oncall and postmortem refuse an unauthenticated caller on every route
+
+**Type:** security · **Priority:** Medium · **Status:** Open. Split off #0-191 (owner, 2026-11-01, `/ready #0-191`).
+**Autopilot:** not-ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-191
+
+**Problem.** #0-191's, for the three services it leaves out: notification-service (`SlackWebhookController`, one
+route, exempt: Slack signature), oncall-service (`OncallScheduleController`) and postmortem-service
+(`PostmortemController`). Each forks its `SecurityFilterChain` and tests listed endpoints only.
+
+**Approach.** A `<Service>DenyByDefaultTest` in each, copying the shape #0-191 sets for incident-service and
+ingestion-service. Acceptance criteria and Touches come with its own `/ready` (`docs/backlog-ready-0-192`).
+
+### 0-193. Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do
+
+**Type:** security · **Priority:** Medium · **Status:** Open. Found in `/ready #0-191` (2026-11-01).
+**Autopilot:** not-ready · **Risk:** medium · **Complexity:** low · **Depends on:** —
+
+**Problem.** SEC-12 (`.ai/rules/review/security.md`) and CLAUDE.md "Invariants" say a forked `SecurityFilterChain` "adds
+`ApiKeyAuthFilter` itself"; `.ai/context/architecture.md` says so only "if it needs API keys". Of the five forks outside
+auth-service, only ingestion-service does (`ingestion/config/SecurityConfig`). incident, notification, oncall and
+postmortem build their chain with `SharedSecurityAutoConfiguration.buildCommonSecurity`, which adds `JwtAuthFilter` and
+`TenantStatusFilter` but not `ApiKeyAuthFilter`; only the shared default chain adds it
+(`SharedSecurityAutoConfiguration`, `addFilterBefore(apiKeyAuthFilter, …)`). None of the four accepts keys (the no-op
+`ApiKeyLookupService` answers `Invalid`), so a key should still end in 401, but nothing shows it, and a reviewer judging
+a new fork by SEC-12 checks a step the existing ones do not have. `ApiKeyAuthFilter` is also a `@Bean`
+`OncePerRequestFilter` with no `FilterRegistrationBean`, so Spring Boot may register it as a servlet filter outside the
+security chain in every service; to verify.
+
+**Approach (to decide).** (A) `buildCommonSecurity` adds `ApiKeyAuthFilter`, so every chain has it from one place,
+and the servlet registration question is settled with it; or (B) SEC-12 and CLAUDE.md say what `architecture.md`
+already does (only a service that accepts keys adds it). #0-191's tests show the behaviour either way.
+
+**Touches:** shared (security, with A; then `.ai/context/architecture.md` too), `.ai/rules/review/security.md`
+(owner), CLAUDE.md "Invariants" (owner).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
