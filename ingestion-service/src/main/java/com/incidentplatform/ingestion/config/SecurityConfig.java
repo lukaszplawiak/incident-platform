@@ -21,9 +21,12 @@ import org.springframework.web.cors.CorsConfigurationSource;
  * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} with
  * service-specific public path rules.
  *
- * <p>CORS and security headers are provided by the shared auto-configuration
- * {@link SharedSecurityAutoConfiguration#corsConfigurationSource()} and
- * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} respectively.
+ * <p>CORS and security headers are applied by
+ * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} (CORS since
+ * backlog #0-199, ADR-0049), from the shared
+ * {@link SharedSecurityAutoConfiguration#corsConfigurationSource()}; the
+ * {@code .cors(cors -> cors.configurationSource(corsConfigurationSource))}
+ * call below names that source explicitly, as an override.
  * Override {@code security.cors.allowed-origins} in {@code application.yml}
  * to change allowed origins per environment.
  *

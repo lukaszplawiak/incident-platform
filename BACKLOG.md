@@ -4263,8 +4263,10 @@ AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 a
      consistent with what #0-192 wrote there.
 AC6. `./mvnw test -pl incident-service` passes on the branch.
 
-**OPTIONS (#0-199).** Until #0-199 decides, a method-less mapping the walk reports for `OPTIONS` is a finding for the
-owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is pinned as #0-192 did.
+**OPTIONS (#0-199).** An `OPTIONS` without preflight headers is expected 401 for an anonymous caller like every method
+(#0-199, ADR-0049): the chain's `CorsFilter` answers only a valid preflight, and no `OPTIONS` rule permits the rest; a
+`404 || 401` for it is a deviation to remove. `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is
+pinned as #0-192 did.
 
 **After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) say "until #0-196"; the
 clause about incident goes once #0-196 and #0-198 are both Done (protected path: not the autopilot's).
@@ -4314,8 +4316,10 @@ AC6. (reviewer-checked) ADR-0048's Context and "Alternatives considered" no long
      through `PUBLIC_PATHS` (they say they did, until #0-197).
 AC7. `./mvnw test -pl auth-service` passes on the branch.
 
-**OPTIONS (#0-199).** Until #0-199 decides, a method-less mapping the walk reports for `OPTIONS` is a finding for the
-owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is pinned as #0-192 did.
+**OPTIONS (#0-199).** An `OPTIONS` without preflight headers is expected 401 for an anonymous caller like every method
+(#0-199, ADR-0049): the chain's `CorsFilter` answers only a valid preflight, and no `OPTIONS` rule permits the rest; a
+`404 || 401` for it is a deviation to remove. `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is
+pinned as #0-192 did.
 
 **After merge (owner).** `.ai/rules/review/security.md` SEC-14 (`:83`) says "its exempt routes come from
 `PUBLIC_PATHS` until #0-197": that clause goes (protected path: not the autopilot's).
@@ -4353,8 +4357,10 @@ AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 a
      positive control and shows its key lookup was asked (CLAUDE.md "Security inventory").
 AC6. `./mvnw test -pl ingestion-service` passes on the branch.
 
-**OPTIONS (#0-199).** Until #0-199 decides, a method-less mapping the walk reports for `OPTIONS` is a finding for the
-owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is pinned as #0-192 did.
+**OPTIONS (#0-199).** An `OPTIONS` without preflight headers is expected 401 for an anonymous caller like every method
+(#0-199, ADR-0049): the chain's `CorsFilter` answers only a valid preflight, and no `OPTIONS` rule permits the rest; a
+`404 || 401` for it is a deviation to remove. `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is
+pinned as #0-192 did.
 
 **After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) "until #0-196" clauses go
 (with #0-196's; protected path: not the autopilot's).
