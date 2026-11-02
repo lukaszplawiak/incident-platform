@@ -129,6 +129,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-196](#0-196-incidents-route-walk-gets-0-192s-shape) | incident's route walk gets #0-192's shape | security | Low | Open |
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
+| [0-199](#0-199-options-is-permitted-on-every-path-so-a-method-less-mapping-runs-its-handler-for-an-anonymous-caller) | `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4152,6 +4153,14 @@ already does (only a service that accepts keys adds it). #0-191's tests show the
 in the owner's host session (macOS, plain `claude`, auto mode), not as `docs/ai-factory.md` "Running it" says.
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
 
+**Second case (2026-11-01, #0-192, run `wf_a2e7e1c8-3d2`).** Started in the devcontainer, but in a session not
+started with `settings.autopilot.json`: the preflight passed, the run went through plan, implementation, the gate, the
+panel and the verifier (24 minutes, 20 agents), and only the shipper found it had no Bash: no draft PR, the item's
+BLOCKED state left uncommitted in the tree. Such a session cannot resume the run either: in `dontAsk` only
+`Workflow(backlog-autopilot)` by name is allowed, not a `scriptPath` call. The owner re-ran it as a `branch` run
+(`wf_980f0ed3-0b4`, after `git switch main` for the preflight), which shipped PR #576. AC2 would have refused it
+before the first agent.
+
 **Problem.** The run was stopped only by chance: `preflight.sh` refused it for `.claude/settings.local.json`, an open
 `autopilot-stop` issue and Docker being off. None of its refusals checks where it runs or how the session was started.
 On the host, with a clean `main`, Docker up and no personal settings file, the autopilot would start:
@@ -4193,6 +4202,13 @@ Hardening".
 picker made `feat/0-191-deny-by-default-tests`. `backlog-autopilot.js` checks the branch only against
 `^[a-z]+/<item>-[A-Za-z0-9._-]+$`, so any prefix passes. The prefix is what Conventional Commits, the PR's title and a
 reader of the branch list go by; a wrong one misleads, it breaks nothing.
+
+**Second case (2026-11-01, #0-192, a `security` item).** The picker made `feat/0-192-deny-by-default-three-services`,
+committed `chore(factory): start backlog #0-192` on it, then switched to `fix/0-192-…` at the same commit and worked
+there (reflog); the `feat/` branch was left behind locally. A `branch` run also records no scope: PR #576 says
+"Scope: not-measured — Touches none · plan none" though #0-192 has a Touches line: it skips the plan, and
+`backlog-autopilot.js:682` takes the Touches from `next-item.sh`'s answer (`next?.modules`), which a `branch` run does
+not ask for.
 
 **Approach.** The workflow knows the type (the picker answers it, `PICK.type`; `next-item.sh` could read it from the
 base commit as it reads risk and complexity): it derives the prefix with `picker.md`'s table and stops the item when
@@ -4243,6 +4259,9 @@ AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 a
      consistent with what #0-192 wrote there.
 AC6. `./mvnw test -pl incident-service` passes on the branch.
 
+**OPTIONS (#0-199).** Until #0-199 decides, a method-less mapping the walk reports for `OPTIONS` is a finding for the
+owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is pinned as #0-192 did.
+
 **After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) say "until #0-196"; the
 clause about incident goes once #0-196 and #0-198 are both Done (protected path: not the autopilot's).
 
@@ -4283,13 +4302,16 @@ AC3. For a mapping with no method condition both walks send every `RequestMethod
      answers otherwise is named in the failure (method, pattern, status).
 AC4. `ApiKeyDenyByDefaultTest` has a negative case: a test-only controller route (e.g. `/api/v1/test-only/open`) and a
      test chain at `HIGHEST_PRECEDENCE` that permits it, in a `@Nested` context with
-     `@NestedTestConfiguration(OVERRIDE)`, make the same walk fail, and the failure names that route (ADR-0048 rule 5). The outer context's walk does not
-     see the route.
+     `@NestedTestConfiguration(OVERRIDE)`, make the same walk fail, and the failure names that route (ADR-0048
+     rule 5). The outer context's walk does not see the route.
 AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 added, says auth-service's walks too
      use a literal exempt set with a reason per entry, never `PUBLIC_PATHS` (CLAUDE.md "Security inventory").
 AC6. (reviewer-checked) ADR-0048's Context and "Alternatives considered" no longer say the auth-service tests exempt
      through `PUBLIC_PATHS` (they say they did, until #0-197).
 AC7. `./mvnw test -pl auth-service` passes on the branch.
+
+**OPTIONS (#0-199).** Until #0-199 decides, a method-less mapping the walk reports for `OPTIONS` is a finding for the
+owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is pinned as #0-192 did.
 
 **After merge (owner).** `.ai/rules/review/security.md` SEC-14 (`:83`) says "its exempt routes come from
 `PUBLIC_PATHS` until #0-197": that clause goes (protected path: not the autopilot's).
@@ -4327,8 +4349,44 @@ AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 a
      positive control and shows its key lookup was asked (CLAUDE.md "Security inventory").
 AC6. `./mvnw test -pl ingestion-service` passes on the branch.
 
+**OPTIONS (#0-199).** Until #0-199 decides, a method-less mapping the walk reports for `OPTIONS` is a finding for the
+owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is pinned as #0-192 did.
+
 **After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) "until #0-196" clauses go
 (with #0-196's; protected path: not the autopilot's).
+
+### 0-199. `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller
+
+**Type:** security · **Priority:** Medium · **Status:** Open. From the review panel of PR #576 (#0-192, 2026-11-02:
+security SEC-12, general GEN-24 and architecture, all non-blocking).
+**Autopilot:** not-ready · **Risk:** medium · **Complexity:** medium · **Depends on:** —
+
+**Problem.** `SharedSecurityAutoConfiguration.buildCommonSecurity` puts `.requestMatchers(HttpMethod.OPTIONS,
+"/**").permitAll()` before every caller's own rules, for CORS preflights. Its comment calls this safe "unconditionally:
+an OPTIONS request never reads or writes any data". That holds for Spring MVC's implicit answer to `OPTIONS` on a
+mapping with a method condition (it writes `Allow` without calling the handler), not for a mapping with no method
+condition or an explicit `OPTIONS` handler: those are dispatched to the handler with no authentication. Only a
+`@PreAuthorize` on the handler still refuses. No walked route of notification, oncall or postmortem is method-less
+today (PR #576); incident's, ingestion's and auth-service's have not been checked. `TRACE` never reaches the chain:
+`StrictHttpFirewall` answers 400.
+
+This also decides what the route walks expect. ADR-0048's amended rule 2 sends every `RequestMethod` for a method-less
+mapping, so #0-196 AC2, #0-198 AC4 and #0-197 AC3 will report `OPTIONS` on such a mapping (rightly: the handler runs),
+and rule 2 does not say what `OPTIONS` and `TRACE` should answer. #0-192 pinned them on its unmapped path (OPTIONS 404
+or 401, TRACE 400; `NotificationDenyByDefaultTest:242-243`) as a recorded deviation.
+
+**Approach (to decide; an ADR, amending ADR-0048 rule 2 either way).**
+- A. Permit only real preflights: the matcher becomes `CorsUtils::isPreFlightRequest` (`OPTIONS` with `Origin` and
+  `Access-Control-Request-Method`), and any other `OPTIONS` is authenticated like every method. A change to `shared`
+  (all 7 services). To check first: every service's chain calls `.cors(...)` (since the comment was written; auth's
+  `SecurityConfig` Javadoc says it once did not), and Spring's `CorsFilter` answers a valid preflight itself, before
+  authorization, so the rule may be needed for no request at all.
+- B. Keep the rule, and refuse what it would open: no method-less mapping and no explicit `OPTIONS` handler in any
+  service, by a test (or an ArchUnit rule, #0-108); the walks then pin `OPTIONS`/`TRACE` as #0-192 did.
+- C. Both.
+
+**Touches (likely, after the decision):** shared (security, its tests), `.ai/decisions/` (ADR-0048), README
+"Infrastructure Hardening", BACKLOG.md; for B also the walks of #0-196, #0-198 and #0-197.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
