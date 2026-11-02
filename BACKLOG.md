@@ -132,6 +132,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-199](#0-199-options-is-permitted-on-every-path-so-a-method-less-mapping-runs-its-handler-for-an-anonymous-caller) | `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller | security | Medium | Open |
 | [0-200](#0-200-each-services-cors-preflight-still-passes-once-the-options-rule-is-gone) | Each service's CORS preflight still passes once the `OPTIONS` rule is gone | security | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
+| [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4507,6 +4508,39 @@ AC1. Factory guards fails a PR whose `BACKLOG.md` has an item with an `**Autopil
      test) shows it.
 AC2. A Touches line with a parenthesis inside a module's parentheses is either read correctly or refused with an
      error naming the item; a test shows which.
+
+### 0-202. The owner and the bot share one working tree
+
+**Type:** design · **Priority:** Low · **Status:** Open. To consider (owner, 2026-11-02, before the first autopilot
+run of the #0-199 queue).
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** root (.devcontainer/devcontainer.json, .ai/decisions/ an ADR), docs (docs/ai-factory.md)
+
+**Problem.** The devcontainer bind-mounts the host's checkout (`devcontainer.json:21`, `workspaceMount …
+type=bind` → `/workspace`), so the owner's sessions on the host and the bot's in the container share one `.git`, one
+HEAD, one index and one set of files. Only the commit identity (`GIT_AUTHOR_*`/`GIT_COMMITTER_*`, `:33-36`), the `gh`
+login and the `~/.claude` and `~/.m2` volumes are the bot's own. What follows today:
+- the owner cannot work while the autopilot runs: a `git switch` or an edit on the host moves or dirties the bot's
+  branch mid-run; the preflight refuses a dirty tree only at start (`docs/ai-factory.md`, the stop conditions), nothing
+  guards the run itself;
+- a file in the tree reaches both: `.claude/settings.local.json` would merge into the bot's `dontAsk` session, so the
+  preflight refuses to start while it exists (`docs/ai-factory.md:78-80`);
+- every gitignored file of the checkout is readable in the container, `docker/.env` and the services'
+  `application-local.yml` included (the same reason `ci-local.sh` sends the tree as a tar instead of a mount, #0-166);
+  the container's firewall (`init-firewall.sh`) limits where it could go.
+
+**Not this.** ADR-0044 rejected a worktree per `/seed-bugs` run: the workflow's agents read hooks from the session's
+own directory, so the session would have to start inside it. This item is about the container's tree as a whole, not
+one run's.
+
+**Approach (to consider).** A separate clone for the container (a named volume, or a second host directory, cloned
+from `origin` and with no gitignored files of the owner's), with the owner's checkout no longer mounted; or a
+`git worktree` of the host's repository as the container's workspace (one object store, separate HEAD and index;
+gitignored files stay out, but `.git` is still shared); or keep the shared tree and record the rule ("no work on the
+host during a run") with a guard that notices a HEAD move by someone else during a run. To weigh: where the bot's
+`application-local.yml` and `docker/.env` then come from (the test gate needs a build, Testcontainers, no services),
+how the owner reviews the bot's branch (fetch from `origin`), the `--admin` merge from the host, the clean-`main`
+preflight, and the cost of a second Maven/Docker cache.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
