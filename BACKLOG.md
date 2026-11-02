@@ -4361,7 +4361,7 @@ owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before th
 
 ### 0-199. `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller
 
-**Type:** security · **Priority:** Low · **Status:** Open. From the review panel of PR #576 (#0-192, 2026-11-02:
+**Type:** security · **Priority:** Low · **Status:** In progress — autopilot run 20261102-135304. From the review panel of PR #576 (#0-192, 2026-11-02:
 security SEC-12, general GEN-24 and architecture, all non-blocking).
 **Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** shared (security; src/test: security), auth-service (auth.config; src/test: auth/api), incident-service (incident.config), ingestion-service (ingestion.config), notification-service (notification.config), oncall-service (oncall.config), postmortem-service (postmortem.config), root (README.md "Infrastructure Hardening", .ai/decisions/0049-options-is-answered-by-corsfilter-not-permitted.md, .ai/decisions/0048-every-route-is-walked-deny-by-default.md: Status line only, .ai/decisions/README.md, BACKLOG.md)
