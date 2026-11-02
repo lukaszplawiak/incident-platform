@@ -1,7 +1,7 @@
 # ADR-0048: A service's whole API is checked by one route-walking deny-by-default test, a copy per service
 
 - **Status:** Accepted (2026-11-01, owner); rules 2 and 3 amended and rule 7 added after the owner's review of PR #572
-  (2026-11-01, backlog #0-192, #0-196)
+  (2026-11-01, backlog #0-192, #0-196); rule 2's `OPTIONS` expectation stated by ADR-0049 (#0-199)
 - **Backlog:** #0-191 (incident-service, ingestion-service); #0-192 copies it (notification, oncall, postmortem)
 - **Date:** 2026-11-01
 - **Author:** architect agent (autopilot run 20261101-154451)
