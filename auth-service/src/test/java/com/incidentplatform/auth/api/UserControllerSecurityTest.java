@@ -20,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
@@ -874,17 +875,30 @@ class UserControllerSecurityTest {
      * admin-only route ({@code POST /users} is ROLE_ADMIN), with no
      * authentication. The origin is auth-service's
      * {@code security.cors.allowed-origins} from {@code application.yml}.
+     *
+     * <p>The web slice does not load auto-configurations from {@code shared}.
+     * Without them, the source injected into {@link SecurityConfig} is Spring
+     * MVC's introspector, which holds no CORS configuration, so every preflight
+     * gets 403. {@code @ImportAutoConfiguration} gives this class's own context
+     * the shared {@code corsConfigurationSource}, which the running service
+     * gets from {@code AutoConfiguration.imports}. Its {@link #corsMockMvc}
+     * comes from that context. The enclosing class's {@code mockMvc} comes from
+     * the outer context, which has no shared source.
      */
     @Nested
+    @ImportAutoConfiguration(SharedSecurityAutoConfiguration.class)
     @DisplayName("OPTIONS preflight")
     class CorsPreflight {
 
         private static final String ALLOWED_ORIGIN = "http://localhost:4200";
 
+        @Autowired
+        private MockMvc corsMockMvc;
+
         @Test
         @DisplayName("a preflight from the allowed origin, no token, on an admin-only endpoint: 200 with the origin")
         void allowedPreflightIs200WithAllowOrigin() throws Exception {
-            mockMvc.perform(options("/api/v1/users")
+            corsMockMvc.perform(options("/api/v1/users")
                             .header("Origin", ALLOWED_ORIGIN)
                             .header("Access-Control-Request-Method", "POST"))
                     .andExpect(status().isOk())
@@ -894,7 +908,7 @@ class UserControllerSecurityTest {
         @Test
         @DisplayName("a bare OPTIONS with no principal: 401 like every method")
         void bareOptionsIs401() throws Exception {
-            mockMvc.perform(options("/api/v1/users"))
+            corsMockMvc.perform(options("/api/v1/users"))
                     .andExpect(status().isUnauthorized());
         }
     }
