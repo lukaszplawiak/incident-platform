@@ -129,10 +129,11 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-196](#0-196-incidents-route-walk-gets-0-192s-shape) | incident's route walk gets #0-192's shape | security | Low | Open |
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
-| [0-199](#0-199-options-is-permitted-on-every-path-so-a-method-less-mapping-runs-its-handler-for-an-anonymous-caller) | `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller | security | Medium | Open |
+| [0-199](#0-199-options-is-permitted-on-every-path-so-a-method-less-mapping-runs-its-handler-for-an-anonymous-caller) | `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller | security | Low | Open |
 | [0-200](#0-200-each-services-cors-preflight-still-passes-once-the-options-rule-is-gone) | Each service's CORS preflight still passes once the `OPTIONS` rule is gone | security | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
+| [0-203](#0-203-the-architects-and-the-block-commits-carry-no-co-authored-by-trailer) | The architect's and the block commits carry no `Co-Authored-By` trailer | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4360,7 +4361,7 @@ owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before th
 
 ### 0-199. `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller
 
-**Type:** security · **Priority:** Medium · **Status:** Open. From the review panel of PR #576 (#0-192, 2026-11-02:
+**Type:** security · **Priority:** Low · **Status:** Open. From the review panel of PR #576 (#0-192, 2026-11-02:
 security SEC-12, general GEN-24 and architecture, all non-blocking).
 **Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** shared (security; src/test: security), auth-service (auth.config; src/test: auth/api), incident-service (incident.config), ingestion-service (ingestion.config), notification-service (notification.config), oncall-service (oncall.config), postmortem-service (postmortem.config), root (README.md "Infrastructure Hardening", .ai/decisions/0049-options-is-answered-by-corsfilter-not-permitted.md, .ai/decisions/0048-every-route-is-walked-deny-by-default.md: Status line only, .ai/decisions/README.md, BACKLOG.md)
@@ -4398,6 +4399,20 @@ or 401, TRACE 400; `NotificationDenyByDefaultTest:242-243`) as a recorded deviat
 answered by `CorsFilter` before authorization and every other `OPTIONS` is authenticated like any method. Per-service
 preflight tests are #0-200. `DevSecurityConfig` (incident, `@Profile({"local","dev"})`, `/dev/**` only) does not call
 `buildCommonSecurity`, never had the rule and is out of scope.
+**Correction (owner, 2026-11-02, after autopilot run 20261102-113931 stopped the item at `plan`, draft PR #581).** The
+title, the Problem and the first criteria said a method-less mapping runs its handler for an anonymous `OPTIONS`. It
+does not: Spring MVC's `RequestMethodsRequestCondition.getMatchingCondition` (spring-webmvc 6.2.19) returns no match
+for an `OPTIONS` on a mapping without methods (outside an `ERROR` dispatch), and the dispatcher answers it itself
+with `Allow` (`RequestMappingInfoHandlerMapping.handleNoMatch` → `HttpOptionsHandler`), the handler not called,
+authenticated or not. Among annotated Spring MVC mappings only an explicit `@RequestMapping(method = OPTIONS)`
+handler runs for an anonymous caller (other handler types answer `OPTIONS` their own way: `WebSocketHttpRequestHandler`
+405, `ResourceHttpRequestHandler` `Allow`; on an `ERROR` dispatch, e.g. `BasicErrorController` on `/error`, a
+method-less mapping does match); none exists in the services, so the change is defence in depth plus a
+`permitAll` whose reason was wrong (priority Low). Read the Problem with that correction; the criteria below are
+the corrected ones. Also found then: `HandlerMappingIntrospector` (bean `mvcHandlerMappingIntrospector`) is a
+`CorsConfigurationSource`, so the shared bean's `@ConditionalOnMissingBean(CorsConfigurationSource.class)` registers
+it only because `SharedSecurityAutoConfiguration` happens to be processed before `WebMvcAutoConfiguration`; AC16 makes
+that deterministic.
 AC1. `SharedSecurityAutoConfiguration.buildCommonSecurity` calls `.cors(Customizer.withDefaults())`: a chain built
      from it, `defaultSecurityFilterChain` with no service `SecurityConfig` included (escalation-service's case),
      contains a `CorsFilter` ahead of the authorization filter. A test in `shared` inspects the chain's filters.
@@ -4415,9 +4430,14 @@ AC5. A bare anonymous `OPTIONS` (no `Origin`, no `Access-Control-Request-Method`
      separately, on an explicit `@RequestMapping(method = OPTIONS)` handler. The same holds for an `OPTIONS` with
      an allowed `Origin` but without `Access-Control-Request-Method` (not a preflight: `CorsFilter` passes it on;
      from a foreign origin `DefaultCorsProcessor` answers 403 instead, the handler not invoked either). Test in
-     `shared`.
-AC6. Positive control (ADR-0048 rule 7): an authenticated caller's bare `OPTIONS` on that method-less mapping reaches
-     the handler. Test in `shared`.
+     `shared`. (The method-less case is answered 401 by the chain before Spring MVC would answer it itself; it is
+     kept so the walk's expectation is pinned, the explicit handler is the case the change closes. The test-only
+     controllers are not mapped under `/error`, where an `ERROR` dispatch would match a method-less mapping.)
+AC6. Positive control (ADR-0048 rule 7): an authenticated caller's bare `OPTIONS` reaches the explicit
+     `@RequestMapping(method = OPTIONS)` handler of AC5. Test in `shared`.
+AC6b. An authenticated caller's bare `OPTIONS` on AC5's method-less mapping gets 200 with an `Allow` header and the
+      handler is not invoked (Spring MVC's implicit `OPTIONS`, which the correction above rests on). Test in
+      `shared`.
 AC7. `TRACE` still gets 400 from `StrictHttpFirewall` (a test in `shared`, or `NotificationDenyByDefaultTest`'s
      existing pin stays green).
 AC8. A service's own `.cors(cors -> cors.configurationSource(custom))` on a chain from `buildCommonSecurity` still
@@ -4425,10 +4445,10 @@ AC8. A service's own `.cors(cors -> cors.configurationSource(custom))` on a chai
 AC9. (reviewer-checked) `buildCommonSecurity` no longer contains `requestMatchers(HttpMethod.OPTIONS, ...)`; the
      "safe to exempt unconditionally" comment is replaced where it lived by a comment or Javadoc citing backlog
      #0-199: `CorsFilter` answers a valid preflight before authorization and does not continue the chain; a bare
-     `OPTIONS` on a method-less mapping or an explicit `OPTIONS` handler would otherwise run the handler for an
-     anonymous caller; a `CorsConfigurationSource` bean under another name than `corsConfigurationSource` makes the
-     shared one back off, and `withDefaults()` then falls back to Spring MVC's `HandlerMappingIntrospector`, which
-     holds no CORS configuration here: `DefaultCorsProcessor` (spring-web 6.2.19) rejects a preflight with no
+     `OPTIONS` reaching an explicit `@RequestMapping(method = OPTIONS)` handler would otherwise run it for an
+     anonymous caller (a method-less mapping does not: Spring MVC answers that `OPTIONS` itself, AC6b); without a
+     bean named `corsConfigurationSource`, `withDefaults()` falls back to Spring MVC's `HandlerMappingIntrospector`,
+     which holds no CORS configuration here: `DefaultCorsProcessor` (spring-web 6.2.19) rejects a preflight with no
      CORS configuration with 403, so the browser refuses the real request. The class Javadoc's mention of the
      rule (`:79-81`) says the same.
 AC10. auth-service: `UserControllerSecurityTest.CorsPreflight` sends a real preflight (allowed `Origin` and
@@ -4437,12 +4457,15 @@ AC10. auth-service: `UserControllerSecurityTest.CorsPreflight` sends a real pref
 AC11. (reviewer-checked) A new ADR-0049, indexed in `.ai/decisions/README.md`, states what `OPTIONS` answers under
       ADR-0048 rule 2: an `OPTIONS` without preflight headers is expected 401 like every method (rule 2 already
       expects that; the `404 || 401` of #0-192's walk was a deviation in the tests, not in the rule); `TRACE` is 400
-      from `StrictHttpFirewall`; a valid preflight is answered by `CorsFilter`. ADR-0048's decision text is not
+      from `StrictHttpFirewall`; a valid preflight is answered by `CorsFilter`; among annotated Spring MVC mappings an
+      anonymous `OPTIONS` could reach a handler only through an explicit `method = OPTIONS` mapping, never a
+      method-less one (outside an `ERROR` dispatch). ADR-0048's decision text is not
       rewritten: its Status line gets a note "rule 2's `OPTIONS` expectation stated by ADR-0049 (#0-199)", and its
       index row's Backlog column gets #0-199.
 AC12. (reviewer-checked) README "Infrastructure Hardening" no longer lists #0-199 as a gap and states the control in
       its HTTP entry: every chain has a `CorsFilter`, only a valid preflight is answered without authentication,
-      every other `OPTIONS` is authenticated (CLAUDE.md "Security inventory").
+      every other `OPTIONS` is authenticated, so no explicit `OPTIONS` handler runs for an anonymous caller (CLAUDE.md
+      "Security inventory").
 AC13. (reviewer-checked) The "OPTIONS (#0-199)" paragraphs of #0-196, #0-198 and #0-197 in BACKLOG.md say what is now
       expected (an `OPTIONS` without preflight headers is 401 like every method, #0-199 and ADR-0049; `TRACE` 400 from
       `StrictHttpFirewall`), no longer "until #0-199 decides".
@@ -4453,6 +4476,16 @@ AC15. (reviewer-checked) The six services' own `.cors(cors -> cors.configuration
       `:57`) stay, as explicit overrides (AC8); their class Javadoc no longer says the chain has no CORS without them
       (e.g. notification `SecurityConfig:22-29`, auth `:42-47`) but that `buildCommonSecurity` applies it and the
       explicit source names it. Only comments change in those classes.
+AC16. The shared `corsConfigurationSource` bean is conditional on its name, not its type
+      (`@ConditionalOnMissingBean(name = "corsConfigurationSource")`), so Spring MVC's `mvcHandlerMappingIntrospector`
+      (itself a `CorsConfigurationSource`) never makes it back off, whatever the auto-configuration order. A test in
+      `shared` shows it: in a context with Spring MVC's configuration registered before
+      `SharedSecurityAutoConfiguration`, the bean named `corsConfigurationSource` is the shared one and AC2's
+      preflight gets 200; a bean of the service's own under that name still replaces it. (reviewer-checked) The
+      Javadoc that promises any `CorsConfigurationSource` bean makes the shared one back off
+      (`SharedSecurityAutoConfiguration:62-63` and `:456-457`) says, citing #0-199, that it backs off only for a bean
+      named `corsConfigurationSource`: a source under another name sits beside it and is not used, since the
+      services inject by type with the parameter name `corsConfigurationSource`.
 
 ### 0-200. Each service's CORS preflight still passes once the `OPTIONS` rule is gone
 
@@ -4529,6 +4562,10 @@ login and the `~/.claude` and `~/.m2` volumes are the bot's own. What follows to
   `application-local.yml` included (the same reason `ci-local.sh` sends the tree as a tar instead of a mount, #0-166);
   the container's firewall (`init-firewall.sh`) limits where it could go.
 
+**Seen.** Autopilot run 20261102-113931 (#0-199) started while the shared tree was on the owner's `plan/2026-11-02`;
+during the run the owner, on the host, switched it to `main` and merged PRs #579 and #580. The run's branch happened to
+start from `main` (`eea28f7d`) and nothing broke, but nothing guarded it either.
+
 **Not this.** ADR-0044 rejected a worktree per `/seed-bugs` run: the workflow's agents read hooks from the session's
 own directory, so the session would have to start inside it. This item is about the container's tree as a whole, not
 one run's.
@@ -4541,6 +4578,37 @@ host during a run") with a guard that notices a HEAD move by someone else during
 `application-local.yml` and `docker/.env` then come from (the test gate needs a build, Testcontainers, no services),
 how the owner reviews the bot's branch (fetch from `origin`), the `--admin` merge from the host, the clean-`main`
 preflight, and the cost of a second Maven/Docker cache.
+
+### 0-203. The architect's and the block commits carry no `Co-Authored-By` trailer
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From autopilot run 20261102-113931 (#0-199, owner 2026-11-02).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** ci (.claude/hooks/readonly-bash.sh, .claude/hooks/test-hooks.sh, .claude/agents/architect.md), root (BACKLOG.md)
+
+**Problem.** On the branch of run 20261102-113931, `fae74d6a` (the architect's "docs(factory): plan backlog 0-199")
+and `edc3946e` ("chore(factory): block backlog #0-199") have no `Co-Authored-By` trailer, while the run's
+`5784e01c` (start) and #0-192's record and close commits (`42495c1d`, `c23c9909`) have one. The architect commits
+through `readonly-bash.sh --architect`, which refuses any command holding `<`, `>` or a newline
+(`readonly-bash.sh`, the metacharacter case before the mode checks), so its `git commit` can carry only a one-line
+message, no trailer with an address in angle brackets. No repository rule requires the trailer today (no hit in
+`.claude/agents/`, `.ai/rules/`, `scripts/factory/`); it comes from the session's attribution, so the history shows
+some factory commits as the model's and others not. Which path wrote `edc3946e` is to check.
+
+`git commit -F <path>` already passes the `--architect` mode (`readonly-bash.sh`: only `-a`, `--all`, `--amend`, `-n`
+and `--no-verify` are refused) with any path, so the architect can today put the content of any file it can read
+into a commit message, which the shipper then pushes.
+
+**Approach (to decide).** Let the architect commit from a message file, restricting `-F` to
+`.ai/work/<item>/` (checked like its `git add` paths), instead of loosening the metacharacter rule, or have a factory script
+write those commits with the trailer; or decide the trailer is not wanted on factory commits and drop it everywhere,
+recorded where the agents' commit conventions live.
+
+**Acceptance criteria (draft).**
+AC1. Every commit an autopilot run writes either carries the same attribution trailer or none does, by a rule stated
+     in the agents' definitions; a `test-hooks.sh` case shows the architect's commit path allows the chosen form and
+     still refuses redirects and chaining.
+AC2. `readonly-bash.sh --architect` refuses `git commit -F` (and `--file`) with a path outside `.ai/work/`, or one
+     with `..`; a `test-hooks.sh` case shows it.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
@@ -4590,6 +4658,11 @@ history of the first cases; from now on they are derived, not written by hand.
    `backlog-estimate-off` in PR #482 (the implementer added it, correctly). Fixed by #0-125.
 3. PR #482 — DOC-10 on the Context section of an accepted ADR (ADR-0026), which records the state when it was
    decided; owner label `human:fp-docs`. Introduced and detected in review (docs dimension) — a reviewers-audit case.
+4. #0-199 — the item's premise (a method-less mapping runs its handler for an anonymous `OPTIONS`) was false: Spring
+   MVC answers that `OPTIONS` itself. Introduced by PR #576's review panel (security SEC-12, general GEN-24,
+   architecture, non-blocking), passed by `/ready #0-199` (PR #578, three manual `/review` rounds; the library facts
+   checked in the jars' bytecode covered CORS and Spring Security, not MVC's request matching), detected at `plan`:
+   the architect BLOCKED the item (run 20261102-113931, draft PR #581). Fixed by the correction in #0-199's criteria.
 
 ---
 
