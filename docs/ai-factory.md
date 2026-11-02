@@ -123,6 +123,11 @@ claude --settings .claude/settings.autopilot.json
 One item per run. The session settings make it `dontAsk`: everything not allowed is refused, nobody is
 asked. `/workflows` shows progress; `p` pauses, `x` stops.
 
+A BLOCKED item is resumed with `branch` (and `acceptUnverifiable` for the claims you read), as a new run from a
+clean `main`, never with `resumeFromRunId`: the settings allow `Workflow(backlog-autopilot)` by name only, not a
+run's saved `scriptPath`, and a run's journal belongs to the session that started it. The new run skips pick, plan
+and implement and runs the gate, the panel, the verifier and the shipper again (PR #576, backlog #0-194).
+
 **Which item.** Code decides, not an agent: `scripts/factory/next-item.sh` reads `BACKLOG.md`,
 `BACKLOG-DONE.md` and `.ai/plan/queue.md` on the run's base commit and the open PRs, and takes, in order:
 
