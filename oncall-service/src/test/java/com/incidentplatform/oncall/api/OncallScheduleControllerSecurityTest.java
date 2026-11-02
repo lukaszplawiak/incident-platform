@@ -27,6 +27,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -100,8 +101,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@code UserControllerSecurityTest} — a real {@link UserPrincipal}-typed
  * {@code Authentication} — applied throughout this file for consistency,
  * not just in the four tests where it was strictly necessary.
+ *
+ * <p>{@code @ContextConfiguration} names {@link TestApplication} (backlog #0-192):
+ * {@code OncallDenyByDefaultTest} adds its own configurations to this package, and a
+ * search would find several and fail with "Found multiple @SpringBootConfiguration".
  */
 @WebMvcTest(OncallScheduleController.class)
+@ContextConfiguration(classes = OncallScheduleControllerSecurityTest.TestApplication.class)
 @Import({SecurityConfig.class, UnauthorizedEntryPoint.class})
 @TestPropertySource(properties = {
         "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
