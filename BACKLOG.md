@@ -130,6 +130,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
 | [0-199](#0-199-options-is-permitted-on-every-path-so-a-method-less-mapping-runs-its-handler-for-an-anonymous-caller) | `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller | security | Medium | Open |
+| [0-200](#0-200-each-services-cors-preflight-still-passes-once-the-options-rule-is-gone) | Each service's CORS preflight still passes once the `OPTIONS` rule is gone | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4359,7 +4360,8 @@ owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before th
 
 **Type:** security · **Priority:** Medium · **Status:** Open. From the review panel of PR #576 (#0-192, 2026-11-02:
 security SEC-12, general GEN-24 and architecture, all non-blocking).
-**Autopilot:** not-ready · **Risk:** medium · **Complexity:** medium · **Depends on:** —
+**Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** shared (security; src/test: security), auth-service (auth.config; src/test: auth/api), incident-service (incident.config), ingestion-service (ingestion.config), notification-service (notification.config), oncall-service (oncall.config), postmortem-service (postmortem.config), root (README.md "Infrastructure Hardening", .ai/decisions/0049-options-is-answered-by-corsfilter-not-permitted.md, .ai/decisions/0048-every-route-is-walked-deny-by-default.md (Status line), .ai/decisions/README.md, BACKLOG.md)
 
 **Problem.** `SharedSecurityAutoConfiguration.buildCommonSecurity` puts `.requestMatchers(HttpMethod.OPTIONS,
 "/**").permitAll()` before every caller's own rules, for CORS preflights. Its comment calls this safe "unconditionally:
@@ -4386,7 +4388,97 @@ or 401, TRACE 400; `NotificationDenyByDefaultTest:242-243`) as a recorded deviat
 - C. Both.
 
 **Touches (likely, after the decision):** shared (security, its tests), `.ai/decisions/` (ADR-0048), README
-"Infrastructure Hardening", BACKLOG.md; for B also the walks of #0-196, #0-198 and #0-197.
+"Infrastructure Hardening", BACKLOG.md; for B also the walks of #0-196, #0-198 and #0-197. (Superseded by the
+`**Touches:**` line above, `/ready` 2026-11-02.)
+
+**Acceptance criteria.** Decided at `/ready` (owner, 2026-11-02): variant A′, neither A, B nor C above:
+`buildCommonSecurity` applies CORS itself and the `OPTIONS /** permitAll` rule is removed, so a valid preflight is
+answered by `CorsFilter` before authorization and every other `OPTIONS` is authenticated like any method. Per-service
+preflight tests are #0-200. `DevSecurityConfig` (incident, `@Profile({"local","dev"})`, `/dev/**` only) does not call
+`buildCommonSecurity`, never had the rule and is out of scope.
+AC1. `SharedSecurityAutoConfiguration.buildCommonSecurity` calls `.cors(Customizer.withDefaults())`: a chain built
+     from it, `defaultSecurityFilterChain` with no service `SecurityConfig` included (escalation-service's case),
+     contains a `CorsFilter` ahead of the authorization filter. A test in `shared` inspects the chain's filters.
+AC2. With `defaultSecurityFilterChain` and no CORS bean of the service's own, a preflight from an allowed origin is
+     answered from the shared `corsConfigurationSource` bean (`security.cors.allowed-origins`): `CorsConfigurer`
+     (spring-security-config 6.5.11) looks up a bean named `corsFilter`, then one named `corsConfigurationSource`.
+     Test in `shared`.
+AC3. A real preflight (`OPTIONS` with `Origin` from an allowed origin and `Access-Control-Request-Method`), with no
+     token, on a path that requires authentication, gets 200 with `Access-Control-Allow-Origin`, and sent to AC5's
+     method-less test controller and to its explicit `OPTIONS` handler it invokes neither handler (the same flag or
+     spy). Test in `shared`.
+AC4. A preflight from a foreign origin gets 403 and the handler is not invoked. Test in `shared`.
+AC5. A bare anonymous `OPTIONS` (no `Origin`, no `Access-Control-Request-Method`) gets 401 and the handler is not
+     invoked (a flag or spy shows it), on a test-only controller with a method-less `@RequestMapping` and,
+     separately, on an explicit `@RequestMapping(method = OPTIONS)` handler. The same holds for an `OPTIONS` with
+     an allowed `Origin` but without `Access-Control-Request-Method` (not a preflight: `CorsFilter` passes it on;
+     from a foreign origin `DefaultCorsProcessor` answers 403 instead, the handler not invoked either). Test in
+     `shared`.
+AC6. Positive control (ADR-0048 rule 7): an authenticated caller's bare `OPTIONS` on that method-less mapping reaches
+     the handler. Test in `shared`.
+AC7. `TRACE` still gets 400 from `StrictHttpFirewall` (a test in `shared`, or `NotificationDenyByDefaultTest`'s
+     existing pin stays green).
+AC8. A service's own `.cors(cors -> cors.configurationSource(custom))` on a chain from `buildCommonSecurity` still
+     wins: the chain answers a preflight per `custom`, not per the shared default. Test in `shared`.
+AC9. (reviewer-checked) `buildCommonSecurity` no longer contains `requestMatchers(HttpMethod.OPTIONS, ...)`; the
+     "safe to exempt unconditionally" comment is replaced where it lived by a comment or Javadoc citing backlog
+     #0-199: `CorsFilter` answers a valid preflight before authorization and does not continue the chain; a bare
+     `OPTIONS` on a method-less mapping or an explicit `OPTIONS` handler would otherwise run the handler for an
+     anonymous caller; a `CorsConfigurationSource` bean under another name than `corsConfigurationSource` makes the
+     shared one back off, and `withDefaults()` then falls back to Spring MVC's `HandlerMappingIntrospector`, which
+     holds no CORS configuration here: `DefaultCorsProcessor` (spring-web 6.2.19) rejects a preflight with no
+     CORS configuration with 403, so the browser refuses the real request. The class Javadoc's mention of the
+     rule (`:79-81`) says the same.
+AC10. auth-service: `UserControllerSecurityTest.CorsPreflight` sends a real preflight (allowed `Origin` and
+      `Access-Control-Request-Method`) to `/api/v1/users` and expects 200 with `Access-Control-Allow-Origin`, and
+      a bare `OPTIONS` there expects 401.
+AC11. (reviewer-checked) A new ADR-0049, indexed in `.ai/decisions/README.md`, states what `OPTIONS` answers under
+      ADR-0048 rule 2: an `OPTIONS` without preflight headers is expected 401 like every method (rule 2 already
+      expects that; the `404 || 401` of #0-192's walk was a deviation in the tests, not in the rule); `TRACE` is 400
+      from `StrictHttpFirewall`; a valid preflight is answered by `CorsFilter`. ADR-0048's decision text is not
+      rewritten: its Status line gets a note "rule 2's `OPTIONS` expectation stated by ADR-0049 (#0-199)", and its
+      index row's Backlog column gets #0-199.
+AC12. (reviewer-checked) README "Infrastructure Hardening" no longer lists #0-199 as a gap and states the control in
+      its HTTP entry: every chain has a `CorsFilter`, only a valid preflight is answered without authentication,
+      every other `OPTIONS` is authenticated (CLAUDE.md "Security inventory").
+AC13. (reviewer-checked) The "OPTIONS (#0-199)" paragraphs of #0-196, #0-198 and #0-197 in BACKLOG.md say what is now
+      expected (an `OPTIONS` without preflight headers is 401 like every method, #0-199 and ADR-0049; `TRACE` 400 from
+      `StrictHttpFirewall`), no longer "until #0-199 decides".
+AC14. `./mvnw verify -pl shared,service-parent,auth-service,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service`
+      passes on the branch: every service's existing security and deny-by-default tests stay green.
+AC15. (reviewer-checked) The six services' own `.cors(cors -> cors.configurationSource(corsConfigurationSource))`
+      calls (auth `SecurityConfig:157`, incident `:46`, ingestion `:65`, notification `:42`, oncall `:79`, postmortem
+      `:57`) stay, as explicit overrides (AC8); their class Javadoc no longer says the chain has no CORS without them
+      (e.g. notification `SecurityConfig:22-29`, auth `:42-47`) but that `buildCommonSecurity` applies it and the
+      explicit source names it. Only comments change in those classes.
+
+### 0-200. Each service's CORS preflight still passes once the `OPTIONS` rule is gone
+
+**Type:** security · **Priority:** Medium · **Status:** Open. Split off #0-199 at `/ready` (owner, 2026-11-02: one
+PR of `shared` plus one service, ready.md point 4).
+**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-199
+**Touches:** incident-service (src/test: incident/api), ingestion-service (src/test: ingestion/api), notification-service (src/test: notification/api), oncall-service (src/test: oncall/api), postmortem-service (src/test: postmortem/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
+
+**Problem.** #0-199 removes `OPTIONS /** permitAll` from `buildCommonSecurity` and lets `CorsFilter` answer preflights.
+The rule was once added because preflights got 401 and the frontend saw "status 0" (`SharedSecurityAutoConfiguration`,
+the comment #0-199 replaces). #0-199 proves the new behaviour in `shared` and in auth-service only; each of the other
+five services with its own chain needs the same evidence against its real `SecurityConfig`. escalation-service has
+no controller and its default chain is covered by #0-199's tests in `shared`.
+
+**Acceptance criteria.**
+AC1. In each of incident-, ingestion-, notification-, oncall- and postmortem-service, a test against the service's
+     real security chain shows: a real preflight (`OPTIONS` with an allowed `Origin` and
+     `Access-Control-Request-Method`), with no token, on one of its authenticated routes gets 200 with
+     `Access-Control-Allow-Origin`.
+AC2. In the same five services, a bare anonymous `OPTIONS` (no preflight headers) on that route gets 401.
+AC3. `NotificationDenyByDefaultTest` pins `OPTIONS` on its unmapped path as an ordinary method: every caller of
+     its `callers` map (`:252-256`) gets 401, the purpose token 401 or 403 as for every other method (ADR-0048
+     rule 2), no longer `404 || 401`; `beforeAnyRequest` keeps only `TRACE`, and its Javadoc (`:228-233`) no longer
+     calls `OPTIONS` a deviation.
+AC4. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-199 wrote, says the per-service preflight
+     tests exist (CLAUDE.md "Security inventory").
+AC5. `./mvnw verify -pl incident-service,ingestion-service,notification-service,oncall-service,postmortem-service`
+     passes on the branch.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
