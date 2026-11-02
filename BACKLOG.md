@@ -131,6 +131,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
 | [0-199](#0-199-options-is-permitted-on-every-path-so-a-method-less-mapping-runs-its-handler-for-an-anonymous-caller) | `OPTIONS` is permitted on every path, so a method-less mapping runs its handler for an anonymous caller | security | Medium | Open |
 | [0-200](#0-200-each-services-cors-preflight-still-passes-once-the-options-rule-is-gone) | Each service's CORS preflight still passes once the `OPTIONS` rule is gone | security | Medium | Open |
+| [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4361,7 +4362,7 @@ owner, not an exemption; `TRACE` answers 400 from `StrictHttpFirewall` before th
 **Type:** security · **Priority:** Medium · **Status:** Open. From the review panel of PR #576 (#0-192, 2026-11-02:
 security SEC-12, general GEN-24 and architecture, all non-blocking).
 **Autopilot:** ready · **Risk:** high · **Complexity:** medium · **Depends on:** —
-**Touches:** shared (security; src/test: security), auth-service (auth.config; src/test: auth/api), incident-service (incident.config), ingestion-service (ingestion.config), notification-service (notification.config), oncall-service (oncall.config), postmortem-service (postmortem.config), root (README.md "Infrastructure Hardening", .ai/decisions/0049-options-is-answered-by-corsfilter-not-permitted.md, .ai/decisions/0048-every-route-is-walked-deny-by-default.md (Status line), .ai/decisions/README.md, BACKLOG.md)
+**Touches:** shared (security; src/test: security), auth-service (auth.config; src/test: auth/api), incident-service (incident.config), ingestion-service (ingestion.config), notification-service (notification.config), oncall-service (oncall.config), postmortem-service (postmortem.config), root (README.md "Infrastructure Hardening", .ai/decisions/0049-options-is-answered-by-corsfilter-not-permitted.md, .ai/decisions/0048-every-route-is-walked-deny-by-default.md: Status line only, .ai/decisions/README.md, BACKLOG.md)
 
 **Problem.** `SharedSecurityAutoConfiguration.buildCommonSecurity` puts `.requestMatchers(HttpMethod.OPTIONS,
 "/**").permitAll()` before every caller's own rules, for CORS preflights. Its comment calls this safe "unconditionally:
@@ -4479,6 +4480,33 @@ AC4. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-199 w
      tests exist (CLAUDE.md "Security inventory").
 AC5. `./mvnw verify -pl incident-service,ingestion-service,notification-service,oncall-service,postmortem-service`
      passes on the branch.
+
+### 0-201. A `ready` item's Touches line is validated only once it is queued
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Found by `/plan-backlog` on 2026-11-02 (owner: record it in the
+queue PR).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** ci (scripts/factory/_backlog.sh, scripts/factory/check-queue.sh, .github/scripts/test-queue.sh, .github/workflows/factory-guards.yml), root (BACKLOG.md)
+
+**Problem.** PR #578 (`/ready #0-199`) gave #0-199 a Touches line with a parenthesis inside a module's parentheses
+(`root (…, .ai/decisions/0048-….md (Status line), …)`). Factory guards passed it: its "Execution queue is consistent"
+step (`factory-guards.yml:159`) runs `check-queue.sh`, which checks Touches only for the items the queue lists, and
+`main` had no `.ai/plan/queue.md`. The next `/plan-backlog` queued #0-199 and `check-queue.sh` failed: `_backlog.sh`
+derives the modules with `gsub("\\([^)]*\\)"; "")` (`:70`), which does not nest, so the first `)` ended the group and
+`.ai/decisions/README.md` and `BACKLOG.md)` were read as modules. A `ready` item is picked without a queue too
+(`next-item.sh`, by priority), with a wrong module list for its scope measurement. Stage that let it in: `ready`
+(the ready-checker drafts Touches, nothing checks them before the PR merges).
+
+**Approach (to decide).** Either check the Touches of every item with an `**Autopilot:**` line in Factory guards
+(the same unknown-module rule as `check-queue.sh`, queue or no queue), or forbid nested parentheses in Touches and
+say so in `.ai/rules/planning.md`, or make the module split nest-aware; the first is needed in any case.
+
+**Acceptance criteria (draft).**
+AC1. Factory guards fails a PR whose `BACKLOG.md` has an item with an `**Autopilot:**` line and an unknown module in
+     its `**Touches:**`, whether or not `.ai/plan/queue.md` exists or lists it; a case in `test-queue.sh` (or its own
+     test) shows it.
+AC2. A Touches line with a parenthesis inside a module's parentheses is either read correctly or refused with an
+     error naming the item; a test shows which.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
