@@ -30,6 +30,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
@@ -67,6 +68,7 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 
@@ -94,6 +96,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  *       secret; a correctly signed request gets 200, so the 401 is the
  *       verifier's and the chain does let the route through.</li>
  * </ul>
+ * {@link CorsPreflight} sends a CORS preflight to the unmapped path, for the
+ * same reason (backlog #0-200).
  *
  * <h2>The chain as production builds it</h2>
  * The filters are the shared auto-configuration's beans with a real
@@ -330,6 +334,53 @@ class NotificationDenyByDefaultTest {
                 .andReturn().getResponse().getStatus();
 
         assertThat(status).as("status for a valid RESPONDER token").isNotEqualTo(401);
+    }
+
+    /**
+     * notification's own {@link SecurityConfig} answers a browser's CORS
+     * preflight without a token, and nothing else about {@code OPTIONS} is
+     * exempt (backlog #0-200, ADR-0049 rule 4): its {@code CorsFilter} answers
+     * a valid preflight before authentication, and any other {@code OPTIONS} is
+     * authenticated like every method. It shares the enclosing context, whose
+     * {@code @ImportAutoConfiguration} supplies the shared
+     * {@code corsConfigurationSource}; without that source the preflight would
+     * get 403, and without {@code CorsFilter} in the chain 401.
+     *
+     * <p>Sent to {@link #UNMAPPED_PATH}: the service's one controller route is
+     * the {@code permitAll()} Slack route, so no controller route is
+     * authenticated, and the {@code anyRequest()} rule the unmapped path reaches
+     * is the one a new route falls under. No handler maps it, so there is no
+     * collaborator to check: the 200 and its {@code Access-Control-Allow-Origin}
+     * can only be {@code CorsFilter}'s, as an anonymous caller past it gets 401.
+     */
+    @Nested
+    @DisplayName("OPTIONS preflight")
+    class CorsPreflight {
+
+        /** The enclosing class's {@code security.cors.allowed-origins}. */
+        private static final String ALLOWED_ORIGIN = "http://localhost:4200";
+
+        @Test
+        @DisplayName("a preflight from the allowed origin, no token: 200 with the origin")
+        void allowedPreflightIs200WithAllowOrigin() throws Exception {
+            final MockHttpServletResponse response = mockMvc.perform(options(UNMAPPED_PATH)
+                            .header("Origin", ALLOWED_ORIGIN)
+                            .header("Access-Control-Request-Method", "POST")
+                            .header("Access-Control-Request-Headers", "Authorization"))
+                    .andReturn().getResponse();
+
+            assertThat(response.getStatus()).as("status of an allowed preflight").isEqualTo(200);
+            assertThat(response.getHeader("Access-Control-Allow-Origin")).as("Access-Control-Allow-Origin")
+                    .isEqualTo(ALLOWED_ORIGIN);
+        }
+
+        @Test
+        @DisplayName("a bare OPTIONS with no principal: 401 like every method")
+        void bareOptionsIs401() throws Exception {
+            final int status = mockMvc.perform(options(UNMAPPED_PATH)).andReturn().getResponse().getStatus();
+
+            assertThat(status).as("status of a bare anonymous OPTIONS").isEqualTo(401);
+        }
     }
 
     /**

@@ -30,6 +30,7 @@ import org.springframework.core.annotation.Order;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
@@ -55,6 +56,8 @@ import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 
 /**
@@ -196,6 +199,50 @@ class IncidentDenyByDefaultTest {
         assertThat(context.getBeanNamesForType(DevSecurityConfig.class)).as("DevSecurityConfig beans").isEmpty();
         assertThat(routes(handlerMapping)).as("routes walked")
                 .noneMatch(route -> route.substring(route.indexOf(' ') + 1).startsWith("/dev"));
+    }
+
+    /**
+     * incident's own {@link SecurityConfig} answers a browser's CORS preflight
+     * without a token, and nothing else about {@code OPTIONS} is exempt
+     * (backlog #0-200, ADR-0049 rule 4): its {@code CorsFilter} answers a valid
+     * preflight before authentication, and any other {@code OPTIONS} is
+     * authenticated like every method. It shares the enclosing context, whose
+     * {@code @ImportAutoConfiguration} supplies the shared
+     * {@code corsConfigurationSource}; without that source the preflight would
+     * get 403, and without {@code CorsFilter} in the chain 401. Sent to
+     * {@code GET /api/v1/incidents}, a route the chain authenticates.
+     */
+    @Nested
+    @DisplayName("OPTIONS preflight")
+    class CorsPreflight {
+
+        /** The enclosing class's {@code security.cors.allowed-origins}. */
+        private static final String ALLOWED_ORIGIN = "http://localhost:4200";
+
+        private static final String ROUTE = "/api/v1/incidents";
+
+        @Test
+        @DisplayName("a preflight from the allowed origin, no token: 200 with the origin, no handler runs")
+        void allowedPreflightIs200WithAllowOrigin() throws Exception {
+            final MockHttpServletResponse response = mockMvc.perform(options(ROUTE)
+                            .header("Origin", ALLOWED_ORIGIN)
+                            .header("Access-Control-Request-Method", "GET")
+                            .header("Access-Control-Request-Headers", "Authorization"))
+                    .andReturn().getResponse();
+
+            assertThat(response.getStatus()).as("status of an allowed preflight").isEqualTo(200);
+            assertThat(response.getHeader("Access-Control-Allow-Origin")).as("Access-Control-Allow-Origin")
+                    .isEqualTo(ALLOWED_ORIGIN);
+            verifyNoInteractions(incidentQueryService);
+        }
+
+        @Test
+        @DisplayName("a bare OPTIONS with no principal: 401 like every method")
+        void bareOptionsIs401() throws Exception {
+            final int status = mockMvc.perform(options(ROUTE)).andReturn().getResponse().getStatus();
+
+            assertThat(status).as("status of a bare anonymous OPTIONS").isEqualTo(401);
+        }
     }
 
     /**

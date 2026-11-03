@@ -129,7 +129,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-196](#0-196-incidents-route-walk-gets-0-192s-shape) | incident's route walk gets #0-192's shape | security | Low | Open |
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
-| [0-200](#0-200-each-services-cors-preflight-still-passes-once-the-options-rule-is-gone) | Each service's CORS preflight still passes once the `OPTIONS` rule is gone | security | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-203](#0-203-the-architects-and-the-block-commits-carry-no-co-authored-by-trailer) | The architect's and the block commits carry no `Co-Authored-By` trailer | ci | Low | Open |
@@ -4363,34 +4362,6 @@ pinned as #0-192 did.
 
 **After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) "until #0-196" clauses go
 (with #0-196's; protected path: not the autopilot's).
-
-### 0-200. Each service's CORS preflight still passes once the `OPTIONS` rule is gone
-
-**Type:** security · **Priority:** Medium · **Status:** Open. Split off #0-199 at `/ready` (owner, 2026-11-02: one
-PR of `shared` plus one service, ready.md point 4).
-**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-199
-**Touches:** incident-service (src/test: incident/api), ingestion-service (src/test: ingestion/api), notification-service (src/test: notification/api), oncall-service (src/test: oncall/api), postmortem-service (src/test: postmortem/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
-
-**Problem.** #0-199 removes `OPTIONS /** permitAll` from `buildCommonSecurity` and lets `CorsFilter` answer preflights.
-The rule was once added because preflights got 401 and the frontend saw "status 0" (`SharedSecurityAutoConfiguration`,
-the comment #0-199 replaces). #0-199 proves the new behaviour in `shared` and in auth-service only; each of the other
-five services with its own chain needs the same evidence against its real `SecurityConfig`. escalation-service has
-no controller and its default chain is covered by #0-199's tests in `shared`.
-
-**Acceptance criteria.**
-AC1. In each of incident-, ingestion-, notification-, oncall- and postmortem-service, a test against the service's
-     real security chain shows: a real preflight (`OPTIONS` with an allowed `Origin` and
-     `Access-Control-Request-Method`), with no token, on one of its authenticated routes gets 200 with
-     `Access-Control-Allow-Origin`.
-AC2. In the same five services, a bare anonymous `OPTIONS` (no preflight headers) on that route gets 401.
-AC3. `NotificationDenyByDefaultTest` pins `OPTIONS` on its unmapped path as an ordinary method: every caller of
-     its `callers` map (`:252-256`) gets 401, the purpose token 401 or 403 as for every other method (ADR-0048
-     rule 2), no longer `404 || 401`; `beforeAnyRequest` keeps only `TRACE`, and its Javadoc (`:228-233`) no longer
-     calls `OPTIONS` a deviation.
-AC4. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-199 wrote, says the per-service preflight
-     tests exist (CLAUDE.md "Security inventory").
-AC5. `./mvnw verify -pl incident-service,ingestion-service,notification-service,oncall-service,postmortem-service`
-     passes on the branch.
 
 ### 0-201. A `ready` item's Touches line is validated only once it is queued
 
