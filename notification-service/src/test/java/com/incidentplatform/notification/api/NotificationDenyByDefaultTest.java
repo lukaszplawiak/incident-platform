@@ -221,25 +221,19 @@ class NotificationDenyByDefaultTest {
     }
 
     /**
-     * Every {@link RequestMethod} is sent to the unmapped path. Two of them never
-     * reach the {@code anyRequest()} rule, so each gets its own pinned answer
-     * instead of AC1's, and never a 2xx:
-     * <ul>
-     *   <li>{@code OPTIONS}: {@code buildCommonSecurity} permits it on every path
-     *       ahead of the service's rules (CORS preflight); no handler maps the
-     *       path, so the answer is 404, or 401 for {@code ApiKey ipl_…}, which
-     *       the shared {@code ApiKeyAuthFilter} bean refuses where it also runs
-     *       as a servlet filter of its own (backlog #0-193 is about that filter
-     *       in these chains);</li>
-     *   <li>{@code TRACE}: Spring Security's {@code StrictHttpFirewall} rejects
-     *       the method with 400 before any chain runs.</li>
-     * </ul>
+     * Every {@link RequestMethod} is sent to the unmapped path. One of them never
+     * reaches the {@code anyRequest()} rule, so it gets its own pinned answer
+     * instead of AC1's, and never a 2xx: {@code TRACE}, which Spring Security's
+     * {@code StrictHttpFirewall} rejects with 400 before any chain runs.
+     * {@code OPTIONS} without preflight headers is checked like every other
+     * method (backlog #0-199, ADR-0049): {@code buildCommonSecurity} no longer
+     * permits it on every path, and its {@code CorsFilter} answers only a valid
+     * preflight, which these requests are not.
      */
     @Test
     @DisplayName("a path no controller maps, every method: 401 anonymous, 401/403 purpose token, 401 unknown key")
     void anUnmappedPathRefusesTheThreeCallers() throws Exception {
         final Map<RequestMethod, IntPredicate> beforeAnyRequest = Map.of(
-                RequestMethod.OPTIONS, status -> status == 404 || status == 401,
                 RequestMethod.TRACE, status -> status == 400);
         final List<String> unmapped = new ArrayList<>();
         for (final RequestMethod method : RequestMethod.values()) {
@@ -247,7 +241,8 @@ class NotificationDenyByDefaultTest {
                 unmapped.add(method + " " + UNMAPPED_PATH);
             }
         }
-        assertThat(unmapped).as("methods that reach the anyRequest() rule").hasSize(6);
+        assertThat(unmapped).as("methods that reach the anyRequest() rule").hasSize(7)
+                .contains("OPTIONS " + UNMAPPED_PATH);
         final String token = purposeToken();
         final Map<String, UnaryOperator<MockHttpServletRequestBuilder>> callers = Map.of(
                 "anonymous", request -> request,

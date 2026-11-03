@@ -948,6 +948,10 @@ Summary; details in [Resilience & Security](#security).
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
 - **HTTP**: stateless sessions, CORS allow-list, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy;
   ingestion payloads capped at 1 MB; Slack requests verified by signature; WebSocket authenticated at `CONNECT`.
+  Every chain built from `buildCommonSecurity` has a `CorsFilter` ahead of authentication: only a valid preflight
+  (an allowed `Origin` and `Access-Control-Request-Method`) is answered without authentication, a foreign origin
+  gets 403, and every other `OPTIONS` is authenticated like any method, so no explicit `OPTIONS` handler runs for an
+  anonymous caller (backlog #0-199, ADR-0049; `SharedSecurityAutoConfigurationCorsTest`).
 - **Actuator**: only `health`, `info` and `prometheus`, on a separate management port, health details only when
   authorized.
 
@@ -1000,9 +1004,6 @@ Open items from the audit and earlier, most important first within each area. Ea
 - **Application**
   - Swagger UI and the OpenAPI documents are public in every profile: backlog #0-73.
   - Whether `/dev/token` should also need an explicit switch besides the dev profile is open: backlog #0-77.
-  - Every chain permits `OPTIONS` on every path for CORS preflights (`buildCommonSecurity`), so a mapping with no
-    method condition, or an explicit `OPTIONS` handler, would run its handler for an anonymous caller (none of
-    notification's, oncall's and postmortem's routes is one; the others are unchecked): backlog #0-199.
   - A suspended tenant's work that came due before a service could see the suspension (its status cache, up to
     10 s) has already gone; the pause covers everything after. The end of a pause is when the sync sees the
     resumption (up to about 20 s late), which lengthens a stopped escalation timer by as much: backlog #0-82. The sync

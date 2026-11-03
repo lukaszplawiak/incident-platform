@@ -20,6 +20,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpStatus;
@@ -862,36 +863,53 @@ class UserControllerSecurityTest {
     // ── CORS preflight (OPTIONS) ─────────────────────────────────────────────
 
     /**
-     * The actual regression coverage for the shared fix in
-     * SharedSecurityAutoConfiguration.buildCommonSecurity — see that
-     * method's own comment for the full account. Before this fix, an
-     * OPTIONS request (the browser's CORS preflight, sent with no
-     * Authorization header since it isn't a real operation) fell through
-     * to .anyRequest().authenticated() and got 401 — the browser then
-     * refused to send the real request at all, surfacing to the frontend
-     * as a generic network failure rather than an actual 401. Verified
-     * against a genuinely protected endpoint (POST /users, ROLE_ADMIN
-     * only) with no Authentication in the test request at all, to prove
-     * OPTIONS is exempt regardless of what the underlying endpoint
-     * requires — not just for endpoints that already permit anonymous
-     * access.
+     * auth-service's chain answers a browser's CORS preflight without a token,
+     * and nothing else about {@code OPTIONS} is exempt (backlog #0-199,
+     * ADR-0049). A preflight carries no {@code Authorization} header, so one
+     * that reached the authorization rules would get 401 and the browser would
+     * refuse the real request; the chain's {@code CorsFilter} (from
+     * {@code buildCommonSecurity}, the source named by {@link SecurityConfig})
+     * answers a valid one first. Until #0-199 every {@code OPTIONS} was
+     * permitted and this class checked only that a bare one was not 401/403;
+     * now a bare {@code OPTIONS} is authenticated like any method. Sent to an
+     * admin-only route ({@code POST /users} is ROLE_ADMIN), with no
+     * authentication. The origin is auth-service's
+     * {@code security.cors.allowed-origins} from {@code application.yml}.
+     *
+     * <p>The web slice does not load auto-configurations from {@code shared}.
+     * Without them, the source injected into {@link SecurityConfig} is Spring
+     * MVC's introspector, which holds no CORS configuration, so every preflight
+     * gets 403. {@code @ImportAutoConfiguration} gives this class's own context
+     * the shared {@code corsConfigurationSource}, which the running service
+     * gets from {@code AutoConfiguration.imports}. Its {@link #corsMockMvc}
+     * comes from that context. The enclosing class's {@code mockMvc} comes from
+     * the outer context, which has no shared source.
      */
     @Nested
+    @ImportAutoConfiguration(SharedSecurityAutoConfiguration.class)
     @DisplayName("OPTIONS preflight")
     class CorsPreflight {
 
+        private static final String ALLOWED_ORIGIN = "http://localhost:4200";
+
+        @Autowired
+        private MockMvc corsMockMvc;
+
         @Test
-        @DisplayName("is not blocked by authentication, even on an admin-only endpoint")
-        void optionsRequestIsNotBlockedByAuthentication() throws Exception {
-            mockMvc.perform(options("/api/v1/users"))
-                    .andExpect(result -> {
-                        final int status = result.getResponse().getStatus();
-                        org.assertj.core.api.Assertions.assertThat(status)
-                                .as("OPTIONS preflight must not be rejected by " +
-                                        "authentication — got status %d", status)
-                                .isNotEqualTo(401)
-                                .isNotEqualTo(403);
-                    });
+        @DisplayName("a preflight from the allowed origin, no token, on an admin-only endpoint: 200 with the origin")
+        void allowedPreflightIs200WithAllowOrigin() throws Exception {
+            corsMockMvc.perform(options("/api/v1/users")
+                            .header("Origin", ALLOWED_ORIGIN)
+                            .header("Access-Control-Request-Method", "POST"))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", ALLOWED_ORIGIN));
+        }
+
+        @Test
+        @DisplayName("a bare OPTIONS with no principal: 401 like every method")
+        void bareOptionsIs401() throws Exception {
+            corsMockMvc.perform(options("/api/v1/users"))
+                    .andExpect(status().isUnauthorized());
         }
     }
 

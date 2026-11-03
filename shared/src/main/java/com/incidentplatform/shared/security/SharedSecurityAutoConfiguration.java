@@ -13,8 +13,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.core.env.Environment;
-import org.springframework.http.HttpMethod;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.authorization.AuthenticatedAuthorizationManager;
 import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.authorization.AuthorizationManager;
@@ -49,7 +49,9 @@ import java.util.function.Supplier;
  *   <li>All other requests: require authentication
  *   <li>JWT filter registered before {@code UsernamePasswordAuthenticationFilter}
  *   <li>Security headers: X-Frame-Options DENY, HSTS, Referrer-Policy
- *   <li>CORS configured from {@code security.cors.allowed-origins} property
+ *   <li>CORS applied by every chain built from {@link #buildCommonSecurity}
+ *       (a {@code CorsFilter} ahead of authentication, backlog #0-199), from
+ *       the {@code security.cors.allowed-origins} property
  * </ul>
  *
  * <h2>How services customise behaviour</h2>
@@ -59,8 +61,13 @@ import java.util.function.Supplier;
  * is annotated {@link ConditionalOnMissingBean}, it backs off and the
  * service-specific chain takes full control.
  *
- * <p>The shared {@link CorsConfigurationSource} bean is also conditional —
- * a service may declare its own if it needs different CORS rules.
+ * <p>The shared {@link CorsConfigurationSource} bean is conditional on its
+ * name (backlog #0-199): a service that needs different CORS rules declares
+ * its own bean named {@code corsConfigurationSource}, or names a source on
+ * its chain with {@code .cors(cors -> cors.configurationSource(...))}. A
+ * source under another name sits beside the shared one and is not used: the
+ * services inject it by type, resolved by the parameter name
+ * {@code corsConfigurationSource}. See {@link #corsConfigurationSource()}.
  *
  * <h2>Problems solved</h2>
  * Before this class, each of the 6 services had its own {@code SecurityConfig}
@@ -76,11 +83,14 @@ import java.util.function.Supplier;
  *   <li>Duplicate public-path list between {@link JwtAuthFilter#shouldNotFilter}
  *       and per-service {@code SecurityConfig} — now defined once here and
  *       replicated in the filter via the same constant set
- *   <li>CORS preflight (OPTIONS) requests getting 401 — see
- *       {@link #buildCommonSecurity}'s own comment on its
- *       {@code requestMatchers(HttpMethod.OPTIONS, "/**")} rule for the
- *       full account. Affected every service, since none had an explicit
- *       exemption for it.
+ *   <li>CORS preflight (OPTIONS) requests getting 401. First fixed by
+ *       permitting {@code OPTIONS} on every path, which let an anonymous
+ *       caller run an explicit {@code @RequestMapping(method = OPTIONS)}
+ *       handler; since backlog #0-199 (ADR-0049) the chain's
+ *       {@code CorsFilter} answers a valid preflight before authorization
+ *       and every other {@code OPTIONS} is authenticated like any method.
+ *       See {@link #buildCommonSecurity}'s own comment on its
+ *       {@code cors(...)} call for the full account.
  * </ul>
  */
 @AutoConfiguration
@@ -370,41 +380,33 @@ public class SharedSecurityAutoConfiguration {
                                 .policy(ReferrerPolicyHeaderWriter.ReferrerPolicy
                                         .STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
                 )
-                // Fixed: CORS preflight (OPTIONS) requests were previously
-                // subject to the same authentication requirement as every
-                // other request. The browser never attaches an Authorization
-                // header to a preflight — it isn't a real operation, just
-                // asking "is this cross-origin request allowed?" — so with
-                // no explicit rule for it, every preflight fell through to
-                // .anyRequest().authenticated() (added later by each
-                // caller's own authorizeHttpRequests block) and got 401.
-                // Seeing anything other than a success response to the
-                // preflight, the browser then refuses to send the real
-                // request at all — surfacing to the frontend as a generic
-                // network failure (status 0, "Cannot connect to the
-                // server"), not as an actual 401, making this easy to
-                // mistake for a CORS misconfiguration when the CORS origin
-                // list itself (security.cors.allowed-origins) was already
-                // correct. Safe to exempt unconditionally: an OPTIONS
-                // request never reads or writes any data — it carries no
-                // request body Spring processes — so this grants no access
-                // to anything, it just lets the negotiation complete. The
-                // real request that follows a successful preflight is
-                // completely unaffected and still goes through full
-                // authorization normally.
+                // CORS preflight (backlog #0-199, ADR-0049). A browser sends no
+                // Authorization header with a preflight, so one that reached
+                // the authorization rules got 401 and the browser refused the
+                // real request (a generic network failure, status 0, in the
+                // frontend). That was first fixed by permitting OPTIONS on
+                // every path here, called "safe to exempt unconditionally"; it
+                // was not: an anonymous OPTIONS then ran any explicit
+                // @RequestMapping(method = OPTIONS) handler. (A method-less
+                // mapping does not run: Spring MVC answers an OPTIONS to it
+                // itself, with Allow.) That rule is gone. Instead every chain
+                // built here has a CorsFilter ahead of authentication and
+                // authorization: it answers a valid preflight (an allowed
+                // Origin and Access-Control-Request-Method) with 200 and does
+                // not continue the chain, so no handler and no authentication
+                // runs, and it answers a foreign origin 403. Every other
+                // OPTIONS goes on to the caller's rules and is authenticated
+                // like any method.
                 //
-                // Added here in the shared helper, not in each service's
-                // own authorizeHttpRequests block, so every service that
-                // calls buildCommonSecurity (directly, or via this class's
-                // own defaultSecurityFilterChain bean) is fixed by this one
-                // change. Spring Security's authorizeHttpRequests can be
-                // called more than once on the same HttpSecurity — each
-                // call appends to one ordered rule list rather than
-                // replacing it — so this rule, added first, is evaluated
-                // before any caller's own .anyRequest().authenticated().
-                .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-                )
+                // withDefaults() takes the bean named corsConfigurationSource
+                // (corsConfigurationSource() below, or a service's own under
+                // that name). Without one it falls back to Spring MVC's
+                // HandlerMappingIntrospector, which holds no CORS configuration
+                // here, and DefaultCorsProcessor (spring-web 6.2.19) answers
+                // every preflight 403. A service's own
+                // .cors(cors -> cors.configurationSource(...)) after this call
+                // configures the same CorsConfigurer and overrides the source.
+                .cors(Customizer.withDefaults())
                 .addFilterBefore(jwtAuthFilter,
                         UsernamePasswordAuthenticationFilter.class)
                 // Backlog #0-82: after authentication (JWT here, an API key
@@ -453,11 +455,20 @@ public class SharedSecurityAutoConfiguration {
      *   security.cors.allowed-origins: https://app.incidentplatform.com
      * </pre>
      *
-     * <p>A service that needs different CORS rules may declare its own
-     * {@link CorsConfigurationSource} bean — this one will back off.
+     * <p>A service that needs different CORS rules declares its own bean
+     * <em>named</em> {@code corsConfigurationSource}, and this one backs off
+     * (backlog #0-199). The condition is on the name, not the type: Spring
+     * MVC's {@code mvcHandlerMappingIntrospector} is a
+     * {@link CorsConfigurationSource} too, so a type-based condition made this
+     * bean back off whenever Spring MVC's configuration was processed first.
+     * A source under another name sits beside this one and is not used: the
+     * services inject {@link CorsConfigurationSource} by type, resolved by
+     * the parameter name {@code corsConfigurationSource}, and
+     * {@link #buildCommonSecurity}'s {@code cors(withDefaults())} looks the
+     * bean up by that name.
      */
     @Bean
-    @ConditionalOnMissingBean(CorsConfigurationSource.class)
+    @ConditionalOnMissingBean(name = "corsConfigurationSource")
     public CorsConfigurationSource corsConfigurationSource() {
         final CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(allowedOrigins);

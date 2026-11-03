@@ -38,24 +38,27 @@ import java.util.Set;
  * is shared across all services. The login endpoint is specific to auth-service
  * and has no meaning in other services.
  *
- * <h2>Fixed: CORS was never actually enabled</h2>
- * {@code SharedSecurityAutoConfiguration} declares a {@code CorsConfigurationSource}
- * bean, but Spring Security does not automatically wire a bean like that into
- * the filter chain just because it exists in the application context — it must
- * be attached explicitly via {@code .cors(cors -> cors.configurationSource(...))}
- * on the {@code HttpSecurity} builder. This class's own
- * {@code securityFilterChain} previously never called {@code .cors(...)} at
- * all, so Spring's CORS support was effectively disabled here regardless of
- * how {@code security.cors.allowed-origins} was configured — every
- * cross-origin request (including the browser's own preflight OPTIONS,
- * separately fixed in {@code SharedSecurityAutoConfiguration
- * .buildCommonSecurity}) was rejected with a generic "Invalid CORS request"
- * 403, with no CORS response headers at all. Found while trying to log in
- * from the frontend against a locally running stack — curl against the same
- * endpoint worked (curl doesn't perform CORS preflight/enforcement, only
- * browsers do), which is what made this reproducible only from an actual
- * browser. {@code incident-service}/{@code ingestion-service} already wired
- * this correctly; {@code oncall-service}, {@code notification-service}, and
+ * <h2>CORS</h2>
+ * {@link SharedSecurityAutoConfiguration#buildCommonSecurity} applies CORS to
+ * every chain built from it (backlog #0-199, ADR-0049): a {@code CorsFilter}
+ * answers a valid preflight before authorization, and every other
+ * {@code OPTIONS} is authenticated like any method. The
+ * {@code .cors(cors -> cors.configurationSource(corsConfigurationSource))}
+ * call below names the shared source explicitly, as an override of the
+ * default it would find by name anyway.
+ *
+ * <h2>Fixed: CORS was never actually enabled (history)</h2>
+ * Before #0-199, {@code buildCommonSecurity} did not apply CORS, and a
+ * {@code CorsConfigurationSource} bean in the context is not wired into a
+ * chain on its own. This class's own {@code securityFilterChain} never called
+ * {@code .cors(...)}, so every cross-origin request was rejected with a
+ * generic "Invalid CORS request" 403, with no CORS response headers at all.
+ * Found while trying to log in from the frontend against a locally running
+ * stack — curl against the same endpoint worked (curl doesn't perform CORS
+ * preflight/enforcement, only browsers do), which is what made this
+ * reproducible only from an actual browser. {@code incident-service}/
+ * {@code ingestion-service} already wired this correctly;
+ * {@code oncall-service}, {@code notification-service}, and
  * {@code postmortem-service} had the identical gap, fixed the same way.
  */
 @Configuration

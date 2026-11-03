@@ -55,14 +55,15 @@ import org.springframework.web.cors.CorsConfigurationSource;
  *   <li>{@code GET /by-slack/{slackUserId}} — authenticated only (ROLE_SERVICE allowed)</li>
  * </ul>
  *
- * <h2>Fixed: CORS was never actually enabled</h2>
- * This class's own {@code securityFilterChain} never called
- * {@code .cors(cors -> cors.configurationSource(...))} on the
- * {@code HttpSecurity} builder — see {@code auth-service}'s own
- * {@code SecurityConfig} class Javadoc for the full account of why a
- * {@code CorsConfigurationSource} bean existing in the application
- * context isn't enough on its own, and why every cross-origin request
- * was rejected with a generic "Invalid CORS request" 403 as a result.
+ * <h2>CORS</h2>
+ * {@code SharedSecurityAutoConfiguration.buildCommonSecurity} applies CORS to
+ * every chain built from it (backlog #0-199, ADR-0049); the
+ * {@code .cors(cors -> cors.configurationSource(corsConfigurationSource))}
+ * call below names the shared source explicitly, as an override. Before
+ * #0-199 the chain had no CORS without that call, and this class did not
+ * make it, so every cross-origin request was rejected with a generic
+ * "Invalid CORS request" 403 — see {@code auth-service}'s own
+ * {@code SecurityConfig} class Javadoc for that account.
  */
 @Configuration
 @EnableWebSecurity

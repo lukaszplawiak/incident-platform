@@ -23,6 +23,11 @@ import org.springframework.web.cors.CorsConfigurationSource;
  * {@code WebSocketConfig.configureClientInboundChannel}); see that
  * class's own Javadoc for the full account.
  *
+ * <p>CORS: {@link SharedSecurityAutoConfiguration#buildCommonSecurity}
+ * applies it to every chain built from it (backlog #0-199, ADR-0049); the
+ * {@code .cors(cors -> cors.configurationSource(corsConfigurationSource))}
+ * call below names the shared source explicitly, as an override.
+ *
  * <p>Note: the duplicate {@code JwtAuthFilter @Bean} that previously existed
  * in this class has been removed. {@link JwtAuthFilter} is a {@code @Component}
  * in {@code shared} — Spring creates exactly one instance automatically.
