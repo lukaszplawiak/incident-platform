@@ -951,7 +951,12 @@ Summary; details in [Resilience & Security](#security).
   Every chain built from `buildCommonSecurity` has a `CorsFilter` ahead of authentication: only a valid preflight
   (an allowed `Origin` and `Access-Control-Request-Method`) is answered without authentication, a foreign origin
   gets 403, and every other `OPTIONS` is authenticated like any method, so no explicit `OPTIONS` handler runs for an
-  anonymous caller (backlog #0-199, ADR-0049; `SharedSecurityAutoConfigurationCorsTest`).
+  anonymous caller (backlog #0-199, ADR-0049; `SharedSecurityAutoConfigurationCorsTest`). Every service with its
+  own chain pins it against its real `SecurityConfig`: an allowed preflight with no token on an authenticated route
+  gets 200 with `Access-Control-Allow-Origin`, a bare `OPTIONS` gets 401 (`UserControllerSecurityTest.CorsPreflight`
+  in auth-service, and the `CorsPreflight` class of `IncidentDenyByDefaultTest`, `IngestionDenyByDefaultTest`,
+  `NotificationDenyByDefaultTest`, `OncallDenyByDefaultTest` and `PostmortemDenyByDefaultTest`, backlog #0-200);
+  escalation-service runs the shared `defaultSecurityFilterChain`, which the shared test covers.
 - **Actuator**: only `health`, `info` and `prometheus`, on a separate management port, health details only when
   authorized.
 
