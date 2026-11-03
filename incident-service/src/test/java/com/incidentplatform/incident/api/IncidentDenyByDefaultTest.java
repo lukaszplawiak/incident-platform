@@ -6,12 +6,15 @@ import com.incidentplatform.incident.service.AuditQueryService;
 import com.incidentplatform.incident.service.IncidentCommandService;
 import com.incidentplatform.incident.service.IncidentQueryService;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.ServiceNames;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
+import com.incidentplatform.shared.security.TenantAccess;
 import com.incidentplatform.shared.security.TenantStatusProvider;
 import com.incidentplatform.shared.security.TokenPurposes;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -41,12 +44,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,16 +61,20 @@ import java.util.function.UnaryOperator;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 
 /**
  * Every route of incident-service refuses a caller that has not authenticated
  * (backlog #0-191, ADR-0048). Like auth-service's {@code ApiKeyDenyByDefaultTest},
- * it goes through the real {@link SecurityConfig} and walks every route of
- * {@link RequestMappingHandlerMapping}, so a route added later is checked
- * without anyone adding it here. Three callers: no {@code Authorization}
+ * it goes through the real {@link SecurityConfig} and walks every route and
+ * method of {@link RequestMappingHandlerMapping}, so a route added later is
+ * checked without anyone adding it here. Three callers: no {@code Authorization}
  * (401), a real purpose token addressed to this service (401 or 403), and an
  * unknown API key as {@code ApiKey ipl_…} and as {@code Bearer ipl_…} (401).
  *
@@ -75,6 +84,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * no mocked {@code JwtUtils}, which the other incident tests use and which
  * would answer 401 to every token whatever the chain said. The scan starts at
  * the service's root package, so a controller in a new package is walked too.
+ * {@link #aValidUserTokenGetsPastAuthentication()} shows a valid token does
+ * authenticate in this context, so the 401s are the chain refusing the caller
+ * (ADR-0048 rule 7, backlog #0-196).
  *
  * <h2>An unknown API key, without {@code ApiKeyAuthFilter}</h2>
  * incident's chain does not add {@code ApiKeyAuthFilter} (backlog #0-193), so
@@ -87,6 +99,16 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * exempt exactly the route a bad new entry there opens. Each exemption is
  * written out with its reason; a route the walk finds open is a finding, not
  * a new entry.
+ *
+ * <h2>No exemption for {@code /ws/}</h2>
+ * {@link SecurityConfig} permits {@code /ws/**} for the STOMP handshake, which
+ * {@code WebSocketConfig} registers as a STOMP endpoint, not a
+ * {@code RequestMappingHandlerMapping} route: the walk never meets it, so it
+ * needs no entry. The {@code /ws/**} entry #0-191 had would have exempted any
+ * REST mapping someone later puts under {@code /ws/}, which that
+ * {@code permitAll} opens to anyone; without it the walk reports such a
+ * mapping ({@link WsRoute} shows it). Backlog #0-196, ADR-0048 rule 3 as
+ * amended.
  *
  * <h2>{@code DevSecurityConfig} is imported on purpose</h2>
  * Its {@code @Profile({"local","dev"})} is then evaluated in this context, so
@@ -115,13 +137,7 @@ class IncidentDenyByDefaultTest {
     private static final Map<String, String> EXEMPT = Map.of(
             // Spring Boot's BasicErrorController: it renders the error of a
             // request the chain has already handled.
-            "/error", "Spring Boot's error page, public in every chain",
-            // The WebSocket handshake: a browser cannot send an Authorization
-            // header on it, and StompAuthChannelInterceptor authenticates the
-            // STOMP CONNECT frame. It is not a RequestMappingHandlerMapping route
-            // today; the entry keeps a future HTTP mapping under it from being
-            // reported as the hole it is not.
-            "/ws/**", "WebSocket handshake; STOMP CONNECT is authenticated by StompAuthChannelInterceptor");
+            "/error", "Spring Boot's error page, public in every chain");
 
     /** An obviously fake Integration key: the {@code ipl_} prefix and 32 characters. */
     private static final String UNKNOWN_KEY = "ipl_" + "0".repeat(32);
@@ -143,14 +159,21 @@ class IncidentDenyByDefaultTest {
     @Qualifier("requestMappingHandlerMapping")
     private RequestMappingHandlerMapping handlerMapping;
 
-    // The controllers' collaborators: never reached, the chain refuses first.
+    // The controllers' collaborators: the walk never reaches them, the chain
+    // refuses first; only the positive control reaches IncidentQueryService.
     @MockitoBean private IncidentQueryService incidentQueryService;
     @MockitoBean private IncidentCommandService incidentCommandService;
     @MockitoBean private AuditQueryService auditQueryService;
     @MockitoBean private ServiceTokenProvider serviceTokenProvider;
     // Replaces AuthServiceTenantStatusProvider (application.yml sets
-    // auth-service.base-url): no request here authenticates, so it is never asked.
+    // auth-service.base-url); every tenant is FULL, so the positive control's
+    // token is not refused for its tenant.
     @MockitoBean private TenantStatusProvider tenantStatusProvider;
+
+    @BeforeEach
+    void tenantsActive() {
+        given(tenantStatusProvider.accessOf(anyString())).willReturn(TenantAccess.FULL);
+    }
 
     @Test
     @DisplayName("no Authorization header: 401 on every route")
@@ -181,15 +204,42 @@ class IncidentDenyByDefaultTest {
     /**
      * A lower bound, not an exact count (ADR-0048): a route added later is
      * walked without anyone editing this number, and an enumeration that finds
-     * nothing still fails, as does one that misses either controller.
+     * nothing still fails, as does one that misses either controller. Every
+     * real incident mapping declares its method, so walking every method of a
+     * mapping with no method condition (backlog #0-196) leaves the count as it was.
      */
     @Test
-    @DisplayName("the walk finds the known routes of both controllers, and not the test-only route")
+    @DisplayName("the walk finds the known routes of both controllers, and none of the test-only routes")
     void enumerationFindsTheKnownRoutes() {
         assertThat(routes(handlerMapping)).as("routes walked")
                 .hasSizeGreaterThanOrEqualTo(8)
                 .contains("GET /api/v1/incidents/{id}", "GET /api/v1/incidents/{incidentId}/audit")
-                .doesNotContain("GET " + OpenRouteTestController.PATH);
+                .doesNotContain("GET " + OpenRouteTestController.PATH,
+                        "POST " + OpenRouteTestController.ANY_METHOD_PATH,
+                        "GET " + WsRouteTestController.PATH);
+    }
+
+    /**
+     * ADR-0048 rule 7 (backlog #0-196): a valid user token gets past
+     * authentication, so the walk's 401s come from refusing its callers, not
+     * from a context in which no token validates. A RESPONDER passes the
+     * route's {@code @PreAuthorize}, and the controller asks
+     * {@link IncidentQueryService} with the tenant of the token: the chain
+     * authenticated the caller and set its tenant.
+     */
+    @Test
+    @DisplayName("a valid RESPONDER token is authenticated: not 401 on GET /api/v1/incidents/{id}, tenant from the token")
+    void aValidUserTokenGetsPastAuthentication() throws Exception {
+        final UUID id = UUID.fromString("00000000-0000-0000-0000-000000000196");
+        final String token = jwtUtils.generateToken(UUID.randomUUID(), "acme-corp", "user@acme.com",
+                List.of(SecurityRoles.ROLE_RESPONDER), List.of(), List.of());
+
+        final int status = mockMvc.perform(get("/api/v1/incidents/{id}", id)
+                        .header("Authorization", "Bearer " + token))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(status).as("status for a valid RESPONDER token").isNotEqualTo(401);
+        verify(incidentQueryService).findById(id, "acme-corp");
     }
 
     @Test
@@ -247,7 +297,7 @@ class IncidentDenyByDefaultTest {
 
     /**
      * The walk itself goes red on an open route: the same {@link SecurityConfig}
-     * plus a test-only route and a chain that permits it, the shape of
+     * plus test-only routes and a chain that permits them, the shape of
      * {@link DevSecurityConfig}. Its own context, so the outer one never holds
      * either class ({@link #enumerationFindsTheKnownRoutes()} asserts it).
      */
@@ -285,22 +335,103 @@ class IncidentDenyByDefaultTest {
                     .isInstanceOf(AssertionError.class)
                     .hasMessageContaining("GET " + OpenRouteTestController.PATH + " [anonymous] -> 200");
         }
+
+        /**
+         * A mapping with no method condition is walked with every method, not
+         * {@code GET} alone (ADR-0048 rule 2, backlog #0-196): its {@code POST}
+         * is reported, so a chain rule keyed on a method other than
+         * {@code GET} is seen too.
+         */
+        @Test
+        @DisplayName("the walk sends every method to a mapping with no method condition")
+        void theWalkSendsEveryMethodToAMethodlessMapping() {
+            assertThatThrownBy(() -> assertEveryRoute(openMockMvc, openHandlerMapping, "anonymous",
+                    request -> request, status -> status == 401))
+                    .isInstanceOf(AssertionError.class)
+                    .hasMessageContaining("POST " + OpenRouteTestController.ANY_METHOD_PATH + " [anonymous] -> 200");
+        }
     }
 
-    /** The context of {@link OpenRoute}: no scan, only what that class imports. */
+    /**
+     * The walk reports a REST mapping under {@code /ws/} (backlog #0-196): the
+     * real {@link SecurityConfig} alone, with no test chain, and a test-only
+     * controller at {@code /ws/test-only}. The chain's
+     * {@code permitAll("/ws/**")} for the STOMP handshake opens that route and
+     * nothing else does, so the walk fails because the exempt set has no
+     * {@code /ws/**} entry.
+     */
+    @Nested
+    @NestedTestConfiguration(NestedTestConfiguration.EnclosingConfiguration.OVERRIDE)
+    @WebMvcTest
+    @ContextConfiguration(classes = OpenRouteApplication.class)
+    @Import({SecurityConfig.class, UnauthorizedEntryPoint.class, JwtUtils.class, WsRouteTestController.class})
+    @ImportAutoConfiguration(SharedSecurityAutoConfiguration.class)
+    @TestPropertySource(properties = {
+            "security.cors.allowed-origins=http://localhost:4200",
+            "jwt.secret=test-secret-key-minimum-64-characters-long-for-hs256-algorithm-padding",
+            "jwt.access-token-ttl=PT15M",
+            "jwt.service-token-ttl=PT1H",
+            "jwt.refresh-token-ttl=P30D",
+            "spring.application.name=incident-service"
+    })
+    @DisplayName("with a REST mapping under /ws/")
+    class WsRoute {
+
+        @Autowired private MockMvc wsMockMvc;
+        @Autowired
+        @Qualifier("requestMappingHandlerMapping")
+        private RequestMappingHandlerMapping wsHandlerMapping;
+
+        @MockitoBean private ServiceTokenProvider wsServiceTokenProvider;
+        @MockitoBean private TenantStatusProvider wsTenantStatusProvider;
+
+        @Test
+        @DisplayName("the walk fails and names the REST mapping under /ws/")
+        void theWalkReportsARestMappingUnderWs() {
+            assertThatThrownBy(() -> assertEveryRoute(wsMockMvc, wsHandlerMapping, "anonymous",
+                    request -> request, status -> status == 401))
+                    .isInstanceOf(AssertionError.class)
+                    .hasMessageContaining("GET " + WsRouteTestController.PATH + " [anonymous] -> 200");
+        }
+    }
+
+    /**
+     * The context of {@link OpenRoute} and of {@link WsRoute}: no scan, only
+     * what each of them imports.
+     */
     @SpringBootConfiguration
     static class OpenRouteApplication {
     }
 
-    /** A route that answers 200 to whoever reaches it. */
+    /** Routes that answer 200 to whoever reaches them. */
     @RestController
     static class OpenRouteTestController {
 
         static final String PATH = "/api/v1/test-only/open";
 
+        /** No method condition: the walk sends it every {@link RequestMethod}. */
+        static final String ANY_METHOD_PATH = "/api/v1/test-only/any-method";
+
         @GetMapping(PATH)
         String open() {
             return "open";
+        }
+
+        @RequestMapping(ANY_METHOD_PATH)
+        String anyMethod() {
+            return "any method";
+        }
+    }
+
+    /** A REST route under {@code /ws/}, which {@link SecurityConfig} permits for the STOMP handshake. */
+    @RestController
+    static class WsRouteTestController {
+
+        static final String PATH = "/ws/test-only";
+
+        @GetMapping(PATH)
+        String ws() {
+            return "ws";
         }
     }
 
@@ -343,7 +474,13 @@ class IncidentDenyByDefaultTest {
         assertThat(misses).as("routes that did not refuse the %s caller", caller).isEmpty();
     }
 
-    /** Every {@code METHOD pattern} of the handler mapping (no method: GET) outside {@link #EXEMPT}. */
+    /**
+     * Every {@code METHOD pattern} of the handler mapping outside {@link #EXEMPT}.
+     * A mapping with no method condition answers every method, so it is walked
+     * with every {@link RequestMethod}: a chain rule keyed on the method (a
+     * {@code permitAll} on {@code POST} of the path) is seen too (ADR-0048 rule 2,
+     * backlog #0-196; #0-191 walked such a mapping with {@code GET} alone).
+     */
     private static List<String> routes(RequestMappingHandlerMapping handlerMapping) {
         final List<String> routes = new ArrayList<>();
         for (final RequestMappingInfo info : handlerMapping.getHandlerMethods().keySet()) {
@@ -352,7 +489,7 @@ class IncidentDenyByDefaultTest {
                 if (isExempt(pattern)) {
                     continue;
                 }
-                for (final RequestMethod method : methods.isEmpty() ? Set.of(RequestMethod.GET) : methods) {
+                for (final RequestMethod method : methods.isEmpty() ? EnumSet.allOf(RequestMethod.class) : methods) {
                     final String route = method + " " + pattern;
                     if (!routes.contains(route)) {
                         routes.add(route);
