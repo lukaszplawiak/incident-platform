@@ -4231,7 +4231,7 @@ AC2. `picker.md` and the workflow name the prefixes in one place.
 
 ### 0-196. incident's route walk gets #0-192's shape
 
-**Type:** security · **Priority:** Low · **Status:** Open. From the owner's review of PR #572 (#0-191, 2026-11-01);
+**Type:** security · **Priority:** Low · **Status:** In progress — autopilot run 20261103-135306. From the owner's review of PR #572 (#0-191, 2026-11-01);
 ingestion's half split off as #0-198 at `/ready` (owner, 2026-11-01: one service per item, ready.md point 4).
 **Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-192
 **Touches:** incident-service (src/test: incident/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
