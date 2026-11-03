@@ -132,6 +132,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-203](#0-203-the-architects-and-the-block-commits-carry-no-co-authored-by-trailer) | The architect's and the block commits carry no `Co-Authored-By` trailer | ci | Low | Open |
+| [0-204](#0-204-a-runs-record-keeps-no-run-id-no-agent-calls-and-no-stage-of-each-commit) | A run's record keeps no run id, no agent calls and no stage of each commit | ci | Low | Open |
+| [0-205](#0-205-a-runs-transcripts-expire-after-90-days-and-nothing-reads-them-per-agent) | A run's transcripts expire after 90 days and nothing reads them per agent | ci | Low | Open |
+| [0-206](#0-206-a-work-agent-that-ends-without-an-answer-leaves-the-lock-and-no-state) | A work agent that ends without an answer leaves the lock and no state | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4413,6 +4416,12 @@ login and the `~/.claude` and `~/.m2` volumes are the bot's own. What follows to
 **Seen.** Autopilot run 20261102-113931 (#0-199) started while the shared tree was on the owner's `plan/2026-11-02`;
 during the run the owner, on the host, switched it to `main` and merged PRs #579 and #580. The run's branch happened to
 start from `main` (`eea28f7d`) and nothing broke, but nothing guarded it either.
+Again on 2026-11-03 (reflog of the shared tree): run 20261103-121611 (#0-200) ended on `main` at 12:33:28Z; at
+12:49:08Z the owner's session on the host created `docs/backlog-factory-run-trace` and began editing `BACKLOG.md`;
+at 12:49:41Z HEAD moved back to `main`, with no new entry in `state.json`, and the session's uncommitted edits went
+with it, which the session noticed only later. What moved it is to check; a run that its preflight refuses stops
+without a state record and runs `return-to-main.sh`, which fits. Nothing was lost this time, but the owner's work in
+progress was changed under them, and in the other direction a run could have started with the owner's edits.
 
 **Not this.** ADR-0044 rejected a worktree per `/seed-bugs` run: the workflow's agents read hooks from the session's
 own directory, so the session would have to start inside it. This item is about the container's tree as a whole, not
@@ -4457,6 +4466,131 @@ AC1. Every commit an autopilot run writes either carries the same attribution tr
      still refuses redirects and chaining.
 AC2. `readonly-bash.sh --architect` refuses `git commit -F` (and `--file`) with a path outside `.ai/work/`, or one
      with `..`; a `test-hooks.sh` case shows it.
+
+**Extended (owner, 2026-11-03): which agent wrote a commit.** Every commit of a run is authored by
+`lukaszplawiakbot`, whichever of picker, architect, implementer (first round, fix-tests, fix-review), self-check or
+shipper wrote it, and the only attribution in it is the trailer the agent writes itself, which proves nothing. So
+`git blame` cannot tell the pipeline audit (#0-121) which agent introduced a line, and the `human:introduced-*`
+labels (`.ai/rules/audit.md`) are its only source. One decision on the factory's commit message, so it belongs here
+with the trailer question above: every autopilot commit carries `Factory-Run: <runId>` and `Factory-Agent: <agent>`,
+and a hook on `git commit` refuses one whose `Factory-Agent` is not the call's `agent_type` or whose `Factory-Run` is
+not the run in `.ai/runs/LOCK` — the two facts a hook can check. The stage and round (`fix-review r2`) are not
+trailers: a hook does not know them and the agent would only declare them; the workflow records them with the
+commit range of each call (#0-204). `git commit --trailer <key>=<value>` puts a trailer on a one-line command, which
+may also settle the architect's newline problem above (to check with `readonly-bash.sh`). Not done by this item:
+phase 3's `--squash` (`docs/ai-factory.md:48`) would drop the branch's commits and their trailers from `main`'s
+history; #0-204 corrects that line.
+**Touches (extension, to settle at `/ready`):** ci (the commit guard of each committing agent and its twin in both
+settings files, `.claude/hooks/test-hooks.sh`, `.github/scripts/check-hook-entries.rb` if the guard is new, a
+Factory guards check of the trailers on a factory PR's commits), docs (docs/ai-factory.md).
+AC3. (draft) Every commit an autopilot run writes carries `Factory-Run` and `Factory-Agent`; a commit whose
+     `Factory-Agent` differs from the call's `agent_type`, or whose `Factory-Run` differs from the run in the lock, is
+     refused; `test-hooks.sh` cases show both refusals and an allowed commit for each committing agent.
+AC4. (draft) Factory guards fails a PR from the bot's account with a commit that lacks either trailer.
+
+### 0-204. A run's record keeps no run id, no agent calls and no stage of each commit
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Owner, 2026-11-03 (what the factory keeps of a run, for the audits).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** ci (.claude/workflows/backlog-autopilot.js, scripts/factory/state.sh, .github/scripts/test-autopilot-workflow.mjs,
+.github/scripts/test-factory-state.sh, .claude/agents/shipper.md, .claude/skills/ship-record/), docs (docs/ai-factory.md)
+
+**Problem.** The workflow counts the work agents' calls (`calls`, `backlog-autopilot.js:62,77`) and returns them in
+the run's result (`agentCalls`, `:262,700,711`), but `state.sh record` keeps only `t`, `item`, `outcome`, `pr` and
+`stage` (`state.sh`, the `record` filters): no run id, no call count, no time per stage, and nothing that ties a commit
+to the stage and round that wrote it. `progress.md` has one line per stage, but it is a work file the agents write. So
+the pipeline audit (#0-121) cannot say from the record which stage introduced a line, and cost per item is not
+measured at all.
+
+Separately, `docs/ai-factory.md:48` tells phase 3 to allow `gh pr merge * --squash --auto`. A squash merge leaves
+`main` with one commit per PR, so the branch's commits, their trailers (#0-203's extension) and the per-stage ranges
+below no longer exist on `main` (the run's branch is deleted on merge). The repository merges with merge commits
+today.
+
+**Approach (to decide at `/ready`).** The workflow keeps, per agent call, `{agent, stage, round, startedAt,
+durationMs, headBefore, headAfter}`, and passes the list to the shipper with the review record, which puts it into
+the PR body (one more `<details>` block of `ship-record`; `audit-data.sh` already reads PR bodies, so the trace
+reaches the audit durably, like the review record). `state.sh record` gains the run id and the call count, plain
+values that pass the workflow's `SAFE` pattern (`q()`), which a JSON list would not. How the workflow learns the head
+around a call is to decide: the work agents' answers name it (checked against the branch afterwards), or an ops
+call per committing stage (one more `factory-ops` call each). Whether the workflow can know its own `wf_<id>` (the
+transcripts' directory, #0-205) is to check in the runtime. Phase 3's merge becomes `--merge --auto`.
+
+**Acceptance criteria (draft).**
+AC1. A shipped or blocked PR's body holds the run's trace: one row per agent call with agent, stage, round, duration
+     and the commits it added; a workflow test with a fake `agent()` shows it for a run with a fix-review round.
+AC2. `state.json`'s history entry carries the run id and the agent call count; `test-factory-state.sh` shows both and
+     an old entry without them still reads.
+AC3. `docs/ai-factory.md`'s phase 3 says `--merge --auto`, with the reason (the branch's commits are the audit's
+     evidence).
+
+### 0-205. A run's transcripts expire after 90 days and nothing reads them per agent
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Owner, 2026-11-03 (what each agent touched, for the audits).
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** #0-204 (the run id in the record)
+**Touches:** ci (scripts/factory/ a new archive-and-summary script and its test, .claude/workflows/backlog-autopilot.js,
+scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh, .gitignore if the archive is in the workspace),
+docs (docs/ai-factory.md, .ai/README.md)
+
+**Problem.** The only full record of what an agent read, edited and ran, and of what a hook refused it, is the
+session's transcripts (`~/.claude/projects/-workspace/<session>/subagents/workflows/wf_<id>/`, the agents' `.jsonl`
+files and the workflow's `journal.jsonl`) in the container's `~/.claude` volume. Claude Code deletes them after
+`cleanupPeriodDays` (90, `.claude/settings.json:75`), and a rebuilt volume loses them sooner. Nothing links a run to
+its directory: `audit-data.sh` passes the analysts the transcripts' root only ("may be unreadable"). A hook's refusal
+reaches only the refused agent (`_lib.sh` `block()`, exit 2), so how often an agent fights a guard is seen only by
+reading transcripts by hand: both #0-199 runs that died on `maxTurns` (2026-11-02, #0-206) were diagnosed that way.
+
+**Approach (to decide; proposed: derive from transcripts, no new recorder).** A factory script, run at
+the end of each run, copies the run's `wf_<id>` directory into an archive that the cleanup does not reach, and writes
+from it one summary per agent call: turns, tokens (the transcripts' `usage`), model, tools used, paths read and
+written, commands (shortened, no file contents) and every refusal with the hook that gave it. `audit-data.sh` includes
+the summaries. Rejected: a PostToolUse hook writing an action log during the run — it records again what the
+transcripts already hold, sits on every call of the run, and with `onFailure: "block"` a logger that fails would stop
+the run; its file would be as writable by the agents as the transcripts are. Reconsider only if the summaries show a
+gap. Claude Code's own OpenTelemetry export is out of scope: it needs a way out of the devcontainer's firewall (an ADR
+of its own).
+To weigh: the archive holds what the agents read (never committed; where it lives with #0-202's shared tree; whether a
+later run's agents may read it, a prompt-injection path the audit agents already treat as data); how the run finds
+its `wf_<id>` (#0-204); whether each `block()` message names its hook.
+
+**Acceptance criteria (draft).**
+AC1. After a run, its transcripts are in the archive under the run id, and a summary per agent call holds turns,
+     tokens, tools, paths and refusals; a test on a fixture transcript shows each field, including a refused call.
+AC2. No summary holds a file's content or a token-shaped string; the test shows a fixture with both left out.
+AC3. `audit-data.sh` puts the summaries of the period's runs into its output; `test-audit-data.sh` shows it, and an
+     audit with no archive still runs.
+
+### 0-206. A work agent that ends without an answer leaves the lock and no state
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. From the two #0-199 runs of 2026-11-02 (owner).
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
+**Touches:** ci (.claude/workflows/backlog-autopilot.js, .github/scripts/test-autopilot-workflow.mjs,
+.claude/agents/implementer.md, .claude/agents/implementer-light.md, possibly a hook on the implementers' Bash and its
+twin in both settings files, .claude/hooks/test-hooks.sh), docs (docs/ai-factory.md)
+
+**Seen.** Run `wf_bc03d7e8-742`: the architect used its 40 turns (`architect.md` `maxTurns`), most of them on a commit
+`readonly-bash.sh` refused (#0-203). Run `wf_c1597fde-23e`: the implementer used its 120 turns, after starting a full
+`verify` in the background and checking its output with `grep` 26 times. In both the agent ended without a structured
+answer, the workflow stopped there, and `.ai/runs/LOCK` stayed behind with no `state.sh record`, no draft PR and no
+notification; `consecutiveBlocked` did not count either run. The work itself was on the branch and shipped by a later
+branch-mode run (PR #583).
+
+**Problem.** `as()` (`backlog-autopilot.js:75`) returns the runtime's `agent()` as is; its callers handle a `null`
+answer (`stopItem`), but an agent that ends without one stops the whole workflow before `stopItem` runs. And the
+implementers' definitions say which tests they may run (`implementer.md:37`) but not that they must run them in the
+foreground: a background run plus polling spends the turn budget on waiting.
+
+**Approach (to decide).** An agent call that ends without an answer becomes `null` with its reason (the agent, "no
+answer", the turn limit if the runtime says so), so the item is stopped through `stopItem`: the lock is released, the
+state recorded with the stage, a draft PR when there is a branch. The implementers run tests in the foreground only
+(the gate is `run-tests.sh` after them); whether a hook also refuses `run_in_background` for them, or the definitions
+are enough, is to decide.
+
+**Acceptance criteria (draft).**
+AC1. A workflow test whose fake `agent()` ends without an answer for the architect, and for the implementer, shows the
+     item BLOCKED with the stage, the lock released, the state recorded and the notification sent.
+AC2. `implementer.md` and `implementer-light.md` say tests run in the foreground and output is not polled; if a hook
+     enforces it, `test-hooks.sh` shows a background Bash call refused for both and allowed for other agents.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
