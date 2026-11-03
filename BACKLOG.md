@@ -4366,7 +4366,7 @@ pinned as #0-192 did.
 
 ### 0-200. Each service's CORS preflight still passes once the `OPTIONS` rule is gone
 
-**Type:** security · **Priority:** Medium · **Status:** Open. Split off #0-199 at `/ready` (owner, 2026-11-02: one
+**Type:** security · **Priority:** Medium · **Status:** In progress — autopilot run 20261103-121611. Split off #0-199 at `/ready` (owner, 2026-11-02: one
 PR of `shared` plus one service, ready.md point 4).
 **Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-199
 **Touches:** incident-service (src/test: incident/api), ingestion-service (src/test: ingestion/api), notification-service (src/test: notification/api), oncall-service (src/test: oncall/api), postmortem-service (src/test: postmortem/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
