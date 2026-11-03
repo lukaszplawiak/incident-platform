@@ -126,7 +126,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Low | Open |
-| [0-196](#0-196-incidents-route-walk-gets-0-192s-shape) | incident's route walk gets #0-192's shape | security | Low | Open |
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
@@ -4228,52 +4227,6 @@ AC2. `picker.md` and the workflow name the prefixes in one place.
 **Touches:** `.claude/workflows/backlog-autopilot.js`, `.claude/agents/picker.md`,
 `.github/scripts/test-autopilot-workflow.mjs`, `scripts/factory/next-item.sh` (if the type is read there),
 `docs/ai-factory.md`.
-
-### 0-196. incident's route walk gets #0-192's shape
-
-**Type:** security · **Priority:** Low · **Status:** In progress — autopilot run 20261103-135306. From the owner's review of PR #572 (#0-191, 2026-11-01);
-ingestion's half split off as #0-198 at `/ready` (owner, 2026-11-01: one service per item, ready.md point 4).
-**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-192
-**Touches:** incident-service (src/test: incident/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
-
-**Problem.** `IncidentDenyByDefaultTest` (#0-191) falls short of ADR-0048 as amended (rules 2, 3 and 7) and of the
-shape #0-192 copies:
-- no positive control: a purpose token's 401 passes too if no token validates in the test's context;
-- a mapping with no method condition is walked as `GET` only (`IncidentDenyByDefaultTest:308`);
-- its `/ws/**` exempt entry (`:121`) names no `RequestMappingHandlerMapping` route (`WebSocketConfig` registers `/ws`
-  as a STOMP endpoint) and would exempt a later REST mapping under `/ws/`, which the real chain permits
-  (`SecurityConfig`: `.requestMatchers("/ws/**").permitAll()`).
-
-**Approach.** The test gets ADR-0048 rule 7's positive control, the walk sends every `RequestMethod` for a method-less
-mapping, and the `/ws/**` entry goes. Test code only; no chain changes.
-
-**Acceptance criteria.**
-AC1. `IncidentDenyByDefaultTest` has a positive control: a valid user token from `JwtUtils.generateToken` (its tenant
-     `FULL` through the mocked `TenantStatusProvider`) gets a status other than 401 on `GET /api/v1/incidents/{id}`.
-     403 counts: it is past authentication.
-AC2. For a mapping with no method condition the walk sends every `RequestMethod`, not `GET` alone. A test shows it:
-     a method-less test-only mapping in a `@Nested` context with `@NestedTestConfiguration(OVERRIDE)` (the existing
-     `OpenRoute` context may be reused) is reported for a method other than `GET`, e.g. `POST`.
-AC3. The exempt set is `/error` only, with no `/ws/**` entry, and `isExempt` keeps its rule-3 matching (a `/**` key
-     covers the patterns below it).
-AC4. A test shows the walk reports a REST mapping under `/ws/`: a test-only controller at `/ws/test-only` in a
-     `@Nested` context with `@NestedTestConfiguration(OVERRIDE)` and the real `SecurityConfig` (no test chain: its
-     `permitAll("/ws/**")` opens it) makes the walk fail, and the failure names `GET /ws/test-only`.
-AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 added, no longer names incident's
-     `/ws/**` as an exempt entry and says incident's test has a positive control (CLAUDE.md "Security inventory"),
-     consistent with what #0-192 wrote there.
-AC6. `./mvnw test -pl incident-service` passes on the branch.
-
-**OPTIONS (#0-199).** An `OPTIONS` without preflight headers is expected 401 for an anonymous caller like every method
-(#0-199, ADR-0049): the chain's `CorsFilter` answers only a valid preflight, and no `OPTIONS` rule permits the rest; a
-`404 || 401` for it is a deviation to remove. `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is
-pinned as #0-192 did.
-
-**After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) say "until #0-196"; the
-clause about incident goes once #0-196 and #0-198 are both Done (protected path: not the autopilot's).
-
-**Order.** `Depends on: #0-192` because #0-192, #0-196, #0-198 and #0-197 each edit the same README paragraph
-(owner, 2026-11-01: a chain, not queue order alone): #0-192 → #0-196 → #0-198 → #0-197.
 
 ### 0-197. auth-service's route walks exempt their routes through `PUBLIC_PATHS`
 
