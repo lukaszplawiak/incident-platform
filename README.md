@@ -943,9 +943,11 @@ Summary; details in [Resilience & Security](#security).
   `OncallDenyByDefaultTest` and `PostmortemDenyByDefaultTest` (backlog #0-192) do the same with `/error` as their
   only exemption; `NotificationDenyByDefaultTest` exempts `/error` and `/api/v1/slack/actions`, checks that the Slack
   route answers 401 unsigned through the real `SlackSignatureVerifier` (and 200 correctly signed), and, as its one
-  route is exempt, sends the three callers to a path no controller maps. These three and incident's test (#0-196;
-  ingestion's is #0-198) walk every method of a mapping with no method condition and have a positive control: a
-  valid user token gets an answer other than 401.
+  route is exempt, sends the three callers to a path no controller maps. These three, incident's test (#0-196) and
+  ingestion's (#0-198) walk every method of a mapping with no method condition, read their exempt set with the same
+  matching (a key ending in `/**` covers the patterns below it), and have a positive control: a valid user token
+  gets an answer other than 401. ingestion's unknown-key walk also shows its mocked key lookup was asked for the
+  key, as `ApiKey ipl_…` and as `Bearer ipl_…`, so its 401 is `ApiKeyAuthFilter`'s in the chain (#0-198).
 - **Tenant isolation**: per request (`TenantContext`), per Kafka record, across async hand-offs and in every query.
 - **HTTP**: stateless sessions, CORS allow-list, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy;
   ingestion payloads capped at 1 MB; Slack requests verified by signature; WebSocket authenticated at `CONNECT`.

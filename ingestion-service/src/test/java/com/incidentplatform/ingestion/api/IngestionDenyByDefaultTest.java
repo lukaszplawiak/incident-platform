@@ -6,8 +6,10 @@ import com.incidentplatform.ingestion.service.AlertIngestionService;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter;
 import com.incidentplatform.shared.security.ApiKeyAuthFilter.ApiKeyLookupResult;
 import com.incidentplatform.shared.security.JwtUtils;
+import com.incidentplatform.shared.security.SecurityRoles;
 import com.incidentplatform.shared.security.ServiceTokenProvider;
 import com.incidentplatform.shared.security.SharedSecurityAutoConfiguration;
+import com.incidentplatform.shared.security.TenantAccess;
 import com.incidentplatform.shared.security.TenantStatusProvider;
 import com.incidentplatform.shared.security.TokenPurposes;
 import com.incidentplatform.shared.security.UnauthorizedEntryPoint;
@@ -39,12 +41,14 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -56,9 +60,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 
 /**
@@ -78,6 +87,20 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * auth-service), and it answers {@code Invalid} for every key: the 401 for an
  * unknown key is the real filter's. The scan starts at the service's root
  * package, so a controller in a new package is walked too.
+ * {@link #aValidUserTokenGetsPastAuthentication()} shows a valid token does
+ * authenticate in this context, so the 401s are the chain refusing the caller
+ * (ADR-0048 rule 7, backlog #0-198).
+ *
+ * <h2>The unknown key is refused by {@code ApiKeyAuthFilter} in the chain</h2>
+ * {@link #everyRouteRefusesAnUnknownApiKey()} also verifies that the mocked
+ * lookup was asked for the key, after each of the two forms (backlog #0-198).
+ * That shows the filter inside the chain, not only its servlet registration:
+ * {@link ApiKeyAuthFilter} is also a plain {@code Filter} bean with no
+ * {@code @Order} (backlog #0-193), which MockMvc registers after
+ * {@code springSecurityFilterChain}. Without the chain's
+ * {@code addFilterBefore(apiKeyAuthFilter, JwtAuthFilter.class)} the entry
+ * point answers 401 before that registration runs, the lookup is never
+ * called, and the verify fails.
  *
  * <h2>Why the exempt set is a literal and not {@code PUBLIC_PATHS}</h2>
  * Reading {@code SharedSecurityAutoConfiguration.PUBLIC_PATHS} here would
@@ -100,7 +123,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 @DisplayName("ingestion-service — every route refuses an unauthenticated caller")
 class IngestionDenyByDefaultTest {
 
-    /** Pattern to the reason the chain lets it through on purpose. */
+    /**
+     * Pattern to the reason the chain lets it through on purpose. A key ending
+     * in {@code /**} covers the patterns below it.
+     */
     private static final Map<String, String> EXEMPT = Map.of(
             // Spring Boot's BasicErrorController: it renders the error of a
             // request the chain has already handled.
@@ -126,7 +152,8 @@ class IngestionDenyByDefaultTest {
     @Qualifier("requestMappingHandlerMapping")
     private RequestMappingHandlerMapping handlerMapping;
 
-    // The controller's collaborators: never reached, the chain refuses first.
+    // The controller's collaborators: never reached, the chain refuses first
+    // (and @PreAuthorize refuses the positive control's RESPONDER).
     @MockitoBean private AlertIngestionService alertIngestionService;
     @MockitoBean private RateLimitingService rateLimitingService;
     @MockitoBean private ClientIpResolver clientIpResolver;
@@ -135,12 +162,14 @@ class IngestionDenyByDefaultTest {
     // ApiKeyAuthFilter runs in the chain, the lookup answers Invalid.
     @MockitoBean private ApiKeyAuthFilter.ApiKeyLookupService apiKeyLookupService;
     // Replaces AuthServiceTenantStatusProvider (application.yml sets
-    // auth-service.base-url): no request here authenticates, so it is never asked.
+    // auth-service.base-url); every tenant is FULL, so the positive control's
+    // token is not refused for its tenant.
     @MockitoBean private TenantStatusProvider tenantStatusProvider;
 
     @BeforeEach
-    void everyKeyIsUnknown() {
+    void everyKeyIsUnknownAndTenantsActive() {
         given(apiKeyLookupService.lookup(anyString(), any())).willReturn(new ApiKeyLookupResult.Invalid());
+        given(tenantStatusProvider.accessOf(anyString())).willReturn(TenantAccess.FULL);
     }
 
     @Test
@@ -165,22 +194,54 @@ class IngestionDenyByDefaultTest {
     void everyRouteRefusesAnUnknownApiKey() throws Exception {
         assertEveryRoute(mockMvc, handlerMapping, "ApiKey ipl_",
                 request -> request.header("Authorization", "ApiKey " + UNKNOWN_KEY), status -> status == 401);
+        verify(apiKeyLookupService, atLeastOnce()).lookup(eq(UNKNOWN_KEY), any());
+        clearInvocations(apiKeyLookupService);
+
         assertEveryRoute(mockMvc, handlerMapping, "Bearer ipl_",
                 request -> request.header("Authorization", "Bearer " + UNKNOWN_KEY), status -> status == 401);
+        verify(apiKeyLookupService, atLeastOnce()).lookup(eq(UNKNOWN_KEY), any());
     }
 
     /**
      * A lower bound, not an exact count (ADR-0048): a route added later is
      * walked without anyone editing this number, and an enumeration that finds
-     * nothing still fails.
+     * nothing still fails. Every ingestion mapping declares its method (only
+     * the exempt {@code /error} has none), so walking every method of a mapping
+     * with no method condition (backlog #0-198) leaves the bound as it was.
      */
     @Test
-    @DisplayName("the walk finds the known routes of AlertIngestionController, and not the test-only route")
+    @DisplayName("the walk finds the known routes of AlertIngestionController, and none of the test-only routes")
     void enumerationFindsTheKnownRoutes() {
         assertThat(routes(handlerMapping)).as("routes walked")
                 .hasSizeGreaterThanOrEqualTo(2)
                 .contains("POST /api/v1/alerts/{source}", "GET /api/v1/alerts/sources")
-                .doesNotContain("GET " + OpenRouteTestController.PATH);
+                .doesNotContain("GET " + OpenRouteTestController.PATH,
+                        "POST " + OpenRouteTestController.ANY_METHOD_PATH);
+    }
+
+    /**
+     * ADR-0048 rule 7 (backlog #0-198): a valid user token gets past
+     * authentication, so the walk's 401s come from refusing its callers, not
+     * from a context in which no token validates. A RESPONDER is not admitted
+     * by {@code AlertIngestionController.ingestAlerts}'s {@code @PreAuthorize},
+     * and method security answers an authenticated principal with 403 (an
+     * anonymous one gets 401 from the entry point); the controller is not
+     * reached.
+     */
+    @Test
+    @DisplayName("a valid RESPONDER token is authenticated: 403, not 401, on POST /api/v1/alerts/{source}")
+    void aValidUserTokenGetsPastAuthentication() throws Exception {
+        final String token = jwtUtils.generateToken(UUID.randomUUID(), "acme-corp", "user@acme.com",
+                List.of(SecurityRoles.ROLE_RESPONDER), List.of(), List.of());
+
+        final int status = mockMvc.perform(post("/api/v1/alerts/{source}", "prometheus")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andReturn().getResponse().getStatus();
+
+        assertThat(status).as("status for a valid RESPONDER token").isNotEqualTo(401).isEqualTo(403);
+        verifyNoInteractions(alertIngestionService);
     }
 
     /**
@@ -267,6 +328,21 @@ class IngestionDenyByDefaultTest {
                     .isInstanceOf(AssertionError.class)
                     .hasMessageContaining("GET " + OpenRouteTestController.PATH + " [anonymous] -> 200");
         }
+
+        /**
+         * A mapping with no method condition is walked with every method, not
+         * {@code GET} alone (ADR-0048 rule 2, backlog #0-198): its {@code POST}
+         * is reported, so a chain rule keyed on a method other than
+         * {@code GET} is seen too.
+         */
+        @Test
+        @DisplayName("the walk sends every method to a mapping with no method condition")
+        void theWalkSendsEveryMethodToAMethodlessMapping() {
+            assertThatThrownBy(() -> assertEveryRoute(openMockMvc, openHandlerMapping, "anonymous",
+                    request -> request, status -> status == 401))
+                    .isInstanceOf(AssertionError.class)
+                    .hasMessageContaining("POST " + OpenRouteTestController.ANY_METHOD_PATH + " [anonymous] -> 200");
+        }
     }
 
     /** The context of {@link OpenRoute}: no scan, only what that class imports. */
@@ -274,15 +350,23 @@ class IngestionDenyByDefaultTest {
     static class OpenRouteApplication {
     }
 
-    /** A route that answers 200 to whoever reaches it. */
+    /** Routes that answer 200 to whoever reaches them. */
     @RestController
     static class OpenRouteTestController {
 
         static final String PATH = "/api/v1/test-only/open";
 
+        /** No method condition: the walk sends it every {@link RequestMethod}. */
+        static final String ANY_METHOD_PATH = "/api/v1/test-only/any-method";
+
         @GetMapping(PATH)
         String open() {
             return "open";
+        }
+
+        @RequestMapping(ANY_METHOD_PATH)
+        String anyMethod() {
+            return "any method";
         }
     }
 
@@ -325,16 +409,22 @@ class IngestionDenyByDefaultTest {
         assertThat(misses).as("routes that did not refuse the %s caller", caller).isEmpty();
     }
 
-    /** Every {@code METHOD pattern} of the handler mapping (no method: GET) outside {@link #EXEMPT}. */
+    /**
+     * Every {@code METHOD pattern} of the handler mapping outside {@link #EXEMPT}.
+     * A mapping with no method condition answers every method, so it is walked
+     * with every {@link RequestMethod}: a chain rule keyed on the method (a
+     * {@code permitAll} on {@code POST} of the path) is seen too (ADR-0048 rule 2,
+     * backlog #0-198; #0-191 walked such a mapping with {@code GET} alone).
+     */
     private static List<String> routes(RequestMappingHandlerMapping handlerMapping) {
         final List<String> routes = new ArrayList<>();
         for (final RequestMappingInfo info : handlerMapping.getHandlerMethods().keySet()) {
             final Set<RequestMethod> methods = info.getMethodsCondition().getMethods();
             for (final String pattern : info.getPatternValues()) {
-                if (EXEMPT.containsKey(pattern)) {
+                if (isExempt(pattern)) {
                     continue;
                 }
-                for (final RequestMethod method : methods.isEmpty() ? Set.of(RequestMethod.GET) : methods) {
+                for (final RequestMethod method : methods.isEmpty() ? EnumSet.allOf(RequestMethod.class) : methods) {
                     final String route = method + " " + pattern;
                     if (!routes.contains(route)) {
                         routes.add(route);
@@ -343,5 +433,15 @@ class IngestionDenyByDefaultTest {
             }
         }
         return routes;
+    }
+
+    private static boolean isExempt(String pattern) {
+        for (final String exempt : EXEMPT.keySet()) {
+            final String base = exempt.endsWith("/**") ? exempt.substring(0, exempt.length() - 3) : exempt;
+            if (pattern.equals(base) || (!base.equals(exempt) && pattern.startsWith(base + "/"))) {
+                return true;
+            }
+        }
+        return false;
     }
 }
