@@ -127,7 +127,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Low | Open |
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
-| [0-198](#0-198-ingestions-route-walk-gets-0-192s-shape) | ingestion's route walk gets #0-192's shape | security | Low | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-203](#0-203-the-architects-and-the-block-commits-carry-no-co-authored-by-trailer) | The architect's and the block commits carry no `Co-Authored-By` trailer | ci | Low | Open |
@@ -4277,47 +4276,6 @@ pinned as #0-192 did.
 
 **After merge (owner).** `.ai/rules/review/security.md` SEC-14 (`:83`) says "its exempt routes come from
 `PUBLIC_PATHS` until #0-197": that clause goes (protected path: not the autopilot's).
-
-### 0-198. ingestion's route walk gets #0-192's shape
-
-**Type:** security · **Priority:** Low · **Status:** Open. Split off #0-196 at `/ready` (owner, 2026-11-01).
-**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-196
-**Touches:** ingestion-service (src/test: ingestion/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
-
-**Problem.** `IngestionDenyByDefaultTest` (#0-191) falls short of ADR-0048 as amended (rules 2, 3 and 7):
-- no positive control: a purpose token's 401 passes too if no token validates in the test's context;
-- its Javadoc says "the 401 for an unknown key is the real filter's", but nothing shows the mocked
-  `ApiKeyLookupService` (`:133`, stubbed in `@BeforeEach` at `:140`) was asked: with `ApiKeyAuthFilter` taken out of
-  ingestion's chain (`SecurityConfig`) the test still passes (the 401 is then the entry point's), and every real
-  integration key stops working;
-- a mapping with no method condition is walked as `GET` only (`:290`);
-- its exempt set is read by `EXEMPT.containsKey(pattern)` (`:287`), exact patterns only, unlike incident's
-  `isExempt` (rule 3: a `/**` key covers the patterns below it).
-
-**Approach.** As #0-196 for incident, plus a `verify` of the lookup. Test code only; no chain changes.
-
-**Acceptance criteria.**
-AC1. `IngestionDenyByDefaultTest` has a positive control: a valid user token from `JwtUtils.generateToken` (its tenant
-     `FULL` through the mocked `TenantStatusProvider`) gets a status other than 401 on `POST /api/v1/alerts/{source}`.
-     403 counts (`AlertIngestionController`'s `@PreAuthorize` admits `INGESTOR`/`ADMIN`/…): it is past
-     authentication.
-AC2. The unknown-key test verifies that the mocked `ApiKeyLookupService.lookup` was called with `UNKNOWN_KEY`, once for
-     each form (`ApiKey ipl_…` and `Bearer ipl_…`, e.g. `verify(…, atLeastOnce())` after each walk with
-     `clearInvocations` between, or an `ArgumentCaptor`), so the test fails if `ApiKeyAuthFilter` is not in the chain.
-AC3. The exempt set is read with incident's `isExempt` (rule-3 matching), in place of `EXEMPT.containsKey`.
-AC4. For a mapping with no method condition the walk sends every `RequestMethod`, not `GET` alone; a test shows it, as
-     #0-196 AC2 (the existing `OpenRoute` context may be reused).
-AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 added, says ingestion's test has a
-     positive control and shows its key lookup was asked (CLAUDE.md "Security inventory").
-AC6. `./mvnw test -pl ingestion-service` passes on the branch.
-
-**OPTIONS (#0-199).** An `OPTIONS` without preflight headers is expected 401 for an anonymous caller like every method
-(#0-199, ADR-0049): the chain's `CorsFilter` answers only a valid preflight, and no `OPTIONS` rule permits the rest; a
-`404 || 401` for it is a deviation to remove. `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is
-pinned as #0-192 did.
-
-**After merge (owner).** `.ai/rules/review/security.md` SEC-10 (`:65`) and SEC-12 (`:76`) "until #0-196" clauses go
-(with #0-196's; protected path: not the autopilot's).
 
 ### 0-201. A `ready` item's Touches line is validated only once it is queued
 
