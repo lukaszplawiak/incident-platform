@@ -4280,7 +4280,7 @@ pinned as #0-192 did.
 
 ### 0-198. ingestion's route walk gets #0-192's shape
 
-**Type:** security · **Priority:** Low · **Status:** Open. Split off #0-196 at `/ready` (owner, 2026-11-01).
+**Type:** security · **Priority:** Low · **Status:** In progress — autopilot run 20261104-123011. Split off #0-196 at `/ready` (owner, 2026-11-01).
 **Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-196
 **Touches:** ingestion-service (src/test: ingestion/api), root (README.md "Infrastructure Hardening", BACKLOG.md)
 
