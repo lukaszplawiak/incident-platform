@@ -61,10 +61,11 @@ the attack scenario: a specific, concrete way this could be exploited or trigger
 - **SEC-10 Every endpoint states who may call it.** A new endpoint has an explicit requirement: `@PreAuthorize`, or a
   filter-chain rule that names its path and role (the shared chain's catch-all `authenticatedExceptPurposeTokens()`
   admits every role, so it is not one); nothing is added to `PUBLIC_PATHS` without a reason in the PR. Backed by:
-  `IncidentDenyByDefaultTest`, `IngestionDenyByDefaultTest` (every route of the service outside the test's literal
-  exempt set refuses an unauthenticated caller; whether its role is right is not seen; until #0-196 they have no
-  positive control; ADR-0048, #0-192 adds notification, oncall and postmortem). Check: a new mapping without
-  `@PreAuthorize` or such a rule, a removed one, or a new `PUBLIC_PATHS` entry.
+  `IncidentDenyByDefaultTest`, `IngestionDenyByDefaultTest`, `NotificationDenyByDefaultTest`,
+  `OncallDenyByDefaultTest`, `PostmortemDenyByDefaultTest` (every route of the service outside the test's literal
+  exempt set refuses an unauthenticated caller, and a positive control shows a valid token gets past authentication;
+  whether its role is right is not seen; ADR-0048). Check: a new mapping without `@PreAuthorize` or such a rule, a
+  removed one, or a new `PUBLIC_PATHS` entry.
 - **SEC-11 A role is written in the form its reader expects.** `@PreAuthorize` and filter-chain rules use the
   non-prefixed `hasRole("ADMIN")` / `SecurityRoles.*_NAME`; JWT claims and `UserPrincipal.hasRole` the `ROLE_`
   prefix. A mismatch fails silently, open or closed. Check: a new role string and where it is compared.
@@ -72,9 +73,10 @@ the attack scenario: a specific, concrete way this could be exploited or trigger
   (instead of extending the shared one) keeps CORS and `PUBLIC_PATHS`, adds `ApiKeyAuthFilter` itself, and ends in
   `authenticatedExceptPurposeTokens()`, not `authenticated()`; the most common way auth gets weakened here. Backed by:
   `AuthenticatedExceptPurposeTokensTest` (the helper itself, not that a chain uses it) and `IncidentDenyByDefaultTest`,
-  `IngestionDenyByDefaultTest` (that those services' chains refuse an anonymous caller, a purpose token and an unknown
-  key on every route; ADR-0048; until #0-196 they have no positive control, and ingestion's does not show its key lookup
-  was asked). Check: a new or changed `SecurityFilterChain` bean.
+  `IngestionDenyByDefaultTest`, `NotificationDenyByDefaultTest`, `OncallDenyByDefaultTest`,
+  `PostmortemDenyByDefaultTest` (that those services' chains refuse an anonymous caller, a purpose token and an unknown
+  key on every route, with a positive control; ingestion's also shows its key lookup was asked; ADR-0048). Check: a new
+  or changed `SecurityFilterChain` bean.
 - **SEC-13 Access by id checks the owner.** Reading or changing a resource by id checks its tenant, team or role, not
   only that the row exists (IDOR). Check: a new `findById` or path id behind an endpoint, and what it compares.
 - **SEC-14 An API key reaches only the routes its scope allows.** A new auth-service route open to keys appears in

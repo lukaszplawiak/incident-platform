@@ -125,7 +125,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
-| [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Low | Open |
+| [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Medium | Open |
 | [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
@@ -133,6 +133,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-204](#0-204-a-runs-record-keeps-no-run-id-no-agent-calls-and-no-stage-of-each-commit) | A run's record keeps no run id, no agent calls and no stage of each commit | ci | Low | Open |
 | [0-205](#0-205-a-runs-transcripts-expire-after-90-days-and-nothing-reads-them-per-agent) | A run's transcripts expire after 90 days and nothing reads them per agent | ci | Low | Open |
 | [0-206](#0-206-a-work-agent-that-ends-without-an-answer-leaves-the-lock-and-no-state) | A work agent that ends without an answer leaves the lock and no state | ci | Medium | Open |
+| [0-207](#0-207-the-picker-spends-its-turns-on-commands-its-session-refuses) | The picker spends its turns on commands its session refuses | ci | Medium | In progress |
+| [0-208](#0-208-five-route-walks-hold-five-copies-of-isexempt) | Five route walks hold five copies of `isExempt` | tech-debt | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4197,7 +4199,8 @@ Hardening".
 
 ### 0-195. The workflow does not check the branch prefix the picker gives an item
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Found 2026-11-01 in run `wf_8c632098-97c` (#0-175).
+**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-01 in run `wf_8c632098-97c` (#0-175); Medium
+since 2026-11-04 (owner): four cases, the fourth cost a run.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 
 **Problem.** `picker.md` ("Prepare the branch") names the prefix by the item's type (`bug`/`security` → `fix/`,
@@ -4212,6 +4215,15 @@ there (reflog); the `feat/` branch was left behind locally. A `branch` run also 
 "Scope: not-measured — Touches none · plan none" though #0-192 has a Touches line: it skips the plan, and
 `backlog-autopilot.js:682` takes the Touches from `next-item.sh`'s answer (`next?.modules`), which a `branch` run does
 not ask for.
+
+**Third and fourth cases (2026-11-04, both `security`).** Run 20261104-123011 (`wf_8eec043b-6b8`) made
+`feat/0-198-ingestion-route-walk-shape` and shipped PR #587 from it (merged; #0-196, the same kind of item, had got
+`fix/` the day before). Run 20261104-135720 (`wf_da30d2f5-240`) made `feat/0-197-auth-walks-literal-exempt-set`,
+noticed the prefix and tried `git branch -m fix/…` twice: `dontAsk` refused it (only `git switch *`,
+`git checkout -b *` and `git branch --list *` are allowed), the picker answered `none`, and the empty `feat/` branch
+was left for the owner to delete (it would have locked #0-197 for the next run, `picker.md` step 3). So a wrong
+prefix is no longer only misleading: corrected by the agent, it ends the run. `picker.md` now says the `security` →
+`fix/` row in words and that a created name is final (#0-207); that is a prompt, the check below stays the fix.
 
 **Approach.** The workflow knows the type (the picker answers it, `PICK.type`; `next-item.sh` could read it from the
 base commit as it reads risk and complexity): it derives the prefix with `picker.md`'s table and stops the item when
@@ -4330,8 +4342,10 @@ start from `main` (`eea28f7d`) and nothing broke, but nothing guarded it either.
 Again on 2026-11-03 (reflog of the shared tree): run 20261103-121611 (#0-200) ended on `main` at 12:33:28Z; at
 12:49:08Z the owner's session on the host created `docs/backlog-factory-run-trace` and began editing `BACKLOG.md`;
 at 12:49:41Z HEAD moved back to `main`, with no new entry in `state.json`, and the session's uncommitted edits went
-with it, which the session noticed only later. What moved it is to check; a run that its preflight refuses stops
-without a state record and runs `return-to-main.sh`, which fits. Nothing was lost this time, but the owner's work in
+with it, which the session noticed only later. What moved it is not known: no autopilot run of the container is in
+its transcripts at that time (its runs that day started 13:33Z and 13:36Z), and a run its preflight refuses does not
+run `return-to-main.sh` (`backlog-autopilot.js:432-435` returns before it; only `notStarted()`, after a passed
+preflight, does), so a refused run does not explain it either. Nothing was lost this time, but the owner's work in
 progress was changed under them, and in the other direction a run could have started with the owner's edits.
 
 **Not this.** ADR-0044 rejected a worktree per `/seed-bugs` run: the workflow's agents read hooks from the session's
@@ -4476,7 +4490,7 @@ AC3. `audit-data.sh` puts the summaries of the period's runs into its output; `t
 **Type:** ci · **Priority:** Medium · **Status:** Open. From the two #0-199 runs of 2026-11-02 (owner).
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
 **Touches:** ci (.claude/workflows/backlog-autopilot.js, .github/scripts/test-autopilot-workflow.mjs,
-.claude/agents/implementer.md, .claude/agents/implementer-light.md, possibly a hook on the implementers' Bash and its
+.claude/agents/implementer.md, .claude/agents/implementer-light.md, .claude/agents/picker.md, possibly a hook on the implementers' Bash and its
 twin in both settings files, .claude/hooks/test-hooks.sh), docs (docs/ai-factory.md)
 
 **Seen.** Run `wf_bc03d7e8-742`: the architect used its 40 turns (`architect.md` `maxTurns`), most of them on a commit
@@ -4485,6 +4499,11 @@ twin in both settings files, .claude/hooks/test-hooks.sh), docs (docs/ai-factory
 answer, the workflow stopped there, and `.ai/runs/LOCK` stayed behind with no `state.sh record`, no draft PR and no
 notification; `consecutiveBlocked` did not count either run. The work itself was on the branch and shipped by a later
 branch-mode run (PR #583).
+A second case, from review round 2 of #0-207 (2026-11-05): `picker.md` answers a refused command with
+`{"none": true, …}`, and the workflow reads every `none` as "nothing to do" (`backlog-autopilot.js:485-489`): it
+releases the lock and returns to `main`, but records no state and sends no notification. Refused after
+`git switch -c`, the branch stays behind and `next-item.sh`'s branch lock skips the item from then on, without a word
+(the #0-197 run of 2026-11-04, `wf_da30d2f5-240`). A failure of the picker's own session is not an empty queue.
 
 **Problem.** `as()` (`backlog-autopilot.js:75`) returns the runtime's `agent()` as is; its callers handle a `null`
 answer (`stopItem`), but an agent that ends without one stops the whole workflow before `stopItem` runs. And the
@@ -4502,6 +4521,91 @@ AC1. A workflow test whose fake `agent()` ends without an answer for the archite
      item BLOCKED with the stage, the lock released, the state recorded and the notification sent.
 AC2. `implementer.md` and `implementer-light.md` say tests run in the foreground and output is not polled; if a hook
      enforces it, `test-hooks.sh` shows a background Bash call refused for both and allowed for other agents.
+AC3. The picker has an answer for its own failure, distinct from `none` (e.g. `{"failed": true, "reason": …}`, a
+     refused command among them), and `picker.md` uses it. The workflow routes it to `stopItem` (stage `pick`, state
+     recorded, notification sent, the branch named when one was created). A workflow test shows it, next to one
+     where a real `none` still ends as NOTHING_TO_DO.
+
+### 0-207. The picker spends its turns on commands its session refuses
+
+**Type:** ci · **Priority:** Medium · **Status:** In progress — `picker.md` rewritten in this item's PR (owner, 2026-11-04);
+AC2 to AC4 open.
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/agents/picker.md, .claude/agents/implementer.md, .claude/agents/implementer-light.md,
+.claude/agents/shipper.md, possibly .claude/hooks/_lib.sh and .claude/hooks/test-hooks.sh), root (BACKLOG.md)
+
+**Seen.** The picker composes commands that its autopilot session refuses, then rewrites them one at a time:
+- run 20261104-123011 (#0-198, `wf_8eec043b-6b8`): four calls refused by `guard-protected-bash.sh` (`git show … |
+  grep …`, `grep … ; git branch …`, `grep … && cat …`), then `git switch -c … && mkdir -p … && cp … && sed -i …` and
+  `mkdir -p /workspace/.ai/work/0-198` refused in `dontAsk` (a chain, and an absolute path the rule
+  `mkdir -p .ai/work/*` does not match). It went on only because it wrote the three work files with the Write tool;
+- run 20261104-135720 (#0-197, `wf_da30d2f5-240`): the same four guard refusals, then `git branch -m` twice and
+  `mkdir -p /workspace/.ai/work/0-197 && cp /workspace/.ai/work/_template/* …` refused in `dontAsk`, and it answered
+  `none` (#0-195's fourth case).
+The session in the container that started the second run read the refusals as a wrong permission mode and told the
+owner to switch it back; `dontAsk` was right (the same misreading as on 2026-11-03, when a picker's chained and
+`git -C` commands left two runs with no item). The guard's message also misleads: a `git show … | grep …` is refused
+as "git grep: a command separator or redirect" (`_lib.sh:162`, reached through `git_grep_unsafe`).
+
+**Problem.** `picker.md` named what to do ("copy the three files", "read the backlog on the base commit") but not the
+command forms the session allows, so the model picks its own (a pipe to cut a 400 KB `git show`, absolute
+`/workspace/…` paths, one chained command for a whole step). `defect-seeder.md` was fixed the same way for the same
+cause (#0-170: "one command per call, no `git -C`, no separators; Read and `git grep` to look"); the picker, the
+implementers and the shipper have no such paragraph.
+
+**Done in this PR (owner's copy of the draft).** `picker.md` gets a "How commands run here" section (one plain
+command per call, relative paths, Grep/Read/`git grep` to look, Write to create, a refused command answered `none`
+with the refusal verbatim) and names each command it needs in its allowed form: `git grep -n -A12 '^### <n>\.'
+<base sha> -- BACKLOG.md`, `git grep -c '^| <n> |' <base sha> -- BACKLOG-DONE.md` (the Done row, not the bare
+number: `'0-19'` counts 7 lines today, the rows of `0-190`…`0-199` among them, the row form 1), `ls .ai/work/<n>`
+(a work directory left by an aborted run stops the item, as a stale branch does; skipped in resume mode, where both are
+the run's own), `cp -r .ai/work/_template .ai/work/<n>`, `git add` and `git commit -m … -m …` as two calls, and in
+resume mode the `git switch <branch>` of its task; and that a created branch name is final. Every one of those commands
+was run through `guard-protected-bash.sh` with `agent_type` picker and passed (exit 0); a piped `git show` was refused
+(exit 2). Review round 1 (`/review`, 2026-11-04) added the row form, the work-directory check and the resume line.
+Review round 2 (2026-11-05) added that resume mode skips "Prepare the branch" as a whole (step 2 there rested on a
+check resume skips, so a literal reading copied the template into the existing directory), and named the
+work-directory check a second safeguard: `.ai/work/` is tracked, so the preflight refuses a tree with a leftover
+directory first. Every command form was run through the guard again after round 1 (exit 0; the piped control exit 2).
+That a refused command ends as `none`, which leaves no state record, is #0-206's second case.
+
+**Acceptance criteria (draft).**
+AC1. `picker.md` names the allowed form of every command it needs; each passes `guard-protected-bash.sh` and matches
+     an allow rule of `settings.autopilot.json` (done, this PR).
+AC2. The next two autopilot runs' pickers have no refused call (their transcripts), or the item records which.
+AC3. `implementer.md`, `implementer-light.md` and `shipper.md` get the same paragraph where their transcripts show
+     refused calls (to check: the runs of #0-196, #0-198); the guard's message for a separator outside `git grep`
+     names the command as it is, not "git grep" (`test-hooks.sh` shows it); the workflow's resume prompt
+     (`backlog-autopilot.js:478`) names the picker's section "Check the item", not "Choose the item".
+AC4. A check (a Factory guard, or a case of `test-hooks.sh`) takes every command form an agent definition prescribes
+     (`picker.md`, `defect-seeder.md`; a marked list in each) and shows it passes that agent's hooks and matches an
+     allow rule of `settings.autopilot.json`, so the prose cannot drift from the allow-list unnoticed (review round 1:
+     today AC1 is shown by hand only).
+
+### 0-208. Five route walks hold five copies of `isExempt`
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open. From the security reviewer's non-blocking finding on PR #587
+(#0-198, 2026-11-04).
+**Autopilot:** not-ready · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** shared (test-jar?), incident-service, ingestion-service, notification-service, oncall-service,
+postmortem-service (src/test: `*/api`), root (.ai/decisions/0048-every-route-is-walked-deny-by-default.md, BACKLOG.md)
+
+**Problem.** `isExempt(String pattern)` (rule 3 of ADR-0048: an exact key, or a `/**` key matching its base and what
+lies under it) is the same method, byte for byte, in `IncidentDenyByDefaultTest:503`, `IngestionDenyByDefaultTest:438`,
+`NotificationDenyByDefaultTest:533`, `OncallDenyByDefaultTest:388` and `PostmortemDenyByDefaultTest:402` (checked
+2026-11-04: the five bodies are identical); auth-service's two walks have their own `isExempt(String, RequestMethod)`.
+Nothing keeps the copies in step: a fix to one leaves four services matching their exempt sets the old way, and no test
+reports it. The reviewer saw two of the five. The same goes for the rest of the walk (`routes()`, the method
+expansion, the positive control): ADR-0048 decision 6 chose one copy per service on purpose, "a shared helper would
+need a test-jar of `shared` … it can follow once all five exist", which they now do. A second, smaller point from the
+same PR (general, GEN-30): two positive controls (`Ingestion`, `Oncall`) assert `isEqualTo(403)` on top of
+`isNotEqualTo(401)`, the other three only the latter; the exact 403 also pins the role rule, so a role change breaks
+the control for a reason that is not authentication.
+
+**Approach (to decide).** (a) A test-jar (or `test-fixtures`) of `shared` with the walk and `isExempt`, each service's
+test keeping its literal exempt set and its context (a new inter-module test dependency: owner); (b) keep five copies
+and add a check that they are equal (a test or a Factory guard comparing the method bodies); (c) leave it, and record in
+ADR-0048 why. Whether the positive controls should agree on `isNotEqualTo(401)` alone is part of it.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
