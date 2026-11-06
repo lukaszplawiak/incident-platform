@@ -14,8 +14,8 @@ every `RequestMappingHandlerMapping` entry through the real `SecurityConfig`). T
 fork the `SecurityFilterChain` (SEC-12) and test listed endpoints only (`IncidentControllerSecurityTest`,
 `AlertIngestionControllerSecurityTest`, ...), so a new controller, a `permitAll()` in a chain, a profile chain like
 incident's `DevSecurityConfig` that leaks, or a `PUBLIC_PATHS` entry matching a real route is caught by review alone.
-The two auth-service tests exempt routes by reading `SharedSecurityAutoConfiguration.PUBLIC_PATHS`, which would
-exempt exactly the route a bad new entry opens.
+The two auth-service tests exempted routes by reading `SharedSecurityAutoConfiguration.PUBLIC_PATHS` (they did,
+until #0-197), which would exempt exactly the route a bad new entry opens.
 
 ## Decision
 
@@ -56,7 +56,7 @@ Each service with an API has `<Service>DenyByDefaultTest` in its `api` test pack
 
 ## Alternatives considered
 
-- **Exempt by `PUBLIC_PATHS`, as the auth-service tests do**: a new `PUBLIC_PATHS` entry matching a controller route
+- **Exempt by `PUBLIC_PATHS`, as the auth-service tests did until #0-197**: a new `PUBLIC_PATHS` entry matching a controller route
   would exempt the route it opens; the item's point is to catch that.
 - **Exact route count**: fails on every new route, so the test is edited with each controller and stops checking
   "without anyone adding it". A lower bound still fails an enumeration that finds nothing.

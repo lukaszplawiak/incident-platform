@@ -939,7 +939,11 @@ Summary; details in [Resilience & Security](#security).
   per entry (`/error`; incident's is `/error` only), never `PUBLIC_PATHS`, so a new entry there that matches a route
   fails the test. incident's test also runs with no profile and checks that `DevSecurityConfig` is absent, and it
   reports a REST mapping under `/ws/`, which its chain permits for the WebSocket handshake (backlog #0-196).
-  auth-service has its own walks (`ApiKeyDenyByDefaultTest`, `IntrospectionTokenDenyByDefaultTest`).
+  In auth-service `ApiKeyDenyByDefaultTest` (an all-scope admin key: 403) and `IntrospectionTokenDenyByDefaultTest`
+  (an introspection token: 403) walk every route and method too (`TRACE` 400, the firewall's); their exempt set is a
+  literal keyed by `<METHOD> <pattern>` with a reason per entry, never `PUBLIC_PATHS`, so `GET` of a public `POST`
+  route is still walked; the routes a key may reach are a literal set of exact team patterns, and the key walk has a
+  negative case (backlog #0-197).
   `OncallDenyByDefaultTest` and `PostmortemDenyByDefaultTest` (backlog #0-192) do the same with `/error` as their
   only exemption; `NotificationDenyByDefaultTest` exempts `/error` and `/api/v1/slack/actions`, checks that the Slack
   route answers 401 unsigned through the real `SlackSignatureVerifier` (and 200 correctly signed), and, as its one
