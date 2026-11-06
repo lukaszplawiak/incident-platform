@@ -126,7 +126,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Medium | Open |
-| [0-197](#0-197-auth-services-route-walks-exempt-their-routes-through-public_paths) | auth-service's route walks exempt their routes through `PUBLIC_PATHS` | security | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-203](#0-203-the-architects-and-the-block-commits-carry-no-co-authored-by-trailer) | The architect's and the block commits carry no `Co-Authored-By` trailer | ci | Low | Open |
@@ -4241,56 +4240,6 @@ AC2. `picker.md` and the workflow name the prefixes in one place.
 **Touches:** `.claude/workflows/backlog-autopilot.js`, `.claude/agents/picker.md`,
 `.github/scripts/test-autopilot-workflow.mjs`, `scripts/factory/next-item.sh` (if the type is read there),
 `docs/ai-factory.md`.
-
-### 0-197. auth-service's route walks exempt their routes through `PUBLIC_PATHS`
-
-**Type:** security · **Priority:** Medium · **Status:** In progress — autopilot run 20261106-214534. Named in ADR-0048 (#0-191, 2026-11-01), "Alternatives
-considered".
-**Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-198
-**Touches:** auth-service (src/test: auth/api), root (README.md "Infrastructure Hardening", .ai/decisions/0048-every-route-is-walked-deny-by-default.md, BACKLOG.md)
-
-**Problem.** `ApiKeyDenyByDefaultTest` (`:201`) and `IntrospectionTokenDenyByDefaultTest` (`:189`) skip every route
-matching `SharedSecurityAutoConfiguration.PUBLIC_PATHS`, by `startsWith`. A new entry there that matches a controller
-route of auth-service would exempt exactly the route it opens, so the two tests meant to catch it would pass. #0-191
-chose a literal exempt set with a reason per entry for that reason (ADR-0048 rule 3); auth-service's tests predate
-it. Their other exemptions are not literal with a reason either: `PUBLIC_POSTS` (both tests: POST only, no reason per
-entry) and, in `ApiKeyDenyByDefaultTest` (`:195`), the routes a key may reach as a `/api/v1/teams` prefix
-(`startsWith("/api/v1/teams/")`). They also walk a mapping with no method condition as `GET` only
-(`ApiKeyDenyByDefaultTest:166`, `IntrospectionTokenDenyByDefaultTest:158`), the gap ADR-0048's amended rule 2
-closes, and neither has a negative case (rule 5). Both already have a positive control (rule 7):
-`ApiKeyDenyByDefaultTest.jwtUnaffected` (200) and `IntrospectionTokenDenyByDefaultTest.introspectionRefusesAdmin`
-(403).
-
-**Decided (owner, 2026-11-01, `/ready`).** The two tests stay two and are fixed in place, not merged into one test
-in ADR-0048's full shape. An exemption that holds for one method only keeps its method: the exempt set is keyed by
-`"<METHOD> <pattern>"`, so `GET /api/v1/auth/login` stays walked.
-
-**Acceptance criteria.**
-AC1. Neither test refers to `PUBLIC_PATHS` or matches a route by `startsWith`. Each reads a literal exempt set,
-     `Map<String, String>` from `"<METHOD> <pattern>"` (or a bare pattern for every method) to its reason, with
-     ADR-0048 rule 3's matching for a `/**` key; `PUBLIC_POSTS` becomes entries of it. A test fails if an entry's
-     reason is blank.
-AC2. In `ApiKeyDenyByDefaultTest` the routes a key may reach are a literal set of exact patterns with a reason each,
-     in place of the `/api/v1/teams` prefix; the existing `teamsReadScope` / `jwtUnaffected` checks still pass.
-AC3. For a mapping with no method condition both walks send every `RequestMethod`, not `GET` alone; a route that
-     answers otherwise is named in the failure (method, pattern, status).
-AC4. `ApiKeyDenyByDefaultTest` has a negative case: a test-only controller route (e.g. `/api/v1/test-only/open`) and a
-     test chain at `HIGHEST_PRECEDENCE` that permits it, in a `@Nested` context with
-     `@NestedTestConfiguration(OVERRIDE)`, make the same walk fail, and the failure names that route (ADR-0048
-     rule 5). The outer context's walk does not see the route.
-AC5. (reviewer-checked) README "Infrastructure Hardening", in the entry #0-191 added, says auth-service's walks too
-     use a literal exempt set with a reason per entry, never `PUBLIC_PATHS` (CLAUDE.md "Security inventory").
-AC6. (reviewer-checked) ADR-0048's Context and "Alternatives considered" no longer say the auth-service tests exempt
-     through `PUBLIC_PATHS` (they say they did, until #0-197).
-AC7. `./mvnw test -pl auth-service` passes on the branch.
-
-**OPTIONS (#0-199).** An `OPTIONS` without preflight headers is expected 401 for an anonymous caller like every method
-(#0-199, ADR-0049): the chain's `CorsFilter` answers only a valid preflight, and no `OPTIONS` rule permits the rest; a
-`404 || 401` for it is a deviation to remove. `TRACE` answers 400 from `StrictHttpFirewall` before the chain and is
-pinned as #0-192 did.
-
-**After merge (owner).** `.ai/rules/review/security.md` SEC-14 (`:83`) says "its exempt routes come from
-`PUBLIC_PATHS` until #0-197": that clause goes (protected path: not the autopilot's).
 
 ### 0-201. A `ready` item's Touches line is validated only once it is queued
 
