@@ -47,7 +47,7 @@
       "Bash(ls *)",
       "Bash(mkdir -p .ai/work/*)",
       "Bash(mkdir -p .ai/runs/*)",
-      "Bash(cp -r .ai/work/_template *)",
+      "Bash(cp .ai/work/_template/* .ai/work/*)",
       "Bash(jar tf *)",
       "WebFetch(domain:api.osv.dev)",
       "WebFetch(domain:osv.dev)",

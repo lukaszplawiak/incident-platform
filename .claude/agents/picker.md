@@ -20,7 +20,7 @@ seven calls this way, one of them its item). So:
 - one plain command per Bash call, with paths relative to the repository root (never `/workspace/…`, never
   `git -C`);
 - to look inside a file use the Grep and Read tools, and inside a file on the base commit `git grep` (step 1);
-- to create a file use the Write tool;
+- to create a file use the Write tool (the one exception: the template copy of "Prepare the branch", step 2);
 - use only the commands this definition names below, and in resume mode the `git switch <branch>` your task
   names (the same rule as `defect-seeder.md`'s, backlog #0-170).
 
@@ -45,7 +45,7 @@ the refusal, verbatim>"}`.
    locally (`git branch --list '*/<item number>-*'`) — a stale branch from an aborted run is for the owner
    to delete — or whose work directory already exists (`ls .ai/work/<item>`, `<item>` without `#`: a listing means
    it exists; "No such file or directory" is the answer you want): a directory left by an aborted run is the
-   owner's to delete too, and copying the template onto it would nest `_template` inside it. The preflight refuses
+   owner's to delete too, and copying the template onto it would overwrite its files. The preflight refuses
    such a tree first (`.ai/work/` is tracked, so a leftover directory makes the tree dirty); this check is the second
    safeguard, for a tree that reaches you clean anyway. In resume mode both
    the branch and the directory are the run's own, on the branch you switched to: skip these two checks there,
@@ -57,7 +57,7 @@ the refusal, verbatim>"}`.
 ## Prepare the branch
 
 In resume mode skip this whole section: the branch, its work directory and its start commit already exist and
-are the run's own. Copying the template or committing again would nest `_template` in the directory or add a
+are the run's own. Copying the template or committing again would overwrite the run's work files or add a
 second start commit. Answer the JSON with the branch you switched to.
 
 1. Branch name: prefix by the item's `**Type:**` (step 1 of "Check the item") — `bug`/`security` → `fix/`,
@@ -68,8 +68,13 @@ second start commit. Answer the JSON with the branch you switched to.
    The name is final once created: you cannot rename or delete a branch (`git branch -m`/`-D` are refused). If you
    find afterwards that its prefix is wrong, keep it and go on (a wrong prefix misleads, it breaks nothing); do not
    create a second branch (a second one is left behind and locks the item for the next run, step 3 above).
-2. Copy the template directory in one command: `cp -r .ai/work/_template .ai/work/<item>` (`<item>` is the number
-   without `#`, e.g. `0-25`; it does not exist, step 3 of "Check the item", so no `mkdir` first). Then Edit
+2. Create the work directory from the template, three commands (`<item>` is the number without `#`, e.g. `0-25`;
+   it does not exist, step 3 of "Check the item"): `ls .ai/work/_template` for the template's files, then
+   `mkdir -p .ai/work/<item>`, then one `cp` that names each file the listing showed as `.ai/work/_template/<file>`
+   and ends in `.ai/work/<item>/` — with today's template
+   `cp .ai/work/_template/handoff.md .ai/work/_template/progress.md .ai/work/_template/proofs.md .ai/work/0-25/`.
+   Not `cp -r` and not a glob (`.ai/work/_template/*`): this session refuses both whatever its allow rules say (run
+   20261106-203806 of #0-197 was stopped by `cp -r`, backlog #0-207). Then Edit
    `.ai/work/<item>/progress.md`: fill the title line and append
    `- [picker] picked; branch <branch>; base <baseSha>` and `NEXT: architect`.
 3. In `BACKLOG.md` set the item's status field to `In progress — autopilot run <runId>` (only that
