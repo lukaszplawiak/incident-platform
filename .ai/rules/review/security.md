@@ -82,7 +82,8 @@ the attack scenario: a specific, concrete way this could be exploited or trigger
 - **SEC-14 An API key reaches only the routes its scope allows.** A new auth-service route open to keys appears in
   `SecurityConfig` with its scope (`ApiKeyAccess`); an endpoint open to `ROLE_SERVICE` never dereferences a `null`
   `@AuthenticationPrincipal UserPrincipal`. Backed by: `ApiKeyDenyByDefaultTest` (routes not listed are refused; its
-  exempt routes come from `PUBLIC_PATHS` until #0-197). Check: a new route meant for keys or services, and its principal
+  exempt routes are a literal set, each with its reason, and the routes a key may reach are exact patterns,
+  `KEY_ROUTES`, since #0-197). Check: a new route meant for keys or services, and its principal
   handling.
 - **SEC-15 A service-to-service call carries the target's token and fails safely.** The token is minted for the
   target (`ServiceTokenProvider.getToken(tenantId, ServiceNames.<TARGET>)`), the client has a connect and a read

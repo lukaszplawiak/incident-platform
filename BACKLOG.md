@@ -2429,6 +2429,18 @@ means rotating it, not deleting it. Nothing scans before the push: no git hook i
 shipper) checks branches, not content. Also open: an allow comment (`gitleaks:allow`) passes whatever its line
 holds, its reason unchecked.
 
+**Seen (2026-11-06, #0-197, PR #590).** The autopilot shipped a PR whose Secret Scan failed at once: the implementer
+repeated auth-service's two dev-only test keys (`mfa.encryption-key`, `slack.encryption-key`, base64 of
+`test-key-32-bytes-for-dev-only!!` and `slack-key-32-bytes-for-dev-only!`, the values of every auth-service security
+test) in a nested class with `@NestedTestConfiguration(OVERRIDE)`, which inherits none of the outer properties, and
+`generic-api-key` matched the two new lines. No secret, but the gate, the panel (all five APPROVE) and acceptance
+passed it: none of them runs `secret-scan.sh`. A fix commit on top does not clear it, since the scan reads every
+commit of the range (`git log -p -m`, ADR-0036): the owner folded the `gitleaks:allow` comments into the implementer's
+commit (`fixup!` + `git rebase --autosquash`) and force-pushed the bot's branch (head `30e1bf3e` → `f3f40556`). So for
+an agent the check belongs before its commit is final, not only before the push: run on the branch's commits by the
+test gate (`run-tests.sh`, which already knows the run's base), a finding is a fixable failure for the
+implementer, who can still amend its own commit (to decide with the Approach below).
+
 **Approach.** The same pinned betterleaks before the push: in the factory's push path (the session hook or the
 shipper's script, `.claude/`, owner-only) on the commits the push sends, and as an opt-in pre-push hook for
 developers (`core.hooksPath` to a committed directory), in the devcontainer by default. Decide whether an allow
@@ -4168,6 +4180,16 @@ BLOCKED state left uncommitted in the tree. Such a session cannot resume the run
 (`wf_980f0ed3-0b4`, after `git switch main` for the preflight), which shipped PR #576. AC2 would have refused it
 before the first agent.
 
+**Third case (2026-11-06, #0-197, run 20261106-214213, `wf_0a53ed01-13c`).** Started in the devcontainer, with
+`settings.autopilot.json`, but in a session started at 20:27Z, before PR #589 (merged 21:40Z) changed that file's
+`cp` allow rule. Claude Code reads the agent definitions as they change on disk, the settings only when a session
+starts: the picker followed the new `picker.md` (`cp` of named files) under the old rule (`cp -r` only) and was
+refused, and answered `none`; the empty branch and an empty `.ai/work/0-197` were left for the owner. In the same
+session the picker's Grep tool was missing ("No such tool available: Grep"), though `picker.md` lists it; a fresh
+session's picker used it (run 20261106-214534). The preflight cannot see either: what it would need is the session's
+settings as loaded, compared with the base commit's (e.g. a hash of `settings.autopilot.json` set in its `env` and
+checked against the file, a third signal for AC2).
+
 **Problem.** The run was stopped only by chance: `preflight.sh` refused it for `.claude/settings.local.json`, an open
 `autopilot-stop` issue and Docker being off. None of its refusals checks where it runs or how the session was started.
 On the host, with a clean `main`, Docker up and no personal settings file, the autopilot would start:
@@ -4481,7 +4503,7 @@ AC3. The picker has an answer for its own failure, distinct from `none` (e.g. `{
 ### 0-207. The picker spends its turns on commands its session refuses
 
 **Type:** ci · **Priority:** Medium · **Status:** In progress — `picker.md` rewritten in this item's PR (owner, 2026-11-04);
-AC2 to AC4 open.
+AC2 one run of two (PR #590), AC3 and AC4 open.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/picker.md, .claude/agents/implementer.md, .claude/agents/implementer-light.md,
 .claude/agents/shipper.md, .claude/settings.autopilot.json, possibly .claude/hooks/_lib.sh and
@@ -4547,6 +4569,16 @@ so Claude Code's own path check holds there, not the hooks (#0-211). Round 1 als
 leftover-directory check (a copy onto it overwrites its files; "nest `_template`" was true of `cp -r` only) and named
 the template copy as the one exception to "create a file with Write". Copying the template in a factory script
 instead, so that no agent needs a `cp` rule, is #0-209.
+
+**After PR #589 (2026-11-06).** Run 20261106-214213 was refused the new `cp` because its session predated the
+settings change (#0-194's third case). Run 20261106-214534 (`wf_fa3d791c-5a0`, a fresh session) shipped #0-197 as
+PR #590: its picker made no refused call (AC2, first of two). The other agents of that run did: the implementer 10
+(a `cat … ; grep …` chain, `git ls-files | grep …`, `git -C /workspace ls-files …`, `git grep … ; git grep …`, a
+`git ls-files -- '…*…'` with globs, a `f=… && sed -i …`, an `ls … && grep …` and three `./mvnw test …` with a pipe,
+a redirect or `mkdir -p … &&`), the
+shipper 4 (a `git status && git branch && gh pr list` chain, a `python3` heredoc to edit the backlog, a
+`git rm … && git add -A …` chain and a `sed -i`), the architect and an architecture reviewer one or two each through
+`readonly-bash.sh`, and `factory-ops` one: AC3's evidence for the implementers and the shipper.
 
 **Acceptance criteria (draft).**
 AC1. `picker.md` names the allowed form of every command it needs; each passes `guard-protected-bash.sh` and runs in
