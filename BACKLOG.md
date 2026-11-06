@@ -4244,7 +4244,7 @@ AC2. `picker.md` and the workflow name the prefixes in one place.
 
 ### 0-197. auth-service's route walks exempt their routes through `PUBLIC_PATHS`
 
-**Type:** security · **Priority:** Medium · **Status:** Open. Named in ADR-0048 (#0-191, 2026-11-01), "Alternatives
+**Type:** security · **Priority:** Medium · **Status:** In progress — autopilot run 20261106-214534. Named in ADR-0048 (#0-191, 2026-11-01), "Alternatives
 considered".
 **Autopilot:** ready · **Risk:** low · **Complexity:** medium · **Depends on:** #0-198
 **Touches:** auth-service (src/test: auth/api), root (README.md "Infrastructure Hardening", .ai/decisions/0048-every-route-is-walked-deny-by-default.md, BACKLOG.md)
