@@ -135,6 +135,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-206](#0-206-a-work-agent-that-ends-without-an-answer-leaves-the-lock-and-no-state) | A work agent that ends without an answer leaves the lock and no state | ci | Medium | Open |
 | [0-207](#0-207-the-picker-spends-its-turns-on-commands-its-session-refuses) | The picker spends its turns on commands its session refuses | ci | Medium | In progress |
 | [0-208](#0-208-five-route-walks-hold-five-copies-of-isexempt) | Five route walks hold five copies of `isExempt` | tech-debt | Low | Open |
+| [0-209](#0-209-the-picker-copies-the-work-template-itself-through-an-allow-rule) | The picker copies the work template itself, through an allow rule | ci | Low | Open |
+| [0-210](#0-210-six-deny-rules-of-the-autopilot-settings-never-match) | Six deny rules of the autopilot settings never match | ci | Low | Open |
+| [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4532,7 +4535,8 @@ AC3. The picker has an answer for its own failure, distinct from `none` (e.g. `{
 AC2 to AC4 open.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/picker.md, .claude/agents/implementer.md, .claude/agents/implementer-light.md,
-.claude/agents/shipper.md, possibly .claude/hooks/_lib.sh and .claude/hooks/test-hooks.sh), root (BACKLOG.md)
+.claude/agents/shipper.md, .claude/settings.autopilot.json, possibly .claude/hooks/_lib.sh and
+.claude/hooks/test-hooks.sh), root (BACKLOG.md)
 
 **Seen.** The picker composes commands that its autopilot session refuses, then rewrites them one at a time:
 - run 20261104-123011 (#0-198, `wf_8eec043b-6b8`): four calls refused by `guard-protected-bash.sh` (`git show … |
@@ -4569,9 +4573,36 @@ work-directory check a second safeguard: `.ai/work/` is tracked, so the prefligh
 directory first. Every command form was run through the guard again after round 1 (exit 0; the piped control exit 2).
 That a refused command ends as `none`, which leaves no state record, is #0-206's second case.
 
+**Third case, after that PR (2026-11-06).** Run 20261106-203806 (#0-197, `wf_d0dcbd83-5d4`), the first after PR
+#588: every command of the new section passed up to `git switch -c fix/0-197-auth-walks-literal-exempt-set`, then
+`cp -r .ai/work/_template .ai/work/0-197`, the form `picker.md` prescribed, was refused in `dontAsk`, and the picker
+answered `none` (the empty branch was left for the owner, who deleted it). The rule `Bash(cp -r .ai/work/_template *)`
+matches that command as text; Claude Code (2.1.295) does not let an allow rule run a recursive `cp`. Shown in a
+throwaway repository in the devcontainer, `dontAsk`: `cp -r` refused under `Bash(cp -r .ai/work/_template *)`,
+`Bash(cp -r .ai/work/_template .ai/work/*)`, `Bash(cp -r *)` and `Bash(cp:*)` (with `Edit` and `Write` allowed too);
+a `cp` of files, no `-r`, runs under `Bash(cp:*)` and under `Bash(cp .ai/work/_template/* .ai/work/*)`; a glob source
+(`.ai/work/_template/*.md`) and a destination through `..` are refused. No run had ever passed that rule (#0-198's
+picker wrote the files with Write). So AC1 below was shown against the hooks and the rules' text, never against the
+permission check itself: the hole AC4 names, and AC4 needs more than a text match to close it.
+
+**Done in this PR (2026-11-06, owner's copy of the draft).** `picker.md` "Prepare the branch" step 2 is three
+commands: `ls .ai/work/_template`, `mkdir -p .ai/work/<n>`, one `cp` naming each listed file and ending in
+`.ai/work/<n>/`, with "not `cp -r`, not a glob" and why. `settings.autopilot.json`: `Bash(cp .ai/work/_template/*
+.ai/work/*)` replaces the rule that never ran. All three commands, and `cp -r` as the control, were run in the
+devcontainer by `claude -p --settings .claude/settings.autopilot.json` on a clone with both drafts, `dontAsk`, with the
+repository's hooks: the three ran, `cp -r` and a `..` destination were refused. Review round 1 (`/review 27`) asked
+whether the rule's first `*` lets a source outside the repository through (a secret copied into the tracked, pushed
+`.ai/work/`, e.g. `~/.m2/settings.xml`, which the hook's `secrets` list does not name): the same session refused
+`cp .ai/work/_template/handoff.md <source> .ai/work/0-999/` for `/home/dev/<file>`, `~/<file>` and `/etc/hostname`,
+so Claude Code's own path check holds there, not the hooks (#0-211). Round 1 also fixed `picker.md`'s reason for the
+leftover-directory check (a copy onto it overwrites its files; "nest `_template`" was true of `cp -r` only) and named
+the template copy as the one exception to "create a file with Write". Copying the template in a factory script
+instead, so that no agent needs a `cp` rule, is #0-209.
+
 **Acceptance criteria (draft).**
-AC1. `picker.md` names the allowed form of every command it needs; each passes `guard-protected-bash.sh` and matches
-     an allow rule of `settings.autopilot.json` (done, this PR).
+AC1. `picker.md` names the allowed form of every command it needs; each passes `guard-protected-bash.sh` and runs in
+     an autopilot session (`dontAsk`, `settings.autopilot.json`): done, this item's two PRs (the second after the
+     third case above).
 AC2. The next two autopilot runs' pickers have no refused call (their transcripts), or the item records which.
 AC3. `implementer.md`, `implementer-light.md` and `shipper.md` get the same paragraph where their transcripts show
      refused calls (to check: the runs of #0-196, #0-198); the guard's message for a separator outside `git grep`
@@ -4580,7 +4611,11 @@ AC3. `implementer.md`, `implementer-light.md` and `shipper.md` get the same para
 AC4. A check (a Factory guard, or a case of `test-hooks.sh`) takes every command form an agent definition prescribes
      (`picker.md`, `defect-seeder.md`; a marked list in each) and shows it passes that agent's hooks and matches an
      allow rule of `settings.autopilot.json`, so the prose cannot drift from the allow-list unnoticed (review round 1:
-     today AC1 is shown by hand only).
+     today AC1 is shown by hand only). A match of the command against the rule's text is not enough (the third case:
+     `cp -r` matched and was refused): the check runs each form through Claude Code's own permission check in
+     `dontAsk` (e.g. `claude -p --settings .claude/settings.autopilot.json` on a throwaway clone), or names the
+     command families that check overrides whatever the rules say (a recursive `cp`, a glob, `..`) and refuses them
+     in the prose.
 
 ### 0-208. Five route walks hold five copies of `isExempt`
 
@@ -4606,6 +4641,78 @@ the control for a reason that is not authentication.
 test keeping its literal exempt set and its context (a new inter-module test dependency: owner); (b) keep five copies
 and add a check that they are equal (a test or a Factory guard comparing the method bodies); (c) leave it, and record in
 ADR-0048 why. Whether the positive controls should agree on `isNotEqualTo(401)` alone is part of it.
+
+### 0-209. The picker copies the work template itself, through an allow rule
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From #0-207's third case (2026-11-06).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (scripts/factory/, .claude/workflows/backlog-autopilot.js, .claude/agents/picker.md,
+.claude/settings.autopilot.json, .github/scripts/test-autopilot-workflow.mjs, a new .github/scripts/test-*.sh),
+root (BACKLOG.md)
+
+**Problem.** Creating `.ai/work/<n>` is a fixed step with one right result, yet the picker does it with commands it
+composes, under an allow rule: `Bash(cp .ai/work/_template/* .ai/work/*)` (#0-207) and `Bash(mkdir -p .ai/work/*)`.
+The first form it was given, `cp -r`, was refused by Claude Code whatever the rule said and stopped a run; the current
+form names the template's files in `picker.md`, so a file added to `_template` is copied only because the picker lists
+the directory first; and the `*` of both rules accepts any argument, held back only by Claude Code's own path check (a
+`..` destination is refused today) and the hooks' heuristics. A script would take the item id, check it
+(`^0-[0-9]+$`), refuse an existing directory, copy the whole template and answer JSON, and the `cp` rule would go.
+
+**Why it is not a picker command.** `guard-factory-scripts.sh` lets only `factory-ops` run `scripts/factory/`
+(backlog #0-131), so the workflow has to call it: (a) `ops('start-work-dir.sh', [item])` after the picker has created
+the branch and before its commit, which splits the picker into two calls; or (b) before the picker, on `main`, which
+leaves an untracked directory behind when the picker answers `none` (`return-to-main.sh` and the preflight would then
+have to clean or refuse it). To decide; each needs cases in `test-autopilot-workflow.mjs`.
+
+### 0-210. Six deny rules of the autopilot settings never match
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Seen 2026-11-06 (#0-207's third case): every
+`claude --settings .claude/settings.autopilot.json` session prints these warnings at start.
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/settings.autopilot.json, possibly .github/scripts/ for a check), root (BACKLOG.md)
+
+**Problem.** Claude Code 2.1.295 warns that two deny rules can never match: `Bash(gh pr edit *human:*)` and
+`Bash(gh pr create *human:*)` mix `*` with the trailing `:*` prefix syntax, so they are matched as a literal prefix.
+The settings' `$comment` calls them "a plain-text second line" behind `guard-protected-bash.sh` (`gh_label_unsafe`,
+backlog #0-126): the hook still refuses every form (`test-hooks.sh` cases), but the second line does not exist. It
+also warns that `Write(./.ai/runs/LOCK)`, `Write(./.ai/runs/state.json)`, `Write(./.ai/STOP)` and
+`Write(./.ai/audit/decisions.md)` are not read by file permission checks (only `Edit(path)` rules are, and cover every
+file tool); their `Edit(…)` twins are there, so these four are dead lines, not a hole.
+
+**Acceptance criteria (draft).**
+AC1. The two label rules have a form Claude Code matches (its warning names `Bash(gh pr edit *human*)`), checked by a
+     refused `gh pr edit 1 --add-label human:agree` in a `dontAsk` session with the hook off, or are removed with the
+     `$comment` saying the hook is the only line.
+AC2. The four `Write(path)` deny rules are removed (or the `$comment` says why they stay).
+AC3. A session started with the settings prints no permission-rule warning; a Factory guard keeps it so if one can
+     (whether Claude Code exposes the check outside a session is to find out).
+
+### 0-211. Two lists of secret paths, and nothing keeps them equal
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the security reviewer's rule gap in review round 1 of #0-207
+(2026-11-06).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/hooks/guard-protected-bash.sh, .claude/hooks/test-hooks.sh, .claude/settings.json,
+.claude/settings.autopilot.json, possibly .github/scripts/ for a check), root (BACKLOG.md)
+
+**Problem.** The secret files an agent must not reach are named twice: as `Read(…)` deny rules (`settings.json`:
+`./docker/.env`, `./docker/secrets/**`, `./.env`, `./.env.*`; `settings.autopilot.json` adds `application-local.y*ml`,
+`~/.config/gh/**`, `~/.claude/.credentials.json`, `~/.claude.json`, `~/.ssh/**`, `~/.netrc`, `~/.git-credentials`,
+`~/.m2/settings*.xml`) and as the `secrets` regex of `guard-protected-bash.sh`, which stops a Bash command naming one
+(a deny rule on Read does not cover `cat` or `cp`). The two have drifted: the regex names `settings-security.xml` but
+not `~/.m2/settings.xml`, nor the root `.env`/`.env.*`. Today a Bash copy of `~/.m2/settings.xml` is refused only
+because Claude Code refuses a source outside the working directory (#0-207's round 1). The root `.env` is inside it,
+yet in review round 2 of #0-207 the same `dontAsk` session refused `cp .ai/work/_template/handoff.md .env
+.ai/work/0-999/` and the same with `.env.local` (both files present, nothing copied). Which layer refused them is not
+shown (no control run): possibly `settings.json`'s `Read(./.env)`/`Read(./.env.*)` deny applied to a `cp` source, so
+the hook's gap is not open today, but it rests on Claude Code, not on the hook. The same shape as FAC-A01: one
+control, two lists, no check.
+
+**Acceptance criteria (draft).**
+AC1. The regex names every path the Read deny rules of both settings files name, or a comment says why one is left
+     out; `test-hooks.sh` has a refused case for each added path.
+AC2. A check (Factory guard or `test-hooks.sh`) derives the list from the deny rules and fails when the regex misses
+     one, so the next added secret cannot drift.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
