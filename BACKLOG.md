@@ -137,6 +137,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Open |
 | [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
 | [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
+| [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4409,12 +4410,14 @@ AC3. `audit-data.sh` puts the summaries of the period's runs into its output; `t
 
 ### 0-207. The picker spends its turns on commands its session refuses
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress — `picker.md` rewritten in this item's PR (owner, 2026-11-04);
-AC2 one run of two (PR #590), AC3 and AC4 open.
+**Type:** ci · **Priority:** Medium · **Status:** In progress — AC1 (PRs #588, #589), AC3 and AC4 done (2026-11-08);
+AC2 one run of two (PR #590): the next autopilot run's picker closes it.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/picker.md, .claude/agents/implementer.md, .claude/agents/implementer-light.md,
-.claude/agents/shipper.md, .claude/settings.autopilot.json, possibly .claude/hooks/_lib.sh and
-.claude/hooks/test-hooks.sh), root (BACKLOG.md)
+.claude/agents/shipper.md, .claude/agents/defect-seeder.md, .claude/settings.autopilot.json, .claude/hooks/_lib.sh,
+.claude/hooks/test-hooks.sh, .claude/workflows/backlog-autopilot.js), ci (.github/scripts/check-agent-commands.rb,
+.github/scripts/test-agent-commands.sh, .github/workflows/factory-guards.yml), docs (docs/ai-factory.md), security
+(README "Infrastructure Hardening", .ai/context/security.md), root (BACKLOG.md, .ai/decisions/0050-…, .ai/decisions/README.md)
 
 **Seen.** The picker composes commands that its autopilot session refuses, then rewrites them one at a time:
 - run 20261104-123011 (#0-198, `wf_8eec043b-6b8`): four calls refused by `guard-protected-bash.sh` (`git show … |
@@ -4486,6 +4489,24 @@ a redirect or `mkdir -p … &&`), the
 shipper 4 (a `git status && git branch && gh pr list` chain, a `python3` heredoc to edit the backlog, a
 `git rm … && git add -A …` chain and a `sed -i`), the architect and an architecture reviewer one or two each through
 `readonly-bash.sh`, and `factory-ops` one: AC3's evidence for the implementers and the shipper.
+
+**Done (2026-11-08, AC3 and AC4).** `implementer.md` and `shipper.md` get a "How commands run here" section from
+the refusals of run 20261106-214534 (implementer 10, shipper 4): one plain command per call, relative paths, no
+`cat`/`grep`/`sed`/`python3` (Read, Grep, Edit, Write instead), a test run as it is with the surefire report read
+after, the PR body written with Write; `implementer-light.md` follows `implementer.md`. `git_grep_unsafe` names a
+refused command by its first two words (`git show: a command separator…`), "git grep" only when it is one
+(`test-hooks.sh`, four cases); the workflow's resume prompt names "Check the item". AC4: each of `picker.md`,
+`implementer.md`, `shipper.md` and `defect-seeder.md` names its command forms in a marked list
+(`<!-- commands:start/end -->`, example values), and Factory guards' `check-agent-commands.rb` (tested by
+`test-agent-commands.sh`) runs every form, for each agent the list is for (implementer-light with implementer's),
+through the session-level Bash hooks of `settings.autopilot.json` and the agent's frontmatter hooks in a throwaway
+repository with a lock, against the allow and deny rules, and fails the families Claude Code refuses whatever the
+rules say (a recursive `cp`, an absolute or `~` path, a separator, pipe or redirect outside quotes, an unquoted glob,
+`..`, `git -C`, `cd`): the second branch of AC4. It found the shipper's `git branch --show-current`, which no rule
+allows, before any run did. Review round 1 (`/review`, 2026-11-08): the decision is ADR-0050; the agents to check are
+every one with Bash, derived from `tools:` with a named `EXEMPT` list (not a fixed list); the rules of both settings
+files are read, as the session merges them; an agent of `ALSO_FOR` is checked with its own frontmatter hooks. Running
+the lists through Claude Code's own check in `dontAsk` is #0-214.
 
 **Acceptance criteria (draft).**
 AC1. `picker.md` names the allowed form of every command it needs; each passes `guard-protected-bash.sh` and runs in
@@ -4652,6 +4673,26 @@ AC1. `backlog-autopilot.js`'s run is wrapped like `seed-bugs.js`'s: an exception
      helper and shows it.
 AC2. `audit.js` and `docs-audit.js` end with an outcome naming the agent and the reason when an agent call throws; a
      test in `test-autopilot-workflow.mjs` shows it for each.
+
+### 0-214. The agents' command lists are not run through Claude Code's own permission check
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From #0-207's AC4 (owner, 2026-11-08: the static check in CI
+now, this one later).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (scripts/factory-admin/ a new script and its test), docs (docs/ai-factory.md)
+
+**Problem.** `check-agent-commands.rb` (#0-207) matches each listed command against the rules' text and a list of
+families Claude Code refuses whatever a rule says; what Claude Code itself decides in `dontAsk` it sees only through
+that list, which was learnt from refusals (`cp -r`, #0-207's third case). A new Claude Code release can refuse more,
+or a form the list does not name, and nothing shows it before a run spends its turns. Only a session shows it: `claude
+-p --settings .claude/settings.autopilot.json` in the devcontainer, on a throwaway clone, asked to run each listed
+command. That needs the owner's Claude login and costs tokens, so it is the owner's tool, run after a Claude Code
+update, not a CI step (CI holds no Claude credentials, and should not).
+
+**Acceptance criteria (draft).**
+AC1. A script in `scripts/factory-admin/` runs every command of the agents' marked lists in a `dontAsk` session with
+     `settings.autopilot.json` on a throwaway clone and reports each one run or refused, with the refusal.
+AC2. `docs/ai-factory.md` names it as a step after updating Claude Code in the devcontainer.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

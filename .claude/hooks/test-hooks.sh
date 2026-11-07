@@ -428,6 +428,11 @@ refusal_says() {
 }
 refusal_says "a glob and grep, no git: not called git grep" "a command with grep and a glob:" "./mvnw test -Dtest='Foo*' | grep FAIL"
 refusal_says "git grep with a pipe: called git grep"       "git grep:" 'git grep foo | head'
+# backlog #0-207: a command that is not git grep is named as it is, so the agent rewrites the command it ran.
+refusal_says "git show piped to grep: called git show"     "BLOCKED by guard-protected-bash.sh: git show: a command separator" 'git show abc:BACKLOG.md | grep x'
+refusal_says "git ls-files piped to grep: git ls-files"    "git ls-files: a command separator" 'git ls-files | grep Foo'
+refusal_says "grep chained to git branch: the command grep" "the command grep: a command separator" 'grep x BACKLOG.md ; git branch'
+refusal_says "git grep chained: still git grep"            "git grep: a command separator" 'git grep -n x ; git branch'
 expect 2 "reviewer: git options before grep"       "$R" -- "$(bash_call 'git -c core.quotepath=off grep foo')"
 
 echo "line continuation (review round 2, sec-b7d2)"

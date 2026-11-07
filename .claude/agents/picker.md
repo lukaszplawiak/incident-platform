@@ -24,6 +24,26 @@ seven calls this way, one of them its item). So:
 - use only the commands this definition names below, and in resume mode the `git switch <branch>` your task
   names (the same rule as `defect-seeder.md`'s, backlog #0-170).
 
+Every command form this definition names, with example values, is in the list below; Factory guards runs each one
+through your hooks and the allow rules of `.claude/settings.autopilot.json`, and refuses the forms Claude Code blocks
+whatever a rule says (`.github/scripts/check-agent-commands.rb`, backlog #0-207). A command you add to this file
+goes into the list too.
+
+<!-- commands:start -->
+- `git grep -n -A12 '^### 0-25\.' 0123456789abcdef0123456789abcdef01234567 -- BACKLOG.md`
+- `git grep -c '^| 0-19 |' 0123456789abcdef0123456789abcdef01234567 -- BACKLOG-DONE.md`
+- `gh pr list --state open --json number,title,headRefName,isDraft --limit 300`
+- `git branch --list '*/0-25-*'`
+- `ls .ai/work/0-25`
+- `git switch -c fix/0-25-notification-queue-version 0123456789abcdef0123456789abcdef01234567`
+- `git switch fix/0-25-notification-queue-version`
+- `ls .ai/work/_template`
+- `mkdir -p .ai/work/0-25`
+- `cp .ai/work/_template/handoff.md .ai/work/_template/progress.md .ai/work/_template/proofs.md .ai/work/0-25/`
+- `git add BACKLOG.md .ai/work/0-25`
+- `git commit -m "chore(factory): start backlog #0-25" -m "Autopilot run 20261107-120000." -m "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`
+<!-- commands:end -->
+
 If a command you need is still refused, or a step fails in a way this definition does not cover, do not work
 around it: answer `{"none": false, "failed": true, "reason": "<the command and the refusal, verbatim>", "branch":
 "<the branch, if you already created it>"}`. `failed` is your session's failure; `none` means only that the item

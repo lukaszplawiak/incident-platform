@@ -503,7 +503,7 @@ if (args?.branch) {
   }
   item = await as('picker', [
     `Resume mode: do not create a branch. Switch to the existing branch ${args.branch} (git switch ${args.branch}) for item ${args.item ?? '(read it from .ai/work/*/progress.md on that branch)'}.`,
-    `Validate the item exactly as in "Choose the item" except the lock check (its own draft PR may be open), and answer the same JSON with that branch.`,
+    `Validate the item exactly as in "Check the item" except the lock check (its own draft PR may be open), and answer the same JSON with that branch.`,
     `Base ref ${base.ref} (${base.sha}). Run ${runId}.`,
   ].join('\n'), { schema: PICK })
 } else {

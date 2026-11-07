@@ -110,6 +110,9 @@ jobs:
       - name: Rule claims check tests
         run: .github/scripts/test-rule-claims.sh
 
+      - name: Agent command check tests
+        run: .github/scripts/test-agent-commands.sh
+
       # The step runner of .github/scripts/ci-local.sh, the owner's local run of this job and of lint-workflows
       # (backlog #0-166): it must run these steps as the runner does, or a local green means nothing.
       - name: Local CI runner tests
@@ -139,6 +142,14 @@ jobs:
         run: |
           set -euo pipefail
           ruby .github/scripts/check-hook-entries.rb
+
+      # Every command form the picker, the implementers, the shipper and the defect-seeder are told to run passes their
+      # hooks and an allow rule of settings.autopilot.json, and is none of the forms Claude Code refuses whatever a
+      # rule says (a recursive cp, an absolute path, a pipe): in dontAsk a refused call costs a turn (backlog #0-207).
+      - name: Agent commands run in an autopilot session
+        run: |
+          set -euo pipefail
+          ruby .github/scripts/check-agent-commands.rb
 
       # A line with `**Escaped from:** <stage>` but no `**Fixes:** #0-<digits>` would vanish from both audits
       # (backlog #0-128); the pattern is scripts/factory/_marker.sh, the one audit-data.sh reads.

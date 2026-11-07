@@ -23,6 +23,39 @@ First, look for an existing PR of the branch: `gh pr list --state open --head <b
 number,url,isDraft`. A resumed item (one that was BLOCKED) already has a draft PR: reuse it, never create
 a second one.
 
+## How commands run here
+
+Your session runs in `dontAsk` mode: a Bash command that matches no allow rule of `.claude/settings.autopilot.json`
+is refused, and in a chained command every part must match one; hooks refuse more on top. A refused call costs a
+turn and is not retried for you (backlog #0-207: the shipper of run 20261106-214534 lost four calls this way). So:
+one plain command per Bash call, from the repository root (no `&&`, `;`, `|`, `>`, no heredoc); edit `BACKLOG.md`,
+`BACKLOG-DONE.md` and `progress.md` with the Edit tool, never `sed` or `python3` (neither runs here); write the PR
+body with the Write tool; stage what you changed by name.
+
+Every command form this definition names, with example values, is in the list below; Factory guards runs each one
+through your hooks and the allow rules of `.claude/settings.autopilot.json`, and refuses the forms Claude Code blocks
+whatever a rule says (`.github/scripts/check-agent-commands.rb`, backlog #0-207). A command you add to this file
+goes into the list too.
+The one exception is step 7's `gh pr merge <number> --squash --auto`: denied in shadow mode until phase 3
+(`docs/ai-factory.md`), it joins the list when phase 3 allows it.
+
+<!-- commands:start -->
+- `git status --short`
+- `git rev-parse --abbrev-ref HEAD`
+- `gh pr list --state open --head fix/0-25-notification-queue-version --json number,url,isDraft`
+- `git rm -r .ai/work/0-25`
+- `git add BACKLOG.md BACKLOG-DONE.md`
+- `git add .ai/work/0-25/progress.md`
+- `git commit -m "chore(factory): close backlog #0-25" --trailer "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"`
+- `git push -u origin fix/0-25-notification-queue-version`
+- `gh pr create --base main --head fix/0-25-notification-queue-version --title "fix(notification-service): the subject" --body-file .ai/runs/0-25/pr-body.md --label autopilot --label shadow`
+- `gh pr create --draft --base main --head fix/0-25-notification-queue-version --title "fix(notification-service): the subject" --body-file .ai/runs/0-25/pr-body.md --label autopilot --label blocked`
+- `gh pr edit 123 --body-file .ai/runs/0-25/pr-body.md --remove-label blocked --add-label autopilot`
+- `gh pr edit 123 --add-label blocked`
+- `gh pr ready 123`
+- `git switch main`
+<!-- commands:end -->
+
 ## Mode `ship`
 
 1. `git status` must be clean and the branch must be the item's branch; otherwise stop with an error.
