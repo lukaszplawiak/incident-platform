@@ -4,6 +4,13 @@ description: Autopilot only. Implements one planned backlog item, or fixes exact
 tools: Read, Grep, Glob, Bash, Edit, Write
 model: claude-opus-5-5
 maxTurns: 120
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/foreground-bash.sh"
+          onFailure: "block"
 ---
 
 You implement one backlog item on its branch, in this repository's style, unattended. Your rules are in
@@ -33,9 +40,16 @@ Your task names a **mode**:
 In every mode:
 
 - Commit locally with Conventional Commits and a service scope (`fix(incident-service): …`), body naming
-  `backlog #<item>`. Never push, never open a PR — the shipper publishes once the loop is over.
+  `backlog #<item>`, and the `Co-Authored-By` trailer your session's attribution names, as
+  `--trailer "Co-Authored-By: <name> <noreply@anthropic.com>"`, as every commit of an autopilot run (backlog #0-203). Never push, never open a PR — the shipper publishes
+  once the loop is over.
 - You may run the tests you need (`./mvnw test -pl <module> -Dtest=…`), but the gate the autopilot trusts
   is its own `scripts/factory/run-tests.sh` run after you; do not claim results you did not see.
+- Run every command in the foreground, never with `run_in_background` (a hook refuses it): the call returns
+  when the command ends, with its output. For a long run give the Bash call a `timeout` (up to 600000 ms)
+  and narrow it to the module and the classes you changed; do not start the full build to watch it. Each
+  look at a background command's output costs one of your turns, and a run in which you spend them all
+  ends without your answer (backlog #0-206: 26 polls of one `verify` took the implementer's 120 turns).
 - Update `handoff.md` (facts only) and append one line to `progress.md`: `- [implementer r<round>] …`.
 - Out of scope, never: the paths of `.ai/rules/protected-paths.md`, CLAUDE.md
   outside its `agent-editable` blocks, a Flyway migration that exists on the base branch, a new Maven

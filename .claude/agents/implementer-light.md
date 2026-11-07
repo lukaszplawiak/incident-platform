@@ -4,6 +4,13 @@ description: Autopilot only. The implementer for backlog items with Complexity l
 tools: Read, Grep, Glob, Bash, Edit, Write
 model: claude-sonnet-5-5
 maxTurns: 80
+hooks:
+  PreToolUse:
+    - matcher: "Bash"
+      hooks:
+        - type: command
+          command: "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/foreground-bash.sh"
+          onFailure: "block"
 ---
 
 You are the implementer for an item the owner rated `**Complexity:** low` (a local change in one class or

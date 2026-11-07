@@ -72,14 +72,35 @@ const record = { item: null, source: null, implementer: null, plannedRules: [], 
 
 const UNBUDGETED = new Set(['factory-ops', 'shipper'])
 
-function as(type, prompt, opts = {}) {
+// Why the latest agent call ended without an answer, named in the stop reason (backlog #0-206). Cleared at every
+// call, so a tolerated `null` (the local second opinion) is not named in a later, unrelated stop (review round 1).
+let noAnswer = null
+
+// Fixed (backlog #0-206): an agent that ends without its structured answer (its maxTurns spent, the runtime's
+// error) made agent() throw, and the exception ended the whole workflow before any caller's `stopItem` ran: runs
+// wf_bc03d7e8-742 (the architect, 40 turns) and wf_c1597fde-23e (the implementer, 120 turns) left `.ai/runs/LOCK`
+// with no state recorded, no draft PR and no notification. Every agent call goes through here, so here it becomes
+// the `null` every caller already stops on ("… gave no answer"), and the reason is kept for the stop. The calls
+// inside stopItem are covered the same way: a shipper that fails still lets `state.sh record` release the lock. If
+// factory-ops itself fails on that `record` (or on `unlock`), the lock stays and the run's outcome still returns; the
+// next preflight then refuses to start (a lock held), so it fails closed, and the cause is in this run's log.
+async function as(type, prompt, opts = {}) {
+  noAnswer = null
   if (!UNBUDGETED.has(type)) {
     calls += 1
-    if (calls > MAX_AGENT_CALLS) { budgetExceeded = true; return Promise.resolve(null) }
+    if (calls > MAX_AGENT_CALLS) { budgetExceeded = true; return null }
   }
+  const label = opts.label ?? type
   const preamble = `You are running as the \`${type}\` agent defined in .claude/agents/${type}.md. ` +
     `If your instructions are not that definition, read the file and follow it exactly. Autopilot run ${runId}.\n\n`
-  return agent(preamble + prompt, { ...opts, [AGENT_TYPE_OPTION]: type, label: opts.label ?? type })
+  try {
+    return await agent(preamble + prompt, { ...opts, [AGENT_TYPE_OPTION]: type, label })
+  } catch (e) {
+    const why = String(e?.message ?? e).replace(/\s+/g, ' ').trim().slice(0, 300) || 'no reason given'
+    noAnswer = `${label}: ${why}`
+    log(`${label} ended without an answer: ${why}`)
+    return null
+  }
 }
 
 function runAll(thunks) {
@@ -144,7 +165,7 @@ const ISOLATION = {
 }
 const PICK = {
   type: 'object', required: ['none'],
-  properties: { none: { type: 'boolean' }, reason: { type: 'string' }, itemId: { type: 'string' }, title: { type: 'string' },
+  properties: { none: { type: 'boolean' }, failed: { type: 'boolean' }, reason: { type: 'string' }, itemId: { type: 'string' }, title: { type: 'string' },
     type: { type: 'string' }, risk: { type: 'string' }, complexity: { type: 'string' }, branch: { type: 'string' },
     workDir: { type: 'string' }, acceptanceCriteria: { type: 'array', items: { type: 'string' } } },
 }
@@ -244,8 +265,12 @@ function enterPhase(name) {
 // count) is never lost to an odd URL (backlog #0-122, review round 1).
 const prArg = (url) => (url && SAFE.test(url) ? url : '-')
 
+// `item` is the picker's answer once it named a branch; `{ itemId, id }` alone (the picker failed, backlog #0-206)
+// records the stop against the item with no draft PR, as there is no branch of the run to push; null, before any
+// item, only releases the lock.
 async function stopItem(item, reason) {
   if (budgetExceeded) reason = `agent budget of ${MAX_AGENT_CALLS} calls exceeded — split the item (last step: ${reason})`
+  if (noAnswer && !reason.includes(noAnswer)) reason = `${reason} (last agent call without an answer: ${noAnswer})`
   log(`BLOCKED ${item?.itemId ?? ''}: ${reason}`)
   if (item?.branch) {
     const draft = await as('shipper', [
@@ -254,6 +279,9 @@ async function stopItem(item, reason) {
       `Review record so far (JSON): ${JSON.stringify(record)}`,
     ].join('\n'), { schema: SHIP })
     await ops('state.sh', ['record', 'blocked', item.id, prArg(draft?.prUrl), stage], STATE_RECORDED, 'state')
+  } else if (item?.id) {
+    await ops('state.sh', ['record', 'blocked', item.id, '-', stage], STATE_RECORDED, 'state')
+    await ops('return-to-main.sh', [], BACK_TO_MAIN, 'back to main')
   } else {
     await ops('state.sh', ['unlock'], STATE_UNLOCKED, 'state')
     await ops('return-to-main.sh', [], BACK_TO_MAIN, 'back to main')
@@ -482,6 +510,19 @@ if (args?.branch) {
   item = await as('picker', `Base ref ${base.ref} (${base.sha}). Run ${runId}. Take item ${next.item} (chosen by next-item.sh: ${record.source}).`, { schema: PICK })
 }
 if (!item) return stopItem(null, 'picker gave no answer')
+// Fixed (backlog #0-206): a picker whose command was refused answered `none`, which ends the run as NOTHING_TO_DO
+// with no state and no notification; refused after `git switch -c`, its branch stayed behind and next-item.sh's
+// branch lock skipped the item from then on, without a word (run wf_da30d2f5-240, #0-197). A failure of the
+// picker's own session is not an empty queue: it stops the item at `pick`, recorded and notified. Recorded as
+// `blocked`, it counts toward consecutiveBlocked on purpose: repeated picker failures are the factory's own fault, and
+// the breaker should stop the autopilot on them as on any other block.
+if (item.failed) {
+  const wantedId = (next?.item ?? (args?.item ? String(args.item) : '')).replace(/^#/, '')
+  // On resume the branch is the owner's (args.branch), not one the picker created and left behind.
+  const left = !args?.branch && item.branch && SAFE.test(item.branch) ? `; the branch ${item.branch} was left: next-item.sh skips the item while it exists` : ''
+  const why = `picker failed: ${String(item.reason ?? 'no reason given').slice(0, 300)}${left}`
+  return stopItem(/^0-\d+$/.test(wantedId) ? { itemId: `#${wantedId}`, id: wantedId } : null, why)
+}
 if (item.none) {
   await ops('state.sh', ['unlock'], STATE_UNLOCKED, 'state')
   await ops('return-to-main.sh', [], BACK_TO_MAIN, 'back to main')

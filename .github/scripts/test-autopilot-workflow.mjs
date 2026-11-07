@@ -361,6 +361,70 @@ test('the item: nothing to do, a malformed next item, a malformed or different p
   }
 })
 
+// backlog #0-206: what the runtime does when an agent ends without its structured answer (its maxTurns spent):
+// agent() throws. Runs wf_bc03d7e8-742 and wf_c1597fde-23e ended there, leaving the lock with no state.
+const ENDS_WITHOUT_ANSWER = () => { throw new Error('the agent ended without calling StructuredOutput (max turns reached)') }
+const stateCalls = (calls) => calls.filter((c) => c.key === 'ops:state.sh').map((c) => c.prompt.slice(c.prompt.indexOf('scripts/factory/')))
+
+test('an agent that ends without an answer stops the item: draft PR, state recorded with the stage, notified', async () => {
+  for (const [type, stage, why] of [
+    ['architect', 'plan', /^architect gave no answer \(last agent call without an answer: architect: the agent ended without calling StructuredOutput \(max turns reached\)\)$/],
+    ['implementer-light', 'implement', /^implementer gave no answer \(last agent call without an answer: implementer-light: .*max turns reached/],
+  ]) {
+    const { outcome, calls, logs } = await run({ answers: { [type]: ENDS_WITHOUT_ANSWER } })
+    assert.equal(outcome.outcome, 'BLOCKED', type)
+    assert.equal(outcome.item, '#0-1')
+    assert.match(outcome.reason, why)
+    assert.ok(logs.some((l) => l.startsWith(`${type} ended without an answer: `)), `${type}: the log names the agent`)
+    const draft = calls.find((c) => c.key === 'shipper')
+    assert.ok(draft && /^Mode: blocked\./m.test(draft.prompt), `${type}: a draft PR of the branch`)
+    assert.ok(stateCalls(calls).includes(`scripts/factory/state.sh 'record' 'blocked' '0-1' 'https://github.com/o/r/pull/7' '${stage}'`),
+      `${type}: the state recorded with the stage (record also releases the lock): ${stateCalls(calls).join(' | ')}`)
+    assert.ok(calls.some((c) => c.key === 'ops:notify.sh' && c.prompt.includes("notify.sh 'blocked' '0-1'")), `${type}: notified`)
+  }
+})
+
+test('a tolerated no-answer earlier in the run is not named in a later, unrelated stop', async () => {
+  const { outcome, logs } = await run({ args: { localReview: true },
+    answers: { 'ops:local-review.sh': ENDS_WITHOUT_ANSWER, 'acceptance-reviewer': null } })
+  assert.ok(logs.some((l) => l.startsWith('local second opinion ended without an answer: ')), 'the local review did throw')
+  assert.equal(outcome.outcome, 'BLOCKED')
+  assert.equal(outcome.reason, 'acceptance-reviewer gave no answer', 'no suffix from the earlier local review')
+})
+
+test('a shipper that ends without an answer while stopping still records the state and notifies', async () => {
+  const { outcome, calls } = await run({ answers: { architect: null, shipper: ENDS_WITHOUT_ANSWER } })
+  assert.equal(outcome.outcome, 'BLOCKED')
+  assert.ok(stateCalls(calls).includes("scripts/factory/state.sh 'record' 'blocked' '0-1' '-' 'plan'"), stateCalls(calls).join(' | '))
+  assert.ok(keys(calls).includes('ops:notify.sh'))
+})
+
+test("the picker's own failure stops the item at pick; a real none is still nothing to do", async () => {
+  for (const [pick, why] of [
+    [{ none: false, failed: true, reason: 'git switch -c refused by guard-protected-bash.sh' }, /^picker failed: git switch -c refused by guard-protected-bash\.sh$/],
+    [{ none: false, failed: true, reason: 'cp refused', branch: 'fix/0-1-an-item' },
+      /^picker failed: cp refused; the branch fix\/0-1-an-item was left: next-item\.sh skips the item while it exists$/],
+  ]) {
+    const { outcome, calls } = await run({ answers: { picker: pick } })
+    assert.equal(outcome.outcome, 'BLOCKED'); assert.equal(outcome.item, '#0-1'); assert.match(outcome.reason, why)
+    assert.ok(stateCalls(calls).includes("scripts/factory/state.sh 'record' 'blocked' '0-1' '-' 'pick'"), stateCalls(calls).join(' | '))
+    assert.ok(!stateCalls(calls).some((s) => s.includes("'branch'")), 'no branch is recorded in the lock for a failed pick')
+    assert.ok(!keys(calls).includes('shipper'), 'no draft PR: the run has no branch of its own to push')
+    assert.ok(keys(calls).includes('ops:return-to-main.sh') && keys(calls).includes('ops:notify.sh'))
+    assert.ok(!keys(calls).includes('architect'))
+  }
+  // On resume the branch is the owner's: its stop does not say the picker left it (review round 1).
+  const resumed = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' },
+    answers: { picker: { none: false, failed: true, reason: 'git switch refused', branch: 'fix/0-1-an-item' } } })
+  assert.equal(resumed.outcome.outcome, 'BLOCKED'); assert.equal(resumed.outcome.reason, 'picker failed: git switch refused')
+  assert.ok(stateCalls(resumed.calls).includes("scripts/factory/state.sh 'record' 'blocked' '0-1' '-' 'pick'"))
+  const thrown = await run({ answers: { picker: ENDS_WITHOUT_ANSWER } })
+  assert.equal(thrown.outcome.outcome, 'BLOCKED'); assert.match(thrown.outcome.reason, /^picker gave no answer \(last agent call without an answer: picker: /)
+  const none = await run({ answers: { picker: { none: true, reason: '#0-1 has no numbered acceptance criteria' } } })
+  assert.equal(none.outcome.outcome, 'NOTHING_TO_DO')
+  assert.ok(!keys(none.calls).includes('ops:notify.sh') && !stateCalls(none.calls).some((s) => s.includes("'record'")))
+})
+
 test("the run's branch is recorded in the lock before any agent works on it, or the run stops", async () => {
   const { calls } = await run()
   const at = calls.findIndex((c) => /state\.sh 'branch' 'fix\/0-1-an-item'/.test(c.prompt))

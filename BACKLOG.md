@@ -128,15 +128,15 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
-| [0-203](#0-203-the-architects-and-the-block-commits-carry-no-co-authored-by-trailer) | The architect's and the block commits carry no `Co-Authored-By` trailer | ci | Low | Open |
 | [0-204](#0-204-a-runs-record-keeps-no-run-id-no-agent-calls-and-no-stage-of-each-commit) | A run's record keeps no run id, no agent calls and no stage of each commit | ci | Low | Open |
 | [0-205](#0-205-a-runs-transcripts-expire-after-90-days-and-nothing-reads-them-per-agent) | A run's transcripts expire after 90 days and nothing reads them per agent | ci | Low | Open |
-| [0-206](#0-206-a-work-agent-that-ends-without-an-answer-leaves-the-lock-and-no-state) | A work agent that ends without an answer leaves the lock and no state | ci | Medium | Open |
 | [0-207](#0-207-the-picker-spends-its-turns-on-commands-its-session-refuses) | The picker spends its turns on commands its session refuses | ci | Medium | In progress |
 | [0-208](#0-208-five-route-walks-hold-five-copies-of-isexempt) | Five route walks hold five copies of `isExempt` | tech-debt | Low | Open |
 | [0-209](#0-209-the-picker-copies-the-work-template-itself-through-an-allow-rule) | The picker copies the work template itself, through an allow rule | ci | Low | Open |
 | [0-210](#0-210-six-deny-rules-of-the-autopilot-settings-never-match) | Six deny rules of the autopilot settings never match | ci | Low | Open |
 | [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Open |
+| [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
+| [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4335,58 +4335,6 @@ host during a run") with a guard that notices a HEAD move by someone else during
 how the owner reviews the bot's branch (fetch from `origin`), the `--admin` merge from the host, the clean-`main`
 preflight, and the cost of a second Maven/Docker cache.
 
-### 0-203. The architect's and the block commits carry no `Co-Authored-By` trailer
-
-**Type:** ci · **Priority:** Low · **Status:** Open. From autopilot run 20261102-113931 (#0-199, owner 2026-11-02).
-**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** ci (.claude/hooks/readonly-bash.sh, .claude/hooks/test-hooks.sh, .claude/agents/architect.md), root (BACKLOG.md)
-
-**Problem.** On the branch of run 20261102-113931, `fae74d6a` (the architect's "docs(factory): plan backlog 0-199")
-and `edc3946e` ("chore(factory): block backlog #0-199") have no `Co-Authored-By` trailer, while the run's
-`5784e01c` (start) and #0-192's record and close commits (`42495c1d`, `c23c9909`) have one. The architect commits
-through `readonly-bash.sh --architect`, which refuses any command holding `<`, `>` or a newline
-(`readonly-bash.sh`, the metacharacter case before the mode checks), so its `git commit` can carry only a one-line
-message, no trailer with an address in angle brackets. No repository rule requires the trailer today (no hit in
-`.claude/agents/`, `.ai/rules/`, `scripts/factory/`); it comes from the session's attribution, so the history shows
-some factory commits as the model's and others not. Which path wrote `edc3946e` is to check.
-
-`git commit -F <path>` already passes the `--architect` mode (`readonly-bash.sh`: only `-a`, `--all`, `--amend`, `-n`
-and `--no-verify` are refused) with any path, so the architect can today put the content of any file it can read
-into a commit message, which the shipper then pushes.
-
-**Approach (to decide).** Let the architect commit from a message file, restricting `-F` to
-`.ai/work/<item>/` (checked like its `git add` paths), instead of loosening the metacharacter rule, or have a factory script
-write those commits with the trailer; or decide the trailer is not wanted on factory commits and drop it everywhere,
-recorded where the agents' commit conventions live.
-
-**Acceptance criteria (draft).**
-AC1. Every commit an autopilot run writes either carries the same attribution trailer or none does, by a rule stated
-     in the agents' definitions; a `test-hooks.sh` case shows the architect's commit path allows the chosen form and
-     still refuses redirects and chaining.
-AC2. `readonly-bash.sh --architect` refuses `git commit -F` (and `--file`) with a path outside `.ai/work/`, or one
-     with `..`; a `test-hooks.sh` case shows it.
-
-**Extended (owner, 2026-11-03): which agent wrote a commit.** Every commit of a run is authored by
-`lukaszplawiakbot`, whichever of picker, architect, implementer (first round, fix-tests, fix-review), self-check or
-shipper wrote it, and the only attribution in it is the trailer the agent writes itself, which proves nothing. So
-`git blame` cannot tell the pipeline audit (#0-121) which agent introduced a line, and the `human:introduced-*`
-labels (`.ai/rules/audit.md`) are its only source. One decision on the factory's commit message, so it belongs here
-with the trailer question above: every autopilot commit carries `Factory-Run: <runId>` and `Factory-Agent: <agent>`,
-and a hook on `git commit` refuses one whose `Factory-Agent` is not the call's `agent_type` or whose `Factory-Run` is
-not the run in `.ai/runs/LOCK` — the two facts a hook can check. The stage and round (`fix-review r2`) are not
-trailers: a hook does not know them and the agent would only declare them; the workflow records them with the
-commit range of each call (#0-204). `git commit --trailer <key>=<value>` puts a trailer on a one-line command, which
-may also settle the architect's newline problem above (to check with `readonly-bash.sh`). Not done by this item:
-phase 3's `--squash` (`docs/ai-factory.md:48`) would drop the branch's commits and their trailers from `main`'s
-history; #0-204 corrects that line.
-**Touches (extension, to settle at `/ready`):** ci (the commit guard of each committing agent and its twin in both
-settings files, `.claude/hooks/test-hooks.sh`, `.github/scripts/check-hook-entries.rb` if the guard is new, a
-Factory guards check of the trailers on a factory PR's commits), docs (docs/ai-factory.md).
-AC3. (draft) Every commit an autopilot run writes carries `Factory-Run` and `Factory-Agent`; a commit whose
-     `Factory-Agent` differs from the call's `agent_type`, or whose `Factory-Run` differs from the run in the lock, is
-     refused; `test-hooks.sh` cases show both refusals and an allowed commit for each committing agent.
-AC4. (draft) Factory guards fails a PR from the bot's account with a commit that lacks either trailer.
-
 ### 0-204. A run's record keeps no run id, no agent calls and no stage of each commit
 
 **Type:** ci · **Priority:** Low · **Status:** Open. Owner, 2026-11-03 (what the factory keeps of a run, for the audits).
@@ -4458,47 +4406,6 @@ AC1. After a run, its transcripts are in the archive under the run id, and a sum
 AC2. No summary holds a file's content or a token-shaped string; the test shows a fixture with both left out.
 AC3. `audit-data.sh` puts the summaries of the period's runs into its output; `test-audit-data.sh` shows it, and an
      audit with no archive still runs.
-
-### 0-206. A work agent that ends without an answer leaves the lock and no state
-
-**Type:** ci · **Priority:** Medium · **Status:** Open. From the two #0-199 runs of 2026-11-02 (owner).
-**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
-**Touches:** ci (.claude/workflows/backlog-autopilot.js, .github/scripts/test-autopilot-workflow.mjs,
-.claude/agents/implementer.md, .claude/agents/implementer-light.md, .claude/agents/picker.md, possibly a hook on the implementers' Bash and its
-twin in both settings files, .claude/hooks/test-hooks.sh), docs (docs/ai-factory.md)
-
-**Seen.** Run `wf_bc03d7e8-742`: the architect used its 40 turns (`architect.md` `maxTurns`), most of them on a commit
-`readonly-bash.sh` refused (#0-203). Run `wf_c1597fde-23e`: the implementer used its 120 turns, after starting a full
-`verify` in the background and checking its output with `grep` 26 times. In both the agent ended without a structured
-answer, the workflow stopped there, and `.ai/runs/LOCK` stayed behind with no `state.sh record`, no draft PR and no
-notification; `consecutiveBlocked` did not count either run. The work itself was on the branch and shipped by a later
-branch-mode run (PR #583).
-A second case, from review round 2 of #0-207 (2026-11-05): `picker.md` answers a refused command with
-`{"none": true, …}`, and the workflow reads every `none` as "nothing to do" (`backlog-autopilot.js:485-489`): it
-releases the lock and returns to `main`, but records no state and sends no notification. Refused after
-`git switch -c`, the branch stays behind and `next-item.sh`'s branch lock skips the item from then on, without a word
-(the #0-197 run of 2026-11-04, `wf_da30d2f5-240`). A failure of the picker's own session is not an empty queue.
-
-**Problem.** `as()` (`backlog-autopilot.js:75`) returns the runtime's `agent()` as is; its callers handle a `null`
-answer (`stopItem`), but an agent that ends without one stops the whole workflow before `stopItem` runs. And the
-implementers' definitions say which tests they may run (`implementer.md:37`) but not that they must run them in the
-foreground: a background run plus polling spends the turn budget on waiting.
-
-**Approach (to decide).** An agent call that ends without an answer becomes `null` with its reason (the agent, "no
-answer", the turn limit if the runtime says so), so the item is stopped through `stopItem`: the lock is released, the
-state recorded with the stage, a draft PR when there is a branch. The implementers run tests in the foreground only
-(the gate is `run-tests.sh` after them); whether a hook also refuses `run_in_background` for them, or the definitions
-are enough, is to decide.
-
-**Acceptance criteria (draft).**
-AC1. A workflow test whose fake `agent()` ends without an answer for the architect, and for the implementer, shows the
-     item BLOCKED with the stage, the lock released, the state recorded and the notification sent.
-AC2. `implementer.md` and `implementer-light.md` say tests run in the foreground and output is not polled; if a hook
-     enforces it, `test-hooks.sh` shows a background Bash call refused for both and allowed for other agents.
-AC3. The picker has an answer for its own failure, distinct from `none` (e.g. `{"failed": true, "reason": …}`, a
-     refused command among them), and `picker.md` uses it. The workflow routes it to `stopItem` (stage `pick`, state
-     recorded, notification sent, the branch named when one was created). A workflow test shows it, next to one
-     where a real `none` still ends as NOTHING_TO_DO.
 
 ### 0-207. The picker spends its turns on commands its session refuses
 
@@ -4694,6 +4601,57 @@ AC1. The regex names every path the Read deny rules of both settings files name,
      out; `test-hooks.sh` has a refused case for each added path.
 AC2. A check (Factory guard or `test-hooks.sh`) derives the list from the deny rules and fails when the regex misses
      one, so the next added secret cannot drift.
+
+### 0-212. A factory commit does not say which run and which agent wrote it
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Split from #0-203 (owner, 2026-11-03; split 2026-11-07, when
+#0-203 shipped the attribution trailer and the architect's commit form).
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** #0-204 (the run id in the record)
+**Touches:** ci (the commit guard of each committing agent and its twin in both settings files, `.claude/hooks/test-hooks.sh`, `.github/scripts/check-hook-entries.rb` if the guard is new, a Factory guards check of the trailers on a factory PR's commits), docs (docs/ai-factory.md).
+
+**Problem.** Every commit of a run is authored by
+`lukaszplawiakbot`, whichever of picker, architect, implementer (first round, fix-tests, fix-review), self-check or
+shipper wrote it, and the only attribution in it is the trailer the agent writes itself, which proves nothing. So
+`git blame` cannot tell the pipeline audit (#0-121) which agent introduced a line, and the `human:introduced-*`
+labels (`.ai/rules/audit.md`) are its only source. Proposed: every autopilot commit carries `Factory-Run: <runId>` and `Factory-Agent: <agent>`,
+and a hook on `git commit` refuses one whose `Factory-Agent` is not the call's `agent_type` or whose `Factory-Run` is
+not the run in `.ai/runs/LOCK` — the two facts a hook can check. The stage and round (`fix-review r2`) are not
+trailers: a hook does not know them and the agent would only declare them; the workflow records them with the
+commit range of each call (#0-204). `git commit --trailer <key>=<value>` puts a trailer on a one-line command; the
+architect's one allowed commit form (`readonly-bash.sh --architect`, #0-203) must then admit these two. Not done by this item:
+phase 3's `--squash` (`docs/ai-factory.md:48`) would drop the branch's commits and their trailers from `main`'s
+history; #0-204 corrects that line.
+
+**Acceptance criteria (draft).**
+AC1. Every commit an autopilot run writes carries `Factory-Run` and `Factory-Agent`; a commit whose
+     `Factory-Agent` differs from the call's `agent_type`, or whose `Factory-Run` differs from the run in the lock, is
+     refused; `test-hooks.sh` cases show both refusals and an allowed commit for each committing agent.
+AC2. Factory guards fails a PR from the bot's account with a commit that lacks either trailer.
+
+### 0-213. An exception ends the autopilot and the audit workflows with no outcome
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From #0-206 (2026-11-07): the same class of defect, outside its
+Touches.
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/workflows/audit.js,
+.claude/workflows/docs-audit.js), ci (.github/scripts/test-autopilot-workflow.mjs), docs (docs/ai-factory.md)
+
+**Problem.** #0-206 made an agent call that throws (agent() ends without its structured answer, e.g. its `maxTurns`
+spent) a `null` in `backlog-autopilot.js`'s `as()`, so every agent's failure reaches `stopItem`. Two exceptions still
+end a workflow with no outcome:
+- in `backlog-autopilot.js`, one of the script's own code between two stops (a field read off an answer the schema
+  let through, a helper's error): the run ends with `.ai/runs/LOCK` held, no state, no notification;
+- in `audit.js` and `docs-audit.js`, whose `as()` (`audit.js:25`, `docs-audit.js:16`) calls `agent()` bare and whose
+  runs have no catch: an analyst that ends without an answer ends the audit with no report and no reason.
+`seed-bugs.js` already has the general form: `try { return await measure() } catch (e) { return finish({ outcome:
+'FAILED', … }) }` around the whole run (#0-176), with `finish()` that never throws.
+
+**Acceptance criteria (draft).**
+AC1. `backlog-autopilot.js`'s run is wrapped like `seed-bugs.js`'s: an exception outside an agent call stops the
+     item through `stopItem` (lock released, state recorded with the stage, notified); a workflow test throws from a
+     helper and shows it.
+AC2. `audit.js` and `docs-audit.js` end with an outcome naming the agent and the reason when an agent call throws; a
+     test in `test-autopilot-workflow.mjs` shows it for each.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

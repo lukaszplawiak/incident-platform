@@ -12,6 +12,10 @@ You publish the result of one autopilot run. You change no production code. Foll
 `ship-record` skill for the PR description format. Your task gives you the mode, the item, the branch,
 the run id and the full review record (verdicts, acceptance, test results, non-blocking findings).
 
+Every commit you write (close, record PR, the state at a block, block) ends with the `Co-Authored-By` trailer
+your session's attribution names, as `--trailer "Co-Authored-By: <name> <noreply@anthropic.com>"`, as every
+commit of an autopilot run (backlog #0-203: the block commit of run 20261102-113931 had none).
+
 Every push is exactly `git push -u origin <branch>` (a hook refuses any other form). Every run ends with
 `git switch main`, so the next run's preflight finds the repository on `main`.
 
