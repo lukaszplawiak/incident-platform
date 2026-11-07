@@ -7,7 +7,8 @@
 #   readonly-bash.sh            git diff/log/show/status/rev-parse/merge-base/ls-files/blame/cat-file/grep
 #                               (git grep: tracked files only, never -O, --no-index, --untracked, -f)
 #   readonly-bash.sh --gh-read  ... plus `gh pr list/view/diff`, `gh issue list/view`, `gh run list/view` (auditors)
-#   readonly-bash.sh --architect ... plus `git add` of .ai/decisions/ and .ai/work/ paths, and `git commit`
+#   readonly-bash.sh --architect ... plus `git add` of .ai/decisions/ and .ai/work/ paths, and `git commit` in one
+#                               form: -m "<subject>", optionally --trailer "Co-Authored-By: <name> <noreply@anthropic.com>"
 #   readonly-bash.sh --agent <names> [mode]   the same, at session level, for those agents' calls only (#0-164)
 #
 # One command per call: no pipes, chaining, redirects or substitutions. Fails closed.
@@ -37,7 +38,7 @@ mode=${1:-}
 HINT="Read a file with the Read tool. Search with git grep -n -e <pattern> -e <other> -- <paths> (each alternative its own -e, not a|b) and list files with git ls-files; one command per call, from the repository root (no git -C)."
 case "$mode" in
     --gh-read)   HINT="$HINT Also allowed here: gh pr list/view/diff, gh issue list/view, gh run list/view." ;;
-    --architect) HINT="$HINT Also allowed here: git add of .ai/decisions/ and .ai/work/ paths, plain git commit." ;;
+    --architect) HINT="$HINT Also allowed here: git add of .ai/decisions/ and .ai/work/ paths, and git commit -m \"<subject>\" --trailer \"Co-Authored-By: <name> <noreply@anthropic.com>\"." ;;
     '') ;;
     # Fails closed on a mode it does not know (FAC-S04): `--k8s` is gone (backlog #0-182), and a frontmatter or a
     # settings twin that still passes it, or a typo, must not leave its agent with no guard of its own.
@@ -48,6 +49,22 @@ if [ -n "$only" ] && ! applies_to_agent "$only" "$input"; then exit 0; fi
 cmd=$(json_get "$input" '.tool_input.command'); rc=$?
 json_checked "$rc" "this agent's Bash guard"
 [ -n "$cmd" ] || exit 0
+
+# The architect's commit, in one form only (backlog #0-203): a subject of plain characters and, optionally, the
+# attribution trailer every factory commit carries. Matched as a whole command before the metacharacter check below,
+# as the trailer's address holds `<` and `>`: inside the double quotes of this exact shape they are text, and nothing
+# else of the command can hold one. Fixed: the metacharacter check refused the trailer, so the architect's commits
+# were the factory's only ones without it (run 20261102-113931, #0-199; 671a53eb, #0-197). Every other form is
+# refused, `-F`/`--file` among them: with a free path the architect could put the content of any file it can read
+# into a commit message, which the shipper then pushes.
+ARCHITECT_COMMIT='^git commit -m "[A-Za-z0-9 ():#._/,-]+"( --trailer "Co-Authored-By: [A-Za-z0-9.]+( [A-Za-z0-9.]+)* <noreply@anthropic[.]com>")?$'
+if [ "$mode" = --architect ]; then
+    case "$cmd" in
+        'git commit'*)
+            [[ $cmd =~ $ARCHITECT_COMMIT ]] && exit 0
+            block "the architect commits in one form only: git commit -m \"<subject>\" --trailer \"Co-Authored-By: <name> <noreply@anthropic.com>\" (no -F, --file, -a, --amend, --no-verify or other options; the subject in letters, digits, spaces and ():#._/,-). $HINT" ;;
+    esac
+fi
 
 # '$(' is the literal text of a substitution, matched, not run (backlog #0-149).
 # shellcheck disable=SC2016
@@ -96,10 +113,6 @@ if [ "$mode" = --architect ]; then
                 *) block "the architect may stage only .ai/decisions/ and .ai/work/ paths, not $path" ;;
             esac
         done
-        exit 0
-    fi
-    if [ "$1 ${2:-}" = "git commit" ]; then
-        case "$cmd" in *" -a"*|*"--all"*|*"--amend"*|*" -n"*|*"--no-verify"*) block "plain git commit only (no -a, --amend, --no-verify)";; esac
         exit 0
     fi
 fi

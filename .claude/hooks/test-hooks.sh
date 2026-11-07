@@ -325,6 +325,27 @@ expect 0 "architect stages an ADR"        "$R" --architect -- "$(bash_call 'git 
 expect 2 "architect stages code"          "$R" --architect -- "$(bash_call 'git add svc/src/main/java/A.java')"
 expect 0 "architect commits"              "$R" --architect -- "$(bash_call 'git commit -m "docs(factory): plan backlog 0-25"')"
 expect 2 "architect amends"               "$R" --architect -- "$(bash_call 'git commit --amend -m x')"
+# backlog #0-203: the architect's commit carries the attribution trailer in one exact form, nothing else passes.
+TRAILER='--trailer "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"'
+expect 0 "architect commits with the trailer"      "$R" --architect -- "$(bash_call "git commit -m \"docs(factory): plan backlog 0-25\" $TRAILER")"
+expect 2 "architect commit -F (any file into a message)" "$R" --architect -- "$(bash_call 'git commit -F docker/.env')"
+expect 2 "architect commit --file"                 "$R" --architect -- "$(bash_call 'git commit --file=.ai/work/0-25/msg')"
+expect 2 "architect commit -F from .ai/work"       "$R" --architect -- "$(bash_call 'git commit -F .ai/work/0-25/progress.md')"
+expect 2 "architect commit -C (another message)"   "$R" --architect -- "$(bash_call 'git commit -C HEAD~3')"
+expect 2 "architect commit -a"                     "$R" --architect -- "$(bash_call 'git commit -a -m "docs(factory): plan backlog 0-25"')"
+expect 2 "architect commit --no-verify"            "$R" --architect -- "$(bash_call 'git commit --no-verify -m "x"')"
+expect 2 "architect commit, then a redirect"       "$R" --architect -- "$(bash_call "git commit -m \"x\" $TRAILER > /tmp/out")"
+expect 2 "architect commit, then a chain"          "$R" --architect -- "$(bash_call "git commit -m \"x\" $TRAILER && git push")"
+expect 2 "architect commit, a redirect in the trailer" "$R" --architect -- "$(bash_call 'git commit -m "x" --trailer "Co-Authored-By: a > /tmp/x <noreply@anthropic.com>"')"
+expect 2 "architect commit, another address"       "$R" --architect -- "$(bash_call 'git commit -m "x" --trailer "Co-Authored-By: Claude <me@example.com>"')"
+expect 2 "architect commit, another trailer key"   "$R" --architect -- "$(bash_call 'git commit -m "x" --trailer "Signed-off-by: Claude <noreply@anthropic.com>"')"
+expect 2 "architect commit, a substitution in the subject" "$R" --architect -- "$(bash_call 'git commit -m "$(cat docker/.env)"')"
+expect 2 "architect commit, a quote ends the subject early" "$R" --architect -- "$(bash_call 'git commit -m "x" -F docker/.env -m "y"')"
+expect 2 "architect commit, a newline"             "$R" --architect -- "$(bash_call "git commit -m \"x\"
+git push")"
+expect 2 "architect commit-tree"                   "$R" --architect -- "$(bash_call 'git commit-tree HEAD^{tree} -m x')"
+expect 2 "reviewer cannot commit with the trailer" "$R" -- "$(bash_call "git commit -m \"x\" $TRAILER")"
+expect_hint "architect commit refusal names the form" 'git commit -F x' --architect 'git commit -m'
 expect 2 "reviewer cannot commit"         "$R" -- "$(bash_call 'git commit -m x')"
 expect 0 "auditor gh pr diff"             "$R" --gh-read -- "$(bash_call 'gh pr diff 12')"
 
@@ -652,6 +673,29 @@ expect 0 "session-level: the verifier, the artifact" "$RS" --agent verifier "${G
 expect 2 "session-level: the verifier, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call verifier .ai/runs/0-25/tests-r1-0.log)"
 expect 0 "session-level: another agent, the test log" "$RS" --agent verifier "${GATE[@]}" -- "$(read_call review-general .ai/runs/0-25/tests-r1-0.log)"
 
+echo "foreground-bash (backlog #0-206): the implementers run no command in the background"
+FG="$HOOKS/foreground-bash.sh"
+# bg_call <agent_type or ""> <command> <run_in_background: true|false|absent>
+bg_call() {
+    local bg=${3:-absent}
+    if [ "$bg" = absent ]; then jq -cn --arg a "$1" --arg c "$2" '{tool_name: "Bash", tool_input: {command: $c}} + (if $a == "" then {} else {agent_type: $a} end)'
+    else jq -cn --arg a "$1" --arg c "$2" --argjson b "$bg" '{tool_name: "Bash", tool_input: {command: $c, run_in_background: $b}} + (if $a == "" then {} else {agent_type: $a} end)'; fi
+}
+expect 0 "a test in the foreground"                      "$FG" -- "$(bg_call '' './mvnw test -pl shared')"
+expect 0 "run_in_background false"                       "$FG" -- "$(bg_call '' './mvnw test -pl shared' false)"
+expect 2 "a test in the background"                      "$FG" -- "$(bg_call '' './mvnw verify' true)"
+expect 2 "run_in_background as a string"                 "$FG" -- '{"tool_name":"Bash","tool_input":{"command":"x","run_in_background":"yes"}}'
+expect 2 "an argument but --agent is refused"            "$FG" --architect -- "$(bg_call '' 'x')"
+expect 2 "twin: the implementer in the background"       "$FG" --agent implementer,implementer-light -- "$(bg_call implementer './mvnw verify' true)"
+expect 2 "twin: implementer-light in the background"     "$FG" --agent implementer,implementer-light -- "$(bg_call implementer-light './mvnw verify' true)"
+expect 0 "twin: the implementer in the foreground"       "$FG" --agent implementer,implementer-light -- "$(bg_call implementer './mvnw verify' false)"
+expect 0 "twin: another agent is not its business"       "$FG" --agent implementer,implementer-light -- "$(bg_call shipper 'x' true)"
+expect 0 "twin: the main session is not its business"    "$FG" --agent implementer,implementer-light -- "$(bg_call '' 'x' true)"
+expect 2 "twin: --agent without names"                   "$FG" --agent -- "$(bg_call implementer 'x' true)"
+err=$(printf '%s' "$(bg_call '' './mvnw verify' true)" | "$FG" 2>&1 >/dev/null)
+if grep -qF -- "foreground" <<<"$err" && grep -qF -- "timeout" <<<"$err"; then echo "  ok: the refusal names the alternative"
+else echo "::error::foreground-bash refusal should name the foreground and the timeout: $err"; failures=$((failures+1)); fi
+
 echo "session-level twins: --agent (backlog #0-164)"
 # agent_call <agent> <tool> <field> <value> — a call as a session-level hook sees it: with agent_type, or (agent
 # empty) without it, as the main session's calls are.
@@ -772,6 +816,7 @@ FAILS_CLOSED=(
     "guard-write-in-repo.sh||$(file_call Write svc/src/main/java/A.java)"
     "webfetch-allowlist.sh||$(fetch_call verifier https://osv.dev/vulnerability/x)"
     "read-scope.sh|.ai/runs/|$(file_call Read .ai/runs/x.json)"
+    "foreground-bash.sh||$(bash_call './mvnw test -pl shared')"
 )
 # Three broken copies of the directory: no helper; a helper that aborts the hook while it loads (an unset variable
 # under set -u ends the shell, which `|| exit 2` on the load line cannot see: only the EXIT trap turns it into 2);

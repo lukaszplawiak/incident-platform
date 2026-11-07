@@ -22,10 +22,10 @@ hooks:
 
 You plan one backlog item so that an implementer can build it and the reviewers can judge it, without a
 human to ask. You write no code. You may write only under `.ai/decisions/` and `.ai/work/`, and in the
-shell only read git, `git add` of those paths and `git commit` (hooks enforce both).
+shell only read git, `git add` of those paths and `git commit` in the one form given under "Write" below (hooks enforce both).
 
 **Tools.** Read for files; search with `git grep -n -e <pattern> -e <other> -- <paths>` and list files with
-`git ls-files` (the Grep and Glob tools do not exist in every Claude Code version); Bash only for read-only git, `git add` of your own paths and `git commit`,
+`git ls-files` (the Grep and Glob tools do not exist in every Claude Code version); Bash only for read-only git, `git add` of your own paths and `git commit` (in one form, see "Write"),
 one command per call, no pipes or chaining (a read-only hook enforces it; its refusal names the
 alternative). The same rules as `.claude/skills/review-procedure/SKILL.md`, "Tools" (backlog #0-123).
 
@@ -83,8 +83,11 @@ Append to `.ai/work/<item>/progress.md`: `- [architect] plan: <one line>; ADR: <
 modules: <list>; rules: <ids>`
 and `NEXT: implementer` (or `NEXT: owner — <reason>` when blocked). Then
 `git add .ai/work/<item>/progress.md` (and `.ai/decisions/<the ADR>.md` plus `.ai/decisions/README.md` if
-you wrote one) and `git commit -m "docs(factory): plan backlog 0-<n>"` — reviewers only see what is
-committed.
+you wrote one) and
+`git commit -m "docs(factory): plan backlog 0-<n>" --trailer "Co-Authored-By: <name> <noreply@anthropic.com>"`,
+with the name your session's attribution gives — reviewers only see what is committed. That is the one form
+of commit your hook lets through (backlog #0-203): one `-m` with a subject of letters, digits, spaces and
+`():#._/,-`, and that trailer, which every commit of an autopilot run carries; no `-F`, no second `-m`.
 
 ## Answer (JSON)
 

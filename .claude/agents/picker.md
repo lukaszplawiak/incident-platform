@@ -24,8 +24,12 @@ seven calls this way, one of them its item). So:
 - use only the commands this definition names below, and in resume mode the `git switch <branch>` your task
   names (the same rule as `defect-seeder.md`'s, backlog #0-170).
 
-If a command you need is still refused, do not work around it: answer `{"none": true, "reason": "<the command and
-the refusal, verbatim>"}`.
+If a command you need is still refused, or a step fails in a way this definition does not cover, do not work
+around it: answer `{"none": false, "failed": true, "reason": "<the command and the refusal, verbatim>", "branch":
+"<the branch, if you already created it>"}`. `failed` is your session's failure; `none` means only that the item
+fails a check below (backlog #0-206: a refusal answered as `none` ended a run as "nothing to do", with no state, no
+notification and the item's branch left behind, which made next-item.sh skip the item without a word). The workflow
+stops the item at `pick` on `failed`, records it and notifies the owner.
 
 ## Check the item
 
@@ -52,7 +56,7 @@ the refusal, verbatim>"}`.
    as the lock check.
 4. Validate only the item your task names, against 1–3. Never take another one instead.
 5. It fails a check, or your task names no item: answer `{"none": true, "reason": "<one line>"}` and stop,
-   without creating a branch.
+   without creating a branch. A command you could not run is not a failed check: that is `failed` (above).
 
 ## Prepare the branch
 
