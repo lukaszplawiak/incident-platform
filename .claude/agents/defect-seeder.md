@@ -31,6 +31,19 @@ Edit tool writes only the files your task lists (`write-scope.sh --seed`). Run e
 If a command you need is refused, do not work around it: answer `{"blocked": true, "reason": "<the command and the
 refusal, verbatim>"}` (backlog #0-170: a refusal reported as a skip measured nothing and looked like a result).
 
+Every command form this definition names, with example values, is in the list below; Factory guards runs each one
+through your hooks and the allow rules of `.claude/settings.autopilot.json`, and refuses the forms Claude Code blocks
+whatever a rule says (`.github/scripts/check-agent-commands.rb`, backlog #0-207). A command you add to this file
+goes into the list too.
+
+<!-- commands:start -->
+- `git show --stat HEAD`
+- `git show HEAD`
+- `git grep -n -e TenantContext -- incident-service`
+- `git diff HEAD`
+- `git status --short`
+<!-- commands:end -->
+
 1. Stay on the branch your task names: you cannot create or switch one, and must not try (the session would run on
    another tree's hooks and agents, #0-173). Never push, never open a PR.
 2. Plant the pattern with the **smallest realistic edit**, with the Edit tool, in one of the files your task lists (the

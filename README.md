@@ -604,6 +604,13 @@ security boundary, so every rule that matters is also enforced outside the model
   leaves pull requests out, while continuing on error, or in the owner's step, and a label naming a script, test or
   guard that does not exist (`check-rule-claims.rb`); it also fails a rule file other than `factory.md` naming the
   seeded-defect measure, and a pattern citing a retired or missing rule id. It reads backticked names only.
+- **An agent's prescribed commands run in its session** (backlog #0-207, ADR-0050): every agent with Bash names
+  its command forms in a marked list (the picker, the implementers, the shipper, the defect-seeder), or is exempt
+  with a reason (a read-only or factory-ops guard of its own), and Factory guards (`check-agent-commands.rb`) runs
+  each form through the session's hooks and the agent's own, against the allow and deny rules of both settings
+  files, and fails a form Claude Code refuses whatever a rule says (a recursive `cp`, an absolute path, a pipe or
+  chain, an unquoted glob, `..`, `git -C`). It matches the rules' text, not Claude Code's own permission check,
+  which only a `dontAsk` session shows (#0-214).
 
 **Known gaps**: a bypass actor or an admin added in the UI is seen only when the owner runs
 `repository-settings.rb check` (#0-113, ADR-0034), and so is a secret added in the UI (ADR-0035); a scan that

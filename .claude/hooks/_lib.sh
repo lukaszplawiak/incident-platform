@@ -251,8 +251,22 @@ git_grep_unsafe() {
         [ "$rc" -eq 3 ] || return 2
         why=$words
         # Only a glob let the command this far (no word git in it): say so, not "git grep" (review round 3 of #0-130).
+        # Fixed (backlog #0-207): every other command was named "git grep" too, so `git show <sha>:BACKLOG.md | grep x`
+        # was refused as "git grep: a command separator or redirect", and the picker went on rewriting a git grep it
+        # had never run. Named by its first two words now (`git show`), "git grep" only when it is one.
         what="git grep"
         matches "$plain" '(^|[[:space:];&|(/])git[[:space:]]' || { [ $? -eq 1 ] || return 2; what="a command with grep and a glob"; }
+        if [ "$what" = "git grep" ]; then
+            set -f
+            # shellcheck disable=SC2086
+            set -- $plain
+            set +f
+            case "${1:-} ${2:-}" in
+                "git grep") ;;
+                git\ *) what="${1} ${2:-}"; what=${what%%[;&|<>()]*} ;;
+                *) what="the command ${1%%[;&|<>()]*}" ;;
+            esac
+        fi
         echo "$what: $why"; return 0
     }
     first=$(printf '%s\n' "$words" | sed -n 1p) || return 2
