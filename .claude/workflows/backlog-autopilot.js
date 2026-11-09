@@ -150,6 +150,7 @@ const STATE_RECORDED = answerOf({ consecutiveBlocked: { type: 'number' }, shippe
 const BACK_TO_MAIN = answerOf({ onMain: { type: 'boolean' }, left: { type: 'string' }, branch: { type: 'string' },
   reason: { type: 'string' } })
 const NOTIFIED = answerOf({ sent: { type: 'boolean' }, reason: { type: 'string' } })
+const STARTED = answerOf({ branch: { type: 'string' }, workDir: { type: 'string' }, head: { type: 'string' } })
 // `result` is the local model's answer: `claude -p --output-format json`'s text, or its whole output if it has none.
 const LOCAL_REVIEW = answerOf({ ran: { type: 'boolean' }, model: { type: 'string' }, result: { type: ['string', 'object'] },
   reason: { type: 'string' } })
@@ -507,7 +508,10 @@ if (args?.branch) {
     `Base ref ${base.ref} (${base.sha}). Run ${runId}.`,
   ].join('\n'), { schema: PICK })
 } else {
-  item = await as('picker', `Base ref ${base.ref} (${base.sha}). Run ${runId}. Take item ${next.item} (chosen by next-item.sh: ${record.source}).`, { schema: PICK })
+  item = await as('picker', [
+    `Base ref ${base.ref} (${base.sha}). Run ${runId}. Take item ${next.item} (chosen by next-item.sh: ${record.source}).`,
+    'Check it and name its branch; do not create the branch: the workflow starts the item (scripts/factory/start-item.sh).',
+  ].join('\n'), { schema: PICK })
 }
 if (!item) return stopItem(null, 'picker gave no answer')
 // Fixed (backlog #0-206): a picker whose command was refused answered `none`, which ends the run as NOTHING_TO_DO
@@ -518,7 +522,8 @@ if (!item) return stopItem(null, 'picker gave no answer')
 // the breaker should stop the autopilot on them as on any other block.
 if (item.failed) {
   const wantedId = (next?.item ?? (args?.item ? String(args.item) : '')).replace(/^#/, '')
-  // On resume the branch is the owner's (args.branch), not one the picker created and left behind.
+  // On resume the branch is the owner's (args.branch). Outside resume the picker creates no branch since backlog #0-209
+  // (start-item.sh does, below, and removes it on a refusal); a branch it names anyway is still said, as a defence.
   const left = !args?.branch && item.branch && SAFE.test(item.branch) ? `; the branch ${item.branch} was left: next-item.sh skips the item while it exists` : ''
   const why = `picker failed: ${String(item.reason ?? 'no reason given').slice(0, 300)}${left}`
   return stopItem(/^0-\d+$/.test(wantedId) ? { itemId: `#${wantedId}`, id: wantedId } : null, why)
@@ -538,13 +543,28 @@ if (next && item.itemId !== next.item) {
 }
 // The run's own branch, recorded in the lock: the only branch guard-git-push.sh lets the shipper push (backlog
 // #0-131). The picker names it, so it is bound first to what the script already knows (review round 1): the item's
-// own prefix (`<type>/<item>-`, picker.md "Prepare the branch"), and on resume the branch the owner gave. Without
+// own prefix (`<type>/<item>-`, picker.md "Name the branch"), and on resume the branch the owner gave. Without
 // it nothing could be pushed, not even a draft PR: stop here.
 if (!new RegExp(`^[a-z]+/${item.id}-[A-Za-z0-9._-]+$`).test(item.branch)) {
   return stopItem(null, `picker named the branch ${item.branch} for ${item.itemId}: an item's branch is <type>/${item.id}-<slug> (no state recorded, check the branches)`)
 }
 if (args?.branch && item.branch !== args.branch) {
   return stopItem(null, `picker answered the branch ${item.branch}, not ${args.branch} the run resumes (no state recorded, check the branches)`)
+}
+// The item starts in code (backlog #0-209): its branch from the base commit, the whole work template, its status field
+// and one commit, by start-item.sh, which refuses with nothing left behind. Fixed: the picker did these steps with
+// commands it composed, and each refusal cost a turn (run 20261106-203806 of #0-197 stopped on a `cp -r`, #0-207); one
+// after `git switch -c` left the branch that locks the item (#0-206). A start that fails is the factory's own: stopped at
+// `pick`, recorded and notified, as a picker that failed.
+if (!args?.branch) {
+  const started = await ops('start-item.sh', [base.sha, item.id, item.branch, runId], STARTED, 'start item')
+  // The work directory is the item's own, never what an answer names (review round 1): one that says another fails.
+  const workDir = `.ai/work/${item.id}`
+  if (!started || started.ok !== true || started.branch !== item.branch || started.workDir !== workDir) {
+    const why = started?.error ?? (Array.isArray(started?.reasons) && started.reasons.length ? started.reasons.join('; ') : null)
+    return stopItem({ itemId: item.itemId, id: item.id }, `could not start ${item.itemId} on ${item.branch}: ${String(why ?? 'no answer').slice(0, 300)}`)
+  }
+  item.workDir = workDir
 }
 const pinned = await ops('state.sh', ['branch', item.branch], STATE_BRANCH, 'state')
 if (!pinned || pinned.branch !== item.branch) {

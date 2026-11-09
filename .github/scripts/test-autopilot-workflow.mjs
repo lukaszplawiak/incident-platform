@@ -112,6 +112,11 @@ const DEFAULTS = {
   // state.sh branch <name> answers the branch it recorded (backlog #0-131); its other commands, {}.
   'ops:state.sh': ({ prompt }) => { const m = prompt.match(/state\.sh 'branch' '([^']+)'/); return m ? { branch: m[1] } : {} },
   'ops:notify.sh': {}, 'ops:return-to-main.sh': {}, 'ops:local-review.sh': {},
+  // start-item.sh <base> <item> <branch> <run id> answers the branch it created (backlog #0-209).
+  'ops:start-item.sh': ({ prompt }) => {
+    const m = prompt.match(/start-item\.sh '[0-9a-f]{40}' '(0-\d+)' '([^']+)'/)
+    return m ? { ok: true, branch: m[2], workDir: `.ai/work/${m[1]}`, head: SHA('d') } : { ok: false, reasons: ['usage'] }
+  },
 }
 const approve = (dimension, extra = {}) => ({ dimension, verdict: 'APPROVE', blocking: [], nonBlocking: [], resolved: [],
   upheldDisputes: [], unverified: [], ...extra })
@@ -423,6 +428,51 @@ test("the picker's own failure stops the item at pick; a real none is still noth
   const none = await run({ answers: { picker: { none: true, reason: '#0-1 has no numbered acceptance criteria' } } })
   assert.equal(none.outcome.outcome, 'NOTHING_TO_DO')
   assert.ok(!keys(none.calls).includes('ops:notify.sh') && !stateCalls(none.calls).some((s) => s.includes("'record'")))
+})
+
+test('the item starts in code: start-item.sh after the pick and before the lock, never on resume or none (#0-209)', async () => {
+  const { outcome, calls } = await run()
+  assert.equal(outcome.outcome, 'SHIPPED')
+  const at = calls.findIndex((c) => c.key === 'ops:start-item.sh')
+  assert.ok(calls[at]?.prompt.endsWith(`\nRun exactly: scripts/factory/start-item.sh '${BASE}' '0-1' 'fix/0-1-an-item' 'run-1'`), calls[at]?.prompt)
+  assert.ok(at > calls.findIndex((c) => c.key === 'picker'), 'after the picker named the branch')
+  assert.ok(at < calls.findIndex((c) => /state\.sh 'branch'/.test(c.prompt)), 'before the lock records the branch')
+  assert.match(calls.find((c) => c.key === 'picker').prompt, /do not create the branch/)
+  assert.equal(calls.filter((c) => c.key === 'ops:start-item.sh').length, 1)
+  // The work directory is the script's, not the picker's.
+  const odd = await run({ answers: { picker: { ...DEFAULTS.picker, workDir: '.ai/work/elsewhere' } } })
+  assert.match(odd.calls.find((c) => c.key === 'architect').prompt, /Work dir \.ai\/work\/0-1\./)
+  const resumed = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' } })
+  assert.ok(!keys(resumed.calls).includes('ops:start-item.sh'), 'a resumed branch has started already')
+  const none = await run({ answers: { picker: { none: true, reason: 'not ready' } } })
+  assert.ok(!keys(none.calls).includes('ops:start-item.sh'))
+  const failed = await run({ answers: { picker: { none: false, failed: true, reason: 'gh refused' } } })
+  assert.ok(!keys(failed.calls).includes('ops:start-item.sh'))
+  for (const branch of ['fix/0-10-x', 'fix/0-1']) {
+    const wrong = await run({ answers: { picker: { ...DEFAULTS.picker, branch } } })
+    assert.ok(!keys(wrong.calls).includes('ops:start-item.sh'), `${branch}: refused before anything is created`)
+  }
+})
+
+test('a start that fails stops the item at pick, recorded and notified, with no branch to push (#0-209)', async () => {
+  for (const [answer, why] of [
+    [{ ok: false, reasons: ['the branch fix/0-1-an-item exists already'] }, /: the branch fix\/0-1-an-item exists already$/],
+    [{ error: 'start-item.sh: Permission denied', exitCode: 126 }, /: start-item\.sh: Permission denied$/],
+    [{ ok: true, branch: 'fix/0-1-other', workDir: '.ai/work/0-1', head: SHA('d') }, /: no answer$/],
+    [{ ok: 'true', branch: 'fix/0-1-an-item' }, /: no answer$/],
+    [{ ok: true, branch: 'fix/0-1-an-item', head: SHA('d') }, /: no answer$/],
+    [{ ok: true, branch: 'fix/0-1-an-item', workDir: '.ai/work/0-2', head: SHA('d') }, /: no answer$/],
+    [null, /: no answer/],
+  ]) {
+    const { outcome, calls } = await run({ answers: { 'ops:start-item.sh': answer } })
+    const label = JSON.stringify(answer)
+    assert.equal(outcome.outcome, 'BLOCKED', label); assert.equal(outcome.item, '#0-1', label)
+    assert.match(outcome.reason, /^could not start #0-1 on fix\/0-1-an-item/, label); assert.match(outcome.reason, why, label)
+    assert.ok(stateCalls(calls).includes("scripts/factory/state.sh 'record' 'blocked' '0-1' '-' 'pick'"), stateCalls(calls).join(' | '))
+    assert.ok(!stateCalls(calls).some((s) => s.includes("'branch'")), `${label}: no branch recorded in the lock`)
+    assert.ok(!keys(calls).includes('shipper') && !keys(calls).includes('architect'), label)
+    assert.ok(keys(calls).includes('ops:return-to-main.sh') && keys(calls).includes('ops:notify.sh'), label)
+  }
 })
 
 test("the run's branch is recorded in the lock before any agent works on it, or the run stops", async () => {

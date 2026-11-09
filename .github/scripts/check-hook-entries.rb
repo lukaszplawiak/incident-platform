@@ -85,7 +85,10 @@ UNGUARDED = {
   'implementer' => 'writes the item\'s code and tests anywhere but the protected paths; settings.autopilot.json\'s denies, ' \
                    'guard-write-in-repo.sh, guard-protected-bash.sh, guard-tests.sh and guard-migrations.sh bound it',
   'implementer-light' => 'the implementer on a lighter model, bounded the same way',
-  'picker' => 'creates the item\'s branch and working files; bounded like the implementer, and guard-factory-scripts.sh',
+  # Since #0-209 the picker writes nothing by its definition (start-item.sh starts the item), but its session still
+  # holds the autopilot's git write rules; a read-only guard for it is #0-215.
+  'picker' => 'checks the item and names its branch, and switches to the owner\'s branch on resume; bounded like the ' \
+              'implementer, and guard-factory-scripts.sh',
   'shipper' => 'pushes the run\'s branch and opens its pull request; bounded like the implementer, and guard-git-push.sh ' \
                '(the run\'s own branch only)'
 }.freeze
