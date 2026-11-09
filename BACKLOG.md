@@ -132,7 +132,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-205](#0-205-a-runs-transcripts-expire-after-90-days-and-nothing-reads-them-per-agent) | A run's transcripts expire after 90 days and nothing reads them per agent | ci | Low | Open |
 | [0-207](#0-207-the-picker-spends-its-turns-on-commands-its-session-refuses) | The picker spends its turns on commands its session refuses | ci | Medium | In progress |
 | [0-208](#0-208-five-route-walks-hold-five-copies-of-isexempt) | Five route walks hold five copies of `isExempt` | tech-debt | Low | Open |
-| [0-209](#0-209-the-picker-copies-the-work-template-itself-through-an-allow-rule) | The picker copies the work template itself, through an allow rule | ci | Low | Open |
 | [0-210](#0-210-six-deny-rules-of-the-autopilot-settings-never-match) | Six deny rules of the autopilot settings never match | ci | Low | Open |
 | [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Open |
 | [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
@@ -4556,7 +4555,8 @@ ADR-0048 why. Whether the positive controls should agree on `isNotEqualTo(401)` 
 
 ### 0-209. The picker copies the work template itself, through an allow rule
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From #0-207's third case (2026-11-06).
+**Type:** ci · **Priority:** Low · **Status:** Done, PR #595 (kept for the decision history: options (a)/(b)/(c) and
+review round 1's one parser of the backlog). From #0-207's third case (2026-11-06).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (scripts/factory/start-item.sh, scripts/factory/next-item.sh, .claude/workflows/backlog-autopilot.js, .claude/agents/picker.md,
 .claude/settings.autopilot.json, .github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-start-item.sh,
