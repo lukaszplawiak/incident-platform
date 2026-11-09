@@ -177,7 +177,7 @@ more than one review round, had a scope category that points at a stage (`backlo
 |---|---|---|
 | `ready` | `/ready`, `ready-checker`, the owner | the item's text and criteria; the `/ready` PR and its "Ready check" |
 | `queue` | `/plan-backlog`, planner | `.ai/plan/queue.md` and its PR |
-| `pick` | `next-item.sh`, `check-queue.sh`, picker | the run's start; the gates' refusals |
+| `pick` | `next-item.sh`, `check-queue.sh`, picker, `start-item.sh` | the run's start; the gates' refusals |
 | `plan` | architect | `.ai/work/<item>/progress.md` (the plan line, the rules listed), a Proposed ADR |
 | `implement` | implementer | the diff, `handoff.md`, the self-check, the test gate |
 | `review` | the panel, the verifier | the verdicts and rounds in the PR, its "Unverified claims" |

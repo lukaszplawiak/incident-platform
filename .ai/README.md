@@ -163,7 +163,7 @@ Who writes and who reads each file. One writer per file per stage; `progress.md`
 | File | Written by | Read by |
 |---|---|---|
 | `BACKLOG.md` (item text, `ready`) | owner | picker, architect, acceptance-reviewer |
-| `BACKLOG.md` (status `In progress` / `Blocked`) | picker / autopilot | owner |
+| `BACKLOG.md` (status `In progress` / `Blocked`) | autopilot (`start-item.sh` / shipper) | owner |
 | `BACKLOG.md` (`**Touches:**`, added `**Depends on:**`) | planner, ready-checker (drafts) — owner approves by merge | planner, `next-item.sh`, `check-queue.sh` |
 | `BACKLOG.md` (new `proposed` follow-up items) | shipper, from `handoff.md` "Follow-up needed" | owner (`/ready`) |
 | `.ai/plan/queue.md` | planner (proposal, `/plan-backlog`) — **owner approves by merge**; autopilot never | `next-item.sh`, `check-queue.sh`, planner |

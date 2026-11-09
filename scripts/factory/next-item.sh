@@ -5,7 +5,9 @@
 #   next-item.sh <base-sha> <0-N>       check one item the owner named (args.item)
 #
 # Everything is read from the run's base commit (the sha in .ai/runs/LOCK), never from the working copy.
-# An item can start when, on the base: it is in BACKLOG.md with `**Autopilot:** ready`, it is not of type
+# An item can start when, on the base: it is in BACKLOG.md with `**Autopilot:** ready` and a status that starts with
+# Open (the condition start-item.sh starts it on: one that passes here and is refused there would be chosen again on
+# every run, backlog #0-209), it is not of type
 # design, its **Touches:** names no path of .ai/rules/protected-paths.md (such an item could only end
 # BLOCKED at the implementer, as #0-42 did; backlog #0-122), every `**Depends on:**` is in BACKLOG-DONE.md, and no open PR or local branch holds it (a branch
 # name containing "/<id>-" is a lock; a BLOCKED item keeps its draft PR open).
@@ -70,6 +72,8 @@ jq -n --argjson items "$backlog" --argjson 'done' "$done_ids" --argjson q "$queu
       ($byId[$id]) as $it
       | if $it == null then (if isDone($id) then "done" else "not in BACKLOG.md on main" end)
         elif $it.autopilot != "ready" then "not ready (Autopilot: \(if $it.autopilot == "" then "none" else $it.autopilot end))"
+        elif ($it.status | startswith("Open") | not)
+          then "its status is not Open (Status: \(if $it.status == "" then "none" else $it.status[0:60] end)): start-item.sh starts only an Open item"
         elif $it.type == "design" then "a design item"
         elif ($it.protected | length) > 0
           then "Touches names \($it.protected | join(", ")), a path the autopilot may not write (.ai/rules/protected-paths.md): make it human-only or split it"

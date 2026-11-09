@@ -138,6 +138,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
 | [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
 | [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Open |
+| [0-215](#0-215-the-picker-writes-nothing-yet-its-bash-may-still-write) | The picker writes nothing, yet its Bash may still write | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4411,7 +4412,9 @@ AC3. `audit-data.sh` puts the summaries of the period's runs into its output; `t
 ### 0-207. The picker spends its turns on commands its session refuses
 
 **Type:** ci · **Priority:** Medium · **Status:** In progress — AC1 (PRs #588, #589), AC3 and AC4 done (2026-11-08);
-AC2 one run of two (PR #590): the next autopilot run's picker closes it.
+AC2 one run of two (PR #590): the next autopilot run's picker closes it. Since #0-209 the picker composes no command
+that writes (it checks and names the branch; `start-item.sh` starts the item), so AC2's second run shows the reading
+commands only.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/picker.md, .claude/agents/implementer.md, .claude/agents/implementer-light.md,
 .claude/agents/shipper.md, .claude/agents/defect-seeder.md, .claude/settings.autopilot.json, .claude/hooks/_lib.sh,
@@ -4555,9 +4558,10 @@ ADR-0048 why. Whether the positive controls should agree on `isNotEqualTo(401)` 
 
 **Type:** ci · **Priority:** Low · **Status:** Open. From #0-207's third case (2026-11-06).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
-**Touches:** factory (scripts/factory/, .claude/workflows/backlog-autopilot.js, .claude/agents/picker.md,
-.claude/settings.autopilot.json, .github/scripts/test-autopilot-workflow.mjs, a new .github/scripts/test-*.sh),
-root (BACKLOG.md)
+**Touches:** factory (scripts/factory/start-item.sh, scripts/factory/next-item.sh, .claude/workflows/backlog-autopilot.js, .claude/agents/picker.md,
+.claude/settings.autopilot.json, .github/scripts/test-autopilot-workflow.mjs, .github/scripts/test-start-item.sh,
+.github/scripts/test-queue.sh, .github/scripts/check-hook-entries.rb, .github/workflows/factory-guards.yml), docs (docs/ai-factory.md, .ai/README.md, .ai/rules/audit.md), root (README.md,
+BACKLOG.md)
 
 **Problem.** Creating `.ai/work/<n>` is a fixed step with one right result, yet the picker does it with commands it
 composes, under an allow rule: `Bash(cp .ai/work/_template/* .ai/work/*)` (#0-207) and `Bash(mkdir -p .ai/work/*)`.
@@ -4572,6 +4576,34 @@ the directory first; and the `*` of both rules accepts any argument, held back o
 the branch and before its commit, which splits the picker into two calls; or (b) before the picker, on `main`, which
 leaves an untracked directory behind when the picker answers `none` (`return-to-main.sh` and the preflight would then
 have to clean or refuse it). To decide; each needs cases in `test-autopilot-workflow.mjs`.
+
+**Decided (owner, 2026-11-09): neither, (c).** (a) splits the picker into two sessions with state between them and
+leaves `git switch -c`, the edits and the commit as commands the session can refuse; (b) creates the directory before
+the item is checked and needs a cleanup path in `return-to-main.sh`. (c): the picker only checks the item and names
+its branch, and the workflow runs `scripts/factory/start-item.sh <base sha> <item> <branch> <run id>` through
+factory-ops after the picker's answer and before `state.sh branch`. The script does the whole start, in the model of
+`seed-branch.sh` (ADR-0044): it refuses anything but a clean main at the base commit, a branch or work directory that
+exists, an item not ready or not Open on that commit (its fields read by `backlog_json`, the parser `next-item.sh`
+uses, which now skips an item that is not Open too: review round 1, where a parser of the script's own counted the
+fields quoted in an item's text and would have refused this item); then the branch, the whole template
+(`cp -R`, a new template file included), progress.md's title and a `[start]` line, the status field, one commit
+(`chore(factory): start backlog #<item>`, no `Co-Authored-By`: code wrote it, #0-212); a refusal after the branch
+exists removes the branch and the directory. A failed start stops the item at `pick`, recorded and notified, like a
+failed picker. The picker loses Edit and Write, its `git switch -c`/`mkdir`/`cp`/`git add`/`git commit` forms, and the
+two allow rules go. Resume mode is unchanged (the picker switches to the owner's branch; no start).
+
+**Acceptance criteria.**
+AC1. `start-item.sh` starts an item as above and answers `{ok, branch, workDir, head}`; each refusal answers
+     `{ok:false, reasons}` and leaves a clean main with no branch and no work directory
+     (`.github/scripts/test-start-item.sh`, in Factory guards).
+AC2. The workflow calls it once, after the picker and before `state.sh branch`, never on resume, `none` or `failed`;
+     a refusal, an untyped answer or no answer stops the item at `pick` with no branch in the lock
+     (`test-autopilot-workflow.mjs`).
+AC3. `picker.md` creates nothing (tools Read, Grep, Glob, Bash; its command list passes `check-agent-commands.rb`),
+     and `settings.autopilot.json` has no `mkdir -p .ai/work/*` or `cp .ai/work/_template/*` rule.
+AC4. The start and the choice read an item the same way: `start-item.sh` takes its fields from `backlog_json`, so
+     text that quotes them counts for nothing, and `next-item.sh` skips a ready item that is not Open
+     (`test-start-item.sh`, `test-queue.sh`).
 
 ### 0-210. Six deny rules of the autopilot settings never match
 
@@ -4639,7 +4671,11 @@ and a hook on `git commit` refuses one whose `Factory-Agent` is not the call's `
 not the run in `.ai/runs/LOCK` — the two facts a hook can check. The stage and round (`fix-review r2`) are not
 trailers: a hook does not know them and the agent would only declare them; the workflow records them with the
 commit range of each call (#0-204). `git commit --trailer <key>=<value>` puts a trailer on a one-line command; the
-architect's one allowed commit form (`readonly-bash.sh --architect`, #0-203) must then admit these two. Not done by this item:
+architect's one allowed commit form (`readonly-bash.sh --architect`, #0-203) must then admit these two. The start
+commit of a run is not an agent's since #0-209: `scripts/factory/start-item.sh` writes it, with no `Co-Authored-By`
+and out of reach of a hook on `git commit` (it runs inside a factory script); it takes `Factory-Run` from its run-id
+argument, and whether its `Factory-Agent` is `start-item.sh` or absent (AC2 then exempts it) is this item's to decide.
+Not done by this item:
 phase 3's `--squash` (`docs/ai-factory.md:48`) would drop the branch's commits and their trailers from `main`'s
 history; #0-204 corrects that line.
 
@@ -4693,6 +4729,31 @@ update, not a CI step (CI holds no Claude credentials, and should not).
 AC1. A script in `scripts/factory-admin/` runs every command of the agents' marked lists in a `dontAsk` session with
      `settings.autopilot.json` on a throwaway clone and reports each one run or refused, with the refusal.
 AC2. `docs/ai-factory.md` names it as a step after updating Claude Code in the devcontainer.
+
+### 0-215. The picker writes nothing, yet its Bash may still write
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the review panel of #0-209 (security and architecture,
+round 1, 2026-11-09).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/agents/picker.md, .claude/hooks/readonly-bash.sh and its tests, .claude/settings.json,
+.claude/settings.autopilot.json, .github/scripts/check-hook-entries.rb), root (README.md)
+
+**Problem.** Since #0-209 the picker only reads: it checks the item and names its branch, and `start-item.sh` starts
+the item. On resume it runs one `git switch <branch>`. It has no file tool, but its Bash has no guard of its own: it is
+one of `check-hook-entries.rb`'s `UNGUARDED` agents, bounded only like the implementer, so the autopilot's allow rules
+(`git switch *`, `git checkout -b *`, `git add *`, `git commit *`, `git push -u origin *`, `gh pr create *`,
+`./mvnw *`) hold for it too. It reads text an outsider can write (PR titles, through `gh pr list`). A picker that
+still runs `git switch -c` would also leave a branch that locks the item, which `start-item.sh` then refuses with
+"not on main", without naming that branch.
+
+**Proposed.** `readonly-bash.sh` in the picker's frontmatter and as its session-level twin in both settings files,
+with a mode that also allows `git switch <branch>` of the resume's branch only, and the picker out of `UNGUARDED`.
+
+**Acceptance criteria (draft).**
+AC1. The picker's Bash runs under `readonly-bash.sh` (frontmatter and twin), whose picker mode allows only its
+     listed commands and `git switch <branch>`; `test-hooks.sh` shows `git switch -c`, `git commit` and `git push`
+     refused for the picker.
+AC2. `UNGUARDED` no longer names the picker, and `check-hook-entries.rb` and `check-agent-commands.rb` pass.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

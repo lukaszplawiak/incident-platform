@@ -73,6 +73,11 @@ jobs:
       - name: State script tests
         run: .github/scripts/test-factory-state.sh
 
+      # An item starts on its branch through code, not through commands the picker composes: the whole work template,
+      # its status field only, one commit, and a refusal leaves no branch behind (start-item.sh, backlog #0-209).
+      - name: Start item script tests
+        run: .github/scripts/test-start-item.sh
+
       # The seed branch of /seed-bugs starts from main, never the merged commit, and is checked after the seeder
       # (seed-branch.sh, seed-check.sh; backlog #0-173, ADR-0044); nothing on it names the run, the defect is folded
       # into the change, and a run's row goes to the gitignored .ai/runs/ (seed-fold.sh, seed-record.sh; #0-177); the plant

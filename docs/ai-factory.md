@@ -7,6 +7,7 @@ The map of files and who may write them is in `.ai/README.md`; this document is 
 
 ```
 next-item.sh (code: ready follow-up → approved queue .ai/plan/queue.md, strictly in order → priority) → picker
+  → start-item.sh (code: the branch from the base commit, .ai/work/<item> from the template, the status, one commit)
   → architect (plan, predicted modules, the rules the implementer must have in front of it)
   → implementer (Opus; implementer-light on Sonnet for Complexity: low)
   → self-check: rule files the diff calls for, from which the plan listed no rule → implementer reads and checks them
@@ -133,7 +134,7 @@ and implement and runs the gate, the panel, the verifier and the shipper again (
 
 1. a `ready` **follow-up** whose parent is done — work an item showed was needed runs right after it;
 2. the **approved queue**, strictly in order: its first row that is not done, if it can start (ready,
-   dependencies done, no open PR or branch). If it cannot, nothing starts — in shadow mode the autopilot
+   its status Open, dependencies done, no open PR or branch). If it cannot, nothing starts — in shadow mode the autopilot
    waits for your merge of the previous item, so every item is built on code you have reviewed;
 3. without a queue file, `ready` items by **priority**.
 
@@ -347,7 +348,8 @@ moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs.
 | `FIREWALL SETUP FAILED: all traffic is blocked` at container start | a required domain did not resolve or GitHub's IP ranges could not be fetched; the message above it names the cause. Fix it and restart the container (an optional domain only warns) |
 | a reviewer "returned no valid verdict" | it answered prose instead of JSON; check its transcript; repeated → audit finding |
 | `BLOCKED: <agent> gave no answer (last agent call without an answer: <agent>: …)` | the agent ended without its JSON, usually its `maxTurns` spent (#0-206): the item is stopped like any block (draft PR when the run has a branch, state recorded with the stage, notification). Read its transcript for where the turns went, often refused commands (a hook names what to use instead); resume the branch once fixed |
-| `BLOCKED: picker failed: …` | a command of the picker was refused or failed (#0-206), not an empty queue: the reason quotes it, and names the branch if the picker had created one (`next-item.sh` skips the item while that branch exists: delete it, or resume it with `branch`). A resume without `item` has no item id to record against: the lock is released and the owner notified, but no state is recorded |
+| `BLOCKED: picker failed: …` | a command of the picker was refused or failed (#0-206), not an empty queue: the reason quotes it. The picker creates no branch since #0-209; were one named anyway, the reason says so (`next-item.sh` skips the item while that branch exists: delete it, or resume it with `branch`). A resume without `item` has no item id to record against: the lock is released and the owner notified, but no state is recorded |
+| `BLOCKED: could not start #0-N on <branch>: …` | `start-item.sh` refused to start the item (#0-209): the reason quotes it (a tree that is not a clean main at the base commit, a branch or `.ai/work/<item>` that exists, an item not `ready` or not `Open` on the base commit). It leaves no branch and no work directory behind, so once the cause is gone the next run can take the item again; if its own cleanup failed, the reason names the branch left. `could not start …: no answer` is the exception: factory-ops ended without the script's answer (killed, out of turns), and a branch it may have made is left: check `git branch --list '*/0-N-*'` |
 | `NOTHING_TO_DO` | the reason names the next queue row and why it cannot start: not `ready` on main, a dependency not done, a path the autopilot may not write ("make it human-only or split it"), or an open PR/branch (a lock — usually the previous item waiting for your merge). "The approved queue is done" → `/plan-backlog` |
 | `NOT_STARTED: the queue on main is invalid` | a merged change broke `.ai/plan/queue.md` (e.g. an item it lists was removed); `scripts/factory/check-queue.sh` names the rows — fix them or re-plan |
 | a hook blocks a legitimate command | read the hook's message; the hooks are tested by `.claude/hooks/test-hooks.sh` — fix the hook and its test together |

@@ -54,6 +54,7 @@ cat > BACKLOG.md <<EOF
 | [0-15](#0-15-o) | Fifteen | bug | Low | Open |
 | [0-16](#0-16-p) | Sixteen | bug | Low | Open |
 | [0-17](#0-17-q) | Seventeen | bug | Low | Open |
+| [0-18](#0-18-r) | Eighteen | bug | Low | In progress |
 
 ---
 
@@ -153,6 +154,12 @@ AC2. The existing check .github/scripts/check-tenant-status-config.sh still pass
 **Type:** bug · **Priority:** Low · **Status:** Open
 **Autopilot:** ready · **Risk:** high · **Complexity:** low · **Depends on:** —
 **Touches:** root (scripts/factory)
+
+### 0-18. Eighteen
+
+**Type:** bug · **Priority:** Low · **Status:** In progress — autopilot run 20261101-000000. Quotes **Status:** Open.
+**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** oncall-service
 EOF
 }
 backlog proposed
@@ -206,6 +213,8 @@ expect_jq "manual item that is human-only"      "$($NI "$base" 0-5)" '.ok and .i
 expect_jq "protected path in Touches: no start" "$($NI "$base" 0-12)" '.ok and .item == null and (.reason | test("Touches names \\.github, a path the autopilot may not write"))'
 expect_jq "a criterion naming .github/: starts" "$($NI "$base" 0-13)" '.ok and .item == "#0-13"'
 expect_jq "CLAUDE.md agent-editable: starts"    "$($NI "$base" 0-14)" '.ok and .item == "#0-14"'
+# start-item.sh starts only an Open item: chosen here and refused there, it would come back on every run (#0-209).
+expect_jq "ready but not Open: no start"        "$($NI "$base" 0-18)" '.ok and .item == null and (.reason | test("its status is not Open \\(Status: In progress"))'
 queue 0-3 0-1; base=$(commit q)
 expect_jq "first queue row"                     "$($NI "$base")" '.ok and .item == "#0-3" and .source == "queue" and .position == 1'
 queue 0-9 0-3 0-1; base=$(commit q1b)

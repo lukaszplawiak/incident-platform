@@ -507,9 +507,13 @@ security boundary, so every rule that matters is also enforced outside the model
   whose `tools:` hold Bash or a file tool with no guard of that kind in its frontmatter (rule 6, backlog #0-186);
   the autopilot's implementer, implementer-light, picker and shipper are its named exceptions, bounded by the
   autopilot session's denies and session-wide guards instead (the two implementers also run `foreground-bash.sh`,
-  which refuses a command in the background, backlog #0-206: a budget guard, not a scope). The architect commits in
-  one form only, `-m "<subject>"` with the attribution trailer: `-F`/`--file` would let it put any file it can read
-  into a commit message the shipper pushes (backlog #0-203). The `/seed-bugs`
+  which refuses a command in the background, backlog #0-206: a budget guard, not a scope). The workflow starts an
+  item in code (`scripts/factory/start-item.sh`, backlog #0-209): the picker has no file-writing tool and its
+  definition creates nothing, and the `mkdir -p .ai/work/*` and `cp .ai/work/_template/* .ai/work/*` allow rules are
+  gone; its Bash is still bounded only like the implementer's, so the autopilot's git write rules hold for it too (a
+  read-only guard for the picker is #0-215). The architect commits in one form only, `-m "<subject>"` with the
+  attribution trailer: `-F`/`--file` would let it put any file it can read into a commit message the shipper pushes
+  (backlog #0-203). The `/seed-bugs`
   defect-seeder runs the reviewers' read-only Bash (no branch, no commit, no redirect) and edits only the files of the
   change it plants in (`write-scope.sh --seed`, from the run's record `.ai/runs/SEED`); a factory script commits its
   edit (backlog #0-172, ADR-0047). They read files with the Read tool and
