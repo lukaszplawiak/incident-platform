@@ -78,6 +78,11 @@ jobs:
       - name: Start item script tests
         run: .github/scripts/test-start-item.sh
 
+      # A resumed run switches to the owner's branch through code, not through the picker, whose Bash is read-only
+      # (resume-item.sh, backlog #0-215).
+      - name: Resume item script tests
+        run: .github/scripts/test-resume-item.sh
+
       # The seed branch of /seed-bugs starts from main, never the merged commit, and is checked after the seeder
       # (seed-branch.sh, seed-check.sh; backlog #0-173, ADR-0044); nothing on it names the run, the defect is folded
       # into the change, and a run's row goes to the gitignored .ai/runs/ (seed-fold.sh, seed-record.sh; #0-177); the plant

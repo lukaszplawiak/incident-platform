@@ -117,6 +117,11 @@ const DEFAULTS = {
     const m = prompt.match(/start-item\.sh '[0-9a-f]{40}' '(0-\d+)' '([^']+)'/)
     return m ? { ok: true, branch: m[2], workDir: `.ai/work/${m[1]}`, head: SHA('d') } : { ok: false, reasons: ['usage'] }
   },
+  // resume-item.sh <base> <branch> answers the branch it switched to and its item (backlog #0-215).
+  'ops:resume-item.sh': ({ prompt }) => {
+    const m = prompt.match(/resume-item\.sh '[0-9a-f]{40}' '([a-z]+\/(0-\d+)-[^']+)'/)
+    return m ? { ok: true, branch: m[1], item: m[2], head: SHA('d') } : { ok: false, reasons: ['usage'] }
+  },
 }
 const approve = (dimension, extra = {}) => ({ dimension, verdict: 'APPROVE', blocking: [], nonBlocking: [], resolved: [],
   upheldDisputes: [], unverified: [], ...extra })
@@ -420,8 +425,8 @@ test("the picker's own failure stops the item at pick; a real none is still noth
   }
   // On resume the branch is the owner's: its stop does not say the picker left it (review round 1).
   const resumed = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' },
-    answers: { picker: { none: false, failed: true, reason: 'git switch refused', branch: 'fix/0-1-an-item' } } })
-  assert.equal(resumed.outcome.outcome, 'BLOCKED'); assert.equal(resumed.outcome.reason, 'picker failed: git switch refused')
+    answers: { picker: { none: false, failed: true, reason: 'gh refused', branch: 'fix/0-1-an-item' } } })
+  assert.equal(resumed.outcome.outcome, 'BLOCKED'); assert.equal(resumed.outcome.reason, 'picker failed: gh refused')
   assert.ok(stateCalls(resumed.calls).includes("scripts/factory/state.sh 'record' 'blocked' '0-1' '-' 'pick'"))
   const thrown = await run({ answers: { picker: ENDS_WITHOUT_ANSWER } })
   assert.equal(thrown.outcome.outcome, 'BLOCKED'); assert.match(thrown.outcome.reason, /^picker gave no answer \(last agent call without an answer: picker: /)
@@ -451,6 +456,54 @@ test('the item starts in code: start-item.sh after the pick and before the lock,
   for (const branch of ['fix/0-10-x', 'fix/0-1']) {
     const wrong = await run({ answers: { picker: { ...DEFAULTS.picker, branch } } })
     assert.ok(!keys(wrong.calls).includes('ops:start-item.sh'), `${branch}: refused before anything is created`)
+  }
+})
+
+test('a resume switches in code: resume-item.sh before the picker, on resume only; the picker only reads (#0-215)', async () => {
+  const { outcome, calls } = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' } })
+  assert.equal(outcome.outcome, 'SHIPPED')
+  const at = calls.findIndex((c) => c.key === 'ops:resume-item.sh')
+  assert.ok(calls[at]?.prompt.endsWith(`\nRun exactly: scripts/factory/resume-item.sh '${BASE}' 'fix/0-1-an-item'`), calls[at]?.prompt)
+  assert.ok(at >= 0 && at < calls.findIndex((c) => c.key === 'picker'), 'before the picker')
+  assert.equal(calls.filter((c) => c.key === 'ops:resume-item.sh').length, 1)
+  assert.match(calls.find((c) => c.key === 'picker').prompt, /do not switch or create a branch/)
+  assert.doesNotMatch(calls.find((c) => c.key === 'picker').prompt, /\(git switch /)
+  // Without args.item the item is the branch's.
+  const bare = await run({ args: { branch: 'fix/0-1-an-item' } })
+  assert.equal(bare.outcome.outcome, 'SHIPPED'); assert.match(bare.calls.find((c) => c.key === 'picker').prompt, /Item #0-1\./)
+  const fresh = await run()
+  assert.ok(!keys(fresh.calls).includes('ops:resume-item.sh'), 'a fresh run starts its item instead')
+  // A picker that fails on a resume without args.item is recorded against the branch's item, not lost (review of #0-215).
+  const failed = await run({ args: { branch: 'fix/0-1-an-item' }, answers: { picker: { none: false, failed: true, reason: 'gh refused' } } })
+  assert.equal(failed.outcome.outcome, 'BLOCKED'); assert.equal(failed.outcome.item, '#0-1')
+  assert.ok(stateCalls(failed.calls).includes("scripts/factory/state.sh 'record' 'blocked' '0-1' '-' 'pick'"), stateCalls(failed.calls).join(' | '))
+})
+
+test("a resume's arguments are checked before anything moves; a refused switch stops the item at pick (#0-215)", async () => {
+  for (const [args, why] of [
+    [{ branch: 'main' }, /branch must be an item's branch/],
+    [{ branch: 'fix/0-1' }, /branch must be an item's branch/],
+    [{ branch: 'fix/0-1-an-item', item: '#0-2' }, /item #0-2 is not the item of the branch fix\/0-1-an-item \(#0-1\)/],
+  ]) {
+    const { outcome, calls } = await run({ args })
+    assert.equal(outcome.outcome, 'NOT_STARTED', JSON.stringify(args)); assert.match(outcome.reasons[0], why)
+    assert.ok(!keys(calls).includes('ops:resume-item.sh') && !keys(calls).includes('picker'), JSON.stringify(args))
+  }
+  for (const [answer, why] of [
+    [{ ok: false, reasons: ['no local branch fix/0-1-an-item to resume'] }, /: no local branch fix\/0-1-an-item to resume$/],
+    [{ error: 'resume-item.sh: Permission denied', exitCode: 126 }, /: resume-item\.sh: Permission denied$/],
+    [{ ok: true, branch: 'fix/0-1-other', item: '0-1', head: SHA('d') }, /: no answer$/],
+    [{ ok: true, branch: 'fix/0-1-an-item', item: '0-2', head: SHA('d') }, /: no answer$/],
+    [{ ok: 'true', branch: 'fix/0-1-an-item', item: '0-1' }, /: no answer$/],
+    [null, /: no answer/],
+  ]) {
+    const { outcome, calls } = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' }, answers: { 'ops:resume-item.sh': answer } })
+    const label = JSON.stringify(answer)
+    assert.equal(outcome.outcome, 'BLOCKED', label); assert.equal(outcome.item, '#0-1', label)
+    assert.match(outcome.reason, /^could not resume #0-1 on fix\/0-1-an-item/, label); assert.match(outcome.reason, why, label)
+    assert.ok(stateCalls(calls).includes("scripts/factory/state.sh 'record' 'blocked' '0-1' '-' 'pick'"), stateCalls(calls).join(' | '))
+    assert.ok(!keys(calls).includes('picker') && !keys(calls).includes('shipper'), label)
+    assert.ok(keys(calls).includes('ops:return-to-main.sh') && keys(calls).includes('ops:notify.sh'), label)
   }
 })
 
@@ -1382,7 +1435,7 @@ test('the scan of ops() calls finds an untyped one, and an argument with commas 
 })
 
 test('backlog-autopilot: each factory script\'s answer accepts what it prints and refuses what the agent made of it (#0-175)', async () => {
-  const S = await schemasNamed(['STATE_BRANCH', 'STATE_UNLOCKED', 'STATE_RECORDED', 'BACK_TO_MAIN', 'NOTIFIED', 'LOCAL_REVIEW'])
+  const S = await schemasNamed(['STATE_BRANCH', 'STATE_UNLOCKED', 'STATE_RECORDED', 'BACK_TO_MAIN', 'NOTIFIED', 'LOCAL_REVIEW', 'STARTED', 'RESUMED'])
   // What every script can also print: factory-ops' own error answer, and _common.sh's failure.
   const failures = [{ error: 'jq: command not found', exitCode: 127 }, { ok: false, reasons: ['jq is not installed'] }]
   const printed = {
@@ -1401,6 +1454,10 @@ test('backlog-autopilot: each factory script\'s answer accepts what it prints an
       { ran: true, model: 'gemma3:27b', result: { type: 'result' } },
       { ran: true, error: 'the working tree changed during the local review: discard the result' },
       { ran: false, reason: 'no parseable output' }],
+    STARTED: [{ ok: true, branch: 'fix/0-25-queue-version', workDir: '.ai/work/0-25', head: 'd'.repeat(40) },
+      { ok: false, reasons: ['the branch fix/0-25-queue-version exists already'] }],
+    RESUMED: [{ ok: true, branch: 'fix/0-25-queue-version', item: '0-25', head: 'd'.repeat(40) },
+      { ok: false, reasons: ['no local branch fix/0-25-queue-version to resume'] }],
   }
   for (const [name, answers] of Object.entries(printed)) {
     for (const answer of [...answers, ...failures]) assert.ok(conforms(answer, S[name]), `${name} accepts ${JSON.stringify(answer)}`)
@@ -1414,6 +1471,8 @@ test('backlog-autopilot: each factory script\'s answer accepts what it prints an
     BACK_TO_MAIN: [{ parameter: '{"onMain": true}' }, { onMain: 'true' }],
     NOTIFIED: [{ output: '{"sent":true}' }, { sent: 'true' }],
     LOCAL_REVIEW: [{ output: '{"ran":false}' }, { ran: 'false' }],
+    STARTED: [{ output: '{"ok":true}' }, { ok: 'true', branch: 'fix/0-1-x' }],
+    RESUMED: [{ output: '{"ok":true}' }, { ok: 'true', branch: 'fix/0-1-x' }, { ok: true, item: 25 }],
   }
   for (const [name, answers] of Object.entries(answered)) {
     for (const answer of answers) assert.ok(!conforms(answer, S[name]), `${name} refuses ${JSON.stringify(answer)}`)

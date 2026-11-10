@@ -8,6 +8,7 @@ The map of files and who may write them is in `.ai/README.md`; this document is 
 ```
 next-item.sh (code: ready follow-up → approved queue .ai/plan/queue.md, strictly in order → priority) → picker
   → start-item.sh (code: the branch from the base commit, .ai/work/<item> from the template, the status, one commit)
+    (on resume: resume-item.sh switches to the owner's branch before the picker, which only reads)
   → architect (plan, predicted modules, the rules the implementer must have in front of it)
   → implementer (Opus; implementer-light on Sonnet for Complexity: low)
   → self-check: rule files the diff calls for, from which the plan listed no rule → implementer reads and checks them
@@ -127,7 +128,11 @@ asked. `/workflows` shows progress; `p` pauses, `x` stops.
 A BLOCKED item is resumed with `branch` (and `acceptUnverifiable` for the claims you read), as a new run from a
 clean `main`, never with `resumeFromRunId`: the settings allow `Workflow(backlog-autopilot)` by name only, not a
 run's saved `scriptPath`, and a run's journal belongs to the session that started it. The new run skips pick, plan
-and implement and runs the gate, the panel, the verifier and the shipper again (PR #576, backlog #0-194).
+and implement and runs the gate, the panel, the verifier and the shipper again (PR #576, backlog #0-194). The
+switch to the branch is code, before the picker (`scripts/factory/resume-item.sh`, backlog #0-215): a branch named as an
+item's (`<type>/0-<n>-<slug>`) that exists locally and holds that item's `.ai/work/0-<n>/progress.md`, from a clean
+`main` at the base commit. The item is the one the branch names; an `item` that names another is refused before
+anything moves.
 
 **Which item.** Code decides, not an agent: `scripts/factory/next-item.sh` reads `BACKLOG.md`,
 `BACKLOG-DONE.md` and `.ai/plan/queue.md` on the run's base commit and the open PRs, and takes, in order:
@@ -348,7 +353,8 @@ moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs.
 | `FIREWALL SETUP FAILED: all traffic is blocked` at container start | a required domain did not resolve or GitHub's IP ranges could not be fetched; the message above it names the cause. Fix it and restart the container (an optional domain only warns) |
 | a reviewer "returned no valid verdict" | it answered prose instead of JSON; check its transcript; repeated → audit finding |
 | `BLOCKED: <agent> gave no answer (last agent call without an answer: <agent>: …)` | the agent ended without its JSON, usually its `maxTurns` spent (#0-206): the item is stopped like any block (draft PR when the run has a branch, state recorded with the stage, notification). Read its transcript for where the turns went, often refused commands (a hook names what to use instead); resume the branch once fixed |
-| `BLOCKED: picker failed: …` | a command of the picker was refused or failed (#0-206), not an empty queue: the reason quotes it. The picker creates no branch since #0-209; were one named anyway, the reason says so (`next-item.sh` skips the item while that branch exists: delete it, or resume it with `branch`). A resume without `item` has no item id to record against: the lock is released and the owner notified, but no state is recorded |
+| `BLOCKED: picker failed: …` | a command of the picker was refused or failed (#0-206), not an empty queue: the reason quotes it. The picker creates no branch since #0-209; were one named anyway, the reason says so (`next-item.sh` skips the item while that branch exists: delete it, or resume it with `branch`). On resume the item is the one the branch names, so the stop is recorded against it |
+| `BLOCKED: could not resume #0-N on <branch>: …` | `resume-item.sh` refused to switch to the branch (#0-215): the reason quotes it (a tree that is not a clean main at the base commit, no local branch of that name, a branch holding no `.ai/work/0-N/progress.md`). It changes nothing: the tree stays on main and the branch as it was. `…: no answer` means factory-ops ended without the script's answer: check `git status -sb` |
 | `BLOCKED: could not start #0-N on <branch>: …` | `start-item.sh` refused to start the item (#0-209): the reason quotes it (a tree that is not a clean main at the base commit, a branch or `.ai/work/<item>` that exists, an item not `ready` or not `Open` on the base commit). It leaves no branch and no work directory behind, so once the cause is gone the next run can take the item again; if its own cleanup failed, the reason names the branch left. `could not start …: no answer` is the exception: factory-ops ended without the script's answer (killed, out of turns), and a branch it may have made is left: check `git branch --list '*/0-N-*'` |
 | `NOTHING_TO_DO` | the reason names the next queue row and why it cannot start: not `ready` on main, a dependency not done, a path the autopilot may not write ("make it human-only or split it"), or an open PR/branch (a lock — usually the previous item waiting for your merge). "The approved queue is done" → `/plan-backlog` |
 | `NOT_STARTED: the queue on main is invalid` | a merged change broke `.ai/plan/queue.md` (e.g. an item it lists was removed); `scripts/factory/check-queue.sh` names the rows — fix them or re-plan |

@@ -58,10 +58,7 @@ base=$1 item=$2 branch=$3 run=$4
 [[ $branch =~ ^[a-z]+/${item}-[A-Za-z0-9._-]+$ ]] || refuse "not a branch of #$item (<type>/$item-<slug>): ${branch:0:80}"
 [[ $run =~ ^[0-9]{8}-[0-9]{6}$ ]] || refuse "not a run id (preflight.sh's yyyymmdd-hhmmss): ${run:0:40}"
 
-[ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ] || refuse "not on main: an item starts from main"
-dirty=$(git status --porcelain --untracked-files=all 2>/dev/null) || refuse "cannot read the working tree's status"
-[ -z "$dirty" ] || refuse "the working tree is not clean"
-[ "$(git rev-parse HEAD 2>/dev/null)" = "$base" ] || refuse "main is not at the base commit $base the preflight recorded"
+why=$(clean_main_at "$base") || refuse "$why"
 git show-ref --verify --quiet "refs/heads/$branch" && refuse "the branch $branch exists already"
 [ ! -e ".ai/work/$item" ] || refuse ".ai/work/$item exists already: a directory left by an earlier run is the owner's to delete"
 [ -f .ai/work/_template/progress.md ] || refuse "no .ai/work/_template/progress.md"

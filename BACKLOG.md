@@ -138,6 +138,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
 | [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Open |
 | [0-215](#0-215-the-picker-writes-nothing-yet-its-bash-may-still-write) | The picker writes nothing, yet its Bash may still write | ci | Low | Open |
+| [0-216](#0-216-the-rule-of-an-items-branch-is-written-four-times-and-nothing-compares-them) | The rule of an item's branch is written four times, and nothing compares them | ci | Low | Open |
+| [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4736,7 +4738,10 @@ AC2. `docs/ai-factory.md` names it as a step after updating Claude Code in the d
 round 1, 2026-11-09).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/agents/picker.md, .claude/hooks/readonly-bash.sh and its tests, .claude/settings.json,
-.claude/settings.autopilot.json, .github/scripts/check-hook-entries.rb), root (README.md)
+.claude/settings.autopilot.json, .github/scripts/check-hook-entries.rb and test-hook-entries.sh,
+scripts/factory/resume-item.sh, .github/scripts/test-resume-item.sh, .github/workflows/factory-guards.yml,
+.claude/workflows/backlog-autopilot.js and test-autopilot-workflow.mjs, docs/ai-factory.md, .ai/decisions/), root
+(README.md)
 
 **Problem.** Since #0-209 the picker only reads: it checks the item and names its branch, and `start-item.sh` starts
 the item. On resume it runs one `git switch <branch>`. It has no file tool, but its Bash has no guard of its own: it is
@@ -4746,14 +4751,57 @@ one of `check-hook-entries.rb`'s `UNGUARDED` agents, bounded only like the imple
 still runs `git switch -c` would also leave a branch that locks the item, which `start-item.sh` then refuses with
 "not on main", without naming that branch.
 
-**Proposed.** `readonly-bash.sh` in the picker's frontmatter and as its session-level twin in both settings files,
-with a mode that also allows `git switch <branch>` of the resume's branch only, and the picker out of `UNGUARDED`.
+**Proposed (first draft).** `readonly-bash.sh` in the picker's frontmatter and as its session-level twin in both
+settings files, with a mode that also allows `git switch <branch>` of the resume's branch only, and the picker out of
+`UNGUARDED`.
 
-**Acceptance criteria (draft).**
-AC1. The picker's Bash runs under `readonly-bash.sh` (frontmatter and twin), whose picker mode allows only its
-     listed commands and `git switch <branch>`; `test-hooks.sh` shows `git switch -c`, `git commit` and `git push`
-     refused for the picker.
-AC2. `UNGUARDED` no longer names the picker, and `check-hook-entries.rb` and `check-agent-commands.rb` pass.
+**Decided (owner, 2026-11-10): the switch is code too (option B, ADR-0051).** A hook cannot know the resume's branch
+(`args.branch`), so a `git switch` it allows could only be checked for its shape: another item's branch would pass, and
+the workflow checks the branch the picker answers, not where HEAD is. So the workflow switches before the picker
+(`scripts/factory/resume-item.sh <base> <branch>`, through factory-ops, as `start-item.sh` starts an item since #0-209)
+and the picker's mode allows no git write at all. Rejected: option A, the first draft above.
+
+**Acceptance criteria.**
+AC1. The picker's Bash runs under `readonly-bash.sh --picker` (frontmatter and the `--agent picker --picker` twin),
+     which allows read-only git, `gh pr list` in the one form `picker.md` names (matched whole) and
+     `ls .ai/work/0-<n>` that resolves to itself (no symlink in any part), only; `test-hooks.sh` shows `git switch` (with and without `-c`),
+     `git commit`, `git push`, `gh pr create`/`view`, other `gh pr list` forms (`-w=true`, `-R`, `--search`) and other
+     `ls` forms refused for the picker.
+AC2. `UNGUARDED` no longer names the picker, and `check-hook-entries.rb` and `check-agent-commands.rb` pass (the
+     picker's list goes through its new guard; its dependency check matches the row as `'^[[:punct:]] 0-<n> [[:punct:]] '`,
+     as the guard refuses a `|` even inside quotes).
+AC3. On resume the workflow runs `resume-item.sh` once, before the picker, and never on a fresh run: a branch that is
+     not an item's, or an `item` that is not the branch's, is `NOT_STARTED` before anything moves; a refusal or a wrong
+     answer stops the item at `pick`, recorded against the branch's item and notified, with the picker not called;
+     `test-resume-item.sh` shows every refusal leaving the tree as it was.
+
+### 0-216. The rule of an item's branch is written four times, and nothing compares them
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the review of #0-209 (round 2, docs) and of #0-215 (round 1,
+architecture, FAC-A01).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, scripts/factory/start-item.sh,
+scripts/factory/resume-item.sh, scripts/factory/_common.sh, a Factory guards check or test)
+
+**Problem.** `<type>/0-<n>-<slug>` (`^[a-z]+/0-[0-9]+-[A-Za-z0-9._-]+$`) is written in `backlog-autopilot.js` twice
+(the resume's arguments, the picker's answer), in `start-item.sh` and in `resume-item.sh`, and no check compares them.
+A drift fails closed (one of them refuses and the item stops), but each stop costs a run and its reason names only the
+copy that refused.
+
+**Proposed.** One copy in `_common.sh` for both scripts (as `SEED_BRANCH_RE`) and a Factory guards test that the
+workflow's two literals equal it; or the workflow asks a script. To decide with the item.
+
+### 0-217. start-item.sh copies the work template without checking it for symlinks
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the review of #0-209 (round 2), named in ADR-0051.
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (scripts/factory/start-item.sh, .github/scripts/test-start-item.sh)
+
+**Problem.** `start-item.sh` copies `.ai/work/_template/` with `cp -R`, which copies a symlink in the template as a
+link; the item's commit then holds a link the next agents read through. The template is on `main` (owner-reviewed),
+so this needs a change that slipped through review first, but nothing refuses it.
+
+**Proposed.** Refuse to start when the template holds a symlink (`find .ai/work/_template -type l`), with a test.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

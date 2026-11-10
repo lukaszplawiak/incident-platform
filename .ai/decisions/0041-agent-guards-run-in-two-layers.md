@@ -74,10 +74,11 @@ look like the main session's, which a guard must let through. The frontmatter ho
   - Edit, Write, MultiEdit or NotebookEdit need `write-scope.sh` on a matcher with each of them;
   - an agent without `tools:` holds them all.
   The autopilot's own stages are named in `UNGUARDED` with the reason each runs without a scope of its own:
-  implementer, implementer-light, picker and shipper. `settings.autopilot.json`'s denies and session-wide guards
+  implementer, implementer-light and shipper (the picker was the fourth until #0-215: it runs `readonly-bash.sh
+  --picker` since, ADR-0051). `settings.autopilot.json`'s denies and session-wide guards
   (the script's rule 5, the required guards above) bound them. Two definitions with one `name:` fail too: the twins
   and the exceptions are keyed on it. An exception for no agent, or for one that has its guards, is stale. In the owner's
-  interactive session those four run unbounded: a residual, in README's known gaps. Giving them a frontmatter guard
+  interactive session those three run unbounded: a residual, in README's known gaps. Giving them a frontmatter guard
   would need a second list of the protected paths in a hook, and was left out.
 - A new agent with a frontmatter guard, or a new guard, needs its twin in both settings files, or Factory guards
   fails and names the line to add. A twin changes with its frontmatter.

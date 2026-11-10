@@ -270,8 +270,8 @@ fresh; mkdir -p "$root/.claude/agents/x" && sed 's/^name: .*/name: shipper/' "$r
 expect 1 "two definitions with one name" 'are both the agent shipper: one name, one definition'
 fresh; agent_tools t-read "Read, Grep, Glob" ""
 expect 0 "an agent that only reads needs no guard" "block when their hook fails"
-fresh; rm "$root/.claude/agents/picker.md"
-expect 1 "an exception for an agent that is gone" 'UNGUARDED (check-hook-entries.rb) names picker, which is no agent'
+fresh; rm "$root/.claude/agents/implementer-light.md"
+expect 1 "an exception for an agent that is gone" 'UNGUARDED (check-hook-entries.rb) names implementer-light, which is no agent'
 fresh; sed -i.bak 's/^tools: .*/tools: Read, Grep, Glob/' "$root/.claude/agents/shipper.md"
 expect 1 "an exception for an agent that needs no guard any more" 'shipper.md: has its guards, so its entry in UNGUARDED (check-hook-entries.rb) is stale'
 
