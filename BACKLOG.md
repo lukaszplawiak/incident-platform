@@ -137,7 +137,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
 | [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
 | [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Open |
-| [0-215](#0-215-the-picker-writes-nothing-yet-its-bash-may-still-write) | The picker writes nothing, yet its Bash may still write | ci | Low | Open |
 | [0-216](#0-216-the-rule-of-an-items-branch-is-written-four-times-and-nothing-compares-them) | The rule of an item's branch is written four times, and nothing compares them | ci | Low | Open |
 | [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -4734,8 +4733,8 @@ AC2. `docs/ai-factory.md` names it as a step after updating Claude Code in the d
 
 ### 0-215. The picker writes nothing, yet its Bash may still write
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From the review panel of #0-209 (security and architecture,
-round 1, 2026-11-09).
+**Type:** ci · **Priority:** Low · **Status:** Done, PR #596 (kept for the decision history: option A rejected for
+B, the resume's switch in code). From the review panel of #0-209 (security and architecture, round 1, 2026-11-09).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (.claude/agents/picker.md, .claude/hooks/readonly-bash.sh and its tests, .claude/settings.json,
 .claude/settings.autopilot.json, .github/scripts/check-hook-entries.rb and test-hook-entries.sh,
