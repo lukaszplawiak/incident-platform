@@ -151,6 +151,7 @@ const BACK_TO_MAIN = answerOf({ onMain: { type: 'boolean' }, left: { type: 'stri
   reason: { type: 'string' } })
 const NOTIFIED = answerOf({ sent: { type: 'boolean' }, reason: { type: 'string' } })
 const STARTED = answerOf({ branch: { type: 'string' }, workDir: { type: 'string' }, head: { type: 'string' } })
+const RESUMED = answerOf({ branch: { type: 'string' }, item: { type: 'string' }, head: { type: 'string' } })
 // `result` is the local model's answer: `claude -p --output-format json`'s text, or its whole output if it has none.
 const LOCAL_REVIEW = answerOf({ ran: { type: 'boolean' }, model: { type: 'string' }, result: { type: ['string', 'object'] },
   reason: { type: 'string' } })
@@ -479,6 +480,7 @@ if (!iso || iso.definitionLoaded !== true || iso.tools.some((t) => /^(Edit|Write
 
 let item
 let next = null
+let resumeId = null            // on resume, the item the owner's branch names (backlog #0-215)
 let plannedModules = null      // the architect's prediction of the modules the change reaches
 enterPhase('Pick')
 if (!args?.branch) {
@@ -502,8 +504,23 @@ if (args?.branch) {
   if (accepted !== undefined && (!Array.isArray(accepted) || !accepted.length || !accepted.every((id) => CLAIM_ID.test(String(id))))) {
     return notStarted([`acceptUnverifiable must be a list of claim ids from the draft PR (ver-<8 hex>), got ${JSON.stringify(accepted).slice(0, 80)}`])
   }
+  // The switch to the owner's branch is code (backlog #0-215), as the start of an item is (#0-209): the picker's Bash is
+  // read-only (readonly-bash.sh --picker). Fixed: the picker ran `git switch <branch>` itself, so its session held the
+  // autopilot's git write rules (`git switch *` matches `-c` too), and no guard could tell the owner's branch from
+  // another item's. A refusal changes nothing (the tree stays on main) and stops the item at `pick`, recorded and
+  // notified, as a picker that failed; the item is the one the branch names.
+  resumeId = (/^[a-z]+\/(0-\d+)-[A-Za-z0-9._-]+$/.exec(String(args.branch)) ?? [])[1]
+  if (!resumeId) return notStarted([`branch must be an item's branch (<type>/0-<n>-<slug>), got ${String(args.branch).slice(0, 80)}`])
+  if (args.item !== undefined && String(args.item).replace(/^#/, '') !== resumeId) {
+    return notStarted([`item ${String(args.item).slice(0, 40)} is not the item of the branch ${args.branch} (#${resumeId})`])
+  }
+  const resumed = await ops('resume-item.sh', [base.sha, args.branch], RESUMED, 'resume')
+  if (!resumed || resumed.ok !== true || resumed.branch !== args.branch || resumed.item !== resumeId) {
+    const why = resumed?.error ?? (Array.isArray(resumed?.reasons) && resumed.reasons.length ? resumed.reasons.join('; ') : null)
+    return stopItem({ itemId: `#${resumeId}`, id: resumeId }, `could not resume #${resumeId} on ${args.branch}: ${String(why ?? 'no answer').slice(0, 300)}`)
+  }
   item = await as('picker', [
-    `Resume mode: do not create a branch. Switch to the existing branch ${args.branch} (git switch ${args.branch}) for item ${args.item ?? '(read it from .ai/work/*/progress.md on that branch)'}.`,
+    `Resume mode: the workflow switched to the existing branch ${args.branch} (resume-item.sh); do not switch or create a branch. Item #${resumeId}.`,
     `Validate the item exactly as in "Check the item" except the lock check (its own draft PR may be open), and answer the same JSON with that branch.`,
     `Base ref ${base.ref} (${base.sha}). Run ${runId}.`,
   ].join('\n'), { schema: PICK })
@@ -521,7 +538,7 @@ if (!item) return stopItem(null, 'picker gave no answer')
 // `blocked`, it counts toward consecutiveBlocked on purpose: repeated picker failures are the factory's own fault, and
 // the breaker should stop the autopilot on them as on any other block.
 if (item.failed) {
-  const wantedId = (next?.item ?? (args?.item ? String(args.item) : '')).replace(/^#/, '')
+  const wantedId = (next?.item ?? resumeId ?? '').replace(/^#/, '')
   // On resume the branch is the owner's (args.branch). Outside resume the picker creates no branch since backlog #0-209
   // (start-item.sh does, below, and removes it on a refusal); a branch it names anyway is still said, as a defence.
   const left = !args?.branch && item.branch && SAFE.test(item.branch) ? `; the branch ${item.branch} was left: next-item.sh skips the item while it exists` : ''

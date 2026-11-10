@@ -7,6 +7,8 @@
 #   readonly-bash.sh            git diff/log/show/status/rev-parse/merge-base/ls-files/blame/cat-file/grep
 #                               (git grep: tracked files only, never -O, --no-index, --untracked, -f)
 #   readonly-bash.sh --gh-read  ... plus `gh pr list/view/diff`, `gh issue list/view`, `gh run list/view` (auditors)
+#   readonly-bash.sh --picker   ... plus one `gh pr list` form and `ls .ai/work/0-<n>` (through no symlink), nothing that
+#                               writes: the autopilot's picker, which reads PR titles an outsider can write (backlog #0-215)
 #   readonly-bash.sh --architect ... plus `git add` of .ai/decisions/ and .ai/work/ paths, and `git commit` in one
 #                               form: -m "<subject>", optionally --trailer "Co-Authored-By: <name> <noreply@anthropic.com>"
 #   readonly-bash.sh --agent <names> [mode]   the same, at session level, for those agents' calls only (#0-164)
@@ -38,6 +40,7 @@ mode=${1:-}
 HINT="Read a file with the Read tool. Search with git grep -n -e <pattern> -e <other> -- <paths> (each alternative its own -e, not a|b) and list files with git ls-files; one command per call, from the repository root (no git -C)."
 case "$mode" in
     --gh-read)   HINT="$HINT Also allowed here: gh pr list/view/diff, gh issue list/view, gh run list/view." ;;
+    --picker)    HINT="$HINT Also allowed here: gh pr list --state open --json number,title,headRefName,isDraft --limit 300 (that form only) and ls .ai/work/0-<n>; nothing that switches, creates or commits a branch: the workflow does that (start-item.sh, resume-item.sh)." ;;
     --architect) HINT="$HINT Also allowed here: git add of .ai/decisions/ and .ai/work/ paths, and git commit -m \"<subject>\" --trailer \"Co-Authored-By: <name> <noreply@anthropic.com>\"." ;;
     '') ;;
     # Fails closed on a mode it does not know (FAC-S04): `--k8s` is gone (backlog #0-182), and a frontmatter or a
@@ -102,6 +105,32 @@ if [ "$mode" = --gh-read ]; then
     case "$1 ${2:-} ${3:-}" in
         "gh pr list"|"gh pr view"|"gh pr diff"|"gh issue list"|"gh issue view"|"gh run list"|"gh run view") exit 0 ;;
     esac
+fi
+# The picker (backlog #0-215): the two reads of its definition beyond git, in the one form each needs. Its branch is
+# made and switched to in code (start-item.sh, resume-item.sh), so no git write passes here, `git switch` least of all:
+# it reads PR titles an outsider can write, and under the autopilot's allow rules alone `git switch *` let it run
+# `git switch -c`, and `git commit *`, `git push -u origin *` came with it.
+# `gh pr list` in its one form, matched as a whole command (review round 1 of #0-215): matched by its first words, any
+# option passed, `--web` in a form a pattern misses (`-w=true`, `-ws open`) and `-R <host>/<owner>/<repo>`, which sends
+# the request, a `--search` text with it, to another host. `ls` of one work directory, never through a symlink: a branch
+# that commits one at that path, or at `.ai` or `.ai/work`, would list names outside the repository (review rounds 1, 2).
+PICKER_PR_LIST='gh pr list --state open --json number,title,headRefName,isDraft --limit 300'
+if [ "$mode" = --picker ]; then
+    if [ "$1 ${2:-} ${3:-}" = "gh pr list" ]; then
+        [ "$cmd" = "$PICKER_PR_LIST" ] && exit 0
+        block "the picker lists pull requests in one form only: $PICKER_PR_LIST. $HINT"
+    fi
+    if [ "$1" = ls ]; then
+        [ "$#" -eq 2 ] && [[ $2 =~ ^\.ai/work/0-[0-9]+$ ]] || block "the picker lists one path only: ls .ai/work/0-<n>. $HINT"
+        [ ! -L "$2" ] || block "$2 is a symlink: the picker lists the work directory itself, never what a link points to. $HINT"
+        # Every component resolved, not the last one alone (review round 2 of #0-215): a resumed branch's tree, written
+        # by an earlier run, could make `.ai` or `.ai/work` a link out of the repository. The path must resolve to
+        # itself under the repository root; resolved from the hook's own working directory, a hook started anywhere
+        # but the root gets another path and refuses, so nothing rests on where Claude Code starts it.
+        rel=$(repo_rel "$2") || block "cannot resolve $2 in this repository. $HINT"
+        [ "$rel" = "$2" ] || block "$2 resolves to $rel, not to itself in this repository: the picker lists the work directory only. $HINT"
+        exit 0
+    fi
 fi
 if [ "$mode" = --architect ]; then
     if [ "$1 ${2:-}" = "git add" ]; then

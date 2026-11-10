@@ -68,6 +68,17 @@ factory_mvn() {
 # shellcheck disable=SC2034 # read by run-tests.sh and seed-compile.sh, which source this file
 MAVEN_ENV_ERRORS='Could not find a valid Docker environment|Cannot connect to the Docker daemon|Could not transfer artifact|Could not resolve dependencies|Connection refused.*(repo|maven)|No space left on device|in offline mode|has not been downloaded from it before'
 
+# clean_main_at <base sha> — true when the tree is on main, clean (untracked files count) and at <base sha>, the
+# commit the preflight recorded; otherwise prints the first reason and returns 1. The one copy of the precondition of
+# start-item.sh and resume-item.sh (review round 1 of #0-215): the two moved a run's tree from the same state.
+clean_main_at() {
+    local dirty
+    [ "$(git rev-parse --abbrev-ref HEAD 2>/dev/null)" = main ] || { echo "not on main: a run's branch starts from main"; return 1; }
+    dirty=$(git status --porcelain --untracked-files=all 2>/dev/null) || { echo "cannot read the working tree's status"; return 1; }
+    [ -z "$dirty" ] || { echo "the working tree is not clean"; return 1; }
+    [ "$(git rev-parse HEAD 2>/dev/null)" = "$1" ] || { echo "main is not at the base commit $1 the preflight recorded"; return 1; }
+}
+
 # is_int <value> — true for a non-negative integer
 is_int() { case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 

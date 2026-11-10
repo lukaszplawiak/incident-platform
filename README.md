@@ -499,19 +499,20 @@ security boundary, so every rule that matters is also enforced outside the model
   Claude Code 2.1.295 or newer (an older one ignores it silently, spike of 2026-10-25): the autopilot's preflight
   refuses an older one.
   Hook tests: `.claude/hooks/test-hooks.sh`, with every hook in a fail-closed table (a hook without a row fails Factory guards).
-- **Least privilege per agent**: reviewers, the architect and the auditors run read-only Bash allow-lists
+- **Least privilege per agent**: reviewers, the architect, the auditors and the autopilot's picker run read-only Bash allow-lists
   and write scopes (`.claude/hooks/readonly-bash.sh`, `write-scope.sh`), in two layers: the agent's frontmatter and
   a twin in both settings files keyed on its `agent_type` (`--agent`), since Claude Code does not promise frontmatter
   hooks to the agents a `Workflow` spawns; Factory guards keeps the twins equal to the frontmatter and checks that
   every session-wide guard is still wired (`check-hook-entries.rb`, backlog #0-164, ADR-0041), and fails an agent
   whose `tools:` hold Bash or a file tool with no guard of that kind in its frontmatter (rule 6, backlog #0-186);
-  the autopilot's implementer, implementer-light, picker and shipper are its named exceptions, bounded by the
+  the autopilot's implementer, implementer-light and shipper are its named exceptions, bounded by the
   autopilot session's denies and session-wide guards instead (the two implementers also run `foreground-bash.sh`,
   which refuses a command in the background, backlog #0-206: a budget guard, not a scope). The workflow starts an
-  item in code (`scripts/factory/start-item.sh`, backlog #0-209): the picker has no file-writing tool and its
-  definition creates nothing, and the `mkdir -p .ai/work/*` and `cp .ai/work/_template/* .ai/work/*` allow rules are
-  gone; its Bash is still bounded only like the implementer's, so the autopilot's git write rules hold for it too (a
-  read-only guard for the picker is #0-215). The architect commits in one form only, `-m "<subject>"` with the
+  item in code (`scripts/factory/start-item.sh`, backlog #0-209) and switches a resumed run to the owner's branch in
+  code (`scripts/factory/resume-item.sh`, #0-215), so the picker writes nothing: it has no file-writing tool, the
+  `mkdir -p .ai/work/*` and `cp .ai/work/_template/* .ai/work/*` allow rules are gone, and its Bash is
+  `readonly-bash.sh --picker` (read-only git, one `gh pr list` form, `ls .ai/work/0-<n>`; no branch, switch, commit or push,
+  though it reads PR titles an outsider can write). The architect commits in one form only, `-m "<subject>"` with the
   attribution trailer: `-F`/`--file` would let it put any file it can read into a commit message the shipper pushes
   (backlog #0-203). The `/seed-bugs`
   defect-seeder runs the reviewers' read-only Bash (no branch, no commit, no redirect) and edits only the files of the
@@ -627,7 +628,7 @@ branch is already public, and an allow comment passes whatever its line holds (#
 session on a Claude Code older than 2.1.295 ignores the hooks' `onFailure` without a word, so there a hook that
 cannot start or times out does not block (only the autopilot's preflight checks the version; ADR-0039);
 an agent guard's session-level twin passes everything if Claude Code stops sending `agent_type` (its frontmatter
-hook stays for that, ADR-0041), and the autopilot's implementer, implementer-light, picker and shipper have no guard
+hook stays for that, ADR-0041), and the autopilot's implementer, implementer-light and shipper have no guard
 of their own: in an interactive session (not the autopilot's) only that session's denies and hooks bound them
 (#0-186); the reviewers read the rules from `origin/main` by instruction (`review-procedure`), which no hook
 enforces (#0-165); `/research` and `/ship` still pre-approve `git diff *` (and `/research` `git log/show *`), and no
