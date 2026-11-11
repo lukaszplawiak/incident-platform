@@ -142,6 +142,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-218](#0-218-no-seeded-pattern-measures-security-on-a-weakened-forked-chain-or-an-idor) | No seeded pattern measures security on a weakened forked chain or an IDOR | ci | Low | Open |
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
 | [0-220](#0-220-the-pipeline-audits-data-attaches-the-wrong-ready-pr-to-a-case) | The pipeline audit's data attaches the wrong `/ready` PR to a case | ci | Medium | Open |
+| [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4872,6 +4873,30 @@ AC2. A `/ready` PR that readies an item on another item's branch is found for th
 its title or body names); a test shows it.
 AC3. A `NEEDS_HUMAN` acceptance on a PR labelled `risk-high`, whose reason is only the item's Risk (acceptance.md,
 "Verdict"), is not a case signal on its own; a test shows both sides.
+
+### 0-221. Two audit reports of one day can give the same recommendation id
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From `/apply-audit` of the 2026-11-11 audits (owner, 2026-11-11).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** root (.ai/rules/audit.md), ci (.github/workflows/factory-guards.yml, .github/scripts/)
+
+**Problem.** `.ai/rules/audit.md` ("Format of a recommendation") gives one id form, `R-YYYY-MM-DD-NN`, but an audit
+writes a report per target (reviewers and pipeline, #0-121). On 2026-11-11 the pipeline synthesis improvised
+`R-2026-11-11-pipeline-NN` so that its ids would not repeat the reviewers' `R-2026-11-11-01`..`04`; nothing asked it
+to, and nothing checks that the ids in `.ai/audit/decisions.md` are unique. A second report of the same target on the
+same day (an audit re-run after a failure) would also start again at `01`. No script parses the ids (the ledger, the
+calibration lines' `(R-…)` and the analysts' `previousRecommendations` hold them as text), so a duplicate is not a
+crash but a ledger row the next audit cannot tell apart.
+
+**Decided (owner, 2026-11-11).** Write down the form already in use, no renaming: `R-YYYY-MM-DD-NN` for the
+reviewers' report, `R-YYYY-MM-DD-pipeline-NN` for the pipeline report; a second report of the same target on the
+same day continues its `NN`. Full symmetry (`R-…-reviewers-NN`) was considered and not taken: it would mix two forms
+in the ledger for no gain.
+
+**Acceptance criteria.**
+AC1. `.ai/rules/audit.md` "Format of a recommendation" gives both forms and the continued `NN` for a same-day re-run.
+AC2. A Factory guards step fails when two rows of `.ai/audit/decisions.md` carry the same id, or an id matches neither
+form; its test shows both failures and a valid ledger.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
