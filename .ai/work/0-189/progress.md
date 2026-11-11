@@ -18,3 +18,4 @@ NEXT: implementer
 - [implementer r0] commit 8688b658; 1 test file; tests: OncallScheduleOptionalStatusIntegrationTest (5 tests, ran green)
 - [implementer rules] GEN-04: OncallScheduleOptionalStatusIntegrationTest (postgres:16-alpine) | GEN-05: otherTenantSeesOnlyItsOwnRows + doesNotContain(OTHER) | GEN-01: dataset puts other tenant and CANCELLED T4 at page heads | GEN-03: exact ids in order, totalElements | GEN-07: fixed Instants, UUID compare, @Transactional | GEN-22: class name/package | GEN-24: test-only | GEN-20: class Javadoc cites #0-189 | SEC-06: tenant tests on content and count | SEC-30: precedent jwt.secret dummy only
 NEXT: tests
+- [implementer self-check] oncall-service/src/test/java/com/incidentplatform/oncall/repository/OncallScheduleOptionalStatusIntegrationTest.java: PERF-02, PERF-30 (the only rules a repository-query test touches; it only calls a paged query with PageRequest, no findAll, thread, synchronized or remote call) — nothing to fix
