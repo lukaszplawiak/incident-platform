@@ -109,4 +109,5 @@ not "consider improving this").
 
 ## Calibration
 
-Added only by `/apply-audit` from accepted audit recommendations. Empty until the first audit.
+Added only by `/apply-audit` from accepted audit recommendations.
+- Which rule a finding cites. The code or test not doing what an acceptance criterion says is GEN-30. GEN-24 is only for an edit no criterion asks for. A behaviour or case no test would catch breaking is GEN-01. GEN-20 is only for a missing "why" comment. A finding whose text fits no rule's sentence takes `ruleId: null`. (R-2026-11-11-02)
