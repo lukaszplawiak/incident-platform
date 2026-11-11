@@ -124,7 +124,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
-| [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | Medium | Open |
+| [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | High | Open |
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
@@ -141,6 +141,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Open |
 | [0-218](#0-218-no-seeded-pattern-measures-security-on-a-weakened-forked-chain-or-an-idor) | No seeded pattern measures security on a weakened forked chain or an IDOR | ci | Low | Open |
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
+| [0-220](#0-220-the-pipeline-audits-data-attaches-the-wrong-ready-pr-to-a-case) | The pipeline audit's data attaches the wrong `/ready` PR to a case | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4179,7 +4180,7 @@ already does (only a service that accepts keys adds it). #0-191's tests show the
 
 ### 0-194. The autopilot's preflight does not refuse a session outside the devcontainer or without its settings
 
-**Type:** security · **Priority:** Medium · **Status:** Open. Found 2026-11-01: `/backlog-autopilot` was started
+**Type:** security · **Priority:** High · **Status:** Open. Found 2026-11-01: `/backlog-autopilot` was started
 in the owner's host session (macOS, plain `claude`, auto mode), not as `docs/ai-factory.md` "Running it" says.
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
 
@@ -4224,7 +4225,7 @@ A signal can be set by hand, so this guards against a mistake, not an adversary;
 **Acceptance criteria (draft).**
 AC1. `preflight.sh` refuses to start outside the devcontainer, naming the signal it missed; `test-preflight.sh` shows
      it.
-AC2. It refuses a session not started with `settings.autopilot.json`, and the limits have no silent default.
+AC2. It refuses a session not started with `settings.autopilot.json`, or started with settings that differ from the base commit's `settings.autopilot.json` (#0-194's third case; the mechanism is decided in #0-194's analysis: a file cannot carry its own hash), and the limits have no silent default; `test-preflight.sh` shows each refusal. (R-2026-11-11-pipeline-01)
 AC3. A correct run in the devcontainer starts as today.
 AC4. `docs/ai-factory.md` "Running it" and README "Infrastructure Hardening" name the new refusals.
 
@@ -4850,6 +4851,27 @@ PERF-22) and runs it once, alternating with the defect runs.
 **Acceptance criteria.**
 AC1. Three blind performance rows in `results.md`, each scanned clean.
 AC2. One clean performance row in `clean.md`.
+
+### 0-220. The pipeline audit's data attaches the wrong `/ready` PR to a case
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. From the pipeline audit 2026-11-11 (R-2026-11-11-pipeline-02:
+PR #581 got #582).
+**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), root (.ai/rules/audit.md)
+
+**Problem.** `ready_of` (`scripts/factory/audit-data.sh`) attaches the newest merged `docs/backlog-ready-<item>` PR,
+whatever the run's date: PR #581 (BLOCKED 2026-11-02T11:47Z) got #582 (merged 12:16Z, with the corrected criteria)
+instead of #578, the `/ready` on its base. An item readied on another item's branch gets no `/ready` PR at all
+(#0-200 on `docs/backlog-ready-0-199`; #0-197 and #0-198 on `docs/backlog-ready-0-196-0-197`). And
+`.ai/rules/acceptance.md` makes every `Risk: high` item `NEEDS_HUMAN`, so the case rule "acceptance other than
+ACCEPT" makes each risk-high PR a case by construction (PR #583).
+
+**Acceptance criteria.**
+AC1. A case's `readyPr` is the item's newest `/ready` PR merged before the run started (the picker's start commit),
+not the newest overall; `test-audit-data.sh` shows it with two `/ready` PRs, one merged after the run.
+AC2. A `/ready` PR that readies an item on another item's branch is found for that item too (e.g. by the item numbers
+its title or body names); a test shows it.
+AC3. A `NEEDS_HUMAN` acceptance on a PR labelled `risk-high`, whose reason is only the item's Risk (acceptance.md,
+"Verdict"), is not a case signal on its own; a test shows both sides.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
