@@ -4090,8 +4090,8 @@ AC3. README's known gap sentence names the outcome.
 **Type:** tech-debt · **Priority:** Medium · **Status:** Open. Found in #0-180's `/research` (2026-10-31): review-general
 raised it as blocking (GEN-04) in four `/seed-bugs` runs on host `47b95294`, each time in the host's own code, not in
 the plant.
-**Autopilot:** not-ready · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** oncall-service (src/test: a repository integration test)
+**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** oncall-service (src/test: oncall/repository)
 
 **Problem.** `OncallScheduleRepository.findByTenantIdAndOptionalStatus` (line 122) filters with
 `(:status IS NULL OR s.status = :status)` on an enum parameter. Its only tests mock the repository
@@ -4104,9 +4104,16 @@ that runs the query with a status and without one, on schedules of two tenants a
 tenant filter holds and the status filter applies only when given.
 
 **Acceptance criteria.**
-AC1. A repository integration test runs `findByTenantIdAndOptionalStatus` with a status and with none, and shows the
-tenant and status filters (another tenant's schedules never returned).
-AC2. Removing the tenant predicate or the status predicate fails it.
+AC1. A new Testcontainers repository integration test class (`postgres:16-alpine`, in
+`oncall-service/src/test/java/com/incidentplatform/oncall/repository/`, its own class rather than a nested one in
+`OncallScheduleOverlapIntegrationTest`) runs `findByTenantIdAndOptionalStatus` against PostgreSQL with a status and
+with `null`; both calls return a page (a wrongly bound `null` fails the test), and it passes in
+`./mvnw verify -pl oncall-service`.
+AC2. With schedules of two tenants, each holding `ACTIVE`, `SUPERSEDED` and `CANCELLED` rows: `status = ACTIVE`
+returns only the queried tenant's `ACTIVE` rows; `status = null` returns all three statuses of the queried tenant; in
+neither case does a row of the other tenant appear.
+AC3. With a page of size 1, the first row is the matching schedule with the latest `startsAt`, and `totalElements`
+equals the number of matching rows of the queried tenant.
 
 ### 0-190. A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited
 
