@@ -1,11 +1,9 @@
-# Proofs: <item id>
-
-Each acceptance criterion and the evidence that shows it (`.ai/rules/acceptance.md`). No pasted logs and
-no secrets: the full output is in `.ai/runs/<item>/` (gitignored), named here.
+# Proofs: 0-189
 
 | Criterion | Evidence | Kind |
 |---|---|---|
-| AC1 | `<Class>#<method>` asserts <outcome> | test |
-| AC2 | `.github/scripts/check-<x>.sh` fails without the change (its test case: `<name>`) | CI check |
+| AC1 | `OncallScheduleOptionalStatusIntegrationTest#activeStatusReturnsOnlyTheTenantsActiveRows` and `#nullStatusReturnsEveryStatusOfTheTenant` run the query with a status and with null on postgres:16-alpine | test |
+| AC2 | same two tests plus `#otherTenantSeesOnlyItsOwnRows` (positive control) | test |
+| AC3 | `#pageOfOneWithStatusHoldsLatestMatchingRowAndFullTotal`, `#pageOfOneWithoutStatusHoldsLatestRowOfTenantAndFullTotal` | test |
 
-Test run: `./mvnw verify -pl <modules>` — PASS, <n> tests, log `.ai/runs/<item>/tests-r<round>.log`.
+Test run: `./mvnw -q test -pl oncall-service -am -Dtest=OncallScheduleOptionalStatusIntegrationTest` — no failure; no log file saved.

@@ -15,3 +15,6 @@ NEXT: <stage>
 NEXT: architect
 - [architect] plan: new OncallScheduleOptionalStatusIntegrationTest (own @SpringBootTest + postgres:16-alpine class, pattern of OncallScheduleOverlapIntegrationTest) running findByTenantIdAndOptionalStatus with ACTIVE and null over two tenants x ACTIVE/SUPERSEDED/CANCELLED rows, page size 1 for order and totalElements; test-only, no src/main change; ADR: none; modules: oncall-service; rules: GEN-04, GEN-05, GEN-01, GEN-03, GEN-07, GEN-22, GEN-24, GEN-20, SEC-06, SEC-30
 NEXT: implementer
+- [implementer r0] commit 8688b658; 1 test file; tests: OncallScheduleOptionalStatusIntegrationTest (5 tests, ran green)
+- [implementer rules] GEN-04: OncallScheduleOptionalStatusIntegrationTest (postgres:16-alpine) | GEN-05: otherTenantSeesOnlyItsOwnRows + doesNotContain(OTHER) | GEN-01: dataset puts other tenant and CANCELLED T4 at page heads | GEN-03: exact ids in order, totalElements | GEN-07: fixed Instants, UUID compare, @Transactional | GEN-22: class name/package | GEN-24: test-only | GEN-20: class Javadoc cites #0-189 | SEC-06: tenant tests on content and count | SEC-30: precedent jwt.secret dummy only
+NEXT: tests
