@@ -95,4 +95,6 @@ CLAUDE.md), **Suggested fix** (the specific line or section, in the style alread
 
 ## Calibration
 
-Added only by `/apply-audit` from accepted audit recommendations. Empty until the first audit.
+Added only by `/apply-audit` from accepted audit recommendations.
+- DOC-10 covers `.ai/rules/` too (level A): grep each name or claim the diff removes or makes untrue (a test's shape, "until #0-N" for the item being done) in `.ai/rules/review/*.md`, not only README, CLAUDE.md and `.ai/context`. (R-2026-11-11-01)
+- A level-A drift that the item's text or `handoff.md` already gives the owner as an after-merge step is non-blocking: report it under DOC-10 with the file:line and the exact replacement text, so the owner can paste it. A level-A drift that nothing records is `NEEDS_HUMAN`, as section 1 says. (R-2026-11-11-01)

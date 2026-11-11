@@ -139,6 +139,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Open |
 | [0-216](#0-216-the-rule-of-an-items-branch-is-written-four-times-and-nothing-compares-them) | The rule of an item's branch is written four times, and nothing compares them | ci | Low | Open |
 | [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Open |
+| [0-218](#0-218-no-seeded-pattern-measures-security-on-a-weakened-forked-chain-or-an-idor) | No seeded pattern measures security on a weakened forked chain or an IDOR | ci | Low | Open |
+| [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4808,6 +4810,46 @@ link; the item's commit then holds a link the next agents read through. The temp
 so this needs a change that slipped through review first, but nothing refuses it.
 
 **Proposed.** Refuse to start when the template holds a symlink (`find .ai/work/_template -type l`), with a test.
+
+### 0-218. No seeded pattern measures security on a weakened forked chain or an IDOR
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the reviewers' audit 2026-11-11 (R-2026-11-11-03).
+
+**Problem.** Seven of the 8 autopilot PRs of 2026-10-10 to 2026-11-11 changed or tested the security chain and the
+route walks (SEC-10/12/14), and review-security approved all of them, yet no seeded pattern plants a weakened forked
+chain (SEC-12) or an access by id that checks only that the row exists (SEC-13, IDOR). Its seeded catches cover
+SEC-03, 04, 06, 10 and 31 only, so on the class of change the autopilot ships the security reviewer is measured only
+by owner `human:agree`.
+
+**Work.** The owner adds to `.ai/audit/benchmark/patterns.md`, defect patterns table:
+
+| Id | Dimension | Rule | Defect to plant |
+|---|---|---|---|
+| P-25 | security | SEC-12 | in a `SecurityFilterChain` the change declares or changes, end it in `authenticated()` instead of `authenticatedExceptPurposeTokens()`, or drop its `.cors(...)`; never in a chain the change does not touch |
+| P-26 | security | SEC-13 | in a read or change by id the change adds or modifies, compare only that the row exists (drop the tenant, team or role comparison) |
+
+**Acceptance criteria.**
+AC1. One blind `/seed-bugs` row each for P-25 and P-26 in `results.md`, scanned clean.
+
+### 0-219. performance's seeded results predate the blind panel, and no clean run measures its false alarms
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the reviewers' audit 2026-11-11 (R-2026-11-11-04).
+
+**Problem.** All of review-performance's seeded evidence is three rows of 2026-10-25 (perf-after-p10, -p11, -p12),
+run before #0-177, when the panel's prompt named the seed branch and its base. The 8 live PRs of the period reached
+no performance-sensitive path, so these rows are its only measure, and a non-blind row can overstate a result
+(sec-after-p04 against sec-p04-blind, #0-187). No clean (`C-`) pattern exists for performance, so its false-alarm
+rate is unmeasured.
+
+**Work.** Re-run P-10, P-11 and P-12 through `/seed-bugs` as it is now: `review/<8 hex>` branch, `Revert "<subject>"`
+base, `seed-fold.sh`, started from a notification turn, scanned with `scripts/factory-admin/seed-scan.sh` before the
+rows land. The owner adds one clean pattern for the Weight rule's exception to `.ai/audit/benchmark/patterns.md`
+(e.g. an unpaged read over a set the change's own code bounds, or a `@Scheduled` job that is one bounded statement,
+PERF-22) and runs it once, alternating with the defect runs.
+
+**Acceptance criteria.**
+AC1. Three blind performance rows in `results.md`, each scanned clean.
+AC2. One clean performance row in `clean.md`.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
