@@ -4091,7 +4091,7 @@ AC3. README's known gap sentence names the outcome.
 
 ### 0-189. The on-call schedules' optional-status query has no repository test
 
-**Type:** tech-debt · **Priority:** Medium · **Status:** Open. Found in #0-180's `/research` (2026-10-31): review-general
+**Type:** tech-debt · **Priority:** Medium · **Status:** In progress — autopilot run 20261111-154512. Found in #0-180's `/research` (2026-10-31): review-general
 raised it as blocking (GEN-04) in four `/seed-bugs` runs on host `47b95294`, each time in the host's own code, not in
 the plant.
 **Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
