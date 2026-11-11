@@ -50,5 +50,10 @@ Report:
    `human-only` (or `not-ready` with a proposed split: the protected part for the owner, the rest as an
    autopilot item), and the path goes into the Touches parentheses so the gate sees it. `Risk: high` does
    not fix this; it only says who merges.
+9. **Premises.** Each statement the item makes about how the code, a library or an ADR behaves, that a criterion
+   rests on (what fails today, what a positive control expects to reach, what an ADR rule says): where you
+   confirmed it (file:line, the ADR rule, or the library class at the version the build resolves), or `cannot
+   tell` with the question for the owner. A criterion no correct implementation can pass does not hold (point 1).
+   (R-2026-11-11-pipeline-03)
 
 Be concrete and short; the owner reads this for every item before marking it ready.
