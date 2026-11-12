@@ -62,6 +62,8 @@ result=$(jq -n --argjson items "$backlog" --argjson 'done' "$done_ids" --argjson
                | "#\(.item) is neither an open item in BACKLOG.md nor done in BACKLOG-DONE.md"),
       ($open[] | select(.it.autopilot == "human-only") | "#\(.item) is human-only: the autopilot never runs it, so it cannot be queued"),
       ($open[] | select(.it.type == "design") | "#\(.item) is a design item: decide it (ADR) and queue its implementation item instead"),
+      ($open[] | select(.it.type != "design" and .it.branchPrefix == null)
+         | "#\(.item): its type (Type: \(if .it.type == "" then "none" else .it.type[0:40] end)) has no branch prefix: next-item.sh would never start it (BRANCH_PREFIX_OF, _backlog.sh; backlog #0-195)"),
       ($open[] | select(.it.protected | length > 0)
          | "#\(.item) names \(.it.protected | join(", ")) in Touches, a path the autopilot may not write (.ai/rules/protected-paths.md): make it human-only or split it"),
       ($open[] as $r | $r.it.dependsOn[] as $d

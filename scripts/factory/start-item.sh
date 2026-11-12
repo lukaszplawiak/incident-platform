@@ -7,7 +7,8 @@
 #
 # On a clean main at <base sha> (the commit the preflight recorded), and only for an item that BACKLOG.md on that
 # commit holds once, `**Autopilot:** ready` and with a status that starts with Open (read as next-item.sh reads them,
-# backlog_json), with no branch <branch> and no .ai/work/<item> yet:
+# backlog_json), and for a <branch> whose prefix is the one the item's **Type:** gives (backlog #0-195), with no branch
+# <branch> and no .ai/work/<item> yet:
 #   1. `git switch -c <branch> <base sha>`;
 #   2. .ai/work/<item>/ as a copy of the whole of .ai/work/_template/ (a file added to the template is copied too);
 #      progress.md gets the item's title line and the start's entry (`- [start] …`), `NEXT: architect`;
@@ -79,6 +80,12 @@ title=$(jq -r '.[0].title' <<<"$entries")
 # next-item.sh skips an item whose status is not Open, for the same reason: the two must agree, or the item is chosen,
 # refused here and chosen again on every run, until the breaker stops the autopilot (review round 1 of #0-209).
 case "$status" in Open*) ;; *) refuse "#$item's status is not Open on the base commit: ${status:0:80}" ;; esac
+# The branch's prefix is the one its **Type:** gives (BRANCH_PREFIX_OF, _backlog.sh; backlog #0-195), read from the
+# base commit as next-item.sh read it: the workflow names the branch with that prefix, so another one here means the
+# two disagree, and the start is refused before the branch exists.
+prefix=$(jq -r '.[0].branchPrefix // ""' <<<"$entries") type=$(jq -r '.[0].type' <<<"$entries")
+[ -n "$prefix" ] || refuse "#$item's type has no branch prefix on the base commit (Type: ${type:-none})"
+[ "${branch%%/*}" = "$prefix" ] || refuse "the branch of #$item (Type: $type) is $prefix/$item-<slug>, not ${branch:0:80}"
 
 # A switch that fails leaves no branch (a name git refuses, e.g. one holding `..`, which the pattern above lets
 # through): nothing to undo. `made` is set only once the branch exists, so a refusal never names a branch that is not

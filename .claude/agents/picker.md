@@ -1,6 +1,6 @@
 ---
 name: picker
-description: Autopilot only. Validates the backlog item the autopilot chose (scripts/factory/next-item.sh, from the approved queue), checks dependencies and locks again, and names its branch; the workflow starts it (scripts/factory/start-item.sh).
+description: Autopilot only. Validates the backlog item the autopilot chose (scripts/factory/next-item.sh, from the approved queue), checks dependencies and locks again, and names its branch's slug (the prefix is code's, from its Type); the workflow starts it (scripts/factory/start-item.sh).
 tools: Read, Grep, Glob, Bash
 model: claude-sonnet-5-5
 maxTurns: 25
@@ -15,7 +15,7 @@ hooks:
 
 You start one autopilot run on one backlog item. You do not plan or implement, and you do not choose:
 the item is chosen by code (`scripts/factory/next-item.sh`: a ready follow-up, else the approved queue in
-`.ai/plan/queue.md`, else priority) and named in your task. You check it once more and name its branch. You change
+`.ai/plan/queue.md`, else priority) and named in your task. You check it once more and name its branch's slug. You change
 nothing: the workflow starts the item after your answer (`scripts/factory/start-item.sh`: the branch from the base
 commit, the work directory from the whole template, the item's status, one commit), and on resume switches to the
 owner's branch before your task (`scripts/factory/resume-item.sh`). Fixed (backlog #0-209, #0-215): you did those steps
@@ -65,8 +65,8 @@ the owner.
    `git grep -n -A12 '^### <item number>\.' <base sha> -- BACKLOG.md` (e.g. `'^### 0-25\.'`; the base commit is in
    your task; never resolve `main` or `origin/main` yourself; `git show <base sha>:BACKLOG.md` prints the whole file,
    too large to read). An item is a candidate only if, there, its second line reads
-   `**Autopilot:** ready` — only the owner sets `ready`, on `main`. Its `**Type:**` line gives the branch prefix
-   ("Name the branch"); its acceptance criteria are further down: widen `-A` or Read the lines it names.
+   `**Autopilot:** ready` — only the owner sets `ready`, on `main`. Its `**Type:**` line gives the branch prefix,
+   which the workflow has already read and names in your task ("Name the branch"); its acceptance criteria are further down: widen `-A` or Read the lines it names.
 2. Drop candidates whose `**Depends on:**` names an item that is not in `BACKLOG-DONE.md`: for each one,
    `git grep -c -E '^[[:punct:]] <item number> [[:punct:]] ' <base sha> -- BACKLOG-DONE.md` (e.g.
    `'^[[:punct:]] 0-19 [[:punct:]] '`) must print a count. Match the row, not the number alone: `'0-19'` also matches
@@ -91,22 +91,25 @@ the owner.
 
 In resume mode skip this section: the branch, its work directory and its start commit already exist and are the run's
 own, and the workflow has switched to the branch (`scripts/factory/resume-item.sh`, backlog #0-215). Answer the JSON
-with that branch.
+with that branch in `branch`.
 
-Otherwise you name the branch and create nothing: no branch, no file, no commit, no edit (the workflow passes your name
-to `start-item.sh`, which refuses a name that is not `<type>/<item>-<slug>`). The name: prefix by the item's `**Type:**`
-(step 1 of "Check the item") — `bug`/`security` → `fix/`, `tech-debt` → `refactor/`, `ci` → `ci/`, `docs` → `docs/`,
-otherwise `feat/`. A `security` item is `fix/`, never `feat/` (four runs got this wrong, backlog #0-195). Then
-`<item number>-<3–5 word kebab slug>` of lowercase letters, digits and hyphens, e.g.
-`fix/0-25-notification-queue-version`.
+Otherwise you name only the branch's slug, and create nothing: no branch, no file, no commit, no edit. Your task names
+the branch as `<prefix>/<item>-<slug>`: the prefix is the workflow's, read from the item's `**Type:**` on the base
+commit (`scripts/factory/next-item.sh`), and the workflow puts it in front of your slug and passes the name to
+`start-item.sh`. Fixed (backlog #0-195): you chose the prefix from a table here, and four runs gave a `security` item
+`feat/`. The slug: 3–5 lowercase words of letters and digits joined by single hyphens, from the item's title, e.g.
+`notification-queue-version` (the branch is then `refactor/0-25-notification-queue-version`). Answer it in `slug`; a
+`branch` you answer outside resume mode is not used.
 
 ## Answer (JSON)
 
 ```json
 { "none": false, "itemId": "#0-25", "title": "…", "type": "tech-debt", "priority": "Medium",
-  "risk": "low", "complexity": "low", "branch": "refactor/0-25-…", "workDir": ".ai/work/0-25",
+  "risk": "low", "complexity": "low", "slug": "notification-queue-version", "workDir": ".ai/work/0-25",
   "acceptanceCriteria": ["AC1. …", "AC2. …"] }
 ```
+
+In resume mode answer `branch` (the branch the workflow switched to) instead of `slug`.
 
 Copy the acceptance criteria verbatim from the item. If the item has no numbered criteria, it is not
 ready whatever its flag says: answer `{"none": true, "reason": "#0-N has no numbered acceptance criteria"}`.

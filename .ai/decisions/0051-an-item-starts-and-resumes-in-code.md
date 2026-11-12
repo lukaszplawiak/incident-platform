@@ -54,3 +54,8 @@ branch's shape: the hook does not know `args.branch`, so another item's branch w
   cannot read a file; `test-autopilot-workflow.mjs` fails when the two differ in text or in what bash and JavaScript
   accept, as it does for `SEED_BRANCH_RE` (#0-177). The workflow asking a script instead was rejected: an agent call per
   run, and one more factory-ops answer to type (#0-169, #0-175), for what CI can check before the merge.
+- The branch's prefix is code's too (#0-195): `BRANCH_PREFIX_OF` in `_backlog.sh` maps the item's `**Type:**` on the
+  base commit to it, `next-item.sh` hands it to the workflow, which puts it in front of the picker's slug, and
+  `start-item.sh` refuses another; a type with no prefix (design, a misspelt one) is not chosen. The picker names only
+  the slug, the part that needs judgement. Checking the picker's own prefix and stopping on a wrong one was not taken:
+  four runs got it wrong, and each stop would have cost a run.

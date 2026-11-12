@@ -7,6 +7,7 @@ The map of files and who may write them is in `.ai/README.md`; this document is 
 
 ```
 next-item.sh (code: ready follow-up → approved queue .ai/plan/queue.md, strictly in order → priority) → picker
+  (checks the item, names the branch's slug; its prefix is the item's Type, from next-item.sh)
   → start-item.sh (code: the branch from the base commit, .ai/work/<item> from the template, the status, one commit)
     (on resume: resume-item.sh switches to the owner's branch before the picker, which only reads)
   → architect (plan, predicted modules, the rules the implementer must have in front of it)
