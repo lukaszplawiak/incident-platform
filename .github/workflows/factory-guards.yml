@@ -37,6 +37,17 @@ permissions:
   contents: read
   pull-requests: read
 
+# A newer event of a pull request cancels its run still in progress (backlog #0-231), the same rule as
+# ci.yml, whose comment says why a push to `main` takes its own group (`run_id`) and is never cancelled.
+# `pull_request` and `pull_request_review` share the PR's group on purpose: the newer event always
+# judges what holds now (the newest commit, or the owner's approval of it), so the required check is
+# always the newest event's finished run, never an older one ending after it.
+# Risk, accepted (low): on a public repository anyone can submit a review, so a series of reviews could
+# keep cancelling this check. The last run always finishes, and every review already starts a run today.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
 jobs:
   factory-guards:
     name: Factory guards

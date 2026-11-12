@@ -24,6 +24,20 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels that PR's run still in progress (backlog #0-231): its result is
+# stale, and every job it already started is billed by the minute until it ends. Measured over 18 days,
+# 33 of 120 PR runs were still going when the next push came, 22 of them because /ship pushes
+# `chore: close backlog` seconds after opening the PR.
+# A push to `main` is never cancelled, neither running nor pending: main-guard.yml and
+# scripts/factory/preflight.sh read every push's own run (#0-148), and a `cancelled` one would leave
+# main unchecked (main-guard acts on `failure` only) and stop the autopilot (preflight). So a push takes
+# its own group, `run_id`, not only `cancel-in-progress: false`: GitHub cancels a *pending* run of the
+# same group whatever that flag says, so a shared `main` group would drop the middle of three quick
+# merges. Do not simplify the group to `github.ref`. `github.workflow` keeps CI and Factory guards apart.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
 # Every `uses:` names a full commit SHA, with its tag in a comment (backlog
 # #0-60): a tag can be repointed by whoever controls the action's repository,
 # a SHA cannot. Renovate (helpers:pinGitHubActionDigests) bumps both together.

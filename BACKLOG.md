@@ -145,6 +145,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-229](#0-229-ingestions-redis-dedup-and-rate-limits-are-tested-only-against-mocks) | ingestion's Redis dedup and rate limits are tested only against mocks | tech-debt | Low | Open |
 | [0-230](#0-230-renovate-rebases-every-open-pr-on-every-merge-58-of-the-actions-minutes) | Renovate rebases every open PR on every merge: 58% of the Actions minutes | ci | Medium | Open |
 | [0-231](#0-231-a-new-push-to-a-pull-request-does-not-cancel-its-running-ci) | A new push to a pull request does not cancel its running CI | ci | Low | Open |
+| [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -5267,29 +5268,89 @@ rests on.
 
 **Type:** ci · **Priority:** Low · **Status:** Open. From the same measurement as #0-230 (2026-11-12).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low
-**Touches:** ci (.github/workflows/ci.yml, .github/workflows/factory-guards.yml)
+**Touches:** ci (.github/workflows/ci.yml, .github/workflows/factory-guards.yml), root (README.md "CI/CD",
+.ai/context/infrastructure.md "CI gotchas")
 
 **Problem.** Neither `ci.yml` nor `factory-guards.yml` declares `concurrency`, so a push to a PR's branch while its
 runs are still going leaves them running to the end, billed in full, though their result is already stale. Over
 the 18 days of #0-230 (Renovate's branches left out), 33 of 120 CI runs and 32 of 120 Factory guards runs were still
-running when the next push came: 442 + 109 billable minutes, up to ~900 a month (an upper bound: a cancelled run is
-billed for the time it ran).
+running when the next push came: 442 + 109 billable minutes. What pushed next: in 22 of the 33, `chore: close backlog
+#…` from `/ship` (its step 7 needs the PR's number, so it pushes after opening the PR); in 7, the autopilot shipper's
+`chore(factory): record PR for backlog #…`; the rest, fixes. The median gap between the two pushes was 0.3 minutes.
+Saving: GitHub bills each job rounded up to a whole minute ("GitHub rounds the minutes and partial minutes each job
+uses up to the nearest whole minute", docs.github.com, Actions runner pricing), so a run cancelled ~20 s in still costs
+a minute for every job already started (about 7 in CI, 1 in Factory guards): about 7 of a CI run's ~14 minutes and 2
+of Factory guards' 3 are saved, **~300 minutes in the 18 days, ~500 a month** (not the ~900 first estimated, which
+assumed a cancelled run cost nothing).
 
-**Approach.** The usual `concurrency: { group: …, cancel-in-progress: true }`, for pull requests only:
-- never a push to `main`: `main-guard.yml` and `scripts/factory/preflight.sh` read the result of each push's run
-  (backlog #0-148), so a cancelled one would read as a red or missing `main`. The group key must therefore keep
-  every push run in a group of its own (e.g. `${{ github.workflow }}-${{ github.event.pull_request.number ||
-  github.run_id }}`), or `cancel-in-progress` an expression that is false off `pull_request`;
-- Factory guards also runs on `pull_request_review`: decide whether a review's run shares the PR's group (it checks
-  the same head commit, but cancelling a push's run with it, or the other way round, must still leave a finished
-  run on the head commit, the one the required check reads);
-- a cancelled required check is not green: check that the run of the newest commit is the one the ruleset sees.
+**Decided (owner, 2026-11-12, after `/research`).** One workflow-level block, the same in both files:
+
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+```
+
+1. **A push to `main` is never cancelled, neither running nor pending.** `main-guard.yml` acts only on a run whose
+   conclusion is `failure`, so a `cancelled` run of `main` would leave it unchecked without a word, and
+   `scripts/factory/preflight.sh` reads the newest push run and refuses `completed/cancelled`, stopping the autopilot
+   (#0-148). A push therefore takes a group of its own (`run_id`), not only `cancel-in-progress: false`: GitHub
+   cancels a *pending* run of the same group whatever that flag says ("By default, any existing `pending` job or
+   workflow in the same concurrency group will be canceled", docs.github.com, control workflow concurrency), so a
+   shared `main` group would drop the middle of three quick merges. The comment above the block in `ci.yml` says so,
+   so that nobody simplifies the group to `github.ref`.
+2. **The PR's number, not `github.head_ref`** (the docs' example): a branch name is chosen by whoever opens the PR, a
+   fork included, so two PRs whose branches had the same name would cancel each other; the number is GitHub's and
+   unique.
+3. **`pull_request` and `pull_request_review` share the PR's group in Factory guards.** The newer event always judges
+   what holds now (the newest commit, or the owner's approval of it: "Changes that need the owner" can be red on
+   `synchronize` and green on the review of the same commit), so the required check is always the newest event's
+   finished run, never an older one ending after it.
+4. **`github.workflow` in the group** keeps CI and Factory guards apart: one never cancels the other.
+5. **Risk, accepted (low).** On a public repository anyone can submit a review, so a series of reviews could keep
+   cancelling Factory guards on a PR. The last run always finishes, and every review already starts a run today
+   (`pull_request_review` was a trigger before this change); recorded in the comment above the block in
+   `factory-guards.yml`.
+6. Rejected: job-level `concurrency` (eight blocks for no exception any job needs); `queue: max` (it cannot be combined
+   with `cancel-in-progress: true`, and a push's own group already keeps every push run); making `/ship` and the
+   shipper push once (a draft PR with CI skipped until `ready_for_review`: new triggers and an `if:` on every job, a
+   skipped job counts as a passed required check, BLOCKED drafts would lose CI, and `.claude/` changes, all to save the
+   ~7 minutes a cancelled run still costs).
 
 **Acceptance.**
 1. A second push to a PR cancels the first push's CI and Factory guards runs; the newest push's runs finish and
-   are the required checks of the PR.
+   are the required checks of the PR (`gh run list --branch <branch>`: the first `cancelled`, the second `success`).
 2. Two quick merges to `main` both finish their CI (neither cancelled), and `main-guard.yml` reads each.
 3. Lint Workflows (actionlint, zizmor) passes on both workflows.
+4. The comment above each block says why a push takes its own group, and `factory-guards.yml`'s names the accepted
+   risk of a series of reviews.
+
+---
+
+### 0-232. No check keeps the concurrency block of the pull request workflows
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the architecture review of #0-231 (2026-11-13).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-231
+**Touches:** ci (.github/scripts, .github/workflows/ci.yml lint-workflows)
+
+**Problem.** #0-231 put the same workflow-level block in `ci.yml` and `factory-guards.yml`
+(`group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}`, `cancel-in-progress:
+${{ github.event_name != 'push' }}`), and `.ai/context/infrastructure.md` "CI gotchas" says a new workflow that runs
+on `pull_request` takes it too. Nothing checks either. A copy "simplified" to `github.ref` would put every push to
+`main` in one group, where GitHub cancels a pending run whatever `cancel-in-progress` says, so the middle of three
+quick merges would end `cancelled`: main-guard (which acts on `failure` only) would not see it, and preflight would
+stop the autopilot (#0-148). A new `pull_request` workflow without the block would only cost minutes. Only review
+catches either today.
+
+**Approach.** A Ruby check in lint-workflows, like `check-runtime-setup.rb` (its own cases first): every workflow
+under `.github/workflows/` whose `on:` has `pull_request` or `pull_request_review` declares exactly that block at the
+workflow level, and no job-level `concurrency` overrides it; a workflow that must differ names its reason in a marker
+comment the check reads.
+
+**Acceptance criteria.**
+AC1. Lint Workflows fails on a `pull_request` workflow without the block, with a group that does not end in
+`github.run_id` off a pull request, or with `cancel-in-progress` true on a push, and passes on today's two workflows;
+each case is a test of the check.
 
 ---
 

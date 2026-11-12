@@ -1165,6 +1165,11 @@ Health and metrics endpoints run on a dedicated port per service, never mixed wi
 
 GitHub Actions pipeline runs on every push and pull request to `main`.
 
+A new push to a pull request cancels that PR's CI and Factory guards runs still in progress (backlog #0-231):
+their result is stale and each started job is billed by the minute. A push to `main` is never cancelled,
+neither running nor pending: each one takes a concurrency group of its own, since main-guard and the autopilot's
+preflight read every push's own run (#0-148).
+
 ### Job 1 — Build, Test & Coverage
 
 Runs on every push to `main`, and on every PR that changes more than Markdown (a PR touching only `.md`
