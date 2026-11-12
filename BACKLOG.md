@@ -124,7 +124,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
-| [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-204](#0-204-a-runs-record-keeps-no-run-id-no-agent-calls-and-no-stage-of-each-commit) | A run's record keeps no run id, no agent calls and no stage of each commit | ci | Low | Open |
@@ -4237,8 +4236,8 @@ AC4. `docs/ai-factory.md` "Running it" and README "Infrastructure Hardening" nam
 
 ### 0-195. The workflow does not check the branch prefix the picker gives an item
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-01 in run `wf_8c632098-97c` (#0-175); Medium
-since 2026-11-04 (owner): four cases, the fourth cost a run.
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #609 (kept for the four cases and the decision). Found
+2026-11-01 in run `wf_8c632098-97c` (#0-175); Medium since 2026-11-04 (owner): four cases, the fourth cost a run.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 
 **Problem.** `picker.md` ("Prepare the branch") names the prefix by the item's type (`bug`/`security` → `fix/`,
