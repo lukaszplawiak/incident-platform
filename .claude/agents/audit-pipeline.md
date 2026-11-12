@@ -36,7 +36,8 @@ labels are the record.
 - The audit data file your task names (`scripts/factory/audit-data.sh`): its `cases` are derived, not
   chosen, by the rules in `.ai/rules/audit.md`, "Pipeline audit" (read them there, not restated here). Each case
   names its PR, its item, its signals and the item's merged `/ready` PR (with whether it has a "Ready check"
-  section); `readyPrs` holds the merged ones only. `state.history` lists the runs and the phase that stopped a
+  section): the one merged before the run started, and `readyBound` says how that bound was known (`audit.md`,
+  "Which `/ready` PR"; with `none` it may be a correction merged after the run); `readyPrs` holds the merged ones only. `state.history` lists the runs and the phase that stopped a
   BLOCKED one.
 - For the `review` stage you attribute the case and refer to the reviewers' report: recommendations to the
   review files are that report's (`audit.md`, "Where a recommendation goes").
