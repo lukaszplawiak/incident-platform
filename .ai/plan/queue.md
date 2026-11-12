@@ -59,7 +59,7 @@ also stale: it says the migration "is V8", but notification-service already has 
 - #0-159: not-ready. Its `**Risk:** medium` is not a value of the convention, and its approach is "to analyse".
 - #0-190: not-ready, and its Touches is in protected paths (`scripts/factory/`, `.claude/`, `.github/`).
 - #0-108, #0-136, #0-155, #0-156, #0-167, #0-169, #0-171, #0-175, #0-183, #0-188, #0-194, #0-195, #0-201, #0-204,
-  #0-205, #0-207, #0-210, #0-211, #0-212, #0-213, #0-214, #0-216, #0-217: human-only. Most are factory or CI work in
+  #0-205, #0-210, #0-211, #0-212, #0-213, #0-214, #0-216, #0-217: human-only. Most are factory or CI work in
   protected paths. #0-188 is a `shared` logging change for all 7 services.
 - #0-3, #0-13, #0-20, #0-24, #0-31, #0-32, #0-35, #0-37, #0-40, #0-41, #0-43, #0-48, #0-55, #0-56, #0-64, #0-65,
   #0-66, #0-67, #0-75, #0-77, #0-79, #0-85, #0-87, #0-94, #0-95, #0-97, #0-98, #0-101, #0-106, #0-107, #0-116,
