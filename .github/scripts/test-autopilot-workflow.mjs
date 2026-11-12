@@ -1517,3 +1517,192 @@ test('backlog-autopilot: each factory script\'s answer accepts what it prints an
     for (const answer of answers) assert.ok(!conforms(answer, S[name]), `${name} refuses ${JSON.stringify(answer)}`)
   }
 })
+
+// ---- backlog #0-175, PR 2: every workflow's factory-script answers typed and closed, and kept equal to the scripts.
+const AUDIT = readFileSync(join(dirname(FILE), 'audit.js'), 'utf8')
+async function auditSchemas(names) {
+  const at = AUDIT.indexOf('\nconst DATE = ')
+  if (at < 0 || AUDIT.indexOf('\nconst DATE = ', at + 1) >= 0) throw new Error('audit.js: the marker "const DATE = " must appear once')
+  return evaluate(`${strip(AUDIT.slice(0, at))}\nreturn { ${names.join(', ')} }`, { args: {}, agent: fakeAgent({}).agent, logs: [] })
+}
+const FAILURES = [{ error: 'jq: command not found', exitCode: 127 }, { ok: false, reasons: ['jq is not installed'] }]
+
+test('the three workflows type a factory script\'s failure the same way (#0-175, PR 2)', () => {
+  // A workflow cannot import, so each holds ERROR_FIELDS and answerOf (and failureOf, where it reads a failure); they
+  // drifted once: seed-bugs.js's had no `ok` and `reasons`, so _common.sh's failure failed its schemas without a reason.
+  const text = (src, name) => {
+    const m = new RegExp(`^const ${name} = [\\s\\S]*?(?=\\n(?:const |\\/\\/|$))`, 'm').exec(src)
+    assert.ok(m, `${name} is defined`)
+    return m[0].replace(/\s+/g, ' ')
+  }
+  for (const name of ['ERROR_FIELDS', 'answerOf']) {
+    assert.equal(text(AUDIT, name), text(SRC, name), `audit.js's ${name} is backlog-autopilot.js's`)
+    assert.equal(text(SEED, name), text(SRC, name), `seed-bugs.js's ${name} is backlog-autopilot.js's`)
+  }
+  assert.equal(text(AUDIT, 'failureOf'), text(SRC, 'failureOf'), "audit.js's failureOf is backlog-autopilot.js's")
+})
+
+test('audit: no factory script\'s answer goes untyped (#0-175, PR 2)', async () => {
+  assert.equal(AUDIT.match(/\bas\(\s*['"`]factory-ops['"`]/g)?.length, 1, "as('factory-ops', …) is called only inside ops()")
+  const sites = opsSchemaArgs(AUDIT)
+  assert.deepEqual(sites.map((s) => s.script).sort(), ["'audit-data.sh'", "'notify.sh'"], 'the scan found every ops() call')
+  const schemas = await auditSchemas(sites.map((s) => s.schema))
+  for (const s of sites) {
+    assert.match(s.schema ?? '', /^[A-Z_]+$/, `${s.script}: the schema is a named constant`)
+    assert.equal(schemas[s.schema].additionalProperties, false, `${s.script}: ${s.schema} refuses a key of the agent's own`)
+  }
+  const { AUDIT_DATA, NOTIFIED } = schemas
+  const data = { file: '.ai/runs/audit-data.json', prs: 3, prsWithHumanLabels: 1, unverifiedHumanLabels: 0, owner: 'o',
+    ownerIsAutopilot: false, unverifiedEscapes: 0, readyPrs: 2, cases: 1, transcriptsDir: '/home/dev/.claude/projects/x' }
+  for (const answer of [data, { ...data, owner: null }, ...FAILURES]) assert.ok(conforms(answer, AUDIT_DATA), JSON.stringify(answer))
+  for (const answer of [{ output: JSON.stringify(data) }, { ...data, prs: '3' }]) assert.ok(!conforms(answer, AUDIT_DATA), JSON.stringify(answer))
+  for (const answer of [{ sent: true }, { sent: false, reason: 'curl failed' }, ...FAILURES]) assert.ok(conforms(answer, NOTIFIED), JSON.stringify(answer))
+  assert.ok(!conforms({ output: '{"sent":true}' }, NOTIFIED))
+})
+
+test("audit: a failure of audit-data.sh stops with its reason, not as an audit of nothing (#0-175, PR 2)", async () => {
+  for (const answer of FAILURES) {
+    const fake = fakeAgent({ 'ops:audit-data.sh': answer })
+    const outcome = await evaluate(strip(AUDIT), { args: { since: '2026-10-01', date: '2026-11-12' }, agent: fake.agent, logs: [] })
+    assert.equal(outcome.outcome, 'FAILED', JSON.stringify(answer))
+    assert.match(outcome.reason, /audit-data\.sh gave no data: (jq: command not found|jq is not installed)/)
+  }
+  // A field a decision rests on, missing: no "nothing to warn of", no "no pipeline case" (review round 1 of PR 2).
+  const data = { file: 'f.json', prs: 3, prsWithHumanLabels: 1, unverifiedHumanLabels: 0, owner: 'o', ownerIsAutopilot: false,
+    unverifiedEscapes: 0, readyPrs: 0, cases: 1, transcriptsDir: 'd' }
+  for (const k of ['file', 'prs', 'prsWithHumanLabels', 'unverifiedHumanLabels', 'ownerIsAutopilot', 'unverifiedEscapes', 'cases']) {
+    const { [k]: _, ...without } = data
+    const fake = fakeAgent({ 'ops:audit-data.sh': without })
+    const outcome = await evaluate(strip(AUDIT), { args: { since: '2026-10-01', date: '2026-11-12' }, agent: fake.agent, logs: [] })
+    assert.equal(outcome.outcome, 'FAILED', k)
+    assert.match(outcome.reason, new RegExp(`audit-data\\.sh gave no data: no ${k}$`), k)
+    assert.ok(!fake.calls.some((c) => c.key.startsWith('audit-')), `${k}: no analyst on data that does not say it all`)
+  }
+})
+
+test('backlog-autopilot: the four schemas once typed by required keys are closed, and accept what their script prints (#0-175, PR 2)', async () => {
+  const S = await schemasNamed(['PREFLIGHT', 'TESTS', 'PATHS', 'NEXT'])
+  for (const [name, schema] of Object.entries(S)) assert.equal(schema.additionalProperties, false, `${name} is closed`)
+  const sha = 'a'.repeat(40)
+  const paths = { base: sha, mergeBase: sha, head: 'b'.repeat(40), files: ['a.java'], delta: [], modules: ['incident-service'],
+    areas: ['incident-service'], ruleFiles: ['general'], protectedTouched: [], migrationTouched: false, editedAppliedMigrations: [],
+    k8sOrBuildTouched: false, pomSupplyChainChange: false, pomSupplyChainLines: '', allModules: false, deletedTests: [],
+    disabledTestsAdded: 0, docsTouched: false, readyFlagAdded: false, buildConfigChanged: [], claudeMdOutsideBlocks: false,
+    needsHuman: false }
+  const printed = {
+    PREFLIGHT: [{ ok: true, reasons: [], baseRef: 'origin/main', baseSha: sha, runId: '20261112-120000', today: '2026-11-12',
+      state: { consecutiveBlocked: 0, shippedSinceAudit: 2, lastAudit: null, history: [] } },
+    { ok: false, reasons: ['audit due'], baseRef: '', baseSha: '', runId: '', today: '2026-11-12', state: {} }],
+    TESTS: [{ status: 'pass', exitCode: 0, modules: 'oncall-service', log: 'l', head: sha, artifact: 'a.json', summary: ['BUILD SUCCESS'] },
+      { status: 'stop', exitCode: -1, modules: '', log: '', head: '', artifact: null, summary: ['invalid round: x'] }],
+    PATHS: [paths, { error: 'no merge base with origin/main' }],
+    NEXT: [{ ok: true, reasons: [], item: '#0-25', source: 'queue', eligible: true, reason: null, touches: 'oncall-service',
+      modules: ['oncall-service'], followUpOf: null, position: 1, risk: 'low', complexity: 'low', type: 'bug', branchPrefix: 'fix', skipped: [] },
+    { ok: true, reasons: [], item: null, source: 'queue', eligible: false, reason: 'queue done', skipped: [{ item: '#0-4', why: 'not ready' }] },
+    { ok: false, reasons: ['gh pr list failed: cannot check locks'], item: null }],
+  }
+  for (const [name, answers] of Object.entries(printed)) {
+    for (const answer of [...answers, ...FAILURES]) assert.ok(conforms(answer, S[name]), `${name} accepts ${JSON.stringify(answer)}`)
+  }
+  const answered = {
+    PREFLIGHT: [{ output: '{"ok":true}' }, { ok: 'true' }],
+    TESTS: [{ status: 'passed' }, { output: '{"status":"pass"}' }],
+    PATHS: [{ ...paths, needsHuman: 'false' }, { ...paths, verdict: 'fine' }],
+    NEXT: [{ output: '{"ok":true}' }, { ok: true, item: 25 }],
+  }
+  for (const [name, answers] of Object.entries(answered)) {
+    for (const answer of answers) assert.ok(!conforms(answer, S[name]), `${name} refuses ${JSON.stringify(answer)}`)
+  }
+})
+
+test('backlog-autopilot: a factory script\'s failure stops with its reason; changed-paths\'s never reads as nothing to check (#0-175, PR 2)', async () => {
+  for (const answer of FAILURES) {
+    const reason = answer.error ?? answer.reasons[0]
+    const pre = await run({ answers: { 'ops:preflight.sh': answer } })
+    assert.equal(pre.outcome.outcome, 'NOT_STARTED'); assert.ok(pre.outcome.reasons.some((r) => r.includes(reason)), 'preflight')
+    // The preflight's own refusal keeps one reason per check (review round 1 of PR 2).
+    const own = await run({ answers: { 'ops:preflight.sh': { ok: false, reasons: ['audit due', 'not in the devcontainer'] } } })
+    assert.deepEqual(own.outcome.reasons, ['audit due', 'not in the devcontainer'])
+    const next = await run({ answers: { 'ops:next-item.sh': answer } })
+    assert.ok(next.outcome.reasons.some((r) => r.includes(reason)), 'next-item')
+    const ownNext = await run({ answers: { 'ops:next-item.sh': { ok: false, reasons: ['gh pr list failed', 'a second reason'], item: null } } })
+    assert.deepEqual(ownNext.outcome.reasons, ['gh pr list failed', 'a second reason'], "next-item's own reasons, one each")
+    const tests = await run({ answers: { 'ops:run-tests.sh': answer } })
+    assert.equal(tests.outcome.outcome, 'BLOCKED'); assert.match(tests.outcome.reason, new RegExp(`test gate gave no status: ${reason}`))
+    assert.ok(!keys(tests.calls).includes('implementer-light') || tests.calls.filter((c) => c.key === 'implementer-light').length === 1,
+      'no fix round on an answer that is not the gate\'s')
+    // Each changed-paths.sh call on its own: the head check, then the path gate after a clean one (without `required`
+    // keys, a failure there would read as "nothing needs a human"), then the rules for the diff.
+    for (const label of ['head check', 'changed paths', 'rules for the diff']) {
+      const only = ({ opts }) => (opts.label === label ? answer : DEFAULTS['ops:changed-paths.sh'])
+      const paths = await run({ answers: { 'ops:changed-paths.sh': only } })
+      assert.equal(paths.outcome.outcome, 'BLOCKED', label)
+      assert.ok(paths.outcome.reason.includes(reason), `${label}: the stop says why (${paths.outcome.reason})`)
+      assert.ok(!keys(paths.calls).some((k) => k.startsWith('review-')), `${label}: no panel on a diff nothing has checked`)
+    }
+  }
+})
+
+// The top-level keys of every jq object literal in `text` whose first key is one of `anchors` (a `${var:…}` expansion is
+// not one). Strings are skipped, with their `\(…)` interpolations, so a brace or a comma inside one counts for nothing.
+const OPENER = { '{': '}', '[': ']', '(': ')' }
+function skipJqString(t, i) {
+  for (i++; i < t.length; i++) {
+    if (t[i] === '\\' && t[i + 1] === '(') { const j = skipJqCode(t, i + 2, ')'); if (j < 0) return -1; i = j - 1; continue }
+    if (t[i] === '\\') { i++; continue }
+    if (t[i] === '"') return i + 1
+  }
+  return -1
+}
+function skipJqCode(t, i, close) {
+  for (; i < t.length; i++) {
+    const c = t[i]
+    if (c === close) return i + 1
+    if (c === '"') { const j = skipJqString(t, i); if (j < 0) return -1; i = j - 1; continue }
+    if (OPENER[c]) { const j = skipJqCode(t, i + 1, OPENER[c]); if (j < 0) return -1; i = j - 1 }
+  }
+  return -1
+}
+function jqObjectKeys(text, anchors) {
+  const keys = new Set()
+  for (const m of text.matchAll(new RegExp(`(?<![$\\w])\\{\\s*(?:${anchors.join('|')})\\s*:`, 'g'))) {
+    const end = skipJqCode(text, m.index + 1, '}')
+    if (end < 0) throw new Error(`an unbalanced jq object at offset ${m.index}`)
+    const obj = text.slice(m.index, end)
+    let seg = 1
+    const take = (s) => { const k = /^\s*(?:"([^"]+)"|\$?([A-Za-z_]\w*))\s*(?::|$)/.exec(s); if (k) keys.add(k[1] ?? k[2]) }
+    for (let i = 1; i < obj.length - 1; i++) {
+      if (obj[i] === '"') { i = skipJqString(obj, i) - 1; continue }
+      if (OPENER[obj[i]]) { i = skipJqCode(obj, i + 1, OPENER[obj[i]]) - 1; continue }
+      if (obj[i] === ',') { take(obj.slice(seg, i)); seg = i + 1 }
+    }
+    take(obj.slice(seg, obj.length - 1))
+  }
+  return keys
+}
+
+test('the jq key scan reads nested objects, strings and interpolations as a script writes them', () => {
+  const keys = jqObjectKeys(`echo "\${base:0:40}"; jq -n '{ok: true, reasons: [], item: ("#" + $id), why: "a, b {c: d}",
+    msg: "\\(if $t == "" then "none, x" else $t end)", nested: {inner: 1}, $short}' + {skipped: []}`, ['ok', 'skipped', 'base'])
+  assert.deepEqual([...keys].sort(), ['item', 'msg', 'nested', 'ok', 'reasons', 'short', 'skipped', 'why'])
+  assert.throws(() => jqObjectKeys("jq -n '{ok: (1'", ['ok']), /unbalanced/)
+})
+
+test('every key a factory script prints is in the schema its workflow reads it with (#0-175, PR 2)', async () => {
+  // A closed schema refuses an answer with a key it does not name: a field added to a script and not to the schema
+  // would stop every run. So the keys are read from the scripts' own jq objects, not from examples written here.
+  const auto = await schemasNamed(['PREFLIGHT', 'TESTS', 'PATHS', 'NEXT', 'STARTED', 'RESUMED', 'BACK_TO_MAIN'])
+  const { AUDIT_DATA } = await auditSchemas(['AUDIT_DATA'])
+  const script = (name) => readFileSync(join(dirname(FILE), '../../scripts/factory', name), 'utf8')
+  for (const [name, anchors, schema, label] of [
+    ['preflight.sh', ['ok'], auto.PREFLIGHT, 'PREFLIGHT'], ['run-tests.sh', ['status'], auto.TESTS, 'TESTS'],
+    ['changed-paths.sh', ['base', 'error'], auto.PATHS, 'PATHS'], ['next-item.sh', ['ok', 'skipped'], auto.NEXT, 'NEXT'],
+    ['start-item.sh', ['ok'], auto.STARTED, 'STARTED'], ['resume-item.sh', ['ok'], auto.RESUMED, 'RESUMED'],
+    ['return-to-main.sh', ['onMain'], auto.BACK_TO_MAIN, 'BACK_TO_MAIN'], ['audit-data.sh', ['file'], AUDIT_DATA, 'AUDIT_DATA'],
+  ]) {
+    const printed = jqObjectKeys(script(name), anchors)
+    assert.ok(printed.size >= 3, `${name}: the scan found ${printed.size} keys: it no longer reads the script`)
+    const missing = [...printed].filter((k) => !(k in schema.properties))
+    assert.deepEqual(missing, [], `${name} prints keys ${label} does not name`)
+  }
+})

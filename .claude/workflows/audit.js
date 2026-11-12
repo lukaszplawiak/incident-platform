@@ -23,6 +23,20 @@ const ALL = ['general', 'architecture', 'security', 'performance', 'migration', 
 
 const REPORT = { type: 'object', required: ['report'], properties: { report: { type: 'string' }, recommendations: { type: 'number' } } }
 const as = (type, prompt, opts = {}) => agent(prompt, { ...opts, [AGENT_TYPE_OPTION]: type, label: opts.label ?? type })
+// A factory script's answer, typed as in backlog-autopilot.js (the same ERROR_FIELDS, answerOf and failureOf, which a test
+// compares, as a workflow cannot import): its fields and nothing else, factory-ops' error, or _common.sh's failure. Fixed (backlog
+// #0-175, PR 2): audit-data.sh's schema was typed by `required` keys only, and notify.sh's not at all.
+const ERROR_FIELDS = { error: { type: 'string' }, exitCode: { type: 'number' }, ok: { type: 'boolean' },
+  reasons: { type: 'array', items: { type: 'string' } } }
+const answerOf = (fields) => ({ type: 'object', additionalProperties: false, properties: { ...fields, ...ERROR_FIELDS } })
+const failureOf = (a) => a?.error ?? (Array.isArray(a?.reasons) && a.reasons.length ? a.reasons.join('; ') : null)
+const AUDIT_DATA = answerOf({ file: { type: 'string' }, prs: { type: 'number' }, prsWithHumanLabels: { type: 'number' },
+  unverifiedHumanLabels: { type: 'number' }, ownerIsAutopilot: { type: 'boolean' }, unverifiedEscapes: { type: 'number' },
+  owner: { type: ['string', 'null'] }, readyPrs: { type: 'number' }, cases: { type: 'number' }, transcriptsDir: { type: 'string' } })
+const NOTIFIED = answerOf({ sent: { type: 'boolean' }, reason: { type: 'string' } })
+// Every factory script goes through here, so the test that no answer goes untyped sees each call.
+const ops = (script, argv, schema, label) => as('factory-ops', `Run exactly: scripts/factory/${script}${argv.map((a) => ` '${a}'`).join('')}`,
+  { schema, label })
 const runAll = (thunks) => parallel(thunks)
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/
@@ -32,11 +46,18 @@ if (!['all', 'reviewers', 'pipeline'].includes(target)) return { outcome: 'NOT_S
 const dimensions = Array.isArray(args.dimensions) && args.dimensions.length ? args.dimensions : ALL
 
 phase('Collect')
-const data = await as('factory-ops', `Run exactly: scripts/factory/audit-data.sh '${args.since}'`, {
-  schema: { type: 'object', required: ['file', 'prs'], properties: { file: { type: 'string' }, prs: { type: 'number' }, prsWithHumanLabels: { type: 'number' }, unverifiedHumanLabels: { type: 'number' }, ownerIsAutopilot: { type: 'boolean' }, unverifiedEscapes: { type: 'number' }, owner: { type: ['string', 'null'] }, readyPrs: { type: 'number' }, cases: { type: 'number' }, transcriptsDir: { type: 'string' } } },
-  label: 'audit data',
-})
+const data = await ops('audit-data.sh', [args.since], AUDIT_DATA, 'audit data')
 if (!data) return { outcome: 'FAILED', reason: 'audit-data.sh gave no result' }
+// No `required` keys: an answer that is not the script's own stops here, with its reason, not as an audit of nothing.
+// Every field a decision below rests on is checked, not only the first two (review round 1 of #0-175 PR 2): a missing
+// ownerIsAutopilot or label count would read as "nothing to warn of", so the owner's labels would count as confirmed,
+// and a missing `cases` as "no pipeline case".
+const NUMBERS = ['prs', 'prsWithHumanLabels', 'unverifiedHumanLabels', 'unverifiedEscapes', 'cases']
+const missing = [...(typeof data.file === 'string' ? [] : ['file']), ...NUMBERS.filter((k) => typeof data[k] !== 'number'),
+  ...(typeof data.ownerIsAutopilot === 'boolean' ? [] : ['ownerIsAutopilot'])]
+if (missing.length) {
+  return { outcome: 'FAILED', reason: `audit-data.sh gave no data: ${String(failureOf(data) ?? `no ${missing.join(', ')}`).slice(0, 300)}` }
+}
 // A pipeline case can come from the run history or an escaped defect alone, with no autopilot PR in the period.
 if (data.prs === 0 && !data.cases) return { outcome: 'NOTHING_TO_AUDIT', reason: `no autopilot PR and no pipeline case since ${args.since}` }
 log(`${data.prs} autopilot PRs since ${args.since}, ${data.prsWithHumanLabels} with owner labels; ${data.cases ?? 0} pipeline cases, ${data.readyPrs ?? 0} /ready PRs`)
@@ -104,5 +125,5 @@ if (target === 'all' || target === 'pipeline') {
 
 if (!reports.length && failures.length) return { outcome: 'FAILED', failures }
 if (!reports.length) return { outcome: 'NOTHING_TO_AUDIT', reason: `nothing to report for target ${target} since ${args.since}` }
-await as('factory-ops', `Run exactly: scripts/factory/notify.sh 'audit-report' '${args.date}'`, { schema: { type: 'object' }, label: 'notify' })
+await ops('notify.sh', ['audit-report', args.date], NOTIFIED, 'notify')
 return { outcome: failures.length ? 'PARTIAL' : 'REPORTED', reports, failures, next: `review the decision boxes, then run /apply-audit <report> for each of: ${reports.map((r) => r.report).join(', ')}` }

@@ -149,6 +149,8 @@ const ANY_OBJECT = { type: 'object' }
 const ERROR_FIELDS = { error: { type: 'string' }, exitCode: { type: 'number' }, ok: { type: 'boolean' },
   reasons: { type: 'array', items: { type: 'string' } } }
 const answerOf = (fields) => ({ type: 'object', additionalProperties: false, properties: { ...fields, ...ERROR_FIELDS } })
+// Why a factory script's answer is not its own: factory-ops' error, or _common.sh's failure; null when neither.
+const failureOf = (a) => a?.error ?? (Array.isArray(a?.reasons) && a.reasons.length ? a.reasons.join('; ') : null)
 const STATE_BRANCH = answerOf({ branch: { type: 'string' } })
 const STATE_UNLOCKED = answerOf({ unlocked: { type: 'boolean' } })
 // `record` prints the whole state file (_common.sh writes it; state-reset.sh sets lastAudit, a time). Its history
@@ -165,11 +167,13 @@ const RESUMED = answerOf({ branch: { type: 'string' }, item: { type: 'string' },
 const LOCAL_REVIEW = answerOf({ ran: { type: 'boolean' }, model: { type: 'string' }, result: { type: ['string', 'object'] },
   reason: { type: 'string' } })
 
-const PREFLIGHT = {
-  type: 'object', required: ['ok', 'reasons'],
-  properties: { ok: { type: 'boolean' }, reasons: { type: 'array', items: { type: 'string' } },
-    baseRef: { type: 'string' }, baseSha: { type: 'string' }, runId: { type: 'string' }, today: { type: 'string' } },
-}
+// The four below were typed by `required` keys only, so a key of the agent's own passed, and _common.sh's failure was
+// refused without its reason (backlog #0-175, PR 2). Closed now, with every field the script prints: a test reads the
+// keys of each script's jq output and fails when one is not here (test-autopilot-workflow.mjs), and the code checks the
+// fields it relies on, since none is required any more.
+const PREFLIGHT = answerOf({ ok: { type: 'boolean' }, reasons: { type: 'array', items: { type: 'string' } },
+  baseRef: { type: 'string' }, baseSha: { type: 'string' }, runId: { type: 'string' }, today: { type: 'string' },
+  state: { type: 'object' } })
 const ISOLATION = {
   type: 'object', required: ['tools', 'definitionLoaded'],
   properties: { tools: { type: 'array', items: { type: 'string' } }, definitionLoaded: { type: 'boolean' } },
@@ -194,22 +198,17 @@ const IMPL = {
     fixed: { type: 'array', items: { type: 'string' } },
     disputed: { type: 'array', items: ANY_OBJECT }, noticedNotTouched: { type: 'array', items: { type: 'string' } } },
 }
-const TESTS = {
-  type: 'object', required: ['status'],
-  properties: { status: { type: 'string', enum: ['pass', 'fixable', 'stop'] }, exitCode: { type: 'number' },
-    modules: { type: 'string' }, log: { type: 'string' }, head: { type: 'string' }, artifact: { type: ['string', 'null'] },
-    summary: { type: 'array', items: { type: 'string' } } },
-}
-const PATHS = {
-  type: 'object', required: ['needsHuman', 'files', 'areas', 'ruleFiles'],
-  properties: { files: { type: 'array', items: { type: 'string' } }, protectedTouched: { type: 'array', items: { type: 'string' } },
-    migrationTouched: { type: 'boolean' }, editedAppliedMigrations: { type: 'array', items: { type: 'string' } },
-    k8sOrBuildTouched: { type: 'boolean' }, pomSupplyChainChange: { type: 'boolean' },
-    deletedTests: { type: 'array', items: { type: 'string' } }, disabledTestsAdded: { type: 'number' },
-    docsTouched: { type: 'boolean' }, needsHuman: { type: 'boolean' }, mergeBase: { type: 'string' }, head: { type: 'string' },
-    modules: { type: 'array', items: { type: 'string' } }, areas: { type: 'array', items: { type: 'string' } },
-    ruleFiles: { type: 'array', items: { type: 'string' } } },
-}
+const TESTS = answerOf({ status: { type: 'string', enum: ['pass', 'fixable', 'stop'] }, exitCode: { type: 'number' },
+  modules: { type: 'string' }, log: { type: 'string' }, head: { type: 'string' }, artifact: { type: ['string', 'null'] },
+  summary: { type: 'array', items: { type: 'string' } } })
+const STRINGS = { type: 'array', items: { type: 'string' } }
+const PATHS = answerOf({ base: { type: 'string' }, mergeBase: { type: 'string' }, head: { type: 'string' }, files: STRINGS,
+  delta: STRINGS, modules: STRINGS, areas: STRINGS, ruleFiles: STRINGS, protectedTouched: STRINGS,
+  migrationTouched: { type: 'boolean' }, editedAppliedMigrations: STRINGS, k8sOrBuildTouched: { type: 'boolean' },
+  pomSupplyChainChange: { type: 'boolean' }, pomSupplyChainLines: { type: 'string' }, allModules: { type: 'boolean' },
+  deletedTests: STRINGS, disabledTestsAdded: { type: 'number' }, docsTouched: { type: 'boolean' },
+  readyFlagAdded: { type: 'boolean' }, buildConfigChanged: STRINGS, claudeMdOutsideBlocks: { type: 'boolean' },
+  needsHuman: { type: 'boolean' } })
 const FINDING = {
   type: 'object', required: ['id', 'ruleId', 'issue', 'impact'],
   properties: { id: { type: 'string' }, ruleId: { type: 'string' }, file: { type: 'string' }, line: { type: ['number', 'null'] },
@@ -245,14 +244,11 @@ const SHIP = {
     merged: { type: 'string' }, labelsMissing: { type: 'array', items: { type: 'string' } },
     followUpsCreated: { type: 'array', items: { type: 'string' } }, error: { type: ['string', 'null'] } },
 }
-const NEXT = {
-  type: 'object', required: ['ok'],
-  properties: { ok: { type: 'boolean' }, reasons: { type: 'array', items: { type: 'string' } },
-    item: { type: ['string', 'null'] }, source: { type: 'string' }, eligible: { type: 'boolean' },
-    reason: { type: ['string', 'null'] }, touches: { type: 'string' }, modules: { type: 'array', items: { type: 'string' } },
-    followUpOf: { type: ['string', 'null'] }, position: { type: ['number', 'null'] }, skipped: { type: 'array', items: ANY_OBJECT },
-    risk: { type: 'string' }, complexity: { type: 'string' }, type: { type: 'string' }, branchPrefix: { type: ['string', 'null'] } },
-}
+const NEXT = answerOf({ ok: { type: 'boolean' }, reasons: { type: 'array', items: { type: 'string' } },
+  item: { type: ['string', 'null'] }, source: { type: 'string' }, eligible: { type: 'boolean' },
+  reason: { type: ['string', 'null'] }, touches: { type: 'string' }, modules: { type: 'array', items: { type: 'string' } },
+  followUpOf: { type: ['string', 'null'] }, position: { type: ['number', 'null'] }, skipped: { type: 'array', items: ANY_OBJECT },
+  risk: { type: 'string' }, complexity: { type: 'string' }, type: { type: 'string' }, branchPrefix: { type: ['string', 'null'] } })
 
 async function notStarted(reasons, outcome = 'NOT_STARTED') {
   await ops('state.sh', ['unlock'], STATE_UNLOCKED, 'state')
@@ -341,9 +337,13 @@ async function testGate(item, round) {
   for (let attempt = 0; attempt <= MAX_TEST_FIXES; attempt++) {
     const t = await ops('run-tests.sh', [item.id, `${round}-${attempt}`, base.ref], TESTS, `tests r${round}`)
     if (!t) return { ok: false, reason: 'test gate returned no result' }
+    if (!['pass', 'fixable', 'stop'].includes(t.status)) return { ok: false, reason: `test gate gave no status: ${String(failureOf(t) ?? 'no reason given').slice(0, 300)}` }
     if (t.status === 'stop') return { ok: false, reason: `test gate stopped (log ${t.log}): ${(t.summary ?? []).slice(-3).join(' | ')}` }
     const head = await ops('changed-paths.sh', [base.ref], PATHS, 'head check')
-    if (!head || !t.head || t.head !== head.head) return { ok: false, reason: `the tested commit (${t.head}) is not the branch HEAD (${head?.head}): something changed the tree during the gate` }
+    if (!head || !t.head || t.head !== head.head) {
+      const why = failureOf(head)
+      return { ok: false, reason: why ? `changed-paths could not read the branch HEAD: ${String(why).slice(0, 300)}` : `the tested commit (${t.head}) is not the branch HEAD (${head?.head}): something changed the tree during the gate` }
+    }
     record.tests.push({ round, attempt, status: t.status, modules: t.modules, artifact: t.artifact ?? null })
     // A pass without its artifact would send the reviewers back to "the gate passed" (backlog #0-160).
     if (t.status === 'pass' && !t.artifact) return { ok: false, reason: `the test gate passed without its artifact (log ${t.log})` }
@@ -362,6 +362,11 @@ async function testGate(item, round) {
 async function pathGate(previousSha) {
   const p = await ops('changed-paths.sh', previousSha ? [base.ref, previousSha] : [base.ref], PATHS, 'changed paths')
   if (!p) return { ok: false, reason: 'changed-paths returned no result' }
+  // Fail closed: with no `required` keys, an answer that is not the script's own (_common.sh's failure) must not read
+  // as "nothing needs a human".
+  if (typeof p.needsHuman !== 'boolean' || !Array.isArray(p.files)) {
+    return { ok: false, reason: `changed-paths gave no answer of its own: ${String(failureOf(p) ?? 'no needsHuman').slice(0, 300)}` }
+  }
   if (p.needsHuman) {
     const why = [
       p.protectedTouched?.length ? `human-owned paths changed: ${p.protectedTouched.join(', ')}` : null,
@@ -468,9 +473,11 @@ const unsettledReason = (items) => {
 enterPhase('Preflight')
 const pre = await ops('preflight.sh', [], PREFLIGHT, 'preflight')
 if (!pre) return { outcome: 'NOT_STARTED', reasons: ['preflight returned no result (is factory-ops loading? check AGENT_TYPE_OPTION)'] }
-if (!pre.ok) {
+if (pre.ok !== true) {
   await notify('not-started', '-')
-  return { outcome: 'NOT_STARTED', reasons: pre.reasons }
+  // The preflight's own reasons as it gave them, one per check; failureOf only for an answer that is not its own.
+  const reasons = Array.isArray(pre.reasons) && pre.reasons.length ? pre.reasons : [failureOf(pre) ?? 'preflight refused without a reason']
+  return { outcome: 'NOT_STARTED', reasons }
 }
 runId = pre.runId
 // Every comparison uses the commit the preflight recorded, never a ref the session could move.
@@ -499,7 +506,10 @@ if (!args?.branch) {
   if (wanted !== null && !/^0-\d+$/.test(wanted)) return notStarted([`args.item must look like #0-25, got ${String(args.item).slice(0, 40)}`])
   next = await ops('next-item.sh', wanted ? [base.sha, wanted] : [base.sha], NEXT, 'next item')
   if (!next) return notStarted(['next-item returned no result'])
-  if (!next.ok) return notStarted(next.reasons ?? ['next-item refused'])
+  if (next.ok !== true) {
+    // next-item.sh's own reasons as it gave them, as the preflight's; failureOf only for an answer that is not its own.
+    return notStarted(Array.isArray(next.reasons) && next.reasons.length ? next.reasons : [failureOf(next) ?? 'next-item refused without a reason'])
+  }
   if (!next.item || next.eligible === false) {
     const skipped = (next.skipped ?? []).map((s) => `${s.item}: ${s.why}`).join('; ')
     return notStarted([`${next.reason ?? 'nothing can start'}${skipped ? ` (${skipped})` : ''}`], 'NOTHING_TO_DO')
@@ -640,7 +650,10 @@ if (!args?.branch) {
   // no rule at all (and that is not core), is read in full and checked by the implementer before the
   // panel sees the change. Once, after implementing; later fix rounds are judged by the panel.
   const reach = await ops('changed-paths.sh', [base.ref], PATHS, 'rules for the diff')
-  if (!reach || !Array.isArray(reach.ruleFiles)) return stopItem(item, 'changed-paths returned no rule files (rules for the diff)')
+  if (!reach || !Array.isArray(reach.ruleFiles)) {
+    const why = failureOf(reach)
+    return stopItem(item, `changed-paths returned no rule files (rules for the diff)${why ? `: ${String(why).slice(0, 300)}` : ''}`)
+  }
   const covered = new Set([...CORE_RULE_FILES, ...ruleFilesOf(plan.rules)])
   const missing = (reach.ruleFiles ?? []).filter((f) => !covered.has(f))
   record.selfCheck = missing

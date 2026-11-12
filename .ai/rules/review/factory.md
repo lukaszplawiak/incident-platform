@@ -115,15 +115,19 @@ a new channel, a new combination of powers).
   failure mode in the diff, and the ADR and README line that names it; weakening without one is a finding.
 - **FAC-A06 A value read from an agent's answer is typed.** A workflow that decides on a field of an agent's answer (a
   `factory-ops` script's JSON, a reviewer's verdict, the seeder's ground truth) types that field in the call's schema;
-  naming only the required keys types nothing. A `factory-ops` answer allows only the script's fields and `factory-ops`'
-  own `{error, exitCode}` (`additionalProperties: false`); `backlog-autopilot.js` also allows `_common.sh`'s failure,
-  `{ok: false, reasons}`, so its reason reaches the stop (#0-175). Untyped, the agent may answer every value as a string
+  naming only the required keys types nothing. A `factory-ops` answer allows only the script's fields, `factory-ops`'
+  own `{error, exitCode}` and `_common.sh`'s failure, `{ok: false, reasons}`, so its reason reaches the stop
+  (`additionalProperties: false`; the same `ERROR_FIELDS` and `answerOf` in each workflow that runs a factory script,
+  `backlog-autopilot.js`, `audit.js` and `seed-bugs.js`, #0-175). With no required
+  keys, the workflow checks each field it decides on before it relies on it: a failure must not read as "nothing to
+  do" (`needsHuman` missing is not `false`). Untyped, the agent may answer every value as a string
   or wrap the JSON in another key (#0-174: `"ok": "true"`, `files` as one string; #0-176: every verdict's `blocking` as
   one string, so the Record phase threw). An untyped schema on an answer the workflow does not read (a notification, a
   record that only reaches the PR) is not a finding. Backed by: `test-autopilot-workflow.mjs` (`seed-bugs.js`: each
-  factory script's answer and the panel's verdict; `backlog-autopilot.js`: no `ops()` call without typed fields, and
-  each script's answer against what it prints, #0-175; `audit.js`' `notify.sh` answer is still untyped, #0-175). Check:
-  a new or changed `schema` of an `agent()` call, and every field of it the workflow reads afterwards.
+  factory script's answer and the panel's verdict; `backlog-autopilot.js` and `audit.js`: no `ops()` call without typed
+  fields, and each script's answer against what it prints; the three workflows' `ERROR_FIELDS` and `answerOf` equal;
+  every key a script's jq output names is in its schema, so a field added to a script fails the PR, not the run;
+  #0-175). Check: a new or changed `schema` of an `agent()` call, and every field of it the workflow reads afterwards.
 
 ## Other checks of these paths
 

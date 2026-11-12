@@ -61,8 +61,11 @@ const VERDICT = {
 // Fixed (backlog #0-174): with the bare `{ type: 'object' }` the agent answered seed-branch.sh's JSON with every value
 // a string ("ok": "true", "files": "[…]") and wrapped return-to-main.sh's in a "parameter" key, so the first run after
 // #0-173 failed on a branch it had made. Each script's answer now has its fields typed and nothing else: what the
-// script prints, or factory-ops' own error answer.
-const ERROR_FIELDS = { error: { type: 'string' }, exitCode: { type: 'number' } }
+// script prints, factory-ops' own error answer, or _common.sh's failure ({"ok":false,"reasons":[…]}: no jq, not inside the
+// repository), which then reaches the outcome as its JSON instead of failing the schema without a reason (backlog #0-175,
+// PR 2). The same ERROR_FIELDS and answerOf as backlog-autopilot.js's and audit.js's: a test compares the three.
+const ERROR_FIELDS = { error: { type: 'string' }, exitCode: { type: 'number' }, ok: { type: 'boolean' },
+  reasons: { type: 'array', items: { type: 'string' } } }
 const answerOf = (fields) => ({ type: 'object', additionalProperties: false, properties: { ...fields, ...ERROR_FIELDS } })
 const SHA_FIELD = { type: 'string' }
 const FILES_FIELD = { type: 'array', items: { type: 'string' } }
