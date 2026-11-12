@@ -1276,14 +1276,29 @@ requests automatically when newer versions are available.
 
 Key configuration (`renovate.json`):
 
-- **Schedule**: every weekend — avoids noise during the work week
+- **Schedule**: every weekend — avoids noise during the work week. It limits when Renovate *creates* a branch;
+  an open PR is still updated at any time (`updateNotScheduled` defaults to `true`)
+- **`rebaseWhen: conflicted`** (backlog #0-230): an open PR is rebased only when it conflicts with `main`, not
+  every time `main` moves. Until 2026-11-12 it was `behind-base-branch`: every merge rebased every open Renovate PR
+  and ran its full CI, 58% of the repository's Actions minutes (~8 200 of ~14 100 a month, measured over 18 days).
+  A PR's CI result can therefore be older than `main`: before merging one, tick its rebase checkbox (or add the
+  `rebase` label) and wait for the new run; `main`'s own CI checks the merge result either way (the ruleset does
+  not require an up-to-date branch)
+- **Major updates need approval** (backlog #0-230): no branch or PR until the update is ticked in the
+  Dependency Dashboard issue. A major moves in compose, the tests and k8s at once, on a branch of our own
+  (backlog #0-71), so the dashboard is the list of image majors still to do; a ticked major of a GitHub Action or
+  a CI tool comes as an ordinary Renovate PR, merged on its own CI. `vulnerabilityAlerts` sets
+  `dependencyDashboardApproval: false` so that a security fix is not held, but Renovate's docs do not say whether
+  it wins over the major rule: a CVE whose only fix is a new major may wait in the dashboard (still reported by
+  Snyk and OWASP Dependency-Check; #0-230 records the first case)
 - **`minimumReleaseAge: 3 days`**: skips releases yanked within 72 hours
 - **Spring Framework / Spring Boot**: grouped into one PR, 7-day delay — gives time for
   community reports before updating a core dependency
 - **Google Cloud SDK**: 14-day delay — large SDK, higher risk on major updates
 - **Vulnerability alerts**: when a CVE is published for any dependency, Renovate opens
-  a PR immediately regardless of schedule
-- **Major updates**: always labelled `major-update`, never auto-merged
+  a PR immediately regardless of schedule (except, possibly, a fix that needs a new major: see "Major updates need
+  approval" above)
+- **Major updates**: always labelled `major-update`, never auto-merged, opened only after approval (above)
 - **GitHub Actions** (`helpers:pinGitHubActionDigests`): keeps every `uses:` pinned to a commit SHA
   and updates the SHA and its `# vX.Y.Z` comment together; all action updates are grouped into one
   PR (backlog #0-60)

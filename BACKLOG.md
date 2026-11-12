@@ -143,6 +143,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-227](#0-227-a-risk-high-items-real-needs_human-ships-as-a-pr-instead-of-stopping) | A risk-high item's real `NEEDS_HUMAN` ships as a PR instead of stopping | ci | Low | Open |
 | [0-228](#0-228-a-blocked-draft-writes-scope-not-measured-and-the-audit-reads-scopenot) | A BLOCKED draft writes "Scope: not measured." and the audit reads `scope:not` | ci | Low | Open |
 | [0-229](#0-229-ingestions-redis-dedup-and-rate-limits-are-tested-only-against-mocks) | ingestion's Redis dedup and rate limits are tested only against mocks | tech-debt | Low | Open |
+| [0-230](#0-230-renovate-rebases-every-open-pr-on-every-merge-58-of-the-actions-minutes) | Renovate rebases every open PR on every merge: 58% of the Actions minutes | ci | Medium | Open |
+| [0-231](#0-231-a-new-push-to-a-pull-request-does-not-cancel-its-running-ci) | A new push to a pull request does not cancel its running CI | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -5199,6 +5201,95 @@ limit and refills.
 **Acceptance criteria.**
 AC1. `DeduplicationService` and each bucket4j rate limiter of ingestion-service have a test against a real Redis of
 compose's image, showing the behaviour above.
+
+---
+
+### 0-230. Renovate rebases every open PR on every merge: 58% of the Actions minutes
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. From the measurement of the billable Actions minutes
+(owner, 2026-11-12), before the repository may go private (a private repository's minutes come from the plan's quota:
+2000 a month in Free, 3000 in Team).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low
+**Touches:** root (renovate.json, README.md "Dependency Updates — Renovate"), docs (.ai/decisions/0036)
+
+**Problem.** Measured from the Actions API over 18 days (2026-10-26 – 11-12, 992 runs; a job's duration rounded up
+to a whole minute, as GitHub bills it): ~8 455 billable minutes, ~14 100 a month. Of them:
+
+| Source | Minutes / 18 days | Share |
+|---|---|---|
+| 5 open Renovate PRs (243 CI runs + 243 Factory guards runs) | 4 936 | 58% |
+| CI + Factory guards on a push to `main` (81 merges) | 1 683 | 20% |
+| Every other PR (79 PRs, 120 runs: 1.5 a PR) | 1 720 | 20% |
+| Snyk, OWASP, Main guard | 116 | 1% |
+
+`renovate.json` set `rebaseWhen: behind-base-branch`, and `updateNotScheduled` defaults to `true` (Renovate's docs:
+"Renovate will perform certain "desirable" updates to _existing_ PRs even when outside of schedule"), so the weekend
+`schedule` limited only when a branch is created: every merge to `main` rebased every open Renovate PR, at any hour,
+and each rebase ran the full CI (~15 min) and Factory guards (~3 min). The five branches ran 29–57 times each. Their
+runs decided nothing: the open ones are majors held by #0-71, which moves a major in compose, the tests and k8s at
+once on a branch of its own (Redis 8: #614 superseded Renovate's #194), so a held PR's CI is never the one a merge
+rests on.
+
+**Decided (owner, 2026-11-12).**
+1. `rebaseWhen: conflicted`: an open PR is rebased only when it conflicts with `main`. Renovate warns against it only
+   with its automerge, which this repository does not use (`automerge: false` everywhere). `auto` would resolve to
+   the same here (no automerge, no required up-to-date branch), but would silently turn back into
+   `behind-base-branch` if either changed. The cost: a Renovate PR's CI can be older than `main`; before merging one,
+   the owner ticks its rebase checkbox (or adds the `rebase` label) and waits for the new run, and `main`'s CI checks
+   the merge result either way (`strict_required_status_checks_policy: false`, the same as for every other PR).
+2. `dependencyDashboardApproval: true` on the major rule: no branch, no PR and no CI for a major until the owner
+   ticks it in the Dependency Dashboard issue (on by `config:recommended`), which becomes the list of #0-71's image
+   majors still to do. A ticked major of a GitHub Action or a CI tool pin (ADR-0033) comes as an ordinary Renovate PR,
+   merged on its own CI, as before. `vulnerabilityAlerts` sets `dependencyDashboardApproval: false` (its default), so
+   a security fix within a major is not held; but Renovate's docs do not say whether that block wins over the major
+   package rule, nor whether `osvVulnerabilityAlerts`' PRs use it (read 2026-11-12, Renovate 44.236.4). If it does not,
+   a CVE whose only fix is a new major waits in the dashboard instead of opening a PR at once. It is still reported by
+   Snyk and OWASP Dependency-Check, and such a fix is a major we would move by hand under #0-71 anyway; Acceptance 3
+   checks it on the first one.
+3. Rejected: `updateNotScheduled: false` alone (still one full CI per open PR every weekend, for runs that decide
+   nothing); skipping CI on `renovate/*` branches (a minor or patch PR is merged on its CI).
+4. CI's own structure (the 7 small jobs billed as a minute each, the docs-only PRs) is measured again after this
+   lands; a new push cancelling a running one is #0-231.
+
+**Acceptance.**
+1. `renovate.json` has `rebaseWhen: conflicted`, the major rule `dependencyDashboardApproval: true` and
+   `vulnerabilityAlerts` `dependencyDashboardApproval: false`; README "Dependency Updates — Renovate" says what each
+   does and how a PR is brought up to date before a merge.
+2. After the merge: the next merges to `main` start no CI run on a `renovate/*` branch that does not conflict
+   (checked by the owner with `gh run list --branch renovate/<name>` a week later), and the Dependency Dashboard
+   issue lists majors as awaiting approval.
+3. On the first vulnerability alert whose fix is a major: the owner records here whether Renovate opened its PR at
+   once or held it in the dashboard, and README follows.
+
+---
+
+### 0-231. A new push to a pull request does not cancel its running CI
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the same measurement as #0-230 (2026-11-12).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low
+**Touches:** ci (.github/workflows/ci.yml, .github/workflows/factory-guards.yml)
+
+**Problem.** Neither `ci.yml` nor `factory-guards.yml` declares `concurrency`, so a push to a PR's branch while its
+runs are still going leaves them running to the end, billed in full, though their result is already stale. Over
+the 18 days of #0-230 (Renovate's branches left out), 33 of 120 CI runs and 32 of 120 Factory guards runs were still
+running when the next push came: 442 + 109 billable minutes, up to ~900 a month (an upper bound: a cancelled run is
+billed for the time it ran).
+
+**Approach.** The usual `concurrency: { group: …, cancel-in-progress: true }`, for pull requests only:
+- never a push to `main`: `main-guard.yml` and `scripts/factory/preflight.sh` read the result of each push's run
+  (backlog #0-148), so a cancelled one would read as a red or missing `main`. The group key must therefore keep
+  every push run in a group of its own (e.g. `${{ github.workflow }}-${{ github.event.pull_request.number ||
+  github.run_id }}`), or `cancel-in-progress` an expression that is false off `pull_request`;
+- Factory guards also runs on `pull_request_review`: decide whether a review's run shares the PR's group (it checks
+  the same head commit, but cancelling a push's run with it, or the other way round, must still leave a finished
+  run on the head commit, the one the required check reads);
+- a cancelled required check is not green: check that the run of the newest commit is the one the ruleset sees.
+
+**Acceptance.**
+1. A second push to a PR cancels the first push's CI and Factory guards runs; the newest push's runs finish and
+   are the required checks of the PR.
+2. Two quick merges to `main` both finish their CI (neither cancelled), and `main-guard.yml` reads each.
+3. Lint Workflows (actionlint, zizmor) passes on both workflows.
 
 ---
 
