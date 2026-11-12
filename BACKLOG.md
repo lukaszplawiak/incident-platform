@@ -118,7 +118,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
-| [0-175](#0-175-the-other-workflows-cannot-start-from-their-commands-and-read-untyped-factory-ops-answers) | The other workflows cannot start from their commands, and read untyped factory-ops answers | ci | Medium | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
@@ -3328,8 +3327,8 @@ AC3. `/seed-bugs` P-10 on `76379e806fb4` plants the pattern and records a row (w
 ### 0-175. The other workflows cannot start from their commands, and read untyped factory-ops answers
 
 **Type:** ci · **Priority:** Medium (Low until review round 2 of #0-174: once FAC-A06 is on main, `:481` breaks it) ·
-**Status:** In progress — PR 1 (AC2 for `backlog-autopilot.js`, 2026-11-01), PR 2 (AC2 for every workflow, 2026-11-12),
-PR 3 (AC1, 2026-11-12); found with #0-174 (2026-10-25)
+**Status:** Done, PRs #571, #610, #611 (kept for the three PRs' decisions) — PR 1 (AC2 for `backlog-autopilot.js`,
+2026-11-01), PR 2 (AC2 for every workflow, 2026-11-12), PR 3 (AC1, 2026-11-12); found with #0-174 (2026-10-25)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-174
 **Touches:** factory (.claude/workflows/audit.js, .claude/workflows/docs-audit.js,
 .claude/workflows/backlog-autopilot.js, .claude/workflows/seed-bugs.js), .ai/rules/review/factory.md (owner: FAC-A06 to "Enforced by checks"), ci
