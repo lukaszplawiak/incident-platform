@@ -123,7 +123,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
-| [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | High | Open |
 | [0-195](#0-195-the-workflow-does-not-check-the-branch-prefix-the-picker-gives-an-item) | The workflow does not check the branch prefix the picker gives an item | ci | Medium | Open |
 | [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
@@ -4152,8 +4151,9 @@ already does (only a service that accepts keys adds it). #0-191's tests show the
 
 ### 0-194. The autopilot's preflight does not refuse a session outside the devcontainer or without its settings
 
-**Type:** security · **Priority:** High · **Status:** Open. Found 2026-11-01: `/backlog-autopilot` was started
-in the owner's host session (macOS, plain `claude`, auto mode), not as `docs/ai-factory.md` "Running it" says.
+**Type:** security · **Priority:** High · **Status:** Done, PR #605 (ADR-0052). Found 2026-11-01: `/backlog-autopilot`
+was started in the owner's host session (macOS, plain `claude`, auto mode), not as `docs/ai-factory.md` "Running it"
+says. Kept in full as the record of the cases, the spike and the decision, which ADR-0052 and the preflight refer to.
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
 
 **Second case (2026-11-01, #0-192, run `wf_a2e7e1c8-3d2`).** Started in the devcontainer, but in a session not
