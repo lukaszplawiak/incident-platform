@@ -139,8 +139,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
 | [0-220](#0-220-the-pipeline-audits-data-attaches-the-wrong-ready-pr-to-a-case) | The pipeline audit's data attaches the wrong `/ready` PR to a case | ci | Medium | Open |
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
-| [0-223](#0-223-the-implementers-are-told-to-use-a-grep-tool-their-session-may-not-have) | The implementers are told to use a Grep tool their session may not have | ci | Medium | Open |
 | [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
+| [0-225](#0-225-the-autopilot-allows-the-grep-and-glob-tools-and-no-secret-rule-or-hook-names-them) | The autopilot allows the Grep and Glob tools, and no secret rule or hook names them | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4914,8 +4914,9 @@ form; its test shows both failures and a valid ledger.
 
 ### 0-223. The implementers are told to use a Grep tool their session may not have
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601;
-#0-207 "Closing run"); the first case is #0-194's third.
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #608 (kept for the evidence of the 31 runs, which #0-225
+rests on). Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601; #0-207 "Closing run"); the first case is
+#0-194's third.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/implementer.md, .claude/agents/picker.md), root (BACKLOG.md)
 
@@ -4948,10 +4949,17 @@ search and `git ls-files <path>` to list, with the same parenthesis. Confirming 
 Code's documentation or a `claude -p` check of an agent with and without Bash, as #0-214 would run) is not needed for
 the fix: `git grep` works either way.
 
-**Acceptance criteria (draft).**
-AC1. `implementer.md` and `picker.md` name `git grep` and `git ls-files` as the search and listing, not the Grep and
-     Glob tools, with #0-123's reason; their marked command lists already hold `git grep` forms, which Factory
-     guards' `check-agent-commands.rb` keeps passing.
+**Decided (owner, 2026-11-12, `/research`).** Align the two with #0-123, and in the same sentence tell them that a
+"No such tool" message suggesting `grep` via Bash does not apply (the command is refused): removing the tool's name
+alone leaves the second lost turn. The picker gets no new `git grep` form for the working tree: it reads the item on
+the base commit. Removing Grep and Glob from the agents' `tools:` was not taken: it reverses #0-123's choice, and
+whether those tools may reach a secret is a question of its own (#0-225).
+
+**Acceptance criteria.**
+AC1. `implementer.md` and `picker.md` name `git grep` and `git ls-files` (the picker: `git grep` on the base commit)
+     as the search and listing, not the Grep and Glob tools, with #0-123's reason and the sentence on the message
+     that suggests `grep`; their marked command lists are unchanged, and Factory guards' `check-agent-commands.rb`
+     keeps passing.
 AC2. No agent definition under `.claude/agents/` prescribes the Grep or Glob tool as the one way to search or list
      (a `git grep` over the definitions, in the PR).
 
@@ -4998,6 +5006,31 @@ AC1. A reviewer whose criteria cover the log pipeline's rules is told to read `.
      in the test of `changed-paths.sh`).
 AC2. If (C) is taken, `test-log-collection.sh` fails when Loki accepts a delete request, shown by running it against
      a Loki with the delete API on.
+
+### 0-225. The autopilot allows the Grep and Glob tools, and no secret rule or hook names them
+
+**Type:** security · **Priority:** Low · **Status:** Open. From the `/research` of #0-223 (owner, 2026-11-12).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/settings.autopilot.json, .claude/settings.json, possibly .claude/agents/*.md `tools:`,
+.claude/hooks/test-hooks.sh), root (BACKLOG.md, README.md "Infrastructure Hardening")
+
+**Problem.** `settings.autopilot.json` allows `Grep` and `Glob`, and every agent but `factory-ops` and the verifier
+lists them in `tools:`. The secret files are denied as `Read(…)` rules only (`./docker/.env`, `./docker/secrets/**`,
+`**/application-local.y*ml`, the home files of #0-211), and the only hook on a file tool matches `Read`. In Bash, the
+agents' search is `git grep`, whose allow-list of options keeps it to tracked files, so a gitignored secret is never
+read (#0-123, `_lib.sh` `git_grep_unsafe`). The Grep tool goes through none of that: whether Claude Code applies the
+`Read` deny rules to Grep and Glob, and whether its Grep searches ignored files, is not checked here. Today it does
+not matter: no autopilot run has given Grep to an agent with Bash (31 runs, #0-223). A Claude Code version that gives
+it back would open the path without a change in this repository; `audit-synthesis`, which has no Bash, gets both
+tools now, but it holds no tool that sends data out.
+
+**Proposed, to decide with the item.** (a) `Grep(…)` and `Glob(…)` deny rules next to each `Read(…)` secret rule, in
+both settings files, with a `test-hooks.sh`-style check that the lists are equal (the shape of #0-211); or (b) drop
+`Grep`/`Glob` from the autopilot's allow list and from the `tools:` of the agents with Bash, so `git grep` is the only
+search there (reverses #0-123's "use them only if you actually have them", where that reasoning lives); or (c) first
+measure what Claude Code does (a `dontAsk` session, Grep for a token of `docker/.env`, as #0-214 would run). A
+change to `settings.autopilot.json` changes its hash: the devcontainer is rebuilt and a new `--settings` session
+started (#0-194).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

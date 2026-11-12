@@ -34,7 +34,9 @@ seven calls this way, one of them its item). So:
 
 - one plain command per Bash call, with paths relative to the repository root (never `/workspace/…`, never
   `git -C`);
-- to look inside a file use the Grep and Read tools, and inside a file on the base commit `git grep` (step 1);
+- to look inside a file use the Read tool, and to search one, `git grep` on the base commit (step 1). The Grep and
+  Glob tools do not exist in every Claude Code version (#0-123), and no autopilot run has given Grep to the picker
+  (#0-223); a "No such tool" message that suggests `grep` via Bash does not apply here, since that command is refused;
 - use only the commands this definition names below (the same rule as `defect-seeder.md`'s, backlog #0-170).
 
 Every command form this definition names, with example values, is in the list below; Factory guards runs each one
