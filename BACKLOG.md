@@ -1125,7 +1125,7 @@ line, by a version override:
 
 | Dependency | Now | Fixed in | Issues |
 |---|---|---|---|
-| `bcprov-jdk18on` | 1.84 | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offers 1.85 only |
+| `bcprov-jdk18on` | 1.87 (was 1.84; 2026-11-12) | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offered 1.85 only (the minimum of its alert, CVE-2026-8763), so the override went to 1.87, the newest on Maven Central |
 | `postgresql` | 42.7.12 | 42.7.14 | Not Failing Securely (`SNYK-JAVA-ORGPOSTGRESQL-20571163`) |
 | `flyway-core` | 11.7.2 | 11.8.1 | per Snyk's upgrade advice |
 | `jackson-databind` / `jackson-core` | 2.21.5 | 2.21.7 | resource exhaustion, DoS |
@@ -1169,6 +1169,17 @@ build artifact.
   bumped by hand (ADR-0026).
 - `docker/docker-compose.yml` uses `:latest` for `provectuslabs/kafka-ui`, `danielqsj/kafka-exporter` and
   `dpage/pgadmin4` (`grafana/grafana` was pinned to `13.2.3` in #0-94 step 2, as it reads every tenant's logs).
+
+**Also (owner, 2026-11-12): a major of an image moves everywhere at once.** Four Renovate PRs bump a major in compose
+only, each green on CI but each leaving the image at another version in the tests and in k8s: #165 `apache/kafka`
+3.9.2 → 4.4.0 (`DeadLetterPublisherKafkaIntegrationTest` pins `apache/kafka:3.9.2`, "the compose tag" per CLAUDE.md;
+k8s runs 3.7.0), #194 `redis` 7 → 8 (`MfaResetRateLimiterTest` and `PlatformRateLimiterTest` run `redis:7-alpine`, as
+k8s does), #171 `postgres` 16 → 18 (conflicting; every Testcontainers test and k8s run `postgres:16-alpine`; 18 needs
+the volume mounted one level up and an empty volume, `make dev-reset`), and #166 `eclipse-temurin` 21 → 25 in the seven
+Dockerfiles (the runtime would differ from the JDK that compiles and tests, 21 in CI and the devcontainer: a decision
+of its own, with #0-158). Held, not merged: a major goes to compose, the Testcontainers tags and k8s in one change, or
+not at all; Renovate does not see the tags in Java test code, so the grouping has to name them too (a `customManagers`
+regex, or one constant per image the tests read).
 
 **Approach.** Pin every third-party image to a version tag (and a digest where Renovate can keep it current), enable
 Renovate's `kubernetes` manager for `k8s/**/*.yml`, and deploy service images by immutable tag (the commit SHA) or
