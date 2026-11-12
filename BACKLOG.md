@@ -143,6 +143,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
 | [0-222](#0-222-the-implementers-prescribed-test-command-does-not-build-in-the-devcontainer) | The implementer's prescribed test command does not build in the devcontainer | ci | Medium | Open |
 | [0-223](#0-223-the-implementers-are-told-to-use-a-grep-tool-their-session-may-not-have) | The implementers are told to use a Grep tool their session may not have | ci | Medium | Open |
+| [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4962,6 +4963,50 @@ AC1. `implementer.md` and `picker.md` name `git grep` and `git ls-files` as the 
      guards' `check-agent-commands.rb` keeps passing.
 AC2. No agent definition under `.claude/agents/` prescribes the Grep or Glob tool as the one way to search or list
      (a `git grep` over the definitions, in the PR).
+
+### 0-224. No reviewer is told to read the log pipeline's rules when a change touches `docker/`
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Found 2026-11-12 checking PR #604 (which agents read
+`.ai/context/infrastructure.md` "Log pipeline").
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** root (.ai/rules/review/security.md (owner)), ci (scripts/factory/changed-paths.sh, .github/scripts/)
+
+**Problem.** The docker-compose log pipeline has security rules: Loki and Alloy have no authentication, and Grafana
+reads every tenant's logs. Grafana is not on `default`, the pipeline sits on the internal `logs` and `docker-api`
+networks, Alloy reaches Docker only through `docker-socket-proxy`, labels are only `service`/`container`/`level`
+with the MDC ids as structured metadata, and Loki's delete API is off. Until PR #604 those rules were in CLAUDE.md,
+which every reviewer has in context. Since then they are in `.ai/context/infrastructure.md` "Log pipeline", behind a
+pointer, and no reviewer is told to read that section when a change touches `docker/`:
+- `review-k8s` is the only one whose criteria name `infrastructure.md` (`k8s.md:12`, for "CI gotchas"). Its gate
+  (`changed-paths.sh:68`, `/review` step 2) matches `k8s/`, a `Dockerfile`, `pom.xml` and `.dockerignore`. It does
+  not match `docker/docker-compose.yml`, `docker/alloy/config.alloy` or `docker/loki.yml`.
+- `review-security`, `review-general` and `review-architecture` read the context file their criteria name
+  (`review-procedure` step 3): `security.md`, `architecture.md` and `project.md`.
+- `changed-paths.sh` records `docker` as an area (`:81`) but no rule file is added for it (`:90-92` add one only for migrations, entities and `k8s`).
+
+What still guards them:
+- Comments in the changed files themselves, which every reviewer reads (`docker-compose.yml:326`,
+  `config.alloy:65` and `:89`, `loki.yml:107`).
+- `test-log-collection.sh` in the Docker Compose smoke test, which checks the networks, the published port, the
+  labels and the structured metadata. That test is not a required check (#0-2), and nothing tests the delete API.
+
+**Approach (to decide).**
+- (A) `security.md`'s opening read list adds `.ai/context/infrastructure.md` "Log pipeline" when the diff touches
+  `docker/`. These are security controls: unauthenticated services and every tenant's logs. One sentence in an
+  owner file.
+- (B) `review-k8s`'s gate also matches `docker/`. Its rules are about manifests, images and POMs, not compose
+  networks, so it would run on changes it has no rules for.
+- (C) Optional with either: a case in `test-log-collection.sh` that asks Loki's delete endpoint and expects a
+  refusal, so the one untested rule gets a check.
+
+(A) is the closest fit; (C) is cheap once #0-2 makes the smoke test required.
+
+**Acceptance criteria (draft).**
+AC1. A reviewer whose criteria cover the log pipeline's rules is told to read `.ai/context/infrastructure.md`
+     "Log pipeline" when a change touches `docker/`, shown by the rule file's text (and, if the gate changes, a case
+     in the test of `changed-paths.sh`).
+AC2. If (C) is taken, `test-log-collection.sh` fails when Loki accepts a delete request, shown by running it against
+     a Loki with the delete API on.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
