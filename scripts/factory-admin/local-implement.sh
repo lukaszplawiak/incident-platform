@@ -4,8 +4,8 @@
 # limit is exhausted, so the waiting time is not wasted. Claude Code itself is the harness, pointed at
 # Ollama's Anthropic-compatible endpoint; nothing here reviews or publishes:
 #   - the branch stays local (no push, no PR);
-#   - review happens later, by the normal panel: /backlog-autopilot with args
-#     {"item":"#0-N","branch":"<branch>"} once the limit has reset.
+#   - review happens later, by the normal panel: /backlog-autopilot #0-N <branch>
+#     once the limit has reset.
 # Usage: local-implement.sh <item-id> <branch-name>
 # Env: FACTORY_LOCAL_MODEL (default qwen3.8:27b), OLLAMA_URL (default http://localhost:11434;
 #      from the devcontainer http://host.docker.internal:11434, which its firewall must allow).
@@ -32,4 +32,4 @@ Create .ai/work/<item>/ from .ai/work/_template/, commit locally, do not push. \
 Run ./mvnw -B -ntp verify for the affected modules and stop when it passes or after 3 attempts." \
   > "$RUNS_DIR/local-implement-$(date -u +%Y%m%d-%H%M%S).log" 2>&1
 rc=$?
-echo "{\"ok\":$([ $rc -eq 0 ] && echo true || echo false),\"branch\":\"$branch\",\"next\":\"review with /backlog-autopilot args {item:'$item', branch:'$branch'}\"}"
+echo "{\"ok\":$([ $rc -eq 0 ] && echo true || echo false),\"branch\":\"$branch\",\"next\":\"review with /backlog-autopilot $item $branch\"}"

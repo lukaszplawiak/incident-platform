@@ -203,7 +203,7 @@ if is_int "$MAX_BLOCKED" && [ "$blocked" -ge "$MAX_BLOCKED" ]; then
 fi
 if is_int "$AUDIT_EVERY" && [ "$shipped" -ge "$AUDIT_EVERY" ]; then
     add "audit due: $shipped items shipped since the last audit"
-    [ -f .ai/STOP ] || printf 'audit due: %s items shipped since the last audit (%s). Run /audit (args since, date), decide, run /apply-audit, then delete this file.\n' "$shipped" "$today" > .ai/STOP
+    [ -f .ai/STOP ] || printf 'audit due: %s items shipped since the last audit (%s). Run /audit <since> <date>, decide, run /apply-audit, then delete this file.\n' "$shipped" "$today" > .ai/STOP
 fi
 
 lock="$RUNS_DIR/LOCK"

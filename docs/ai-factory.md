@@ -119,9 +119,19 @@ from it.
 # inside the devcontainer, on a clean main
 claude --settings .claude/settings.autopilot.json
 > /backlog-autopilot                                   # next ready item, shadow mode
-> /backlog-autopilot  with args {"item": "#0-25"}      # a specific item
-> /backlog-autopilot  with args {"item": "#0-25", "branch": "refactor/0-25-…"}   # resume after you resolved a BLOCKED item
+> /backlog-autopilot #0-25                             # a specific item
+> /backlog-autopilot #0-25 refactor/0-25-…             # resume after you resolved a BLOCKED item
 ```
+
+Claude Code hands a workflow the words typed after its command as one string; each workflow reads them in a fixed
+order and checks them as it checks the object's fields (backlog #0-175, as `/seed-bugs` since #0-174). A count it
+cannot read starts nothing, with the usage. `/backlog-autopilot` takes no word, `#0-N`, or `#0-N <branch>`;
+`shadow`, `maxRounds`, `localReview` and `acceptUnverifiable` are object fields only: a word that follows the
+command is never one of them, so ask the session in a plain message to run the workflow with the object
+(`{"item": "#0-25", "branch": "refactor/0-25-…", "acceptUnverifiable": ["ver-1a2b3c4d"]}`), which it passes to the
+Workflow tool as its `args`. `/audit <since> <date> [target]
+[dimension…]` (target `all`, the default, `reviewers` or `pipeline`; each dimension one of the panel's) and
+`/docs-audit <date>` take dates as `YYYY-MM-DD`.
 
 One item per run. The session settings make it `dontAsk`: everything not allowed is refused, nobody is
 asked. `/workflows` shows progress; `p` pauses, `x` stops.
@@ -168,7 +178,7 @@ BLOCKED at the implementer, as #0-42 did (backlog #0-122). Make it `human-only` 
 parentheses. The autopilot's deny rules, its shell-write hook and CODEOWNERS keep literal copies of that
 list; the "Factory guards" check fails when one stops covering it.
 
-`{"item": "#0-25"}` overrides the choice (the item still has to be ready, unblocked and unlocked). When
+`/backlog-autopilot #0-25` (or `{"item": "#0-25"}`) overrides the choice (the item still has to be ready, unblocked and unlocked). When
 nothing can start, the run ends with `NOTHING_TO_DO` and names the row and why.
 
 **Which rules the implementer reads.** The panel judges every change against the full files of
@@ -236,8 +246,8 @@ history (for a BLOCKED item also its draft PR and the phase that stopped it, whi
 | when the queue is done, or every ~10 items | `/plan-backlog`, edit, merge | 15–20 min |
 | daily, in shadow mode | review and merge the autopilot's PRs; **label each one** `human:*` from your own account (see below) | 10–20 min |
 | when it happens | BLOCKED draft PRs: decide, fix or split, then resume with `branch` | 5–20 min |
-| every 10 items | `/audit` (args `since`, `date`), tick decisions in the report, `/apply-audit <report>`, merge its PR | 20–30 min |
-| every 10–15 items | `/docs-audit`; look at the architecture as a whole (what no single review sees) | ~1 h |
+| every 10 items | `/audit <since> <date>`, tick decisions in the report, `/apply-audit <report>`, merge its PR | 20–30 min |
+| every 10–15 items | `/docs-audit <date>`; look at the architecture as a whole (what no single review sees) | ~1 h |
 | sometimes | do an item yourself, then `/review` and `/ship` — the knowledge should end up in you, not only in the repository | — |
 
 Spot checks must be real (read the diff, run the tests), or the `human:*` labels measure nothing.
@@ -348,7 +358,7 @@ upgrade: change it on purpose, then run a few seeded defects and compare `result
 `scripts/factory/local-review.sh` (advisory second opinion in the PR, never blocks; the autopilot runs
 it with `{"localReview": true}`) and `scripts/factory-admin/local-implement.sh` (you run it by hand, for a
 `Complexity: low` item while your limit is exhausted; the branch stays local and is reviewed later by the
-normal panel with `{"item", "branch"}`). Both point Claude Code at Ollama on the host (`OLLAMA_URL`). Measure first: with the test stack running, a 27B model may not fit
+normal panel with `/backlog-autopilot #0-N <branch>`). Both point Claude Code at Ollama on the host (`OLLAMA_URL`). Measure first: with the test stack running, a 27B model may not fit
 next to it in 32 GB.
 
 ## Cloud (later)
