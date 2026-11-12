@@ -4918,7 +4918,7 @@ form; its test shows both failures and a valid ledger.
 **Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601;
 #0-207 "Closing run").
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** factory (.claude/agents/implementer.md), root (BACKLOG.md)
+**Touches:** factory (.claude/agents/implementer.md, .claude/skills/ship/SKILL.md, .claude/hooks/foreground-bash.sh), shared (pom.xml), root (CLAUDE.md, BACKLOG.md)
 
 **Problem.** `implementer.md` ("How commands run here" and its marked command list) prescribes
 `./mvnw -q test -pl <module> -Dtest=<Class>` and `./mvnw -q verify -pl <module>`, without `-am`. Maven then resolves
@@ -4935,11 +4935,19 @@ Factory guards passed it. The test gate already builds with `-am` (`run-tests.sh
 (otherwise `shared`, built first, fails on "No tests matching pattern"). Installing `shared` into `~/.m2` once (a
 `postCreateCommand`) was considered and not taken: a stale jar would hide a change the item makes to `shared`.
 
-**Acceptance criteria (draft).**
-AC1. `implementer.md` prescribes `-am` in its test and verify forms (and `-Dsurefire.failIfNoSpecifiedTests=false`
-     with `-Dtest=`), in its prose and its marked command list; Factory guards' `check-agent-commands.rb` passes them.
-AC2. Both forms run in the devcontainer with an `~/.m2` that holds no `shared` jar (shown by hand, the output in the
-     PR).
+**Decided (owner, 2026-11-12, `/research`).** Not `-Dsurefire.failIfNoSpecifiedTests=false` on the command line: it
+applies to the service too, and under `-q` a misspelt class then runs no test and prints nothing, as a passing run does.
+`shared/pom.xml` sets `<failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>` for `shared` alone (an explicit value
+wins over the user property), so a service's misspelt class still fails. `/ship`'s `./mvnw test -pl <affected>` takes
+`-am` too: the same class of fault on the owner's machine, where `~/.m2` may hold a `shared` older than the branch;
+so do CLAUDE.md's one-class commands and `foreground-bash.sh`'s refusal, which named the old form (review round 1).
+
+**Acceptance criteria.**
+AC1. `implementer.md` prescribes `-am` in its test and verify forms, in its prose and its marked command list;
+     Factory guards' `check-agent-commands.rb` passes them. `/ship` runs its tests with `-am`.
+AC2. Both forms run with a local repository that holds no `shared` jar (`-Dmaven.repo.local=<empty dir>`, the output
+     in the PR); without the `shared/pom.xml` setting the `-Dtest` form fails on `shared`; a misspelt class in the
+     service still fails.
 
 ### 0-223. The implementers are told to use a Grep tool their session may not have
 

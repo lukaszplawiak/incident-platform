@@ -34,5 +34,5 @@ background=$(json_get "$input" '.tool_input.run_in_background'); rc=$?
 json_checked "$rc" "this agent's Bash guard"
 case "$background" in
     ''|false|False) exit 0 ;;   # jq prints false, the python3 fallback False
-    *) block "run the command in the foreground (no run_in_background): it returns when it ends, so there is no output to poll, and every look at a background command's output spends one of your turns. For a long test run, give the Bash call a timeout (up to 600000 ms) and narrow it with -pl <module> -Dtest=<Class>; the autopilot's own test gate runs the full set after you (backlog #0-206)." ;;
+    *) block "run the command in the foreground (no run_in_background): it returns when it ends, so there is no output to poll, and every look at a background command's output spends one of your turns. For a long test run, give the Bash call a timeout (up to 600000 ms) and narrow it with -pl <module> -am -Dtest=<Class> (-am builds shared from the branch, backlog #0-222); the autopilot's own test gate runs the full set after you (backlog #0-206)." ;;
 esac

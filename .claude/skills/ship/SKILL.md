@@ -23,7 +23,8 @@ unfinished or untested, stop and say so instead of finishing it here.
    From the changed file paths, determine which Maven module(s) are affected
    (top-level directory: `shared`, `auth-service`, `incident-service`, etc.).
    If `shared` changed, treat all 7 services as affected, per CLAUDE.md.
-   Run `./mvnw test -pl <affected-modules>` for exactly those modules.
+   Run `./mvnw test -pl <affected-modules> -am` for exactly those modules: `-am` builds `shared` from the branch
+   instead of taking the jar in `~/.m2`, which may be older than the branch (backlog #0-222).
 
     - If any test fails: **stop here.** Do not branch, commit, or push. Report
       which test(s) failed and the relevant failure output, and ask whether I
