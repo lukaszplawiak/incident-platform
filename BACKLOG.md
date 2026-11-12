@@ -136,7 +136,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Open |
 | [0-218](#0-218-no-seeded-pattern-measures-security-on-a-weakened-forked-chain-or-an-idor) | No seeded pattern measures security on a weakened forked chain or an IDOR | ci | Low | Open |
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
-| [0-220](#0-220-the-pipeline-audits-data-attaches-the-wrong-ready-pr-to-a-case) | The pipeline audit's data attaches the wrong `/ready` PR to a case | ci | Medium | Open |
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
 | [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
 | [0-225](#0-225-the-autopilot-allows-the-grep-and-glob-tools-and-no-secret-rule-or-hook-names-them) | The autopilot allows the Grep and Glob tools, and no secret rule or hook names them | security | Low | Open |
@@ -4923,7 +4922,7 @@ AC2. One clean performance row in `clean.md`.
 
 ### 0-220. The pipeline audit's data attaches the wrong `/ready` PR to a case
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. From the pipeline audit 2026-11-11 (R-2026-11-11-pipeline-02:
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #612 (kept for the owner's decisions on AC2 and AC3). From the pipeline audit 2026-11-11 (R-2026-11-11-pipeline-02:
 PR #581 got #582).
 **Touches:** ci (scripts/factory/audit-data.sh, scripts/factory/_backlog.sh, .github/scripts/test-audit-data.sh),
 root (.ai/rules/audit.md, .ai/rules/acceptance.md), factory (.claude/agents/audit-pipeline.md, .claude/skills/ready/SKILL.md)
