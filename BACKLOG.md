@@ -1128,7 +1128,7 @@ line, by a version override:
 
 | Dependency | Now | Fixed in | Issues |
 |---|---|---|---|
-| `bcprov-jdk18on` | 1.87 (was 1.84; 2026-11-12) | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offered 1.85 only (the minimum of its alert, CVE-2026-8763), so the override went to 1.87, the newest on Maven Central |
+| `bcprov-jdk18on` | 1.87 (was 1.84; 2026-11-12) | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offered 1.85 only (the minimum of its alert, CVE-2026-8763), so the override went to 1.87, the newest on Maven Central (PR #613). Snyk on `main` after it (run 43294099841): no bcprov finding, 14 issues fewer in each of the eight projects (48–56 → 34–42) |
 | `postgresql` | 42.7.12 | 42.7.14 | Not Failing Securely (`SNYK-JAVA-ORGPOSTGRESQL-20571163`) |
 | `flyway-core` | 11.7.2 | 11.8.1 | per Snyk's upgrade advice |
 | `jackson-databind` / `jackson-core` | 2.21.5 | 2.21.7 | resource exhaustion, DoS |
