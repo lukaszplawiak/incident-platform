@@ -55,6 +55,7 @@ cat > BACKLOG.md <<EOF
 | [0-16](#0-16-p) | Sixteen | bug | Low | Open |
 | [0-17](#0-17-q) | Seventeen | bug | Low | Open |
 | [0-18](#0-18-r) | Eighteen | bug | Low | In progress |
+| [0-19](#0-19-s) | Nineteen | secruity | Low | Open |
 
 ---
 
@@ -160,6 +161,12 @@ AC2. The existing check .github/scripts/check-tenant-status-config.sh still pass
 **Type:** bug · **Priority:** Low · **Status:** In progress — autopilot run 20261101-000000. Quotes **Status:** Open.
 **Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** oncall-service
+
+### 0-19. Nineteen
+
+**Type:** secruity · **Priority:** Low · **Status:** Open
+**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** oncall-service
 EOF
 }
 backlog proposed
@@ -187,6 +194,7 @@ queue 0-2;                                 expect_jq "dependency missing"       
 queue 0-7 0-3;                             expect_jq "shared next to others is fine" "$($CQ)" '.valid'
 queue 0-5;                                 expect_jq "human-only queued"             "$($CQ)" '(.valid | not) and (.errors | any(test("human-only")))'
 queue 0-6;                                 expect_jq "design item queued"            "$($CQ)" '(.valid | not) and (.errors | any(test("design item")))'
+queue 0-19;                                expect_jq "type with no branch prefix queued" "$($CQ)" '(.valid | not) and (.errors | any(test("type \\(Type: secruity\\) has no branch prefix")))'
 queue 0-99;                                expect_jq "unknown item"                  "$($CQ)" '(.valid | not) and (.errors | any(test("neither an open item")))'
 queue 0-1 0-1;                             expect_jq "item twice"                    "$($CQ)" '(.valid | not) and (.errors | any(test("queued 2 times")))'
 queue 0-9 0-3;                             expect_jq "done item stays valid"         "$($CQ)" '.valid and .openRows == 1'
@@ -206,15 +214,17 @@ expect_jq "--ref reads the commit, not the tree" "$($CQ --ref "$base")" '.valid 
 
 echo "next-item"
 rm -f .ai/plan/queue.md; base=$(commit noqueue)
-expect_jq "no queue: priority order"            "$($NI "$base")" '.ok and .item == "#0-1" and .source == "priority"'
+expect_jq "no queue: priority order"            "$($NI "$base")" '.ok and .item == "#0-1" and .source == "priority" and .type == "bug" and .branchPrefix == "fix"'
 expect_jq "manual item with an open dependency" "$($NI "$base" 0-2)" '.ok and .item == null and (.reason | test("waits for #0-1"))'
-expect_jq "manual item that can start"          "$($NI "$base" 0-3)" '.ok and .item == "#0-3" and .source == "manual" and .modules == ["oncall-service"] and .risk == "low" and .complexity == "low"'
+expect_jq "manual item that can start"          "$($NI "$base" 0-3)" '.ok and .item == "#0-3" and .source == "manual" and .modules == ["oncall-service"] and .risk == "low" and .complexity == "low" and .type == "tech-debt" and .branchPrefix == "refactor"'
 expect_jq "manual item that is human-only"      "$($NI "$base" 0-5)" '.ok and .item == null and (.reason | test("not ready"))'
 expect_jq "protected path in Touches: no start" "$($NI "$base" 0-12)" '.ok and .item == null and (.reason | test("Touches names \\.github, a path the autopilot may not write"))'
 expect_jq "a criterion naming .github/: starts" "$($NI "$base" 0-13)" '.ok and .item == "#0-13"'
 expect_jq "CLAUDE.md agent-editable: starts"    "$($NI "$base" 0-14)" '.ok and .item == "#0-14"'
 # start-item.sh starts only an Open item: chosen here and refused there, it would come back on every run (#0-209).
 expect_jq "ready but not Open: no start"        "$($NI "$base" 0-18)" '.ok and .item == null and (.reason | test("its status is not Open \\(Status: In progress"))'
+# The branch's prefix comes from the type (backlog #0-195): a type with none is not chosen, not given a guessed prefix.
+expect_jq "a type with no branch prefix: no start" "$($NI "$base" 0-19)" '.ok and .item == null and (.reason | test("its type \\(Type: secruity\\) has no branch prefix"))'
 queue 0-3 0-1; base=$(commit q)
 expect_jq "first queue row"                     "$($NI "$base")" '.ok and .item == "#0-3" and .source == "queue" and .position == 1'
 queue 0-9 0-3 0-1; base=$(commit q1b)

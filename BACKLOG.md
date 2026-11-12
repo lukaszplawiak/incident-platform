@@ -15,8 +15,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 - **Status:** `Open` · `In progress` · `Blocked` · `Done`. A finished item leaves this file: its row
   moves to [`BACKLOG-DONE.md`](BACKLOG-DONE.md) with the PR, so references in code stay resolvable.
   `Blocked` names its reason in one line (`**Status:** Blocked — <reason> (autopilot run <id>)`).
-- **Type:** `bug` · `design` (a decision is needed before implementation) · `tech-debt` ·
-  `ci` · `docs`.
+- **Type:** `bug` · `security` · `design` (a decision is needed before implementation) · `tech-debt` ·
+  `performance` · `ci` · `docs`. The type gives an autopilot item's branch prefix; the table is `BRANCH_PREFIX_OF` in
+  `scripts/factory/_backlog.sh`, and an item of a type it does not list is never chosen (backlog #0-195).
 - **Autopilot fields** (optional; an item without them is never picked by the autopilot). A second
   line under the Type/Priority/Status line, and a third with the predicted reach:
   `**Autopilot:** ready | proposed | not-ready | human-only · **Risk:** low | high · **Complexity:** low | medium | high · **Depends on:** #0-N, …`
@@ -141,6 +142,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
 | [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
 | [0-225](#0-225-the-autopilot-allows-the-grep-and-glob-tools-and-no-secret-rule-or-hook-names-them) | The autopilot allows the Grep and Glob tools, and no secret rule or hook names them | security | Low | Open |
+| [0-226](#0-226-a-resumed-run-records-no-scope) | A resumed run records no scope | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4266,14 +4268,26 @@ base commit as it reads risk and complexity): it derives the prefix with `picker
 the picker's branch has another, before `state.sh branch` records it. The table then lives in the workflow, and
 `picker.md` points to it, so the two cannot drift.
 
-**Acceptance criteria (draft).**
-AC1. A picker branch whose prefix does not match the item's type stops the item before its branch is recorded, shown
-     by a test in `test-autopilot-workflow.mjs`; a matching one passes, for each type.
-AC2. `picker.md` and the workflow name the prefixes in one place.
+**Decided (owner, 2026-11-12, `/research`).** Not the check above but the prefix in code: a check would stop the
+item on every wrong prefix, and four runs got it wrong. One table, `BRANCH_PREFIX_OF` in `_backlog.sh`, maps the
+`**Type:**` read from the base commit to the prefix (`performance` → `perf/`, new; `design` and a type not listed have
+none, so a misspelt type stops the item before it starts instead of getting `feat/`). `next-item.sh` hands it to the
+workflow, which names the branch `<prefix>/<item>-<slug>` with the picker's `slug`; a `branch` the picker answers
+outside resume is not used; `start-item.sh` refuses another prefix. On resume the branch is the owner's, as given. The
+missing scope of a `branch` run (second case) is #0-226.
 
-**Touches:** `.claude/workflows/backlog-autopilot.js`, `.claude/agents/picker.md`,
-`.github/scripts/test-autopilot-workflow.mjs`, `scripts/factory/next-item.sh` (if the type is read there),
-`docs/ai-factory.md`.
+**Acceptance criteria.**
+AC1. Outside resume the branch is `<prefix>/<item>-<slug>` with the prefix next-item.sh reads from the item's
+     `**Type:**` on the base commit, whatever branch the picker answers; a missing prefix or an unusable slug stops
+     before anything is created (tests in `test-autopilot-workflow.mjs`).
+AC2. One table of prefixes (`_backlog.sh`); `picker.md` holds none; `next-item.sh` does not choose an item whose type
+     has none, and `start-item.sh` refuses a branch with another prefix (tests in `test-queue.sh`,
+     `test-start-item.sh`).
+
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/agents/picker.md, scripts/factory/_backlog.sh,
+scripts/factory/next-item.sh, scripts/factory/start-item.sh, .github/scripts/test-autopilot-workflow.mjs,
+.github/scripts/test-queue.sh, .github/scripts/test-start-item.sh), docs (ai-factory.md), root (BACKLOG.md,
+.ai/decisions/0051).
 
 ### 0-201. A `ready` item's Touches line is validated only once it is queued
 
@@ -5031,6 +5045,23 @@ search there (reverses #0-123's "use them only if you actually have them", where
 measure what Claude Code does (a `dontAsk` session, Grep for a token of `docker/.env`, as #0-214 would run). A
 change to `settings.autopilot.json` changes its hash: the devcontainer is rebuilt and a new `--settings` session
 started (#0-194).
+
+### 0-226. A resumed run records no scope
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Split from #0-195's second case (owner, 2026-11-12).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, possibly scripts/factory/next-item.sh,
+.github/scripts/test-autopilot-workflow.mjs), root (BACKLOG.md)
+
+**Problem.** A run started with `branch` (resume) skips `next-item.sh` and the plan, so `record.scope =
+scopeOf(next?.modules, plannedModules, lastPaths?.areas)` (`backlog-autopilot.js`) gets no Touches and no plan: PR #576
+said "Scope: not-measured — Touches none · plan none" though #0-192 has a Touches line. The audits then miss the item's
+predicted reach. `next-item.sh <base> <item>` cannot simply be asked on resume: its own draft PR is a lock, so it
+answers "in progress or blocked".
+
+**Proposed, to decide with the item.** Read the item's Touches from the base commit on resume (a mode of
+`next-item.sh` that skips the lock check, or `backlog_json` through another script), and say in the record that the plan
+was skipped, not that it predicted nothing.
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

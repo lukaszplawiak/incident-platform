@@ -65,6 +65,16 @@ Its text quotes **Autopilot:** ready, which is not its field.
 **Type:** ci · **Priority:** Low · **Status:** Open.
 **Autopilot:** ready · **Risk:** low
 
+### 0-30. A design item, ready by mistake
+
+**Type:** design · **Priority:** Low · **Status:** Open.
+**Autopilot:** ready · **Risk:** low
+
+### 0-31. A misspelt type
+
+**Type:** secruity · **Priority:** Low · **Status:** Open.
+**Autopilot:** ready · **Risk:** low
+
 ### 0-29. Its own sub-heading first, and wide spacing
 
 ### Notes
@@ -119,6 +129,10 @@ refused "no such section"         "has 0 sections ### 0-99."   "$base" 0-99 fix/
 refused "not ready, quoting ready" "is not **Autopilot:** ready on the base commit (human-only)" "$base" 0-26 ci/0-26-not-ready "$RUN"
 refused "not Open"                "status is not Open on the base commit: In progress" "$base" 0-27 ci/0-27-in-progress "$RUN"
 refused "two sections"            "has 2 sections ### 0-28."   "$base" 0-28 ci/0-28-two "$RUN"
+# The prefix is the one the item's **Type:** gives, read from the base commit (backlog #0-195).
+refused "a prefix its type does not give" "the branch of #0-25 (Type: bug) is fix/0-25-<slug>, not feat/0-25-queue" "$base" 0-25 feat/0-25-queue "$RUN"
+refused "a design item"           "#0-30's type has no branch prefix on the base commit (Type: design)" "$base" 0-30 feat/0-30-x "$RUN"
+refused "a misspelt type"         "#0-31's type has no branch prefix on the base commit (Type: secruity)" "$base" 0-31 fix/0-31-x "$RUN"
 
 # Each of these states is made on purpose, and must be left as it is: nothing is created, nothing is undone.
 printf 'x\n' > stray.txt

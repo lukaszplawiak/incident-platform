@@ -97,8 +97,8 @@ const DEFAULTS = {
   'ops:preflight.sh': { ok: true, reasons: [], baseSha: BASE, runId: 'run-1' },
   isolation: { tools: ['Read', 'Grep', 'Glob', 'Bash'], definitionLoaded: true },
   'ops:next-item.sh': { ok: true, item: '#0-1', source: 'queue', position: 1, eligible: true, modules: ['incident-service'],
-    risk: 'low', complexity: 'low' },
-  picker: { none: false, itemId: '#0-1', title: 'An item', branch: 'fix/0-1-an-item', workDir: '.ai/work/0-1',
+    risk: 'low', complexity: 'low', type: 'bug', branchPrefix: 'fix' },
+  picker: { none: false, itemId: '#0-1', title: 'An item', slug: 'an-item', branch: 'fix/0-1-an-item', workDir: '.ai/work/0-1',
     risk: 'low', complexity: 'low', acceptanceCriteria: ['AC1. It works.'] },
   architect: { blocked: false, plan: { steps: [] }, adrs: [], rules: [{ id: 'GEN-01' }], modules: ['incident-service'] },
   implementer: { blocked: false, headSha: SHA('b') },
@@ -361,9 +361,15 @@ test('the item: nothing to do, a malformed next item, a malformed or different p
   assert.equal(nothing.outcome.outcome, 'NOTHING_TO_DO')
   const malformed = await run({ answers: { 'ops:next-item.sh': { ...DEFAULTS['ops:next-item.sh'], item: '0-1' } } })
   assert.match(malformed.outcome.reasons[0], /malformed item/)
+  // The prefix of the branch is next-item.sh's (backlog #0-195): without one, nothing starts and no picker is asked.
+  for (const branchPrefix of [undefined, null, '', 'Fix', 'fix/', 'fix x']) {
+    const noPrefix = await run({ answers: { 'ops:next-item.sh': { ...DEFAULTS['ops:next-item.sh'], branchPrefix } } })
+    assert.match(noPrefix.outcome.reasons[0], /next-item returned no branch prefix for #0-1/, String(branchPrefix))
+    assert.ok(!keys(noPrefix.calls).includes('picker'), String(branchPrefix))
+  }
   for (const [pick, why] of [
     [{ ...DEFAULTS.picker, acceptanceCriteria: [] }, /picker answer incomplete/],
-    [{ ...DEFAULTS.picker, branch: 'fix/0-1 x' }, /picker answer incomplete/],
+    [{ ...DEFAULTS.picker, slug: 'an item' }, /picker gave no usable slug/],
     [{ ...DEFAULTS.picker, itemId: '#0-2' }, /picker prepared #0-2 instead of #0-1/],
     [null, /picker gave no answer/],
   ]) {
@@ -454,9 +460,9 @@ test('the item starts in code: start-item.sh after the pick and before the lock,
   assert.ok(!keys(none.calls).includes('ops:start-item.sh'))
   const failed = await run({ answers: { picker: { none: false, failed: true, reason: 'gh refused' } } })
   assert.ok(!keys(failed.calls).includes('ops:start-item.sh'))
-  for (const branch of ['fix/0-10-x', 'fix/0-1']) {
-    const wrong = await run({ answers: { picker: { ...DEFAULTS.picker, branch } } })
-    assert.ok(!keys(wrong.calls).includes('ops:start-item.sh'), `${branch}: refused before anything is created`)
+  for (const slug of [undefined, '', 'An-item', 'a/b', 'a_b', '-a', 'a--b', 'a.b', 'a-b-c-d-e-f-g-h-i']) {
+    const wrong = await run({ answers: { picker: { ...DEFAULTS.picker, slug } } })
+    assert.ok(!keys(wrong.calls).includes('ops:start-item.sh'), `${slug}: refused before anything is created`)
   }
 })
 
@@ -548,12 +554,23 @@ test("the run's branch is recorded in the lock before any agent works on it, or 
   }
 })
 
-test("the run's branch must be the item's own, and on resume the owner's", async () => {
-  for (const branch of ['feat/0-40-owners-work', 'fix/0-10-x', 'fix/0-1', 'fix/0-1-', 'fix/x0-1-y', 'fix/0-1-a/b']) {
-    const { outcome, calls } = await run({ answers: { picker: { ...DEFAULTS.picker, branch } } })
-    assert.equal(outcome.outcome, 'BLOCKED', branch)
-    assert.match(outcome.reason, /an item's branch is <type>\/0-1-<slug>|picker answer incomplete/, branch)
-    assert.ok(!calls.some((c) => /state\.sh 'branch'/.test(c.prompt)), `${branch}: never recorded`)
+test("the run's branch: code's prefix and the picker's slug, and on resume the owner's (#0-195)", async () => {
+  // The prefix is next-item.sh's, read from the item's Type on the base commit; a branch the picker names is not used,
+  // whatever its prefix (four runs gave a security item feat/, backlog #0-195).
+  for (const prefix of ['refactor', 'perf', 'fix']) {
+    const { outcome, calls } = await run({ answers: { 'ops:next-item.sh': { ...DEFAULTS['ops:next-item.sh'], branchPrefix: prefix },
+      picker: { ...DEFAULTS.picker, branch: 'feat/0-1-the-pickers-own' } } })
+    assert.equal(outcome.outcome, 'SHIPPED', prefix)
+    assert.match(calls.find((c) => c.key === 'picker').prompt, new RegExp(`the branch is ${prefix}/0-1-<slug>`), prefix)
+    assert.ok(calls.some((c) => c.prompt.includes(`start-item.sh '${BASE}' '0-1' '${prefix}/0-1-an-item'`)), `${prefix}: started on its branch`)
+    assert.ok(calls.some((c) => c.prompt.includes(`state.sh 'branch' '${prefix}/0-1-an-item'`)), `${prefix}: recorded`)
+    assert.ok(!calls.some((c) => c.prompt.includes('the-pickers-own')), `${prefix}: the picker's branch is never used`)
+  }
+  for (const slug of [undefined, 'Fix', 'a b', 'a/b', '0-1-x/y']) {
+    const { outcome, calls } = await run({ answers: { picker: { ...DEFAULTS.picker, slug } } })
+    assert.equal(outcome.outcome, 'BLOCKED', String(slug))
+    assert.match(outcome.reason, /picker gave no usable slug for #0-1/, String(slug))
+    assert.ok(!calls.some((c) => /state\.sh 'branch'/.test(c.prompt)), `${slug}: never recorded`)
   }
   const other = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' }, answers: { picker: { ...DEFAULTS.picker, branch: 'fix/0-1-another' } } })
   assert.match(other.outcome.reason, /picker answered the branch fix\/0-1-another, not fix\/0-1-an-item/)

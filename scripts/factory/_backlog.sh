@@ -4,9 +4,11 @@
 # Text in, JSON out (jq). Portable: awk + jq, no bash 4 features, so the owner can run the checks on macOS.
 #
 #   backlog_json <protected-re> < BACKLOG.md
-#                                      → [{id, title, type, priority, status, autopilot, risk, complexity,
-#                                           dependsOn:[ids], followUpOf, touches, modules:[...],
+#                                      → [{id, title, type, branchPrefix, priority, status, autopilot, risk,
+#                                           complexity, dependsOn:[ids], followUpOf, touches, modules:[...],
 #                                           protected:[paths], order}]
+#     branchPrefix: the prefix of the item's branch, from its **Type:** (BRANCH_PREFIX_OF below), or null for a type
+#     that has none (design, a misspelt one): next-item.sh does not choose such an item.
 #     protected: the paths of .ai/rules/protected-paths.md that the item's **Touches:** names
 #     (<protected-re> from _protected.sh: paths_regex free). Touches is what the change writes; a criterion
 #     may name a protected path only to refer to it (an existing check), so the criteria are not read.
@@ -26,6 +28,14 @@
 #   docs   docs/          k8s   k8s/          docker   docker/          ci   .github/, scripts/
 # Read by the scripts that source this file (check-queue.sh), not here (backlog #0-149).
 # shellcheck disable=SC2034
+# The prefix of an item's branch, by its **Type:** (backlog #0-195): the one table. next-item.sh hands it to the
+# workflow, which names the branch `<prefix>/<item>-<slug>` with the picker's slug, and start-item.sh refuses a branch
+# with another prefix. Fixed: the picker chose the prefix from a table in its own definition, and four runs gave a
+# `security` item `feat/` (one shipped as PR #587, one ended the run when the picker tried to rename the branch).
+# `design` has none on purpose: next-item.sh never chooses a design item. A type not listed has none either, so a
+# misspelt one stops the item before it starts instead of getting a guessed prefix.
+BRANCH_PREFIX_OF='{"bug":"fix","security":"fix","tech-debt":"refactor","ci":"ci","docs":"docs","performance":"perf"}'
+
 KNOWN_MODULES='["shared","service-parent","auth-service","ingestion-service","incident-service","notification-service","escalation-service","postmortem-service","oncall-service","root","docs","k8s","docker","ci"]'
 
 backlog_json() {
@@ -57,12 +67,13 @@ backlog_json() {
         }
         id != "" && /^\*\*Touches:\*\*/ && touches == "" { touches = field($0, "Touches") }
         END { flush() }
-    ' | jq -R -s --arg protected "$protected_re" '
+    ' | jq -R -s --arg protected "$protected_re" --argjson prefixOf "$BRANCH_PREFIX_OF" '
         split("\n") | map(select(length > 0) | split("\t")) as $rows
         | ($rows | map(select(.[0] == "T")) | to_entries
             | map({key: .value[1], value: {order: .key, priority: .value[2]}}) | from_entries) as $table
         | $rows | map(select(.[0] == "I") | {
-            id: .[1], title: .[2], type: (.[3] | ascii_downcase), priority: .[4], status: .[5],
+            id: .[1], title: .[2], type: (.[3] | ascii_downcase), branchPrefix: ($prefixOf[.[3] | ascii_downcase] // null),
+            priority: .[4], status: .[5],
             autopilot: (.[6] | ascii_downcase), risk: (.[7] | ascii_downcase), complexity: (.[8] | ascii_downcase),
             dependsOn: [.[9] | scan("0-[0-9]+")],
             followUpOf: ([.[10] | scan("0-[0-9]+")] | first // null),

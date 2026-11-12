@@ -114,6 +114,10 @@ const SAFE = /^[A-Za-z0-9._\/:-]+$/
 // same rule as ITEM_BRANCH_RE for start-item.sh and resume-item.sh (this script cannot read a file), and
 // test-autopilot-workflow.mjs fails when the two differ (backlog #0-216: four copies, nothing comparing them).
 const ITEM_BRANCH = /^[a-z]+\/(0-[0-9]+)-[A-Za-z0-9._-]+$/
+// The picker's part of a new item's branch (backlog #0-195): lowercase words joined by hyphens, as picker.md asks. The
+// prefix is code's: next-item.sh reads it from the item's **Type:** on the base commit (_backlog.sh, BRANCH_PREFIX_OF).
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+){0,7}$/
+const PREFIX = /^[a-z]+$/
 function q(value) {
   const s = String(value)
   if (!SAFE.test(s)) throw new Error(`unsafe argument for a factory script: ${s}`)
@@ -174,7 +178,7 @@ const PICK = {
   type: 'object', required: ['none'],
   properties: { none: { type: 'boolean' }, failed: { type: 'boolean' }, reason: { type: 'string' }, itemId: { type: 'string' }, title: { type: 'string' },
     type: { type: 'string' }, risk: { type: 'string' }, complexity: { type: 'string' }, branch: { type: 'string' },
-    workDir: { type: 'string' }, acceptanceCriteria: { type: 'array', items: { type: 'string' } } },
+    slug: { type: 'string' }, workDir: { type: 'string' }, acceptanceCriteria: { type: 'array', items: { type: 'string' } } },
 }
 const PLAN = {
   type: 'object', required: ['blocked'],
@@ -247,7 +251,7 @@ const NEXT = {
     item: { type: ['string', 'null'] }, source: { type: 'string' }, eligible: { type: 'boolean' },
     reason: { type: ['string', 'null'] }, touches: { type: 'string' }, modules: { type: 'array', items: { type: 'string' } },
     followUpOf: { type: ['string', 'null'] }, position: { type: ['number', 'null'] }, skipped: { type: 'array', items: ANY_OBJECT },
-    risk: { type: 'string' }, complexity: { type: 'string' } },
+    risk: { type: 'string' }, complexity: { type: 'string' }, type: { type: 'string' }, branchPrefix: { type: ['string', 'null'] } },
 }
 
 async function notStarted(reasons, outcome = 'NOT_STARTED') {
@@ -501,6 +505,7 @@ if (!args?.branch) {
     return notStarted([`${next.reason ?? 'nothing can start'}${skipped ? ` (${skipped})` : ''}`], 'NOTHING_TO_DO')
   }
   if (!/^#0-\d+$/.test(next.item)) return notStarted([`next-item returned a malformed item: ${String(next.item).slice(0, 40)}`])
+  if (!PREFIX.test(String(next.branchPrefix ?? ''))) return notStarted([`next-item returned no branch prefix for ${next.item}: ${String(next.branchPrefix).slice(0, 40)}`])
   record.source = next.source === 'queue' ? `queue row ${next.position}` : next.source === 'follow-up' ? `follow-up of #${next.followUpOf}` : next.source
   log(`next item ${next.item} (${record.source})`)
 }
@@ -532,7 +537,7 @@ if (args?.branch) {
 } else {
   item = await as('picker', [
     `Base ref ${base.ref} (${base.sha}). Run ${runId}. Take item ${next.item} (chosen by next-item.sh: ${record.source}).`,
-    'Check it and name its branch; do not create the branch: the workflow starts the item (scripts/factory/start-item.sh).',
+    `Check it and name the slug of its branch: the branch is ${next.branchPrefix}/${next.item.replace(/^#/, '')}-<slug>, the prefix from its Type (next-item.sh); answer \`slug\`, not \`branch\`, and do not create the branch: the workflow starts the item (scripts/factory/start-item.sh).`,
   ].join('\n'), { schema: PICK })
 }
 if (!item) return stopItem(null, 'picker gave no answer')
@@ -557,6 +562,16 @@ if (item.none) {
 }
 // Fail closed on an incomplete answer; `id` is the bare number used in script arguments and paths.
 item.id = String(item.itemId ?? '').replace(/^#/, '')
+// A new item's branch is composed here (backlog #0-195): the prefix from next-item.sh (its **Type:** on the base
+// commit), the item, the picker's slug. Fixed: the picker named the whole branch from picker.md's table, and four
+// runs gave a `security` item `feat/` (one shipped as PR #587; one ended the run when the picker tried to rename the
+// branch). A branch the picker names anyway is not used. On resume the branch is the owner's, as given.
+if (!args?.branch) {
+  if (!SLUG.test(String(item.slug ?? ''))) {
+    return stopItem(null, `picker gave no usable slug for ${String(item.itemId ?? next.item).slice(0, 20)} (lowercase words joined by hyphens), got ${JSON.stringify(item.slug ?? null).slice(0, 80)} (no state recorded, check the branches)`)
+  }
+  item.branch = /^0-\d+$/.test(item.id) ? `${next.branchPrefix}/${item.id}-${item.slug}` : undefined
+}
 if (!/^0-\d+$/.test(item.id) || !item.branch || !SAFE.test(item.branch) || !Array.isArray(item.acceptanceCriteria) || !item.acceptanceCriteria.length) {
   return stopItem(null, `picker answer incomplete or malformed (no state recorded, check the branches): ${JSON.stringify(item).slice(0, 300)}`)
 }
@@ -564,9 +579,8 @@ if (next && item.itemId !== next.item) {
   return stopItem(null, `picker prepared ${item.itemId} instead of ${next.item} (no state recorded, check the branches)`)
 }
 // The run's own branch, recorded in the lock: the only branch guard-git-push.sh lets the shipper push (backlog
-// #0-131). The picker names it, so it is bound first to what the script already knows (review round 1): the item's
-// own prefix (`<type>/<item>-`, picker.md "Name the branch"), and on resume the branch the owner gave. Without
-// it nothing could be pushed, not even a draft PR: stop here.
+// #0-131). Bound to what the script already knows (review round 1): the item's own (`<type>/<item>-`), and on resume
+// the branch the owner gave, which the picker repeats. Without it nothing could be pushed, not even a draft PR: stop.
 if ((ITEM_BRANCH.exec(item.branch) ?? [])[1] !== item.id) {
   return stopItem(null, `picker named the branch ${item.branch} for ${item.itemId}: an item's branch is <type>/${item.id}-<slug> (no state recorded, check the branches)`)
 }
