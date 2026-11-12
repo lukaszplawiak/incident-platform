@@ -46,7 +46,11 @@ branch's shape: the hook does not know `args.branch`, so another item's branch w
   --picker` refuses (Factory guards fails it).
 - The row match of the picker's dependency check is `'^[[:punct:]] 0-<n> [[:punct:]] '`: its guard refuses a `|`
   even inside quotes.
-- Known, left open: the rule of an item's branch is written four times (`backlog-autopilot.js` twice, `start-item.sh`,
-  `resume-item.sh`) and no check compares them (#0-216); `start-item.sh` copies the template with `cp -R` without
-  checking it for symlinks (#0-217). Both from the reviews of #0-209 and #0-215. The two scripts share their
-  precondition, a clean `main` at the base (`clean_main_at`, `_common.sh`).
+- Known, left open: `start-item.sh` copies the template with `cp -R` without checking it for symlinks (#0-217), from
+  the review of #0-209. The two scripts share their precondition, a clean `main` at the base (`clean_main_at`,
+  `_common.sh`).
+- The rule of an item's branch, once written four times with nothing comparing them (#0-216, from the reviews of
+  #0-209 and #0-215), is `ITEM_BRANCH_RE` in `_common.sh` for both scripts and `ITEM_BRANCH` in the workflow, which
+  cannot read a file; `test-autopilot-workflow.mjs` fails when the two differ in text or in what bash and JavaScript
+  accept, as it does for `SEED_BRANCH_RE` (#0-177). The workflow asking a script instead was rejected: an agent call per
+  run, and one more factory-ops answer to type (#0-169, #0-175), for what CI can check before the merge.

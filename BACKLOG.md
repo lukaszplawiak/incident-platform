@@ -134,7 +134,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
 | [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
 | [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Open |
-| [0-216](#0-216-the-rule-of-an-items-branch-is-written-four-times-and-nothing-compares-them) | The rule of an item's branch is written four times, and nothing compares them | ci | Low | Open |
 | [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Open |
 | [0-218](#0-218-no-seeded-pattern-measures-security-on-a-weakened-forked-chain-or-an-idor) | No seeded pattern measures security on a weakened forked chain or an IDOR | ci | Low | Open |
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
@@ -4816,22 +4815,6 @@ AC3. On resume the workflow runs `resume-item.sh` once, before the picker, and n
      not an item's, or an `item` that is not the branch's, is `NOT_STARTED` before anything moves; a refusal or a wrong
      answer stops the item at `pick`, recorded against the branch's item and notified, with the picker not called;
      `test-resume-item.sh` shows every refusal leaving the tree as it was.
-
-### 0-216. The rule of an item's branch is written four times, and nothing compares them
-
-**Type:** ci · **Priority:** Low · **Status:** Open. From the review of #0-209 (round 2, docs) and of #0-215 (round 1,
-architecture, FAC-A01).
-**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** factory (.claude/workflows/backlog-autopilot.js, scripts/factory/start-item.sh,
-scripts/factory/resume-item.sh, scripts/factory/_common.sh, a Factory guards check or test)
-
-**Problem.** `<type>/0-<n>-<slug>` (`^[a-z]+/0-[0-9]+-[A-Za-z0-9._-]+$`) is written in `backlog-autopilot.js` twice
-(the resume's arguments, the picker's answer), in `start-item.sh` and in `resume-item.sh`, and no check compares them.
-A drift fails closed (one of them refuses and the item stops), but each stop costs a run and its reason names only the
-copy that refused.
-
-**Proposed.** One copy in `_common.sh` for both scripts (as `SEED_BRANCH_RE`) and a Factory guards test that the
-workflow's two literals equal it; or the workflow asks a script. To decide with the item.
 
 ### 0-217. start-item.sh copies the work template without checking it for symlinks
 

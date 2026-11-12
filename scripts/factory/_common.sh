@@ -16,6 +16,14 @@ command -v jq >/dev/null 2>&1 || { echo '{"ok":false,"reasons":["jq is not insta
 # shellcheck disable=SC2034 # read by the seed-*.sh scripts that source this file, not here
 SEED_BRANCH_RE='^review/[0-9a-f]{8}$'
 
+# The branch of a backlog item, `<type>/0-<n>-<slug>`, with the item as the first group (backlog #0-216): start-item.sh
+# compares the group with the item it starts, resume-item.sh reads the item from it. The workflow holds the same rule as
+# ITEM_BRANCH (backlog-autopilot.js), since it cannot read this file; test-autopilot-workflow.mjs fails when the two
+# differ. Fixed: the rule was written four times (twice in the workflow, once in each script) with nothing comparing
+# them, so a drift showed up only as a stopped run whose reason named the one copy that refused.
+# shellcheck disable=SC2034 # read by start-item.sh and resume-item.sh, which source this file, not here
+ITEM_BRANCH_RE='^[a-z]+/(0-[0-9]+)-[A-Za-z0-9._-]+$'
+
 # Same rule as .claude/hooks/_lib.sh: during a run, the commit recorded in .ai/runs/LOCK.
 base_ref() {
     local sha
