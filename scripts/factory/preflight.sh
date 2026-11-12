@@ -6,11 +6,13 @@
 # Refuses to start when: .ai/STOP exists; the working tree is not clean; the current branch is not main
 # or cannot fast-forward to origin/main; an open issue carries the `autopilot-stop` label; the latest CI
 # run of a push to main did not succeed (or has a status gh does not document); the circuit breaker
-# tripped (FACTORY_MAX_BLOCKED consecutive BLOCKED items, default 2); an audit is due
-# (FACTORY_AUDIT_EVERY shipped items since the last one, default 10); the daily merge limit is reached
-# (FACTORY_MAX_MERGES_PER_DAY, default 5); another run holds the lock (younger than FACTORY_LOCK_HOURS,
-# default 3); Docker is not reachable (the tests need it); Claude Code is older than 2.1.295, or does not say
-# its version (the hooks' onFailure, backlog #0-162).
+# tripped (FACTORY_MAX_BLOCKED consecutive BLOCKED items); an audit is due (FACTORY_AUDIT_EVERY shipped items
+# since the last one); the daily merge limit is reached (FACTORY_MAX_MERGES_PER_DAY); one of those three limits is
+# not set (they come from settings.autopilot.json's env, with no default); another run holds the lock (younger than
+# FACTORY_LOCK_HOURS, default 3); Docker is not reachable (the tests need it); Claude Code is older than 2.1.295, or
+# does not say its version (the hooks' onFailure, backlog #0-162); the run is not in the devcontainer, is not the
+# bot's, or example.com is not refused (no firewall); the session was not started with main's
+# .claude/settings.autopilot.json and .claude/settings.json (backlog #0-194, ADR-0052).
 # The breaker and the audit trigger create .ai/STOP, so the owner has to clear them on purpose.
 # ============================================================
 set -uo pipefail
@@ -21,10 +23,64 @@ ensure_ignored
 reasons=()
 add() { reasons+=("$1"); }
 
-MAX_BLOCKED=${FACTORY_MAX_BLOCKED:-2}
-AUDIT_EVERY=${FACTORY_AUDIT_EVERY:-10}
-MAX_MERGES=${FACTORY_MAX_MERGES_PER_DAY:-5}
+# Fixed (backlog #0-194, ADR-0052): the three limits had defaults equal to the values settings.autopilot.json sets, so
+# a session started without that file ran with the same numbers and nothing showed it. They come from its `env` only
+# now; a limit that is not a number refuses, and the check it bounds is skipped rather than run against nothing (a
+# breaker compared with an empty limit would trip and write .ai/STOP). The lock's age keeps its default: it is not a
+# setting of the session.
+MAX_BLOCKED=${FACTORY_MAX_BLOCKED:-}
+AUDIT_EVERY=${FACTORY_AUDIT_EVERY:-}
+MAX_MERGES=${FACTORY_MAX_MERGES_PER_DAY:-}
+for limit in FACTORY_MAX_BLOCKED FACTORY_AUDIT_EVERY FACTORY_MAX_MERGES_PER_DAY; do
+    is_int "${!limit:-}" || add "$limit is not set to a number: settings.autopilot.json's env sets it, so the session was not started with that file (claude --settings .claude/settings.autopilot.json; backlog #0-194)"
+done
 LOCK_HOURS=${FACTORY_LOCK_HOURS:-3}
+
+# Fixed (backlog #0-194, ADR-0052): nothing checked where the run starts. On the host, with a clean main, Docker up
+# and no personal settings file, the autopilot started outside the firewall, with the owner's files, git identity and
+# gh token. Each check reads a property that only the devcontainer gives, and names it when it is missing. They guard
+# against a mistake, not an adversary: every signal can be set by hand.
+# - FACTORY_DEVCONTAINER: devcontainer.json's containerEnv, so the session inherited the container's environment.
+[ "${FACTORY_DEVCONTAINER:-}" = 1 ] \
+    || add "not in the devcontainer (FACTORY_DEVCONTAINER is not 1): start the autopilot inside it, as docs/ai-factory.md \"Running it\" says (backlog #0-194)"
+# - The bot's identity: FACTORY_BOT_LOGIN (containerEnv) is the account every commit and PR of a run must be; the
+#   GIT_* names here, gh's login below (the token in the gh volume). Otherwise the PR is the owner's and the human:*
+#   labels mean nothing.
+bot=${FACTORY_BOT_LOGIN:-}
+if [ -z "$bot" ]; then
+    add "FACTORY_BOT_LOGIN is not set (devcontainer.json containerEnv): cannot check that the run is the bot's (backlog #0-194)"
+else
+    for id in GIT_AUTHOR_NAME GIT_COMMITTER_NAME; do
+        [ "${!id:-}" = "$bot" ] || add "$id is '${!id:-}', not the bot '$bot': the run's commits would not be the machine account's (backlog #0-194)"
+    done
+    # GitHub attributes a commit by its email, not its name (review round 1): a bot name over the owner's address
+    # would show as the owner's. The bot's address is its noreply one, <id>+<login>@users.noreply.github.com: digits
+    # only before the `+` (review round 2: a glob `[0-9]*` let `1x+<login>@…` through), the login matched as text.
+    noreply_suffix="+$bot@users.noreply.github.com"
+    for id in GIT_AUTHOR_EMAIL GIT_COMMITTER_EMAIL; do
+        addr=${!id:-}
+        account=${addr%"$noreply_suffix"}
+        if [ "$account" = "$addr" ] || [ -z "$account" ] || ! is_int "$account"; then
+            add "$id is '$addr', not the bot's noreply address (<id>$noreply_suffix): GitHub would attribute the run's commits to another account (backlog #0-194)"
+        fi
+    done
+fi
+# - The firewall: example.com, the host init-firewall.sh's own self-test expects to be unreachable. Its REJECT answers
+#   at once (spike of 2026-11-12: curl exit 7 in 6 ms), so a correct run loses nothing; a firewall flushed after the
+#   container started (backlog #0-116) refuses here too. Only "no connection" passes: 6 (no name), 7 (refused) and 28
+#   (timed out, a DROP). Any other exit means a connection was made or curl failed in a way that says nothing, e.g. 35
+#   or 60, a TLS error behind an intercepting proxy (review round 1), and refuses.
+if ! command -v curl >/dev/null 2>&1; then
+    add "curl is not installed: cannot check the devcontainer's firewall (backlog #0-194)"
+else
+    curl -sS -o /dev/null --max-time "${FACTORY_FIREWALL_PROBE_WAIT:-5}" https://example.com 2>/dev/null
+    probe=$?
+    case "$probe" in
+        6|7|28) ;;
+        0) add "example.com answers: the devcontainer's firewall is not applied (init-firewall.sh; backlog #0-194)" ;;
+        *) add "example.com was not refused (curl exit $probe: a connection was made, or curl failed in another way): the firewall is not shown to be applied (init-firewall.sh; backlog #0-194)" ;;
+    esac
+fi
 today=$(date -u +%F)
 run_id=$(date -u +%Y%m%d-%H%M%S)
 
@@ -90,6 +146,22 @@ fi
 base=$(base_ref)
 base_sha=$(git rev-parse --verify --quiet "$base" 2>/dev/null || echo "")
 
+# Fixed (backlog #0-194, ADR-0052): a session reads --settings once, at its start (spike of 2026-11-12 on 2.1.295: a
+# rule and an env value changed in the file mid-session did not apply, 15 s later), and this preflight's own
+# fast-forward above can change the file seconds before the first agent (#0-197's run, 2026-11-06: the picker ran under
+# the old cp rule). settings.autopilot.json carries a hash of itself without that field and of .claude/settings.json,
+# which the session loads under it (settings-hash.sh); the session's env holds the value of the files it loaded.
+# Computed here, after the fast-forward, from main's files, the two differ when the session started with another file
+# or none, or before main's last change to either.
+want_settings=$("$(dirname "$0")"/settings-hash.sh .claude/settings.autopilot.json .claude/settings.json 2>/dev/null || echo "")
+if [ -z "${FACTORY_SETTINGS_SHA256:-}" ]; then
+    add "the session was not started with .claude/settings.autopilot.json (FACTORY_SETTINGS_SHA256 is not set): start it with claude --settings .claude/settings.autopilot.json (backlog #0-194)"
+elif [ -z "$want_settings" ]; then
+    add "cannot hash .claude/settings.autopilot.json and .claude/settings.json (scripts/factory/settings-hash.sh failed)"
+elif [ "$FACTORY_SETTINGS_SHA256" != "$want_settings" ]; then
+    add "the session's settings are not main's .claude/settings.autopilot.json and .claude/settings.json (changed since the session started, or other files were loaded): start a new session (backlog #0-194)"
+fi
+
 if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     stops=$(gh issue list --label autopilot-stop --state open --json number --jq 'length' 2>/dev/null || echo "?")
     if ! is_int "$stops"; then add "could not list autopilot-stop issues"
@@ -113,7 +185,11 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     esac
     merged=$(gh pr list --label autopilot --state merged --search "merged:>=$today" --json number --jq 'length' 2>/dev/null || echo "?")
     if ! is_int "$merged"; then add "could not count today's merged autopilot PRs"
-    elif [ "$merged" -ge "$MAX_MERGES" ]; then add "daily merge limit reached ($merged/$MAX_MERGES)"; fi
+    elif is_int "$MAX_MERGES" && [ "$merged" -ge "$MAX_MERGES" ]; then add "daily merge limit reached ($merged/$MAX_MERGES)"; fi
+    if [ -n "$bot" ]; then
+        login=$(gh api user --jq .login 2>/dev/null || echo "")
+        [ "$login" = "$bot" ] || add "gh is logged in as '${login:-?}', not the bot '$bot': the run's PRs would not be the machine account's (backlog #0-194)"
+    fi
 else
     add "gh is not installed or not authenticated (the autopilot opens PRs with it)"
 fi
@@ -121,11 +197,11 @@ fi
 blocked=$(jq -r '.consecutiveBlocked' "$STATE_FILE")
 shipped=$(jq -r '.shippedSinceAudit' "$STATE_FILE")
 { is_int "$blocked" && is_int "$shipped"; } || { add "state file unreadable"; blocked=99; shipped=0; }
-if [ "$blocked" -ge "$MAX_BLOCKED" ]; then
+if is_int "$MAX_BLOCKED" && [ "$blocked" -ge "$MAX_BLOCKED" ]; then
     add "circuit breaker: $blocked items BLOCKED in a row"
     [ -f .ai/STOP ] || printf 'circuit breaker: %s items BLOCKED in a row (%s). Resolve them, then delete this file and run scripts/factory-admin/state-reset.sh blocked.\n' "$blocked" "$today" > .ai/STOP
 fi
-if [ "$shipped" -ge "$AUDIT_EVERY" ]; then
+if is_int "$AUDIT_EVERY" && [ "$shipped" -ge "$AUDIT_EVERY" ]; then
     add "audit due: $shipped items shipped since the last audit"
     [ -f .ai/STOP ] || printf 'audit due: %s items shipped since the last audit (%s). Run /audit (args since, date), decide, run /apply-audit, then delete this file.\n' "$shipped" "$today" > .ai/STOP
 fi

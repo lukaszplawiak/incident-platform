@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================
-# Tests for scripts/factory/preflight.sh's reading of main's CI result (backlog #0-148) and of Claude Code's
-# version (backlog #0-162 PR 2: 2.1.295 or newer, the running binary's), in a temporary repository with gh, docker
-# and claude replaced by stubs on PATH (the real .ai/runs/ is never touched).
+# Tests for scripts/factory/preflight.sh's reading of main's CI result (backlog #0-148), of Claude Code's
+# version (backlog #0-162 PR 2: 2.1.295 or newer, the running binary's), and of where and how the session was started
+# (backlog #0-194, ADR-0052: the devcontainer, the bot's identity, the firewall, main's settings.autopilot.json and
+# the limits it sets), in a temporary repository with gh, docker, claude and curl replaced by stubs on PATH (the
+# real .ai/runs/ is never touched). Every case runs in the environment of a correct session (exported below) unless
+# it unsets or changes one variable.
 #
 # The gh stub answers `gh run list` from a list of runs, newest first, filtered the way GitHub filters
 # them: `--branch` by the run's head branch, `--event` by its event, then `--limit`. That is what made
@@ -20,7 +23,8 @@ ok()   { echo "  ok: $1"; }
 fail() { echo "::error::$1"; failures=$((failures+1)); }
 
 mkdir -p "$WORK/bin" "$WORK/repo/scripts/factory"
-cp "$SRC"/scripts/factory/_common.sh "$SRC"/scripts/factory/preflight.sh "$WORK/repo/scripts/factory/"
+cp "$SRC"/scripts/factory/_common.sh "$SRC"/scripts/factory/preflight.sh "$SRC"/scripts/factory/settings-hash.sh \
+    "$WORK/repo/scripts/factory/"
 
 # gh: authenticated, no autopilot-stop issue, every label present, no merged autopilot PR today; runs
 # from $RUNS (a JSON array, newest first).
@@ -40,6 +44,7 @@ while [ $# -gt 0 ]; do
 done
 case "$cmd" in
     "auth status") exit 0 ;;
+    "api user") printf '%s\n' "${GH_LOGIN-bot}" ;;
     "issue list"|"pr list") echo '[]' | jq -r "$jq_expr" ;;
     "label list") jq -n '[{name:"autopilot"},{name:"shadow"},{name:"blocked"},{name:"risk-high"},{name:"autopilot-stop"}]' | jq -r "$jq_expr" ;;
     "run list") printf '%s' "$RUNS" | jq --arg b "$branch" --arg e "$event" --argjson n "$limit" \
@@ -48,6 +53,10 @@ case "$cmd" in
 esac
 STUB
 printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/docker"
+# curl: exits $CURL_EXIT (7, "failed to connect", when unset: what the devcontainer's firewall answers for example.com).
+# shellcheck disable=SC2016
+printf '#!/bin/sh\nexit "${CURL_EXIT-7}"\n' > "$WORK/bin/curl"
+chmod +x "$WORK/bin/curl"
 # claude: prints $CLAUDE_VERSION_OUT as its version (a current one when unset); `running` is a second binary, the
 # one CLAUDE_CODE_EXECPATH names in the cases that set it.
 # The stub expands $CLAUDE_VERSION_OUT when it runs, not when it is written: single quotes meant.
@@ -61,7 +70,17 @@ chmod +x "$WORK/bin/gh" "$WORK/bin/docker" "$WORK/bin/claude" "$WORK/running" "$
 cd "$WORK/repo" || exit 1
 git init -q -b main
 printf '.ai/runs/\n.ai/STOP\n' > .gitignore
+mkdir -p .claude
+printf '{"permissions":{"defaultMode":"dontAsk"},"env":{"FACTORY_MAX_BLOCKED":"2"}}\n' > .claude/settings.autopilot.json
+printf '{"permissions":{"deny":["Bash(gh pr merge *)"]}}\n' > .claude/settings.json
 git add -A && git -c user.name=t -c user.email=t@t commit -qm init
+settings_sha=$(scripts/factory/settings-hash.sh .claude/settings.autopilot.json .claude/settings.json)
+
+# The environment of a correct session: in the devcontainer, as the bot, started with this repository's
+# settings.autopilot.json over its settings.json (their hash and the three limits its env sets).
+export FACTORY_DEVCONTAINER=1 FACTORY_BOT_LOGIN=bot GIT_AUTHOR_NAME=bot GIT_COMMITTER_NAME=bot \
+    GIT_AUTHOR_EMAIL=1+bot@users.noreply.github.com GIT_COMMITTER_EMAIL=1+bot@users.noreply.github.com \
+    FACTORY_MAX_BLOCKED=2 FACTORY_AUDIT_EVERY=10 FACTORY_MAX_MERGES_PER_DAY=5 FACTORY_SETTINGS_SHA256="$settings_sha"
 
 # run_preflight <runs JSON> — prints preflight's JSON; removes the lock a passing run takes. $CV is the version the
 # claude stub prints (unset: a current one), $EXEC the CLAUDE_CODE_EXECPATH (unset: none, as outside Claude Code),
@@ -130,6 +149,121 @@ started=$SECONDS
 EXEC="$WORK/hangs" WAIT=5 expect "a binary that hangs stops, not the preflight" "$green" "$unread"
 if [ $((SECONDS - started)) -lt 20 ]; then ok "... and the preflight did not wait for it (the stub sleeps 30 s)"
 else fail "the preflight waited $((SECONDS - started)) s for a binary that hangs"; fi
+
+echo "preflight.sh: where and how the session was started (backlog #0-194)"
+# has <text> — a jq expression: preflight refused, and one of its reasons contains <text>.
+has() { printf '.ok == false and any(.reasons[]; contains("%s"))' "$1"; }
+expect "a correct session passes" "$green" '.ok == true and .reasons == []'
+FACTORY_DEVCONTAINER='' expect "outside the devcontainer stops" "$green" "$(has "not in the devcontainer")"
+FACTORY_BOT_LOGIN='' expect "no bot login stops" "$green" "$(has "FACTORY_BOT_LOGIN is not set")"
+GIT_AUTHOR_NAME=owner expect "the owner's git author stops" "$green" "$(has "GIT_AUTHOR_NAME is 'owner', not the bot 'bot'")"
+GIT_COMMITTER_NAME='' expect "no git committer stops" "$green" "$(has "GIT_COMMITTER_NAME is '', not the bot")"
+GH_LOGIN=owner expect "gh logged in as the owner stops" "$green" "$(has "gh is logged in as 'owner', not the bot 'bot'")"
+GH_LOGIN='' expect "gh that names no login stops" "$green" "$(has "gh is logged in as '?'")"
+GIT_AUTHOR_EMAIL=owner@example.com expect "the owner's git author email stops" "$green" \
+    "$(has "GIT_AUTHOR_EMAIL is 'owner@example.com', not the bot's noreply address")"
+GIT_COMMITTER_EMAIL=1+other@users.noreply.github.com expect "another account's noreply address stops" "$green" \
+    "$(has "GIT_COMMITTER_EMAIL is '1+other@users.noreply.github.com'")"
+GIT_AUTHOR_EMAIL=1x+bot@users.noreply.github.com expect "a noreply address whose id is not digits stops" "$green" \
+    "$(has "GIT_AUTHOR_EMAIL is '1x+bot@users.noreply.github.com'")"
+GIT_AUTHOR_EMAIL=+bot@users.noreply.github.com expect "a noreply address without an id stops" "$green" \
+    "$(has "GIT_AUTHOR_EMAIL is '+bot@users.noreply.github.com'")"
+GIT_AUTHOR_EMAIL=1+bot@users.noreply.github.com.evil expect "text after the noreply address stops" "$green" \
+    "$(has "GIT_AUTHOR_EMAIL is '1+bot@users.noreply.github.com.evil'")"
+CURL_EXIT=0 expect "example.com answering (no firewall) stops" "$green" "$(has "example.com answers")"
+CURL_EXIT=28 expect "example.com timing out (a DROP firewall) passes" "$green" '.ok == true'
+CURL_EXIT=6 expect "example.com not resolving passes" "$green" '.ok == true'
+CURL_EXIT=35 expect "a TLS error after a connection (curl 35) stops" "$green" "$(has "curl exit 35")"
+CURL_EXIT=60 expect "a certificate error after a connection (curl 60) stops" "$green" "$(has "curl exit 60")"
+# No curl at all: a PATH of every command the preflight finds today but curl (the stubs first, then each directory of
+# PATH linked command by command), so nothing else it needs goes missing.
+mkdir -p "$WORK/nocurl"
+for d in "$WORK/bin" $(printf '%s' "$PATH" | tr ':' ' '); do
+    for f in "$d"/*; do
+        n=${f##*/}
+        [ "$n" = curl ] || [ -e "$WORK/nocurl/$n" ] || { [ -x "$f" ] && [ ! -d "$f" ] && ln -s "$f" "$WORK/nocurl/$n"; }
+    done
+done
+out=$(RUNS=$green PATH="$WORK/nocurl" env -u CLAUDE_CODE_EXECPATH scripts/factory/preflight.sh 2>/dev/null)
+rm -f .ai/runs/LOCK
+if printf '%s' "$out" | jq -e "$(has "curl is not installed")" >/dev/null 2>&1; then ok "no curl stops"
+else fail "no curl: not refused as such: $(printf '%s' "$out" | head -c 400)"; fi
+FACTORY_SETTINGS_SHA256='' expect "a session without settings.autopilot.json stops" "$green" \
+    "$(has "the session was not started with .claude/settings.autopilot.json")"
+FACTORY_SETTINGS_SHA256=0000 expect "a session with other settings stops" "$green" \
+    "$(has "the session's settings are not main's")"
+# Settings that cannot be hashed (here a project settings file that is not JSON) refuse, never pass.
+cp .claude/settings.json "$WORK/settings.json.keep"
+printf 'not json' > .claude/settings.json
+expect "settings that cannot be hashed stop" "$green" "$(has "cannot hash .claude/settings.autopilot.json and .claude/settings.json")"
+cp "$WORK/settings.json.keep" .claude/settings.json
+for limit in FACTORY_MAX_BLOCKED FACTORY_AUDIT_EVERY FACTORY_MAX_MERGES_PER_DAY; do
+    out=$(unset "$limit"; run_preflight "$green")
+    if printf '%s' "$out" | jq -e "$(has "$limit is not set to a number")" >/dev/null 2>&1; then ok "no $limit stops"
+    else fail "no $limit: not refused: $(printf '%s' "$out" | head -c 400)"; fi
+done
+FACTORY_MAX_BLOCKED=two expect "a limit that is not a number stops" "$green" "$(has "FACTORY_MAX_BLOCKED is not set to a number")"
+if [ -f .ai/STOP ]; then fail "a missing limit wrote .ai/STOP (the breaker ran against no limit)"; rm -f .ai/STOP
+else ok "... and a missing limit did not trip the breaker (no .ai/STOP)"; fi
+
+# The settings hash itself (settings-hash.sh): formatting and key order do not change it, its own field is left out,
+# any other change does change it.
+# h <autopilot settings> [project settings] — the hash, over $WORK/p.json when no project file is given.
+printf '{"permissions":{"deny":["Bash(x)"]}}' > "$WORK/p.json"
+h() { scripts/factory/settings-hash.sh "$1" "${2:-$WORK/p.json}"; }
+printf '{"env":{"A":"1","FACTORY_SETTINGS_SHA256":"x"},"permissions":{"defaultMode":"dontAsk"}}' > "$WORK/s1.json"
+printf '{\n  "permissions": { "defaultMode": "dontAsk" },\n  "env": { "A": "1" }\n}\n' > "$WORK/s2.json"
+printf '{"env":{"A":"2"},"permissions":{"defaultMode":"dontAsk"}}' > "$WORK/s3.json"
+if [ "$(h "$WORK/s1.json")" = "$(h "$WORK/s2.json")" ]; then ok "settings-hash: key order, layout and its own field do not count"
+else fail "settings-hash: the same settings hash differently"; fi
+if [ "$(h "$WORK/s1.json")" != "$(h "$WORK/s3.json")" ]; then ok "settings-hash: a changed env value changes it"
+else fail "settings-hash: a changed env value left the hash as it was"; fi
+printf '{"permissions":{"deny":["Bash(y)"]}}' > "$WORK/p2.json"
+if [ "$(h "$WORK/s1.json" "$WORK/p.json")" != "$(h "$WORK/s1.json" "$WORK/p2.json")" ]; then
+    ok "settings-hash: a change to the project settings (settings.json) changes it"
+else fail "settings-hash: a change to settings.json left the hash as it was"; fi
+printf 'not json' > "$WORK/bad.json"
+if out=$(h "$WORK/bad.json" 2>/dev/null); then fail "settings-hash: a file that is not JSON printed '$out'"
+else ok "settings-hash: a file that is not JSON fails"; fi
+if out=$(h "$WORK/s1.json" "$WORK/no-such.json" 2>/dev/null); then fail "settings-hash: a missing project file printed '$out'"
+else ok "settings-hash: a missing project settings file fails"; fi
+
+# check-settings-hash.sh (Factory guards): the file's field must be its hash. It runs from the real repository root,
+# so it is given absolute paths here.
+check="$SRC/.github/scripts/check-settings-hash.sh"
+jq --arg h "$(h "$WORK/s2.json")" '.env.FACTORY_SETTINGS_SHA256 = $h' "$WORK/s2.json" > "$WORK/good.json"
+if "$check" "$WORK/good.json" "$WORK/p.json" >/dev/null 2>&1; then ok "check-settings-hash: a file that carries its hash passes"
+else fail "check-settings-hash: a file that carries its hash failed"; fi
+jq '.env.A = "changed"' "$WORK/good.json" > "$WORK/stale.json"
+if out=$("$check" "$WORK/stale.json" "$WORK/p.json" 2>&1); then fail "check-settings-hash: a change that left the field passed"
+elif printf '%s' "$out" | grep -q "set the field to that value"; then ok "check-settings-hash: a change that left the field fails, naming the value"
+else fail "check-settings-hash: unexpected message: $out"; fi
+if "$check" "$WORK/good.json" "$WORK/p2.json" >/dev/null 2>&1; then fail "check-settings-hash: a change to settings.json that left the field passed"
+else ok "check-settings-hash: a change to settings.json that left the field fails"; fi
+if "$check" "$WORK/s2.json" "$WORK/p.json" >/dev/null 2>&1; then fail "check-settings-hash: a file without the field passed"
+else ok "check-settings-hash: a file without the field fails"; fi
+if "$check" >/dev/null 2>&1; then ok "check-settings-hash: this repository's settings.autopilot.json carries its hash"
+else fail "check-settings-hash: this repository's settings.autopilot.json does not carry its hash: $("$check" 2>&1)"; fi
+
+# The hash is compared after the preflight's fast-forward (review round 1): main moved on with a change to the
+# settings since the session started, so the session's value is the old files'. Compared before the fast-forward, the
+# old files on disk would match it and the stale session would pass. Last, as it gives the repository an origin.
+echo "preflight.sh: the settings are main's after the fast-forward"
+git init -q --bare -b main "$WORK/origin.git"
+git remote add origin "$WORK/origin.git"
+git push -q origin main
+git clone -q -b main "$WORK/origin.git" "$WORK/other"
+(
+    cd "$WORK/other" || exit 1
+    printf '{"permissions":{"defaultMode":"dontAsk","allow":["Bash(new)"]},"env":{"FACTORY_MAX_BLOCKED":"2"}}\n' \
+        > .claude/settings.autopilot.json
+    git -c user.name=t -c user.email=t@t commit -qam "settings change on main" || exit 1
+    git push -q origin main || exit 1
+) || fail "could not push a settings change to the test origin (the case below would not test the fast-forward)"
+expect "a session started before main changed its settings stops, after the fast-forward" "$green" \
+    "$(has "the session's settings are not main's")"
+if git diff --quiet HEAD origin/main; then ok "... and the preflight did fast-forward to that main"
+else fail "the preflight did not fast-forward main before comparing"; fi
 
 if [ "$failures" -gt 0 ]; then echo "$failures preflight test(s) failed"; exit 1; fi
 echo "All preflight tests passed."

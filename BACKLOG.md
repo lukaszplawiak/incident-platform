@@ -130,7 +130,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-204](#0-204-a-runs-record-keeps-no-run-id-no-agent-calls-and-no-stage-of-each-commit) | A run's record keeps no run id, no agent calls and no stage of each commit | ci | Low | Open |
 | [0-205](#0-205-a-runs-transcripts-expire-after-90-days-and-nothing-reads-them-per-agent) | A run's transcripts expire after 90 days and nothing reads them per agent | ci | Low | Open |
 | [0-208](#0-208-five-route-walks-hold-five-copies-of-isexempt) | Five route walks hold five copies of `isExempt` | tech-debt | Low | Open |
-| [0-210](#0-210-six-deny-rules-of-the-autopilot-settings-never-match) | Six deny rules of the autopilot settings never match | ci | Low | Open |
+| [0-210](#0-210-twenty-one-deny-rules-of-the-autopilot-settings-never-match) | Twenty-one deny rules of the autopilot settings never match | ci | Low | Open |
 | [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Open |
 | [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
 | [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
@@ -4204,9 +4204,36 @@ AC2. It refuses a session not started with `settings.autopilot.json`, or started
 AC3. A correct run in the devcontainer starts as today.
 AC4. `docs/ai-factory.md` "Running it" and README "Infrastructure Hardening" name the new refusals.
 
-**Touches:** `scripts/factory/preflight.sh`, `.github/scripts/test-preflight.sh`, `.claude/settings.autopilot.json`
-(`env`), `.devcontainer/devcontainer.json` (`containerEnv`), `docs/ai-factory.md`, README "Infrastructure
-Hardening".
+**Decided (owner, 2026-11-12, after `/research 0-194` and a spike; ADR-0052).**
+- AC1 checks the properties the devcontainer gives, not only a marker:
+  - `FACTORY_DEVCONTAINER=1` (`containerEnv`);
+  - the bot's identity: `FACTORY_BOT_LOGIN` against `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME` and `gh api user`, and
+    the two `GIT_*_EMAIL` against its noreply address;
+  - the firewall: `example.com` must be refused. Only curl's 6, 7 and 28 pass. Its REJECT costs 6 ms.
+- AC2's mechanism: `settings.autopilot.json` carries `env.FACTORY_SETTINGS_SHA256`, the sha256 of that file's
+  `jq -cS` without that field and of `settings.json`'s (`scripts/factory/settings-hash.sh`). The preflight compares
+  the session's value with main's files after its fast-forward. Factory guards' `check-settings-hash.sh` keeps the
+  field equal to the files.
+- `/review 1267` round 1, all non-blocking, all taken: `settings.json` added to the hash, which
+  `settings.autopilot.json` alone left out; the email check; curl's exit codes narrowed; tests for the order against
+  the fast-forward, a missing curl and settings that cannot be hashed; the stale defaults in `preflight.sh`'s header;
+  jq's printing noted.
+- Round 2, non-blocking: the noreply address now needs digits only before the `+` (a glob let `1x+…` through);
+  ADR-0052 names the container user's `~/.claude/settings.json` and managed settings as not hashed (an older gap)
+  and why curl's exit 6 still passes.
+- Rejected: a SessionStart hook writing to `CLAUDE_ENV_FILE`. The docs do not say subagents see it, or that hooks of
+  a `--settings` file run, and it would refuse a session after any fast-forward if settings ever reload.
+- The spike (devcontainer, Claude Code 2.1.295, `claude -p`) showed that a rule and an `env` value changed in the
+  `--settings` file mid-session did not apply, and that the file's `env` reaches a subagent's Bash.
+- AC3 is shown in a clone in the devcontainer where the change is `main`. A `--settings` session ran the preflight
+  through factory-ops and got `ok: true` with no reasons. The same clone without the settings refused with the four
+  missing values. A host clone refused for the devcontainer, the bot login and the firewall.
+
+**Touches:** `scripts/factory/preflight.sh`, `scripts/factory/settings-hash.sh` (new),
+`.github/scripts/test-preflight.sh`, `.github/scripts/check-settings-hash.sh` (new),
+`.github/workflows/factory-guards.yml`, `.claude/settings.autopilot.json` (`env`), `.devcontainer/devcontainer.json`
+(`containerEnv`), `docs/ai-factory.md`, README "Infrastructure Hardening", `.ai/decisions/0052-…`,
+`.ai/decisions/README.md`.
 
 ### 0-195. The workflow does not check the branch prefix the picker gives an item
 
@@ -4612,7 +4639,7 @@ AC4. The start and the choice read an item the same way: `start-item.sh` takes i
      text that quotes them counts for nothing, and `next-item.sh` skips a ready item that is not Open
      (`test-start-item.sh`, `test-queue.sh`).
 
-### 0-210. Six deny rules of the autopilot settings never match
+### 0-210. Twenty-one deny rules of the autopilot settings never match
 
 **Type:** ci · **Priority:** Low · **Status:** Open. Seen 2026-11-06 (#0-207's third case): every
 `claude --settings .claude/settings.autopilot.json` session prints these warnings at start.
@@ -4627,11 +4654,21 @@ also warns that `Write(./.ai/runs/LOCK)`, `Write(./.ai/runs/state.json)`, `Write
 `Write(./.ai/audit/decisions.md)` are not read by file permission checks (only `Edit(path)` rules are, and cover every
 file tool); their `Edit(…)` twins are there, so these four are dead lines, not a hole.
 
+**Seen again, wider (2026-11-12, #0-194's spike and AC3).** A `claude -p --settings .claude/settings.autopilot.json`
+session in the devcontainer (Claude Code 2.1.295) warned about the two label rules and about **19** `Write(…)` deny
+rules, not 4. The other fifteen are the protected paths and build files: `.ai/rules/**`, `.claude/**`, `.github/**`,
+`architecture-tests/**`, `AGENTS.md`, `scripts/factory/**`, `.ai/plan/**`, `scripts/factory-admin/**`,
+`.devcontainer/**`, `mvnw`, `mvnw.cmd`, `.mvn/**`, `.ruby-version`, `.node-version` and `.git/**`. Each of the 19 has
+its `Edit(…)` twin in the same `deny` list (checked with jq against the file), so all of them are dead lines, not a
+hole; `.claude/settings.json` has no `Write(…)` deny. The title said six until then; it is 21.
+
 **Acceptance criteria (draft).**
 AC1. The two label rules have a form Claude Code matches (its warning names `Bash(gh pr edit *human*)`), checked by a
      refused `gh pr edit 1 --add-label human:agree` in a `dontAsk` session with the hook off, or are removed with the
      `$comment` saying the hook is the only line.
-AC2. The four `Write(path)` deny rules are removed (or the `$comment` says why they stay).
+AC2. The 19 `Write(path)` deny rules are removed, each with its `Edit(path)` twin left in place (or the `$comment` says
+     why they stay); a Factory guard, or a case of an existing one, fails a `Write(…)` deny rule without its
+     `Edit(…)` twin, so that removing the dead line can never leave a hole.
 AC3. A session started with the settings prints no permission-rule warning; a Factory guard keeps it so if one can
      (whether Claude Code exposes the check outside a session is to find out).
 
