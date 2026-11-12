@@ -72,7 +72,7 @@ case_ fail "prod service left at base's latest" "edit $PROD 's/  - name: oncall-
     "runs oncall-service:latest, tagged latest"
 case_ fail "prod third-party image latest"    "edit k8s/base/infrastructure/kafka.yml 's/apache\/kafka:[0-9.]+/apache\/kafka:latest/'" \
     "runs apache/kafka:latest, tagged latest"
-case_ fail "prod image without a tag"         "edit k8s/base/infrastructure/redis.yml 's/image: redis:7-alpine/image: redis/'" \
+case_ fail "prod image without a tag"         "edit k8s/base/infrastructure/redis.yml 's/image: redis:[^\s]+/image: redis/'" \
     "runs \"redis\" with no tag"
 # 3. prod's services on a release, not an environment
 case_ fail "prod service tagged staging"      "edit $PROD 's/(  - name: incident-service\n    newTag: )\"[^\"]*\"/\${1}staging/'" \

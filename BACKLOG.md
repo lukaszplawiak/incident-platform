@@ -142,6 +142,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-226](#0-226-a-resumed-run-records-no-scope) | A resumed run records no scope | ci | Low | Open |
 | [0-227](#0-227-a-risk-high-items-real-needs_human-ships-as-a-pr-instead-of-stopping) | A risk-high item's real `NEEDS_HUMAN` ships as a PR instead of stopping | ci | Low | Open |
 | [0-228](#0-228-a-blocked-draft-writes-scope-not-measured-and-the-audit-reads-scopenot) | A BLOCKED draft writes "Scope: not measured." and the audit reads `scope:not` | ci | Low | Open |
+| [0-229](#0-229-ingestions-redis-dedup-and-rate-limits-are-tested-only-against-mocks) | ingestion's Redis dedup and rate limits are tested only against mocks | tech-debt | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -1039,7 +1040,9 @@ the Postgres part is done: the Secret with #0-78, the default password in PR #44
 
 **Problem.**
 - **Redis** (`k8s/base/infrastructure/redis.yml`) runs `redis-server --appendonly yes` with no password. It holds
-  the token revocation list and the rate-limit buckets, so any pod can un-revoke a token or reset a limit.
+  the token revocation list and the rate-limit buckets, so any pod can un-revoke a token or reset a limit. Since
+  Redis 8 (2026-11-12) the image also ships the Query Engine, JSON, time series and probabilistic modules, so more
+  commands sit behind the same open port (review of the Redis 8 move, security).
 - **Kafka** (`kafka.yml`) listens `PLAINTEXT` with no SASL and no ACLs. Any pod can produce to `alerts.raw` or
   `incidents.lifecycle` for any tenant: since #0-92 consumers refuse a record whose header and payload disagree,
   but a forged record naming one tenant in both is taken as that tenant's.
@@ -1125,7 +1128,7 @@ line, by a version override:
 
 | Dependency | Now | Fixed in | Issues |
 |---|---|---|---|
-| `bcprov-jdk18on` | 1.87 (was 1.84; 2026-11-12) | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offered 1.85 only (the minimum of its alert, CVE-2026-8763), so the override went to 1.87, the newest on Maven Central |
+| `bcprov-jdk18on` | 1.87 (was 1.84; 2026-11-12) | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offered 1.85 only (the minimum of its alert, CVE-2026-8763), so the override went to 1.87, the newest on Maven Central (PR #613). Snyk on `main` after it (run 43294099841): no bcprov finding, 14 issues fewer in each of the eight projects (48–56 → 34–42) |
 | `postgresql` | 42.7.12 | 42.7.14 | Not Failing Securely (`SNYK-JAVA-ORGPOSTGRESQL-20571163`) |
 | `flyway-core` | 11.7.2 | 11.8.1 | per Snyk's upgrade advice |
 | `jackson-databind` / `jackson-core` | 2.21.5 | 2.21.7 | resource exhaustion, DoS |
@@ -1163,7 +1166,7 @@ build artifact.
   overlays replace the tag with `dev`, `staging` or `1.0.0`, all mutable, so a node can keep running an old image
   under the same tag.
 - Third-party images in `k8s/` are not tracked by Renovate, whose `kubernetes` manager needs file patterns that
-  `renovate.json` does not set: `apache/kafka:3.7.0` (compose runs 3.9.2), `redis:7-alpine`, `postgres:16-alpine`,
+  `renovate.json` does not set: `apache/kafka:3.7.0` (compose runs 3.9.2), `redis:8-alpine` (was 7 until 2026-11-12), `postgres:16-alpine`,
   `busybox:1.36`, and since #0-42 `axllent/mailpit` in `k8s/overlays/dev/mailpit.yml`, whose tag
   `check-k8s-mail.rb` requires to equal compose's: a compose-only Renovate PR fails that check until the manifest is
   bumped by hand (ADR-0026).
@@ -1173,11 +1176,12 @@ build artifact.
 **Also (owner, 2026-11-12): a major of an image moves everywhere at once.** Four Renovate PRs bump a major in compose
 only, each green on CI but each leaving the image at another version in the tests and in k8s: #165 `apache/kafka`
 3.9.2 → 4.4.0 (`DeadLetterPublisherKafkaIntegrationTest` pins `apache/kafka:3.9.2`, "the compose tag" per CLAUDE.md;
-k8s runs 3.7.0), #194 `redis` 7 → 8 (`MfaResetRateLimiterTest` and `PlatformRateLimiterTest` run `redis:7-alpine`, as
-k8s does), #171 `postgres` 16 → 18 (conflicting; every Testcontainers test and k8s run `postgres:16-alpine`; 18 needs
+k8s runs 3.7.0), #194 `redis` 7 → 8 (`MfaResetRateLimiterTest` and `PlatformRateLimiterTest` ran `redis:7-alpine`, as
+k8s did; done on 2026-11-12 the way this paragraph says: compose, both tests, k8s and the mutation case of
+`test-k8s-environments.sh` in one change, #194 superseded), #171 `postgres` 16 → 18 (conflicting; every Testcontainers test and k8s run `postgres:16-alpine`; 18 needs
 the volume mounted one level up and an empty volume, `make dev-reset`), and #166 `eclipse-temurin` 21 → 25 in the seven
 Dockerfiles (the runtime would differ from the JDK that compiles and tests, 21 in CI and the devcontainer: a decision
-of its own, with #0-158). Held, not merged: a major goes to compose, the Testcontainers tags and k8s in one change, or
+of its own, with #0-158). The other three are held, not merged: a major goes to compose, the Testcontainers tags and k8s in one change, or
 not at all; Renovate does not see the tags in Java test code, so the grouping has to name them too (a `customManagers`
 regex, or one constant per image the tests read).
 
@@ -5172,6 +5176,29 @@ signal (`scope:unreadable`) instead of a fragment of a word.
 AC1. A BLOCKED draft with no measured scope records `Scope: not-measured`.
 AC2. `test-audit-data.sh` shows a PR body with `Scope: not measured.` and one with an unknown category: neither yields
 `scope:not` or a category the scope table (`audit.md`) does not name.
+
+---
+
+### 0-229. ingestion's Redis dedup and rate limits are tested only against mocks
+
+**Type:** tech-debt · **Priority:** Low · **Status:** Open. From the review of the Redis 7 → 8 move (architecture,
+2026-11-12).
+**Touches:** ingestion-service
+
+**Problem.** ingestion-service keeps its alert deduplication (`DeduplicationService`, `setIfAbsent` with a TTL) and its
+bucket4j rate limits (`RateLimitingService`, `AuthFailureRateLimiter`) in Redis, but `DeduplicationServiceTest` and
+`RateLimitingServiceTest` mock the Redis template: no test runs them against a real Redis. Only auth-service's
+`MfaResetRateLimiterTest` and `PlatformRateLimiterTest` start a Redis (Testcontainers). So a Redis major (8 since
+2026-11-12, #0-71) or a bucket4j/Lettuce upgrade that changed `SET … NX EX` or the buckets' Lua scripts would pass
+CI for ingestion and show only in the compose smoke test, if a request reached the path there.
+
+**Approach.** A Testcontainers test per Redis-backed class, on the image compose runs (`redis:8-alpine`), as
+auth-service's two do: a duplicate within the TTL is refused and accepted after it, and a bucket refuses past its
+limit and refills.
+
+**Acceptance criteria.**
+AC1. `DeduplicationService` and each bucket4j rate limiter of ingestion-service have a test against a real Redis of
+compose's image, showing the behaviour above.
 
 ---
 
