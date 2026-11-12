@@ -3,6 +3,7 @@
 // whole runs with a fake agent() that answers each agent and factory script as a scenario says.
 // And how .claude/workflows/seed-bugs.js turns the seeder's answer into an outcome (backlog #0-170), reads its args and
 // types the factory scripts' answers (#0-174) and the panel's verdicts, and ends on main after an error (#0-176).
+// And that /backlog-autopilot, /audit and /docs-audit start from their command's words as from the object (#0-175, AC1).
 //
 // The workflow is not a module: Claude Code's workflow runtime evaluates its text as the body of an async function,
 // with agent, parallel, phase, log and args in scope, and has no import (the workflow-authoring reference: "No
@@ -347,13 +348,47 @@ test('args: acceptUnverifiable without branch, a malformed item, malformed claim
   const noBranch = await run({ args: { acceptUnverifiable: ['ver-00000001'] } })
   assert.match(noBranch.outcome.reasons[0], /acceptUnverifiable needs branch/)
   const badItem = await run({ args: { item: '0-1; rm -rf /' } })
-  assert.match(badItem.outcome.reasons[0], /args\.item must look like #0-25/)
+  assert.match(badItem.outcome.reasons[0], /the item must look like #0-25/)
   assert.ok(!keys(badItem.calls).includes('ops:next-item.sh'), 'refused before any script sees it')
   for (const ids of [[], ['ver-xyz'], 'ver-00000001', ['ver-00000001', 'nope']]) {
     const bad = await run({ args: { branch: 'fix/0-1-x', acceptUnverifiable: ids } })
     assert.equal(bad.outcome.outcome, 'NOT_STARTED', JSON.stringify(ids))
     assert.match(bad.outcome.reasons[0], /acceptUnverifiable must be a list of claim ids/)
   }
+})
+
+test('`/backlog-autopilot #0-N [<branch>]` passes one string, read as the item and the branch (#0-175, AC1)', async () => {
+  // A run from the words makes exactly the calls a run from the object does, so every check the object meets applies.
+  for (const [words, object] of [
+    ['', {}], ['  \n', {}],
+    ['#0-2', { item: '#0-2' }], [' #0-2\t', { item: '#0-2' }],
+    ['#0-1 fix/0-1-an-item', { item: '#0-1', branch: 'fix/0-1-an-item' }],
+    ['  #0-1\tfix/0-1-an-item\n', { item: '#0-1', branch: 'fix/0-1-an-item' }],
+    // The same refusals as the object's, before any script sees the value.
+    ['0-1;rm', { item: '0-1;rm' }], ['#0-2 fix/0-1-an-item', { item: '#0-2', branch: 'fix/0-1-an-item' }],
+    ['#0-1 main', { item: '#0-1', branch: 'main' }],
+  ]) {
+    const fromWords = await run({ args: words })
+    const fromObject = await run({ args: object })
+    assert.deepEqual(fromWords.outcome, fromObject.outcome, JSON.stringify(words))
+    assert.deepEqual(fromWords.calls.map((c) => c.prompt), fromObject.calls.map((c) => c.prompt), JSON.stringify(words))
+  }
+  // The item is the one named, not the queue's next (the defect: args.item was undefined on a string).
+  const named = await run({ args: '#0-2' })
+  assert.ok(named.calls.find((c) => c.key === 'ops:next-item.sh').prompt.endsWith(`'${BASE}' '0-2'`))
+  const resumed = await run({ args: '#0-1 fix/0-1-an-item' })
+  assert.ok(keys(resumed.calls).includes('ops:resume-item.sh') && !keys(resumed.calls).includes('ops:next-item.sh'))
+  // Three words or more: no run, and nothing runs (not even the preflight).
+  for (const words of ['#0-1 fix/0-1-an-item extra', '#0-1 fix/0-1-an-item ver-00000001', 'a b c d']) {
+    const { outcome, calls } = await run({ args: words })
+    assert.equal(outcome.outcome, 'NOT_STARTED', words)
+    assert.match(outcome.reasons[0], /^\d+ words: pass no words \(the next item\), "#0-N" \(that item\) or "#0-N <branch>"/, words)
+    assert.equal(calls.length, 0, `nothing runs on ${JSON.stringify(words)}`)
+  }
+  // shadow, maxRounds and acceptUnverifiable stay object fields: a run from words is in shadow mode, with three rounds.
+  const shadow = await run({ args: '#0-1' })
+  assert.equal(shadow.outcome.mode, 'shadow')
+  assert.match(shadow.calls.find((c) => c.key === 'shipper').prompt, /shadow: true\. risk-high: false\. merge: false\./)
 })
 
 test('the item: nothing to do, a malformed next item, a malformed or different pick', async () => {
@@ -1704,5 +1739,79 @@ test('every key a factory script prints is in the schema its workflow reads it w
     assert.ok(printed.size >= 3, `${name}: the scan found ${printed.size} keys: it no longer reads the script`)
     const missing = [...printed].filter((k) => !(k in schema.properties))
     assert.deepEqual(missing, [], `${name} prints keys ${label} does not name`)
+  }
+})
+
+// ---------------------------------------------------------------- /audit and /docs-audit from their words (#0-175, AC1)
+
+// One whole run of another workflow's text: its outcome and its agent calls.
+async function runOf(src, args, answers) {
+  const fake = fakeAgent(answers)
+  const outcome = await evaluate(strip(src), { args, agent: fake.agent, logs: [] })
+  return { outcome, calls: fake.calls }
+}
+const AUDITED = {
+  'ops:audit-data.sh': { file: '.ai/runs/audit-data.json', prs: 3, prsWithHumanLabels: 1, unverifiedHumanLabels: 0, owner: 'o',
+    ownerIsAutopilot: false, unverifiedEscapes: 0, readyPrs: 0, cases: 1, transcriptsDir: 'd' },
+  'audit-reviewers': ({ prompt }) => ({ dimension: prompt.match(/dimension `(\w+)`/)[1], findings: [], recommendations: [] }),
+  'audit-pipeline': { cases: [], findings: [], recommendations: [] },
+  'audit-synthesis': ({ prompt }) => ({ report: `.ai/audit/${prompt.match(/target (\w+)/)[1]}.md`, recommendations: 0 }),
+}
+const SINCE = '2026-10-01', TODAY = '2026-11-12'
+
+test('audit: `/audit <since> <date> [target] [dimension…]` passes one string, read in the order of the keys (#0-175, AC1)', async () => {
+  for (const [words, object] of [
+    [`${SINCE} ${TODAY}`, { since: SINCE, date: TODAY }],
+    [`  ${SINCE}\t${TODAY}\n`, { since: SINCE, date: TODAY }],
+    [`${SINCE} ${TODAY} all`, { since: SINCE, date: TODAY, target: 'all' }],
+    [`${SINCE} ${TODAY} pipeline`, { since: SINCE, date: TODAY, target: 'pipeline' }],
+    [`${SINCE} ${TODAY} reviewers security docs`, { since: SINCE, date: TODAY, target: 'reviewers', dimensions: ['security', 'docs'] }],
+  ]) {
+    const fromWords = await runOf(AUDIT, words, AUDITED)
+    const fromObject = await runOf(AUDIT, object, AUDITED)
+    assert.notEqual(fromObject.outcome.outcome, 'NOT_STARTED', JSON.stringify(object))
+    assert.deepEqual(fromWords.outcome, fromObject.outcome, JSON.stringify(words))
+    assert.deepEqual(fromWords.calls.map((c) => c.prompt), fromObject.calls.map((c) => c.prompt), JSON.stringify(words))
+  }
+  const two = await runOf(AUDIT, `${SINCE} ${TODAY} reviewers security docs`, AUDITED)
+  assert.deepEqual(two.calls.filter((c) => c.key === 'audit-reviewers').map((c) => c.label), ['audit security', 'audit docs'])
+  assert.ok(!keys(two.calls).includes('audit-pipeline'), 'target reviewers: no pipeline analyst')
+})
+
+test('audit: a wrong count, a date that is not one, an unknown target or dimension start nothing (#0-175, AC1)', async () => {
+  for (const [args, why] of [
+    ['', /^pass args \{ since, date, target\?, dimensions\? \}, or the words "<since> <date>/], [SINCE, /^pass args/],
+    [`${SINCE} yesterday`, /^pass args/], [`${SINCE};rm ${TODAY}`, /^pass args/], [undefined, /^pass args/], [null, /^pass args/],
+    [{ since: SINCE }, /^pass args/], [{ since: SINCE, date: 20261112 }, /^pass args/],
+    [`${SINCE} ${TODAY} security`, /^no audit defined for target security; pass args/],
+    [`${SINCE} ${TODAY} reviewers secruity docs`, /^no review dimension secruity \(one of general, /],
+    [{ since: SINCE, date: TODAY, dimensions: ['security', 'nope'] }, /^no review dimension nope /],
+  ]) {
+    const { outcome, calls } = await runOf(AUDIT, args, AUDITED)
+    assert.equal(outcome.outcome, 'NOT_STARTED', String(JSON.stringify(args)))
+    assert.match(outcome.reason, why, String(JSON.stringify(args)))
+    assert.equal(calls.length, 0, `nothing runs on ${JSON.stringify(args)}`)
+  }
+})
+
+const DOCS_AUDIT = readFileSync(join(dirname(FILE), 'docs-audit.js'), 'utf8')
+const DOCS_AUDITED = { 'review-docs': { drifts: [{ file: 'README.md', level: 'B', issue: 'names a removed class' }] },
+  'audit-synthesis': { report: `.ai/audit/${TODAY}-docs.md` } }
+
+test('docs-audit: `/docs-audit <date>` passes one string, read as the date; anything else starts nothing (#0-175, AC1)', async () => {
+  const fromObject = await runOf(DOCS_AUDIT, { date: TODAY }, DOCS_AUDITED)
+  assert.equal(fromObject.outcome.outcome, 'REPORTED')
+  assert.match(fromObject.calls.find((c) => c.key === 'audit-synthesis').prompt, new RegExp(`^Write \\.ai/audit/${TODAY}-docs\\.md:`))
+  for (const words of [TODAY, `  ${TODAY}\n`]) {
+    const fromWords = await runOf(DOCS_AUDIT, words, DOCS_AUDITED)
+    assert.deepEqual(fromWords.outcome, fromObject.outcome, JSON.stringify(words))
+    assert.deepEqual(fromWords.calls.map((c) => c.prompt), fromObject.calls.map((c) => c.prompt), JSON.stringify(words))
+  }
+  // The date names the report's file: one that is not a date (a path, a number) is refused, as a wrong count is.
+  for (const args of ['', `${TODAY} extra`, 'tomorrow', '../../x', undefined, null, {}, { date: '../../x' }, { date: 20261112 }]) {
+    const { outcome, calls } = await runOf(DOCS_AUDIT, args, DOCS_AUDITED)
+    assert.equal(outcome.outcome, 'NOT_STARTED', String(JSON.stringify(args)))
+    assert.match(outcome.reason, /^pass args \{ date \}, or the word "<date>" \(YYYY-MM-DD\)$/)
+    assert.equal(calls.length, 0, `nothing runs on ${JSON.stringify(args)}`)
   }
 })

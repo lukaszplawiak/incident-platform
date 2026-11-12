@@ -16,7 +16,11 @@ export const meta = {
 // before the panel sees the change. The panel always judges against its full files.
 // Scope: the item's Touches, the architect's planned modules and the areas the diff reached are compared
 // and recorded in the PR (.ai/rules/planning.md, "Touches") — a measurement, never a gate.
-// Args (all optional):
+// Args (all optional), as the command's words (backlog #0-175, AC1):
+//   /backlog-autopilot                          the next item
+//   /backlog-autopilot #0-25                    this item (as args { item })
+//   /backlog-autopilot #0-25 fix/0-25-…         resume this item on its branch (as args { item, branch })
+// or as an object, whose keys are below; shadow, maxRounds, localReview and acceptUnverifiable are object-only:
 //   item:     '#0-25'           take this item instead (it must still be `ready` on main, deps done, no lock)
 //   branch:   'fix/0-25-…'      resume an existing branch (after a BLOCKED item was resolved, or a
 //                               branch from scripts/factory-admin/local-implement.sh): skips pick/plan/implement
@@ -46,8 +50,20 @@ export const meta = {
 // ============================================================================================
 
 const AGENT_TYPE_OPTION = 'agentType'
-const SHADOW = args?.shadow !== false
-const MAX_ROUNDS = Math.min(Math.max(args?.maxRounds ?? 3, 1), 3)
+// Fixed (backlog #0-175, AC1): Claude Code hands the script the command's words as one string, so
+// `/backlog-autopilot #0-25` read no args.item and ran the queue's next item instead. The words are read as seed-bugs.js
+// reads its own (#0-174): one word is the item, two are the item and the branch to resume, and both are then checked as
+// the object's values are (the item's form, the branch's rule, the branch's item). No word is the next item; three or
+// more is no run (null, refused before the preflight, so before the first agent): no field is read from a word by guess.
+const WORDS = typeof args === 'string' ? args.trim().split(/\s+/).filter(Boolean) : null
+const params = !WORDS ? (args ?? {})
+  : WORDS.length === 0 ? {}
+  : WORDS.length === 1 ? { item: WORDS[0] }
+  : WORDS.length === 2 ? { item: WORDS[0], branch: WORDS[1] }
+  : null
+const USAGE = 'pass no words (the next item), "#0-N" (that item) or "#0-N <branch>" (resume it on its branch), or args { item, branch, … }'
+const SHADOW = params?.shadow !== false
+const MAX_ROUNDS = Math.min(Math.max(params?.maxRounds ?? 3, 1), 3)
 const MAX_TEST_FIXES = 2          // fix-tests attempts per gate before the item is BLOCKED
 const MAX_AGENT_CALLS = 45        // budget per item; a runaway item stops instead of eating the limit
 
@@ -64,7 +80,7 @@ let budgetExceeded = false
 let runId = 'unknown'
 const base = { ref: 'origin/main', sha: null }
 const CLAIM_ID = /^ver-[0-9a-f]{8}$/
-const ACCEPT_UNVERIFIABLE = new Set(Array.isArray(args?.acceptUnverifiable) && args?.branch ? args.acceptUnverifiable : [])
+const ACCEPT_UNVERIFIABLE = new Set(Array.isArray(params?.acceptUnverifiable) && params?.branch ? params.acceptUnverifiable : [])
 const record = { item: null, source: null, implementer: null, plannedRules: [], selfCheck: null, scope: null,
   rounds: [], acceptance: null, tests: [], nonBlocking: [], adrs: [], local: null, verification: [] }
 
@@ -470,6 +486,9 @@ const unsettledReason = (items) => {
 
 // ---------------------------------------------------------------- run
 
+// Words the script cannot read are no run: refused before the preflight, so nothing is locked, moved or notified.
+if (!params) return { outcome: 'NOT_STARTED', reasons: [`${WORDS.length} words: ${USAGE}`] }
+
 enterPhase('Preflight')
 const pre = await ops('preflight.sh', [], PREFLIGHT, 'preflight')
 if (!pre) return { outcome: 'NOT_STARTED', reasons: ['preflight returned no result (is factory-ops loading? check AGENT_TYPE_OPTION)'] }
@@ -499,11 +518,11 @@ let next = null
 let resumeId = null            // on resume, the item the owner's branch names (backlog #0-215)
 let plannedModules = null      // the architect's prediction of the modules the change reaches
 enterPhase('Pick')
-if (!args?.branch) {
+if (!params.branch) {
   // The choice is code: next-item.sh reads the queue, the backlog and the locks on the base commit.
-  const wanted = args?.item ? String(args.item).replace(/^#/, '') : null
-  if (args?.acceptUnverifiable !== undefined) return notStarted(['acceptUnverifiable needs branch: the owner accepts claims of a draft PR they read'])
-  if (wanted !== null && !/^0-\d+$/.test(wanted)) return notStarted([`args.item must look like #0-25, got ${String(args.item).slice(0, 40)}`])
+  const wanted = params.item ? String(params.item).replace(/^#/, '') : null
+  if (params.acceptUnverifiable !== undefined) return notStarted(['acceptUnverifiable needs branch: the owner accepts claims of a draft PR they read'])
+  if (wanted !== null && !/^0-\d+$/.test(wanted)) return notStarted([`the item must look like #0-25, got ${String(params.item).slice(0, 40)}`])
   next = await ops('next-item.sh', wanted ? [base.sha, wanted] : [base.sha], NEXT, 'next item')
   if (!next) return notStarted(['next-item returned no result'])
   if (next.ok !== true) {
@@ -519,8 +538,8 @@ if (!args?.branch) {
   record.source = next.source === 'queue' ? `queue row ${next.position}` : next.source === 'follow-up' ? `follow-up of #${next.followUpOf}` : next.source
   log(`next item ${next.item} (${record.source})`)
 }
-if (args?.branch) {
-  const accepted = args?.acceptUnverifiable
+if (params.branch) {
+  const accepted = params.acceptUnverifiable
   if (accepted !== undefined && (!Array.isArray(accepted) || !accepted.length || !accepted.every((id) => CLAIM_ID.test(String(id))))) {
     return notStarted([`acceptUnverifiable must be a list of claim ids from the draft PR (ver-<8 hex>), got ${JSON.stringify(accepted).slice(0, 80)}`])
   }
@@ -529,18 +548,18 @@ if (args?.branch) {
   // autopilot's git write rules (`git switch *` matches `-c` too), and no guard could tell the owner's branch from
   // another item's. A refusal changes nothing (the tree stays on main) and stops the item at `pick`, recorded and
   // notified, as a picker that failed; the item is the one the branch names.
-  resumeId = (ITEM_BRANCH.exec(String(args.branch)) ?? [])[1]
-  if (!resumeId) return notStarted([`branch must be an item's branch (<type>/0-<n>-<slug>), got ${String(args.branch).slice(0, 80)}`])
-  if (args.item !== undefined && String(args.item).replace(/^#/, '') !== resumeId) {
-    return notStarted([`item ${String(args.item).slice(0, 40)} is not the item of the branch ${args.branch} (#${resumeId})`])
+  resumeId = (ITEM_BRANCH.exec(String(params.branch)) ?? [])[1]
+  if (!resumeId) return notStarted([`branch must be an item's branch (<type>/0-<n>-<slug>), got ${String(params.branch).slice(0, 80)}`])
+  if (params.item !== undefined && String(params.item).replace(/^#/, '') !== resumeId) {
+    return notStarted([`item ${String(params.item).slice(0, 40)} is not the item of the branch ${params.branch} (#${resumeId})`])
   }
-  const resumed = await ops('resume-item.sh', [base.sha, args.branch], RESUMED, 'resume')
-  if (!resumed || resumed.ok !== true || resumed.branch !== args.branch || resumed.item !== resumeId) {
+  const resumed = await ops('resume-item.sh', [base.sha, params.branch], RESUMED, 'resume')
+  if (!resumed || resumed.ok !== true || resumed.branch !== params.branch || resumed.item !== resumeId) {
     const why = resumed?.error ?? (Array.isArray(resumed?.reasons) && resumed.reasons.length ? resumed.reasons.join('; ') : null)
-    return stopItem({ itemId: `#${resumeId}`, id: resumeId }, `could not resume #${resumeId} on ${args.branch}: ${String(why ?? 'no answer').slice(0, 300)}`)
+    return stopItem({ itemId: `#${resumeId}`, id: resumeId }, `could not resume #${resumeId} on ${params.branch}: ${String(why ?? 'no answer').slice(0, 300)}`)
   }
   item = await as('picker', [
-    `Resume mode: the workflow switched to the existing branch ${args.branch} (resume-item.sh); do not switch or create a branch. Item #${resumeId}.`,
+    `Resume mode: the workflow switched to the existing branch ${params.branch} (resume-item.sh); do not switch or create a branch. Item #${resumeId}.`,
     `Validate the item exactly as in "Check the item" except the lock check (its own draft PR may be open), and answer the same JSON with that branch.`,
     `Base ref ${base.ref} (${base.sha}). Run ${runId}.`,
   ].join('\n'), { schema: PICK })
@@ -559,9 +578,9 @@ if (!item) return stopItem(null, 'picker gave no answer')
 // the breaker should stop the autopilot on them as on any other block.
 if (item.failed) {
   const wantedId = (next?.item ?? resumeId ?? '').replace(/^#/, '')
-  // On resume the branch is the owner's (args.branch). Outside resume the picker creates no branch since backlog #0-209
+  // On resume the branch is the owner's (params.branch). Outside resume the picker creates no branch since backlog #0-209
   // (start-item.sh does, below, and removes it on a refusal); a branch it names anyway is still said, as a defence.
-  const left = !args?.branch && item.branch && SAFE.test(item.branch) ? `; the branch ${item.branch} was left: next-item.sh skips the item while it exists` : ''
+  const left = !params.branch && item.branch && SAFE.test(item.branch) ? `; the branch ${item.branch} was left: next-item.sh skips the item while it exists` : ''
   const why = `picker failed: ${String(item.reason ?? 'no reason given').slice(0, 300)}${left}`
   return stopItem(/^0-\d+$/.test(wantedId) ? { itemId: `#${wantedId}`, id: wantedId } : null, why)
 }
@@ -576,7 +595,7 @@ item.id = String(item.itemId ?? '').replace(/^#/, '')
 // commit), the item, the picker's slug. Fixed: the picker named the whole branch from picker.md's table, and four
 // runs gave a `security` item `feat/` (one shipped as PR #587; one ended the run when the picker tried to rename the
 // branch). A branch the picker names anyway is not used. On resume the branch is the owner's, as given.
-if (!args?.branch) {
+if (!params.branch) {
   if (!SLUG.test(String(item.slug ?? ''))) {
     return stopItem(null, `picker gave no usable slug for ${String(item.itemId ?? next.item).slice(0, 20)} (lowercase words joined by hyphens), got ${JSON.stringify(item.slug ?? null).slice(0, 80)} (no state recorded, check the branches)`)
   }
@@ -594,15 +613,15 @@ if (next && item.itemId !== next.item) {
 if ((ITEM_BRANCH.exec(item.branch) ?? [])[1] !== item.id) {
   return stopItem(null, `picker named the branch ${item.branch} for ${item.itemId}: an item's branch is <type>/${item.id}-<slug> (no state recorded, check the branches)`)
 }
-if (args?.branch && item.branch !== args.branch) {
-  return stopItem(null, `picker answered the branch ${item.branch}, not ${args.branch} the run resumes (no state recorded, check the branches)`)
+if (params.branch && item.branch !== params.branch) {
+  return stopItem(null, `picker answered the branch ${item.branch}, not ${params.branch} the run resumes (no state recorded, check the branches)`)
 }
 // The item starts in code (backlog #0-209): its branch from the base commit, the whole work template, its status field
 // and one commit, by start-item.sh, which refuses with nothing left behind. Fixed: the picker did these steps with
 // commands it composed, and each refusal cost a turn (run 20261106-203806 of #0-197 stopped on a `cp -r`, #0-207); one
 // after `git switch -c` left the branch that locks the item (#0-206). A start that fails is the factory's own: stopped at
 // `pick`, recorded and notified, as a picker that failed.
-if (!args?.branch) {
+if (!params.branch) {
   const started = await ops('start-item.sh', [base.sha, item.id, item.branch, runId], STARTED, 'start item')
   // The work directory is the item's own, never what an answer names (review round 1): one that says another fails.
   const workDir = `.ai/work/${item.id}`
@@ -624,7 +643,7 @@ const isLow = (v) => String(v ?? '').trim().toLowerCase() === 'low'
 const IMPL_TYPE = (next ? isLow(next.complexity) && isLow(item.complexity) : isLow(item.complexity)) ? 'implementer-light' : 'implementer'
 record.implementer = IMPL_TYPE
 
-if (!args?.branch) {
+if (!params.branch) {
   enterPhase('Plan')
   const plan = await as('architect', [
     `Plan item ${item.itemId} ("${item.title}") on branch ${item.branch}. Work dir ${item.workDir}. Risk ${item.risk}, complexity ${item.complexity}.`,
@@ -693,7 +712,7 @@ for (let round = 1; round <= MAX_ROUNDS; round++) {
     dimensions = [...PANEL_ALWAYS]
     if (pg.paths.migrationTouched) dimensions.push('migration')
     if (pg.paths.k8sOrBuildTouched) dimensions.push('k8s')
-    if (args?.localReview) {
+    if (params.localReview) {
       record.local = await ops('local-review.sh', [item.id, base.ref], LOCAL_REVIEW, 'local second opinion')
     }
   }
