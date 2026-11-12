@@ -27,8 +27,9 @@ run is decided here.
    are replaced by the confirmed ones). Touch nothing else in the file.
 5. Give the git commands to commit it on a `docs/backlog-ready-<item>` branch (CLAUDE.md "Working style":
    commands ready to paste). `ready` takes effect for the picker only once it is on `main`. One item per branch,
-   named exactly `docs/backlog-ready-0-N` (no `#`): the pipeline audit finds an item's `/ready` PR, and its "Ready
-   check", by that name (`scripts/factory/audit-data.sh`, backlog #0-121).
+   named exactly `docs/backlog-ready-0-N` (no `#`). The pipeline audit finds an item's `/ready` PR, and its "Ready
+   check", by the item sections its merge changed (`scripts/factory/audit-data.sh`, backlog #0-121, #0-220), and by
+   that name only when the merge is not in its history.
 6. The PR description carries a short **Ready check** section: the checker's verdict per `ready.md` point,
    its recommendation, and what the owner decided differently. The checker's report lives only in the
    conversation; this section is what the pipeline audit reads to tell whether a problem found later began

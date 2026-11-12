@@ -34,12 +34,17 @@ For each criterion write `met: true|false`, the evidence, and — when false —
   item. Give the missing piece as concretely as a failing test would. The autopilot allows **one** fix
   round after a REJECT; a second REJECT stops the item.
 - `NEEDS_HUMAN` — any of:
-  - the item has `**Risk:** high` (the owner merges it, whatever this review says);
   - a criterion is ambiguous, or two criteria contradict each other or an ADR;
   - meeting a criterion needs a decision the item does not make (a contract change, a destructive
     migration, a new dependency);
   - the change does noticeably more than the item asked (scope creep that a reviewer approved as
     correct but nobody asked for).
+
+The item's `**Risk:**` is not a reason for any verdict: the workflow reads it itself, and a risk-high item is never
+merged automatically, whatever this review says (`backlog-autopilot.js`, `riskHigh`). Judge a risk-high item's
+criteria as any other's, so that its `NEEDS_HUMAN` means one of the reasons above. Changed (backlog #0-220): `Risk:
+high` was a `NEEDS_HUMAN` of its own, so every risk-high PR was a case of the pipeline audit by construction (PR
+#583), and a real reason on one could not be told from it.
 
 ## Scope
 

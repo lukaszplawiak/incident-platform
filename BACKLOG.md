@@ -141,6 +141,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
 | [0-225](#0-225-the-autopilot-allows-the-grep-and-glob-tools-and-no-secret-rule-or-hook-names-them) | The autopilot allows the Grep and Glob tools, and no secret rule or hook names them | security | Low | Open |
 | [0-226](#0-226-a-resumed-run-records-no-scope) | A resumed run records no scope | ci | Low | Open |
+| [0-227](#0-227-a-risk-high-items-real-needs_human-ships-as-a-pr-instead-of-stopping) | A risk-high item's real `NEEDS_HUMAN` ships as a PR instead of stopping | ci | Low | Open |
+| [0-228](#0-228-a-blocked-draft-writes-scope-not-measured-and-the-audit-reads-scopenot) | A BLOCKED draft writes "Scope: not measured." and the audit reads `scope:not` | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4923,7 +4925,8 @@ AC2. One clean performance row in `clean.md`.
 
 **Type:** ci · **Priority:** Medium · **Status:** Open. From the pipeline audit 2026-11-11 (R-2026-11-11-pipeline-02:
 PR #581 got #582).
-**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), root (.ai/rules/audit.md)
+**Touches:** ci (scripts/factory/audit-data.sh, scripts/factory/_backlog.sh, .github/scripts/test-audit-data.sh),
+root (.ai/rules/audit.md, .ai/rules/acceptance.md), factory (.claude/agents/audit-pipeline.md, .claude/skills/ready/SKILL.md)
 
 **Problem.** `ready_of` (`scripts/factory/audit-data.sh`) attaches the newest merged `docs/backlog-ready-<item>` PR,
 whatever the run's date: PR #581 (BLOCKED 2026-11-02T11:47Z) got #582 (merged 12:16Z, with the corrected criteria)
@@ -4933,12 +4936,22 @@ instead of #578, the `/ready` on its base. An item readied on another item's bra
 ACCEPT" makes each risk-high PR a case by construction (PR #583).
 
 **Acceptance criteria.**
-AC1. A case's `readyPr` is the item's newest `/ready` PR merged before the run started (the picker's start commit),
-not the newest overall; `test-audit-data.sh` shows it with two `/ready` PRs, one merged after the run.
-AC2. A `/ready` PR that readies an item on another item's branch is found for that item too (e.g. by the item numbers
-its title or body names); a test shows it.
-AC3. A `NEEDS_HUMAN` acceptance on a PR labelled `risk-high`, whose reason is only the item's Risk (acceptance.md,
-"Verdict"), is not a case signal on its own; a test shows both sides.
+AC1. A case's `readyPr` is the item's newest `/ready` PR merged before the run started (its run id), not the newest
+overall; `test-audit-data.sh` shows it with two `/ready` PRs, one merged after the run.
+AC2. A `/ready` PR that readies an item on another item's branch is found for that item too, by the item sections its
+merge changed in `BACKLOG.md` (not its title); a test shows it. Reworded by the owner (2026-11-12, `/research`): the
+titles of the real PRs name items they only add as not-ready (#568 "add #0-193").
+AC3. A risk-high PR is not a case by construction: `.ai/rules/acceptance.md` no longer makes `Risk: high` a
+`NEEDS_HUMAN` (the workflow decides risk itself, `riskHigh`), so a `NEEDS_HUMAN` on one names a real reason; a test
+shows both sides. Reworded by the owner (2026-11-12, `/research`, option 3C): a filter on the reason's free text would
+have kept #583 a case (it named a scope creep too) and the rule a duplicate of the code's decision.
+
+**Done as (2026-11-12).** `audit-data.sh` reads, per merged `/ready` PR, the items its merge made or changed and left
+`ready` or `human-only` (`readied_items`, `_backlog.sh`; the merge commit from `gh`, the blobs from the local
+history, the branch name only when the merge is not there), and bounds a case's `readyPr` by the run's start from its
+PR (`Autopilot run <runId>`), the stop for a BLOCKED run without a PR, or the shipping run for an escape; each case
+says which (`readyBound`: run, stop, none). On the real data #581 gets #578 (was #582), #583, the resume the next day,
+#582. `acceptance.md` drops the Risk reason; `audit.md` says how to read a risk-high `NEEDS_HUMAN` from before.
 
 ### 0-221. Two audit reports of one day can give the same recommendation id
 
@@ -5100,6 +5113,57 @@ answers "in progress or blocked".
 **Proposed, to decide with the item.** Read the item's Touches from the base commit on resume (a mode of
 `next-item.sh` that skips the lock check, or `backlog_json` through another script), and say in the record that the plan
 was skipped, not that it predicted nothing.
+
+---
+
+### 0-227. A risk-high item's real `NEEDS_HUMAN` ships as a PR instead of stopping
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the review of #0-220 (architecture, round 1, 2026-11-12).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-220
+**Touches:** factory (.claude/workflows/backlog-autopilot.js, .github/scripts/test-autopilot-workflow.mjs), docs (docs/ai-factory.md)
+
+**Problem.** `backlog-autopilot.js:815` stops an item on an acceptance `NEEDS_HUMAN` only when it is not risk-high
+(`if (acc.verdict === 'NEEDS_HUMAN' && !riskHigh) return stopItem(...)`). The exemption existed because
+`.ai/rules/acceptance.md` made every `Risk: high` item `NEEDS_HUMAN`; #0-220 removed that reason, so a `NEEDS_HUMAN`
+on a risk-high item now names a real one (an ambiguous criterion, a decision the item does not make, scope creep), and
+the item still ships as a PR where a low-risk one stops BLOCKED. Nothing is lost (the owner merges every risk-high PR
+and its acceptance JSON holds the reason), but the asymmetry's reason is gone and nothing records why it stays. The
+acceptance prompt (`:777`) also still passes `Risk: ${item.risk}`, which acceptance.md now says decides no verdict;
+`docs/ai-factory.md:31` describes the exemption ("NEEDS_HUMAN → BLOCKED (risk-high: owner merges)").
+
+**Approach (to decide).** Drop `&& !riskHigh` (a risk-high item with a real reason stops as any other, draft PR with
+the reason), or keep it with a comment saying why the owner's merge is enough; either way the prompt stops naming the
+Risk, and the docs line follows.
+
+**Acceptance criteria.**
+AC1. An acceptance `NEEDS_HUMAN` on a risk-high item is handled as decided, and `test-autopilot-workflow.mjs` shows it
+on a risk-high and a low-risk item.
+AC2. The acceptance prompt does not name the item's Risk; `docs/ai-factory.md` describes what the workflow does.
+
+---
+
+### 0-228. A BLOCKED draft writes "Scope: not measured." and the audit reads `scope:not`
+
+**Type:** ci · **Priority:** Low · **Status:** Open. Found while implementing #0-220 (2026-11-12), on PR #581.
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), factory (.claude/agents/shipper.md,
+.claude/skills/ship-record/SKILL.md)
+
+**Problem.** The draft PR of an item BLOCKED before any scope was measured says `Scope: not measured.` in prose (#581),
+where `ship-record` writes the category, `not-measured`. `audit-data.sh` reads `Scope: ([a-z-]+)`, so it takes `not`,
+which is no clean category, and the case carries the signal `scope:not`: noise for the analyst, and a case for a run
+that may have no other signal.
+
+**Approach (to decide).** `ship-record`/`shipper.md` write `Scope: not-measured` when the record has no scope (the
+category the workflow's `scopeOf` already uses), and `audit-data.sh` gives a scope that is no known category its own
+signal (`scope:unreadable`) instead of a fragment of a word.
+
+**Acceptance criteria.**
+AC1. A BLOCKED draft with no measured scope records `Scope: not-measured`.
+AC2. `test-audit-data.sh` shows a PR body with `Scope: not measured.` and one with an unknown category: neither yields
+`scope:not` or a category the scope table (`audit.md`) does not name.
+
+---
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 

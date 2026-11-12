@@ -6,11 +6,13 @@
 # "Owner labels" below; body with the verdict JSON in <details>), items with **Escaped from:**, seeded-defect results, the local run history, and the
 # transcript directory (Claude Code keeps transcripts for cleanupPeriodDays, 90 in settings.json).
 #
-# For the pipeline audit (backlog #0-121) it also collects the merged /ready PRs (branches docs/backlog-ready-<0-N>,
-# with their "Ready check" section) and derives the CASES by the rules in .ai/rules/audit.md, "Pipeline audit" —
+# For the pipeline audit (backlog #0-121) it also collects the merged /ready PRs (branches docs/backlog-ready-*, with
+# their "Ready check" section; the items each one readied are read from its merge, "Which /ready PR" below) and derives the CASES by the rules in .ai/rules/audit.md, "Pipeline audit" —
 # this script is their one implementation. Derived from what the pipeline already records, so no agent and no person
 # has to remember to log a case. Only MERGED /ready PRs are read at all: merging is the owner's, so a PR opened from
 # a fork on a docs/backlog-ready-* branch neither stands in for one nor puts its text in front of the analyst.
+# A case's /ready PR is the newest that readied its item and was merged before the run started (backlog #0-220): see
+# "Which /ready PR" below.
 #
 # Owner labels (backlog #0-126): a `human:*` label counts only when the repository owner added it, read from the PR's
 # label events (the last `labeled` event of a label still on the PR). The data keeps `verifiedLabels` and
@@ -35,22 +37,24 @@
 # ============================================================
 set -uo pipefail
 . "$(dirname "$0")/_common.sh"
+. "$(dirname "$0")/_backlog.sh"
 since=${1:?since date YYYY-MM-DD}
 out="$RUNS_DIR/audit/audit-data-$since.json"; mkdir -p "$(dirname "$out")"
 
 case "$since" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo '{"error":"since must be YYYY-MM-DD"}'; exit 1 ;; esac
 prs_file="$RUNS_DIR/audit/prs-$since.json"
 ready_file="$RUNS_DIR/audit/ready-prs-$since.json"
+ready_items_file="$RUNS_DIR/audit/ready-items-$since.json"
 events_file="$RUNS_DIR/audit/label-events-$since.json"
 vouch_file="$RUNS_DIR/audit/escape-vouch-$since.json"
-echo '[]' > "$prs_file"; echo '[]' > "$ready_file"; echo '{}' > "$events_file"; echo '{}' > "$vouch_file"
+echo '[]' > "$prs_file"; echo '[]' > "$ready_file"; echo '{}' > "$events_file"; echo '{}' > "$vouch_file"; echo '{}' > "$ready_items_file"
 owner="" repo=""
 if command -v gh >/dev/null 2>&1; then
     gh pr list --label autopilot --state all --search "updated:>=$since" --limit 200 \
        --json number,title,state,labels,body,mergedAt,closedAt,url,headRefName,isDraft,author > "$prs_file" 2>/dev/null || echo '[]' > "$prs_file"
     # No date filter: an item's /ready PR is normally merged before the period its autopilot run falls in.
     gh pr list --state all --search "head:docs/backlog-ready" --limit 200 \
-       --json number,title,state,body,mergedAt,url,headRefName > "$ready_file" 2>/dev/null || echo '[]' > "$ready_file"
+       --json number,title,state,body,mergedAt,url,headRefName,mergeCommit > "$ready_file" 2>/dev/null || echo '[]' > "$ready_file"
     # Who added each label, only for the PRs that carry a human:* one. A failed call leaves that PR without events:
     # its human labels stay unverified, never trusted.
     repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || repo=""
@@ -161,6 +165,29 @@ while IFS= read -r line; do
                     item: (if $i == "" then null else $i end), stage: $s}}' \
        "$vouch_file" > "$vouch_file.tmp" && mv "$vouch_file.tmp" "$vouch_file"
 done < <(jq -rn --argjson a "$escaped" --argjson b "$escaped_new" '$a + $b | unique[]')
+# Which /ready PR (backlog #0-220). The items each merged /ready PR readied: the sections its merge made or changed in
+# BACKLOG.md that are ready or human-only after it (readied_items, _backlog.sh), read from the local history as the
+# markers are (no replace refs; blobs read raw, so no textconv). Fixed: only a branch named exactly
+# docs/backlog-ready-<item> counted, so the items #575 readied on docs/backlog-ready-0-196-0-197 (#0-196, #0-197,
+# #0-198) and #578's second (#0-200) had none. Not the title either: it names items a PR only adds as not-ready or
+# splits off (#568 "add #0-193"), and it is free text where the merge is the owner's. A PR whose merge commit the
+# history does not hold (a shallow clone, not fetched yet) falls back to its branch name, and says so (`from`).
+ready_before=$(mktemp "$RUNS_DIR/audit/ready-before.XXXXXX"); ready_after=$(mktemp "$RUNS_DIR/audit/ready-after.XXXXXX")
+while IFS=$'\t' read -r n c; do
+    case "$c" in *[!0-9a-f]*|"") c="" ;; esac
+    [ "${#c}" -eq 40 ] || c=""
+    from=branch items='[]'
+    if [ "$shallow" = false ] && [ -n "$c" ] && git cat-file -e "$c^{commit}" 2>/dev/null </dev/null \
+       && git cat-file blob "$c:BACKLOG.md" > "$ready_after" 2>/dev/null </dev/null; then
+        # A root commit, or one before BACKLOG.md existed, has no file before: every section in it is new.
+        git cat-file blob "$c^1:BACKLOG.md" > "$ready_before" 2>/dev/null </dev/null || : > "$ready_before"
+        if found=$(readied_items "$ready_before" "$ready_after"); then items=$found; from="diff"; fi
+    fi
+    jq --arg n "$n" --arg from "$from" --argjson items "$items" \
+       '. + {($n): {from: $from, items: (if $from == "diff" then $items else null end)}}' \
+       "$ready_items_file" > "$ready_items_file.tmp" && mv "$ready_items_file.tmp" "$ready_items_file"
+done < <(jq -r '.[] | select(.mergedAt != null) | [(.number | tostring), (.mergeCommit.oid // "")] | @tsv' "$ready_file")
+rm -f "$ready_before" "$ready_after"
 seeded='[]'
 [ -f .ai/audit/benchmark/results.md ] && seeded=$(grep -E '^\|' .ai/audit/benchmark/results.md | jq -R . | jq -s .)
 # The clean runs (backlog #0-180): a rule's deliberate exception planted, the panel's false alarms on it. A table of
@@ -171,17 +198,29 @@ state=$(state_init; cat "$STATE_FILE")
 proj_dir="$HOME/.claude/projects/$(printf '%s' "$FACTORY_ROOT" | sed 's#[/.]#-#g')"
 
 # PR bodies go through a file (--slurpfile): 200 bodies on a command line can exceed ARG_MAX.
-jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready_file" --argjson escaped "$escaped" \
+jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready_file" --slurpfile readyItems "$ready_items_file" --argjson escaped "$escaped" \
       --argjson escapedNew "$escaped_new" --slurpfile events "$events_file" --arg owner "$owner" \
       --argjson ownerIsAutopilot "$owner_is_autopilot" --slurpfile vouch "$vouch_file" \
       --argjson seeded "$seeded" --argjson seededClean "$seeded_clean" --argjson state "$state" --arg transcripts "$proj_dir" '
   def first_match($re): [match($re).captures[0].string] | first;
   def item_of: (.headRefName // "") | first_match("/(0-[0-9]+)-");
-  # The /ready PR of an item, the newest first, with whether it carries a "Ready check" section.
-  def ready_of($id): [$ready[0][] | select(.headRefName == ("docs/backlog-ready-" + $id) and .mergedAt != null)]
-                     | sort_by(.number) | last
+  # When a run started, from the record of its PR ("Autopilot run <runId>", ship-record; the run id is the UTC time of preflight.sh,
+  # %Y%m%d-%H%M%S), as an ISO time that compares with mergedAt as a string.
+  def run_start: first_match("Autopilot run ([0-9]{8}-[0-9]{6})")
+                 | if . == null then null else "\(.[0:4])-\(.[4:6])-\(.[6:8])T\(.[9:11]):\(.[11:13]):\(.[13:15])Z" end;
+  # Whether this /ready PR readied the item: by its merge (above), or by its branch name where the merge was unread.
+  def readies($id): ($readyItems[0][(.number | tostring)] // {from: "branch"}) as $r
+                    | if $r.from == "diff" then any($r.items[]; . == $id) else .headRefName == ("docs/backlog-ready-" + $id) end;
+  # The /ready PR of an item (backlog #0-220): the newest merged before $bound, the start of the run (or, with no PR, its
+  # stop), so the analyst reads the criteria the run had, not a later correction. Fixed: the newest overall, so the
+  # BLOCKED #581 (run 20261102-113931) got #582, merged at 12:16Z with the corrected criteria, not #578 (11:19Z), the
+  # /ready on its base. A null $bound (no run known) keeps the newest, and the case says so (readyBound "none").
+  def ready_of($id; $bound): [$ready[0][] | select(.mergedAt != null) | select(readies($id))
+                              | select($bound == null or .mergedAt < $bound)]
+                     | sort_by(.mergedAt, .number) | last
                      | if . == null then null
-                       else {number, url, readyCheck: ((.body // "") | test("(?m)^## Ready check"))} end;
+                       else {number, url, mergedAt, readyCheck: ((.body // "") | test("(?m)^## Ready check")),
+                             itemsFrom: ($readyItems[0][(.number | tostring)].from // "branch")} end;
   # A marker counts only when its entry in the vouch file says so (backlog #0-129); no entry is no vouching.
   def vouched: . as $l | ($vouch[0][$l].verified // false) == true;
   # The human:* labels of one PR, each with who added it and, when it does not count, why (backlog #0-126).
@@ -204,6 +243,10 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
       | . + {labels: [.labels[] | select(.name | ascii_downcase | startswith("human:") | not)],
              verifiedLabels: [$checked[] | select(.reason == null) | .label],
              unverifiedLabels: [$checked[] | select(.reason != null)]})) as $prsV
+  # The start of the run that shipped the merged PR of each item: the bound of the /ready PR of an escaped case.
+  | ([$prsV[] | select(.mergedAt != null) | {item: (item_of), start: ((.body // "") | run_start)}
+      | select(.item != null and .start != null)] | group_by(.item) | map({key: .[0].item, value: (map(.start) | max)})
+      | from_entries) as $runOf
   | ($prsV | map(
       (.labels | map(.name)) as $labels
       | (.body // "") as $body
@@ -211,7 +254,8 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
          merged: (.mergedAt != null), labels: $labels, verifiedLabels, unverifiedLabels,
          rounds: ($body | first_match("(?m)^Rounds: ([0-9]+)") | if . == null then null else tonumber end),
          scope: ($body | first_match("(?m)^Scope: ([a-z-]+)")),
-         acceptance: ($body | first_match("\"item\"\\s*:\\s*\"#0-[0-9]+\"[\\s\\S]*?\"verdict\"\\s*:\\s*\"([A-Z_]+)\""))}
+         acceptance: ($body | first_match("\"item\"\\s*:\\s*\"#0-[0-9]+\"[\\s\\S]*?\"verdict\"\\s*:\\s*\"([A-Z_]+)\"")),
+         runStart: ($body | run_start)}
       | . + {signals: [
           (if (.labels | index("blocked")) then "blocked" else empty end),
           (if (.rounds // 1) > 1 then "rounds:\(.rounds)" else empty end),
@@ -221,7 +265,8 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
           (.verifiedLabels[] | select(test("^human:(fp|missed|introduced)-"; "i")))
         ]}
       | select(.signals | length > 0)
-      | . + {readyPr: (if .item == null then null else ready_of(.item) end)})) as $prCases
+      | . + {readyBound: (if .runStart == null then "none" else "run" end),
+             readyPr: (if .item == null then null else ready_of(.item; .runStart) end)})) as $prCases
   | ([$prCases[].item] | map(select(. != null))) as $covered
   # Exact comparisons only: inside and contains match strings as substrings ("0-1" inside "0-12").
   | ($state.history // [] | map(select(.outcome == "blocked" and ((.pr // "") == "") and ((.t // "") >= $since)
@@ -229,15 +274,16 @@ jq -n --arg since "$since" --slurpfile prs "$prs_file" --slurpfile ready "$ready
      | map({pr: null, url: null, item, branch: null, draft: null, merged: false, labels: [], verifiedLabels: [],
             unverifiedLabels: [], rounds: null,
             scope: null, acceptance: null, stage: (.stage // null), signals: ["blocked (run history, no PR)"],
-            readyPr: ready_of(.item)})) as $stateCases
+            runStart: null, readyBound: "stop", readyPr: ready_of(.item; .t)})) as $stateCases
   # The item and stage come from _marker.sh (the vouch entry), so no second pattern lives here. A stage in another
   # form (`Review-General`) is an "escaped:unparsed" case, not dropped: every marker counted is traced. Only vouched
   # markers are cases (backlog #0-129), and only those first added in the period (review round 2).
   | ($escapedNew | map(select(vouched and (($vouch[0][.].added // "") >= $since))) | map($vouch[0][.] | {item, from: (.stage | if test("^[a-z][a-z0-9-]*$") then . else null end)})
      | map({pr: null, url: null, item, branch: null, draft: null, merged: true, labels: [], verifiedLabels: [],
             unverifiedLabels: [], rounds: null,
-            scope: null, acceptance: null, signals: [if .from == null then "escaped:unparsed" else "escaped:\(.from)" end],
-            readyPr: ready_of(.item)})) as $escapedCases
+            scope: null, acceptance: null, signals: [if .from == null then "escaped:unparsed" else "escaped:\(.from)" end]}
+     | (if .item == null then null else ($runOf[.item] // null) end) as $start
+     | . + {runStart: $start, readyBound: (if $start == null then "none" else "run" end), readyPr: ready_of(.item; $start)})) as $escapedCases
   | {since: $since, owner: (if $owner == "" then null else $owner end),
      ownerIsAutopilot: $ownerIsAutopilot,
      unverifiedLabels: [$prsV[] | .number as $n | .unverifiedLabels[] | {pr: $n} + .],

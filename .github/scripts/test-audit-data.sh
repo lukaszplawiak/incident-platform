@@ -21,7 +21,7 @@ expect_jq() {   # expect_jq <name> <file> <jq expression that must be true>
 }
 
 mkdir -p "$WORK/repo/scripts/factory" "$WORK/repo/.ai/runs" "$WORK/bin"
-cp "$SRC/scripts/factory/_common.sh" "$SRC/scripts/factory/_marker.sh" "$SRC/scripts/factory/audit-data.sh" "$WORK/repo/scripts/factory/"
+cp "$SRC/scripts/factory/_common.sh" "$SRC/scripts/factory/_backlog.sh" "$SRC/scripts/factory/_marker.sh" "$SRC/scripts/factory/audit-data.sh" "$WORK/repo/scripts/factory/"
 
 body() {   # body <rounds> <scope> <acceptance verdict>
     printf 'Backlog: #0-x\\n\\n## Review\\nRounds: %s. Tests: PASS.\\nScope: %s — Touches a · plan a · diff a.\\n<details>{\\"item\\":\\"#0-1\\",\\"verdict\\":\\"%s\\",\\"criteria\\":[]}</details>' "$1" "$2" "$3"
@@ -169,7 +169,7 @@ else fail "summary: $summary"; fi
 expect_jq "a clean PR is not a case"                  "$F" '[.cases[].pr] | index(10) | not'
 expect_jq "two review rounds make a case"            "$F" '.cases[] | select(.pr == 11) | .signals == ["rounds:2"]'
 expect_jq "scope off and an owner label"             "$F" '.cases[] | select(.pr == 12) | .signals == ["scope:backlog-estimate-off", "human:fp-docs"]'
-expect_jq "the merged /ready PR is attached, not a newer unmerged one from a fork" "$F" '.cases[] | select(.pr == 12) | .readyPr == {number: 20, url: "r20", readyCheck: true}'
+expect_jq "the merged /ready PR is attached, not a newer unmerged one from a fork" "$F" '.cases[] | select(.pr == 12) | .readyPr == {number: 20, url: "r20", mergedAt: "2026-10-09T00:00:00Z", readyCheck: true, itemsFrom: "branch"} and .readyBound == "none"'
 expect_jq "blocked draft with human:introduced"      "$F" '.cases[] | select(.pr == 13) | (.signals == ["blocked", "human:introduced-ready"]) and (.readyPr.readyCheck == false)'
 expect_jq "acceptance other than ACCEPT"             "$F" '.cases[] | select(.pr == 14) | .signals == ["acceptance:NEEDS_HUMAN"] and .item == "0-5"'
 expect_jq "a pretty-printed acceptance verdict is read"  "$F" '.cases[] | select(.pr == 15) | .signals == ["acceptance:REJECT"]'
@@ -259,6 +259,66 @@ git rev-parse "$new_a" > .git/shallow
 scripts/factory/audit-data.sh 2026-10-09 >/dev/null
 expect_jq "a shallow clone vouches for nothing" "$F" '.escaped == [] and ([.cases[].signals[] | select(startswith("escaped"))] == []) and all(.unverifiedEscapes[]; .reason | test("shallow"))'
 rm .git/shallow
+
+echo "audit-data: which /ready PR a case gets (backlog #0-220)"
+# /ready PRs as merges of the owner's: each commit below stands for the merge of one PR (its parent is main before it).
+# The autopilot PRs and /ready PRs of this part are added to the fixtures, so the counts checked above stay theirs.
+section() {   # section <item> <autopilot value> <text>
+    printf '### %s. item %s\n\n**Type:** bug · **Priority:** Low · **Status:** Open\n**Autopilot:** %s · **Risk:** low · **Complexity:** low\n\n%s\n\n---\n\n' "$1" "$1" "$2" "$3"
+}
+{ section 0-50 ready 'AC1. The first criteria.'; section 0-51 ready 'AC1. Readied on the branch of 0-50.'
+  section 0-52 not-ready 'Only added, not readied.'; } >> BACKLOG.md
+m60=$(commit "merge of /ready #60: 0-50 and 0-51 ready, 0-52 added")
+sed 's/AC1. The first criteria./AC1. The corrected criteria./' BACKLOG.md > BACKLOG.tmp && mv BACKLOG.tmp BACKLOG.md
+m61=$(commit "merge of /ready #61: 0-50 corrected after its run")
+section 0-53 ready 'AC1. Its own.' >> BACKLOG.md
+m62=$(commit "merge of /ready #62: 0-53 ready, its title names 0-50")
+section 0-55 ready 'AC1. Before the stop.' >> BACKLOG.md
+m64=$(commit "merge of /ready #64: 0-55 ready")
+sed 's/AC1. Before the stop./AC1. After the stop./' BACKLOG.md > BACKLOG.tmp && mv BACKLOG.tmp BACKLOG.md
+m65=$(commit "merge of /ready #65: 0-55 corrected after the stop")
+section 0-56 ready 'AC1. Before its run.' >> BACKLOG.md
+m66=$(commit "merge of /ready #66: 0-56 ready")
+sed 's/AC1. Before its run./AC1. After its run./' BACKLOG.md > BACKLOG.tmp && mv BACKLOG.tmp BACKLOG.md
+m67=$(commit "merge of /ready #67: 0-56 corrected after its run")
+marker 0-56 implement; prs_of "$(commit "the owner marks the escape of 0-56")" "$(pr 41 o yes main)"
+rp() {   # rp <number> <branch> <mergedAt> <merge commit> <title>
+    printf '{"number":%s,"title":"%s","state":"MERGED","body":"## Ready check","mergedAt":"%s","url":"r%s","author":{"login":"o"},"headRefName":"%s","mergeCommit":{"oid":"%s"}}' "$1" "$5" "$3" "$1" "$2" "$4"
+}
+ap() {   # ap <number> <branch> <body> <mergedAt or null>
+    local merged=null; [ "$4" != null ] && merged="\"$4\""
+    printf '{"number":%s,"title":"t","state":"OPEN","labels":[{"name":"autopilot"}],"body":"%s","mergedAt":%s,"closedAt":null,"url":"u%s","author":{"login":"bot"},"headRefName":"%s","isDraft":false}' "$1" "$3" "$merged" "$1" "$2"
+}
+run_body() { printf 'Backlog: #0-x. Autopilot run %s. Mode: shadow.\\nRounds: %s.\\nScope: consistent — x.' "$1" "$2"; }
+jq --argjson extra "[$(rp 60 docs/backlog-ready-0-50 2026-10-10T10:00:00Z "$m60" 'mark #0-50 and #0-51 ready, add #0-52'),
+  $(rp 61 docs/backlog-ready-0-50 2026-10-10T14:00:00Z "$m61" 'correct #0-50 after its run'),
+  $(rp 62 docs/backlog-ready-0-53 2026-10-10T11:00:00Z "$m62" 'ready #0-53, as #0-50 and #0-52'),
+  $(rp 63 docs/backlog-ready-0-54 2026-10-10T09:00:00Z "$(printf 'f%.0s' $(seq 40))" 'ready #0-54, merge not fetched'),
+  $(rp 68 docs/backlog-ready-0-58 2026-10-10T09:00:00Z "--output=x $m60" 'ready #0-58, a merge commit that is no sha'),
+  $(rp 69 docs/backlog-ready-0-59 2026-10-10T09:00:00Z "" 'ready #0-59, no merge commit'),
+  $(rp 64 docs/backlog-ready-0-55 2026-10-10T09:00:00Z "$m64" 'ready #0-55'),
+  $(rp 65 docs/backlog-ready-0-55 2026-10-10T15:00:00Z "$m65" 'correct #0-55'),
+  $(rp 66 docs/backlog-ready-0-56 2026-10-10T11:00:00Z "$m66" 'ready #0-56'),
+  $(rp 67 docs/backlog-ready-0-56 2026-10-10T16:00:00Z "$m67" 'correct #0-56')]" '. + $extra' "$WORK/ready.json" > "$WORK/ready.tmp" && mv "$WORK/ready.tmp" "$WORK/ready.json"
+jq --argjson extra "[$(ap 70 fix/0-50-x "$(run_body 20261010-120000 2)" null), $(ap 71 fix/0-51-y "Rounds: 2." null),
+  $(ap 72 fix/0-52-z "Rounds: 2." null), $(ap 73 fix/0-54-w "Rounds: 2." null),
+  $(ap 75 fix/0-56-v "$(run_body 20261010-120000 1)" 2026-10-10T13:00:00Z),
+  $(ap 76 feat/0-57-risk "$(body 1 consistent ACCEPT)" null | jq -c '.labels += [{"name":"risk-high"}]')]" \
+   '. + $extra' "$WORK/autopilot.json" > "$WORK/autopilot.tmp" && mv "$WORK/autopilot.tmp" "$WORK/autopilot.json"
+jq '.history += [{"t":"2026-10-10T13:00:00Z","item":"0-55","outcome":"blocked","pr":"","stage":"implement"}]' .ai/runs/state.json > state.tmp && mv state.tmp .ai/runs/state.json
+scripts/factory/audit-data.sh 2026-10-09 >/dev/null
+expect_jq "AC1: the /ready merged before the run started, not a later correction" "$F" '.cases[] | select(.pr == 70) | .readyPr.number == 60 and .readyBound == "run" and .runStart == "2026-10-10T12:00:00Z"'
+expect_jq "AC2: an item readied on the branch of another item gets that PR" "$F" '.cases[] | select(.pr == 71) | .readyPr.number == 60 and .readyPr.itemsFrom == "diff" and .readyBound == "none"'
+expect_jq "AC2: an item a /ready PR only added as not-ready, or named in a title, gets none" "$F" '.cases[] | select(.pr == 72) | .readyPr == null'
+expect_jq "a /ready PR whose merge is not in the history falls back to its branch, and says so" "$F" '.cases[] | select(.pr == 73) | .readyPr.number == 63 and .readyPr.itemsFrom == "branch"'
+expect_jq "a blocked run without a PR: the /ready merged before it stopped" "$F" '.cases[] | select(.item == "0-55") | .readyPr.number == 64 and .readyBound == "stop"'
+expect_jq "an escape: the /ready merged before the run that shipped the item" "$F" '.cases[] | select(.item == "0-56") | .signals == ["escaped:implement"] and .readyPr.number == 66 and .readyBound == "run"'
+expect_jq "each /ready PR names the items its merge readied" "$F" '.readyPrs | length == 12'
+expect_jq "AC3: an accepted risk-high PR is no case (acceptance.md: Risk is code's)" "$F" '[.cases[].pr] | index(76) | not'
+expect_jq "AC3: a NEEDS_HUMAN acceptance still is one" "$F" '.cases[] | select(.pr == 14) | .signals == ["acceptance:NEEDS_HUMAN"]'
+if [ "$(jq -c '.["60"], .["62"], .["63"], .["68"], .["69"]' .ai/runs/audit/ready-items-2026-10-09.json | tr '\n' ' ')" = '{"from":"diff","items":["0-50","0-51"]} {"from":"diff","items":["0-53"]} {"from":"branch","items":null} {"from":"branch","items":null} {"from":"branch","items":null} ' ]; then
+    ok "the items of each /ready PR: its merge's sections, never its title; a merge commit that is no sha, or none, is not read"
+else fail "ready items: $(cat .ai/runs/audit/ready-items-2026-10-09.json)"; fi
 
 echo "audit-data: the marker is defined once (backlog #0-128, AC10)"
 # The grep pattern 'Escaped from:\\\\' matches `Escaped from:` and two backslashes: a copy of the marker's

@@ -171,6 +171,19 @@ more than one review round, had a scope category that points at a stage (`backlo
 `human:introduced-*`; a BLOCKED run without a PR; and an escaped defect (`**Fixes:** #0-N · **Escaped from:**
 <stage>`, vouched for as above; one whose stage cannot be read is an `escaped:unparsed` case). Each carries the item's merged `/ready` PR.
 
+**Which `/ready` PR** (backlog #0-220): the newest one that readied the item and was merged before the run started
+(`readyPr`, with `readyBound: run`), so the analyst reads the criteria the run had, not a correction merged after it.
+A PR readied an item when its merge made or changed the item's section in `BACKLOG.md` and left it `ready` or
+`human-only`: one `/ready` PR can ready several items, on the branch of one of them (`readyPr.itemsFrom: diff`); when
+its merge is not in the local history, only its branch name counts (`itemsFrom: branch`). The bound is the run's
+start from its PR (`Autopilot run <runId>`); for a BLOCKED run without a PR it is the stop (`readyBound: stop`: a
+`/ready` merged during the run would pass); for an escaped defect, the run that shipped the item's merged PR, found among the autopilot PRs of the
+period only: an escape found after its item's PR left the period has none. With no run known (`readyBound: none`)
+the newest is given: it may postdate the run, so the analyst finds the `/ready` the run had from the item's history
+(`git log -L` on its section, as `audit-pipeline.md` says). Until 2026-11-12 `.ai/rules/acceptance.md`
+made every `Risk: high` item `NEEDS_HUMAN`: an `acceptance:NEEDS_HUMAN` signal on a `risk-high` PR shipped before
+then is that rule, not a case, unless its acceptance reason names another.
+
 **Stages**, in order, with the artifacts that show their output:
 
 | Stage | Who | Artifacts |

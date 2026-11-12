@@ -15,6 +15,9 @@
 #     A bare `ci` (no parentheses) counts too: `ci` is .github/ and scripts/, and everything tracked under
 #     both is protected today — a Touches line must name the path for the gate to judge it.
 #   done_json      < BACKLOG-DONE.md   → ["0-1", "0-18", …]
+#   readied_items <before> <after>     → ["0-50", …]: the items whose section the change from <before> to <after>
+#                                        (two BACKLOG.md files) made or changed, and that are `ready` or `human-only`
+#                                        after it: the items a /ready PR readied (backlog #0-220, audit-data.sh)
 #   queue_json     < queue.md          → {markers: bool, rows: [{index, pos, item, why}]}
 #
 # Ids are bare ("0-25"), without "#". The order of an item is its row in the open-items table.
@@ -38,15 +41,21 @@ BRANCH_PREFIX_OF='{"bug":"fix","security":"fix","tech-debt":"refactor","ci":"ci"
 
 KNOWN_MODULES='["shared","service-parent","auth-service","ingestion-service","incident-service","notification-service","escalation-service","postmortem-service","oncall-service","root","docs","k8s","docker","ci"]'
 
-backlog_json() {
-    local protected_re=${1:?backlog_json needs the protected-path regex (_protected.sh)}
-    LC_ALL=C awk '
+# trim() and field(<line>, <name>): the value of `**<name>:**` on a line, up to the next ` · `, without backticks.
+# Defined once, and put in front of every awk program below that reads a field (review round 2 of #0-220: backlog_json
+# and readied_items held two copies of it, which could drift).
+AWK_FIELDS='
         function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
         function field(line, name,    key, i, rest, j) {
             key = "**" name ":**"; i = index(line, key); if (!i) return ""
             rest = substr(line, i + length(key)); j = index(rest, " \302\267 "); if (j) rest = substr(rest, 1, j - 1)
             gsub(/`/, "", rest); return trim(rest)
         }
+'
+
+backlog_json() {
+    local protected_re=${1:?backlog_json needs the protected-path regex (_protected.sh)}
+    LC_ALL=C awk "$AWK_FIELDS"'
         function flush() {
             if (id != "") printf "I\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, title, type, prio, status, auto, risk, cx, deps, fup, touches
             id = ""
@@ -87,13 +96,35 @@ backlog_json() {
                    priority: (if .priority == "" then ($table[.id].priority // "") else .priority end)})'
 }
 
+# The sections end where backlog_json's do (the next `### 0-N.` or `## ` heading), so both read the same item. An
+# item counts when its section differs at all, not only its **Autopilot:** line: a /ready PR that corrects the criteria
+# of an item already ready (#582 for #0-199) readied it again. An item the change only adds as not-ready, or splits off
+# (#568 added #0-193, not-ready), does not count: its title may name it, but it was not readied.
+readied_items() {
+    LC_ALL=C awk "$AWK_FIELDS"'
+        { f = (FILENAME == ARGV[1]) ? 1 : 2 }
+        /^### 0-[0-9]+\./ { id = $2; sub(/\.$/, "", id); seen[f, id] = 1 }
+        /^## / { id = ""; next }
+        FNR == 1 && !/^### 0-[0-9]+\./ { id = "" }
+        id != "" { body[f, id] = body[f, id] $0 "\n" }
+        id != "" && /^\*\*Autopilot:\*\*/ && !((f, id) in auto) {
+            auto[f, id] = tolower(field($0, "Autopilot"))
+        }
+        END {
+            for (k in seen) {
+                split(k, p, SUBSEP); if (p[1] != 2) continue
+                i = p[2]; if ((auto[2, i] == "ready" || auto[2, i] == "human-only") && body[1, i] != body[2, i]) print i
+            }
+        }
+    ' "$1" "$2" | jq -R . | jq -s 'unique'
+}
+
 done_json() {
     LC_ALL=C grep -oE '^\| *0-[0-9]+ *\|' | grep -oE '0-[0-9]+' | jq -R . | jq -s 'unique'
 }
 
 queue_json() {
-    LC_ALL=C awk '
-        function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    LC_ALL=C awk "$AWK_FIELDS"'
         /<!-- queue:start -->/ { on = 1; seen++; next }
         /<!-- queue:end -->/   { on = 0; seen++; next }
         on && /^\|/ {
