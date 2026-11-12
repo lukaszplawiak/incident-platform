@@ -34,6 +34,11 @@
     "GIT_AUTHOR_EMAIL": "340222835+lukaszplawiakbot@users.noreply.github.com",
     "GIT_COMMITTER_NAME": "lukaszplawiakbot",
     "GIT_COMMITTER_EMAIL": "340222835+lukaszplawiakbot@users.noreply.github.com",
+    // The autopilot's preflight refuses to start without these two (backlog #0-194, ADR-0052): the first says the
+    // session inherited this container's environment, the second is the login gh and the GIT_* names above must
+    // be, so that a run on the host, under the owner's identity, stops before its first agent.
+    "FACTORY_DEVCONTAINER": "1",
+    "FACTORY_BOT_LOGIN": "lukaszplawiakbot",
     "TESTCONTAINERS_HOST_OVERRIDE": "host.docker.internal",
     "TESTCONTAINERS_RYUK_DISABLED": "false",
     "OLLAMA_URL": "http://host.docker.internal:11434",

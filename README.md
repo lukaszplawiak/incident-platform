@@ -569,6 +569,15 @@ security boundary, so every rule that matters is also enforced outside the model
   which a CDN or Google's front end shares with other sites — hence a short list) and the Docker host over IPv4, closes IPv6 to all
   but loopback, and blocks all traffic if its own setup fails (`FIREWALL SETUP FAILED`). It narrows exfiltration, it
   does not prevent it: the host's Docker (needed by Testcontainers) and GitHub itself remain channels.
+- **Where a run starts**: the preflight refuses a run outside the devcontainer (`FACTORY_DEVCONTAINER` from its
+  `containerEnv`), not under the bot's identity (`GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME` and `gh`'s login must be
+  `FACTORY_BOT_LOGIN`, the two `GIT_*_EMAIL` its noreply address), with the firewall down (`example.com` not refused,
+  as `init-firewall.sh`'s self-test checks, so a firewall flushed after the container started refuses too), or in a
+  session that did not load `main`'s `settings.autopilot.json` and `settings.json`: the first carries a hash of both
+  without that field (`scripts/factory/settings-hash.sh`), the session's env holds the value of the files it loaded,
+  and the two are compared after the preflight's fast-forward; Factory guards keeps the field equal to the files
+  (backlog #0-194, ADR-0052). Every signal can be set
+  by hand: it stops a mistake, not an adversary.
 - **Merge**: shadow mode does not rely on the agents — `gh pr merge` is denied to autopilot sessions and the
   only push a hook allows is `git push -u origin <type>/<branch>` of the run's own branch, which the workflow
   records in `.ai/runs/LOCK` (`state.sh branch`) once it has bound the picker's answer to the item

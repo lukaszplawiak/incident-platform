@@ -99,6 +99,12 @@ jobs:
       - name: Preflight tests
         run: .github/scripts/test-preflight.sh
 
+      # settings.autopilot.json carries the hash of the session's settings (itself without that field, and
+      # settings.json; env.FACTORY_SETTINGS_SHA256), which the preflight compares with the session's env: a change to
+      # either file that leaves the field stale fails here, naming the value to put in (backlog #0-194, ADR-0052).
+      - name: Autopilot settings carry their hash
+        run: .github/scripts/check-settings-hash.sh
+
       - name: Test gate tests
         run: .github/scripts/test-run-tests.sh
 

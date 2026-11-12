@@ -125,6 +125,23 @@ claude --settings .claude/settings.autopilot.json
 One item per run. The session settings make it `dontAsk`: everything not allowed is refused, nobody is
 asked. `/workflows` shows progress; `p` pauses, `x` stops.
 
+The preflight refuses a run started any other way, before the first agent (backlog #0-194, ADR-0052), and names
+what it missed:
+- **not in the devcontainer**: `FACTORY_DEVCONTAINER` (its `containerEnv`) is not `1`;
+- **not the bot**: `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME` or `gh`'s login is not `FACTORY_BOT_LOGIN`, or
+  `GIT_AUTHOR_EMAIL` or `GIT_COMMITTER_EMAIL` is not its noreply address (`<id>+<login>@users.noreply.github.com`);
+- **no firewall**: `example.com` is not refused: only curl's "could not resolve", "connection refused" and
+  "timed out" pass;
+- **not this session's settings**: the session's `FACTORY_SETTINGS_SHA256` is unset (started without
+  `--settings .claude/settings.autopilot.json`) or is not the hash of `main`'s `settings.autopilot.json` and
+  `settings.json`. A session reads its settings once, when it starts: after a change to either reaches `main`, even
+  through the preflight's own fast-forward, start a new session. The three limits (`FACTORY_MAX_BLOCKED`, `FACTORY_AUDIT_EVERY`, `FACTORY_MAX_MERGES_PER_DAY`) have no
+  default either.
+
+After changing `settings.autopilot.json` or `settings.json`, put the value `scripts/factory/settings-hash.sh` prints
+into `settings.autopilot.json`'s `env.FACTORY_SETTINGS_SHA256`; Factory guards ("Autopilot settings carry their hash") fails the PR until you do.
+After changing the devcontainer's `containerEnv`, rebuild the container.
+
 A BLOCKED item is resumed with `branch` (and `acceptUnverifiable` for the claims you read), as a new run from a
 clean `main`, never with `resumeFromRunId`: the settings allow `Workflow(backlog-autopilot)` by name only, not a
 run's saved `scriptPath`, and a run's journal belongs to the session that started it. The new run skips pick, plan
