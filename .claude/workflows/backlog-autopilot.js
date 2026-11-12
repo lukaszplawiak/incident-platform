@@ -109,6 +109,11 @@ function runAll(thunks) {
 
 // Arguments reach a shell: only ids, refs and shas that match a strict pattern are passed, quoted.
 const SAFE = /^[A-Za-z0-9._\/:-]+$/
+// The branch of a backlog item, `<type>/0-<n>-<slug>`, with the item as the first group: the picker's branch must hold
+// the item it took, and a resume reads its item from the branch the owner gave. scripts/factory/_common.sh holds the
+// same rule as ITEM_BRANCH_RE for start-item.sh and resume-item.sh (this script cannot read a file), and
+// test-autopilot-workflow.mjs fails when the two differ (backlog #0-216: four copies, nothing comparing them).
+const ITEM_BRANCH = /^[a-z]+\/(0-[0-9]+)-[A-Za-z0-9._-]+$/
 function q(value) {
   const s = String(value)
   if (!SAFE.test(s)) throw new Error(`unsafe argument for a factory script: ${s}`)
@@ -509,7 +514,7 @@ if (args?.branch) {
   // autopilot's git write rules (`git switch *` matches `-c` too), and no guard could tell the owner's branch from
   // another item's. A refusal changes nothing (the tree stays on main) and stops the item at `pick`, recorded and
   // notified, as a picker that failed; the item is the one the branch names.
-  resumeId = (/^[a-z]+\/(0-\d+)-[A-Za-z0-9._-]+$/.exec(String(args.branch)) ?? [])[1]
+  resumeId = (ITEM_BRANCH.exec(String(args.branch)) ?? [])[1]
   if (!resumeId) return notStarted([`branch must be an item's branch (<type>/0-<n>-<slug>), got ${String(args.branch).slice(0, 80)}`])
   if (args.item !== undefined && String(args.item).replace(/^#/, '') !== resumeId) {
     return notStarted([`item ${String(args.item).slice(0, 40)} is not the item of the branch ${args.branch} (#${resumeId})`])
@@ -562,7 +567,7 @@ if (next && item.itemId !== next.item) {
 // #0-131). The picker names it, so it is bound first to what the script already knows (review round 1): the item's
 // own prefix (`<type>/<item>-`, picker.md "Name the branch"), and on resume the branch the owner gave. Without
 // it nothing could be pushed, not even a draft PR: stop here.
-if (!new RegExp(`^[a-z]+/${item.id}-[A-Za-z0-9._-]+$`).test(item.branch)) {
+if ((ITEM_BRANCH.exec(item.branch) ?? [])[1] !== item.id) {
   return stopItem(null, `picker named the branch ${item.branch} for ${item.itemId}: an item's branch is <type>/${item.id}-<slug> (no state recorded, check the branches)`)
 }
 if (args?.branch && item.branch !== args.branch) {

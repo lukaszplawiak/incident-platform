@@ -53,9 +53,9 @@ undo() {     # undo <reason>: back to main, the half-made branch and work direct
 base=$1 item=$2 branch=$3 run=$4
 [[ $base =~ ^[0-9a-f]{40}$ ]] || refuse "not a commit sha (40 hex): ${base:0:48}"
 [[ $item =~ ^0-[0-9]+$ ]] || refuse "not an item id (0-<n>): ${item:0:40}"
-# The workflow's own rule for the picker's branch (backlog-autopilot.js), held here too: the script is the one that
-# creates it.
-[[ $branch =~ ^[a-z]+/${item}-[A-Za-z0-9._-]+$ ]] || refuse "not a branch of #$item (<type>/$item-<slug>): ${branch:0:80}"
+# The rule of an item's branch (_common.sh's ITEM_BRANCH_RE, backlog #0-216), whose item must be this one: the workflow
+# checks the picker's branch too, and the script holds the rule as well because it is the one that creates the branch.
+{ [[ $branch =~ $ITEM_BRANCH_RE ]] && [ "${BASH_REMATCH[1]}" = "$item" ]; } || refuse "not a branch of #$item (<type>/$item-<slug>): ${branch:0:80}"
 [[ $run =~ ^[0-9]{8}-[0-9]{6}$ ]] || refuse "not a run id (preflight.sh's yyyymmdd-hhmmss): ${run:0:40}"
 
 why=$(clean_main_at "$base") || refuse "$why"

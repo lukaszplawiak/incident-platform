@@ -28,6 +28,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -38,7 +39,7 @@ const HELPERS = '// ------------------------------------------------------------
 const RUN = '// ---------------------------------------------------------------- run'
 const EXPORTED = [
   'scopeOf', 'valid', 'ruleFilesOf', 'claimKey', 'claimId', 'openClaims', 'verifyClaims', 'refutedFindings',
-  'unsettledReason', 'q', 'record', 'CLAIM_ID', 'ACCEPT_UNVERIFIABLE', 'as', 'stopItem', 'VERDICT',
+  'unsettledReason', 'q', 'record', 'CLAIM_ID', 'ACCEPT_UNVERIFIABLE', 'as', 'stopItem', 'VERDICT', 'ITEM_BRANCH',
 ]
 
 function once(marker) {
@@ -557,6 +558,27 @@ test("the run's branch must be the item's own, and on resume the owner's", async
   const other = await run({ args: { branch: 'fix/0-1-an-item', item: '#0-1' }, answers: { picker: { ...DEFAULTS.picker, branch: 'fix/0-1-another' } } })
   assert.match(other.outcome.reason, /picker answered the branch fix\/0-1-another, not fix\/0-1-an-item/)
   assert.ok(!other.calls.some((c) => /state\.sh 'branch'/.test(c.prompt)))
+})
+
+test("the workflow's rule of an item's branch is the scripts' rule (#0-216)", async () => {
+  // The rule lives twice, ITEM_BRANCH here and ITEM_BRANCH_RE in _common.sh (start-item.sh, resume-item.sh): a drift
+  // stops a run at whichever copy is stricter. The same text first, then the same answers from both engines (bash's
+  // ERE is not JavaScript's: a `\d` or a class the two read differently would pass the first check alone).
+  const { ITEM_BRANCH } = await helpers()
+  const common = readFileSync(join(dirname(FILE), '../../scripts/factory/_common.sh'), 'utf8')
+  const shell = common.match(/^ITEM_BRANCH_RE='([^']+)'$/m)?.[1]
+  assert.ok(shell, '_common.sh defines ITEM_BRANCH_RE')
+  assert.equal(ITEM_BRANCH.source.replaceAll('\\/', '/'), shell)
+  assert.equal(ITEM_BRANCH.flags, '', 'no flag: bash has none, and `g` would make exec() stateful')
+  const names = ['fix/0-1-an-item', 'ci/0-216-one.rule_v2', 'feat/0-40-A-b', 'fix/0-10-x', 'main', 'fix/0-1', 'fix/0-1-',
+    'fix/x0-1-y', 'fix/0-1-a/b', 'Fix/0-1-x', 'fix/0-1-a b', '/0-1-x', 'fix/0-1-x\nfix', 'review/0123abcd']
+  for (const name of names) {
+    const js = ITEM_BRANCH.exec(name)?.[1] ?? null
+    const sh = spawnSync('bash', ['-c', '[[ $2 =~ $1 ]] && printf %s "${BASH_REMATCH[1]}"', 'match', shell, name], { encoding: 'utf8' })
+    assert.equal(sh.error, undefined, 'bash runs')
+    assert.equal(sh.status === 0 ? sh.stdout : null, js, JSON.stringify(name))
+  }
+  assert.equal(ITEM_BRANCH.exec('ci/0-216-one.rule_v2')?.[1], '0-216')
 })
 
 test('complexity: anything but low, in the backlog or the pick, takes the full implementer', async () => {

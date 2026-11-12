@@ -26,8 +26,8 @@ refuse() { jq -n --arg r "$1" '{ok: false, reasons: [$r]}'; exit 0; }
 [ $# -eq 2 ] || refuse "usage: resume-item.sh <base sha> <branch>"
 base=$1 branch=$2
 [[ $base =~ ^[0-9a-f]{40}$ ]] || refuse "not a commit sha (40 hex): ${base:0:48}"
-# The workflow's rule for an item's branch (backlog-autopilot.js, start-item.sh), with the item read from the name.
-[[ $branch =~ ^[a-z]+/(0-[0-9]+)-[A-Za-z0-9._-]+$ ]] || refuse "not an item's branch (<type>/0-<n>-<slug>): ${branch:0:80}"
+# The rule of an item's branch (_common.sh's ITEM_BRANCH_RE, backlog #0-216), with the item read from the name.
+[[ $branch =~ $ITEM_BRANCH_RE ]] || refuse "not an item's branch (<type>/0-<n>-<slug>): ${branch:0:80}"
 item=${BASH_REMATCH[1]}
 
 why=$(clean_main_at "$base") || refuse "$why"
