@@ -139,7 +139,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
 | [0-220](#0-220-the-pipeline-audits-data-attaches-the-wrong-ready-pr-to-a-case) | The pipeline audit's data attaches the wrong `/ready` PR to a case | ci | Medium | Open |
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
-| [0-222](#0-222-the-implementers-prescribed-test-command-does-not-build-in-the-devcontainer) | The implementer's prescribed test command does not build in the devcontainer | ci | Medium | Open |
 | [0-223](#0-223-the-implementers-are-told-to-use-a-grep-tool-their-session-may-not-have) | The implementers are told to use a Grep tool their session may not have | ci | Medium | Open |
 | [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -4912,42 +4911,6 @@ in the ledger for no gain.
 AC1. `.ai/rules/audit.md` "Format of a recommendation" gives both forms and the continued `NN` for a same-day re-run.
 AC2. A Factory guards step fails when two rows of `.ai/audit/decisions.md` carry the same id, or an id matches neither
 form; its test shows both failures and a valid ledger.
-
-### 0-222. The implementer's prescribed test command does not build in the devcontainer
-
-**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601;
-#0-207 "Closing run").
-**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** factory (.claude/agents/implementer.md, .claude/skills/ship/SKILL.md, .claude/hooks/foreground-bash.sh), shared (pom.xml), root (CLAUDE.md, BACKLOG.md)
-
-**Problem.** `implementer.md` ("How commands run here" and its marked command list) prescribes
-`./mvnw -q test -pl <module> -Dtest=<Class>` and `./mvnw -q verify -pl <module>`, without `-am`. Maven then resolves
-`shared` from the local repository, and the devcontainer's `~/.m2` (the `incident-platform-m2` volume) never had it
-installed: implementer-light's first test run failed with "Could not find artifact
-com.incidentplatform:shared:jar:1.0.0-SNAPSHOT", and it went on only because it found
-`./mvnw -q test -pl oncall-service -am -Dtest=… -Dsurefire.failIfNoSpecifiedTests=false` by itself (both forms are in
-the transcript). Every service module depends on `shared`, so the prescribed form fails for each of them in a fresh
-container; on the owner's host it works only because an earlier `./mvnw install` left a `shared` jar, possibly older
-than the branch's. `check-agent-commands.rb` (#0-207 AC4) checks that a form is allowed, not that it builds, so
-Factory guards passed it. The test gate already builds with `-am` (`run-tests.sh:108`, `verify -pl "$mods" -am`).
-
-**Approach.** Prescribe the gate's form: `-am`, and with `-Dtest=` also `-Dsurefire.failIfNoSpecifiedTests=false`
-(otherwise `shared`, built first, fails on "No tests matching pattern"). Installing `shared` into `~/.m2` once (a
-`postCreateCommand`) was considered and not taken: a stale jar would hide a change the item makes to `shared`.
-
-**Decided (owner, 2026-11-12, `/research`).** Not `-Dsurefire.failIfNoSpecifiedTests=false` on the command line: it
-applies to the service too, and under `-q` a misspelt class then runs no test and prints nothing, as a passing run does.
-`shared/pom.xml` sets `<failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>` for `shared` alone (an explicit value
-wins over the user property), so a service's misspelt class still fails. `/ship`'s `./mvnw test -pl <affected>` takes
-`-am` too: the same class of fault on the owner's machine, where `~/.m2` may hold a `shared` older than the branch;
-so do CLAUDE.md's one-class commands and `foreground-bash.sh`'s refusal, which named the old form (review round 1).
-
-**Acceptance criteria.**
-AC1. `implementer.md` prescribes `-am` in its test and verify forms, in its prose and its marked command list;
-     Factory guards' `check-agent-commands.rb` passes them. `/ship` runs its tests with `-am`.
-AC2. Both forms run with a local repository that holds no `shared` jar (`-Dmaven.repo.local=<empty dir>`, the output
-     in the PR); without the `shared/pom.xml` setting the `-Dtest` form fails on `shared`; a misspelt class in the
-     service still fails.
 
 ### 0-223. The implementers are told to use a Grep tool their session may not have
 
