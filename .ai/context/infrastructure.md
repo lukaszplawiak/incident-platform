@@ -8,6 +8,13 @@ anything the CI checks scripts look at.
 
 ## CI gotchas
 
+Concurrency (backlog #0-231): `ci.yml` and `factory-guards.yml` share one rule, `group: <workflow>-<PR number or
+run_id>`, `cancel-in-progress` only off a push. A newer event of a PR (push, and in Factory guards a review) cancels
+its older run; a push to `main` is never cancelled, because main-guard.yml and `preflight.sh` read every push's own
+run (#0-148). It takes its own group (`run_id`) rather than only `cancel-in-progress: false`, since GitHub cancels a
+*pending* run of a shared group whatever that flag says: never simplify the group to `github.ref`. A new workflow
+that runs on `pull_request` takes the same block.
+
 `.github/workflows/ci.yml` runs build+test (skipped, like the smoke test, on a pull request that changes only
 Markdown, at the job so a required check still passes; always on a push to `main`; nothing the build, its tests
 or its check scripts read is Markdown, so a new check that reads one must change the `code` filter in
