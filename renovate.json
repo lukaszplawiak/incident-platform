@@ -11,7 +11,7 @@
 
   "prConcurrentLimit": 5,
   "prHourlyLimit": 2,
-  "rebaseWhen": "behind-base-branch",
+  "rebaseWhen": "conflicted",
 
   "minimumReleaseAge": "3 days",
 
@@ -93,16 +93,18 @@
       ]
     },
     {
-      "description": "Major updates — always require manual review",
+      "description": "Major updates — always require manual review; no branch or PR until the owner ticks the update in the Dependency Dashboard issue (backlog #0-230): an image major moves in compose, the tests and k8s at once (#0-71), on a branch of its own, so a Renovate PR held open only cost a full CI run on every merge to main; a ticked major of a GitHub Action or a CI tool comes as an ordinary Renovate PR",
       "matchUpdateTypes": ["major"],
       "labels": ["dependencies", "major-update"],
-      "automerge": false
+      "automerge": false,
+      "dependencyDashboardApproval": true
     }
   ],
 
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": ["security", "dependencies"]
+    "labels": ["security", "dependencies"],
+    "dependencyDashboardApproval": false
   },
 
   "osvVulnerabilityAlerts": true

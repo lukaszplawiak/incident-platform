@@ -90,6 +90,7 @@ expired, untracked since ff2b4da, a history rewrite judged disproportionate then
 - A test that needs a secret-shaped value builds it at run time, or allows its line (`test-secret-scan.sh`
   does both).
 - betterleaks v2 changes the CLI and the config: its first stable release comes as a Renovate major bump, read
-  against `docs/v2_migration.md` and `secret-scan.sh`'s flags.
+  against `docs/v2_migration.md` and `secret-scan.sh`'s flags. Since backlog #0-230 a major waits in the Dependency
+  Dashboard issue until the owner ticks it, and only then opens as that PR.
 - A push to `main` that brings a secret turns `main` red, which stops the autopilot (main-guard, ADR-0034), as any
   red check does.
