@@ -129,7 +129,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-204](#0-204-a-runs-record-keeps-no-run-id-no-agent-calls-and-no-stage-of-each-commit) | A run's record keeps no run id, no agent calls and no stage of each commit | ci | Low | Open |
 | [0-205](#0-205-a-runs-transcripts-expire-after-90-days-and-nothing-reads-them-per-agent) | A run's transcripts expire after 90 days and nothing reads them per agent | ci | Low | Open |
-| [0-207](#0-207-the-picker-spends-its-turns-on-commands-its-session-refuses) | The picker spends its turns on commands its session refuses | ci | Medium | In progress |
 | [0-208](#0-208-five-route-walks-hold-five-copies-of-isexempt) | Five route walks hold five copies of `isExempt` | tech-debt | Low | Open |
 | [0-210](#0-210-six-deny-rules-of-the-autopilot-settings-never-match) | Six deny rules of the autopilot settings never match | ci | Low | Open |
 | [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Open |
@@ -142,6 +141,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
 | [0-220](#0-220-the-pipeline-audits-data-attaches-the-wrong-ready-pr-to-a-case) | The pipeline audit's data attaches the wrong `/ready` PR to a case | ci | Medium | Open |
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
+| [0-222](#0-222-the-implementers-prescribed-test-command-does-not-build-in-the-devcontainer) | The implementer's prescribed test command does not build in the devcontainer | ci | Medium | Open |
+| [0-223](#0-223-the-implementers-are-told-to-use-a-grep-tool-their-session-may-not-have) | The implementers are told to use a Grep tool their session may not have | ci | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -4167,8 +4168,11 @@ before the first agent.
 `cp` allow rule. Claude Code reads the agent definitions as they change on disk, the settings only when a session
 starts: the picker followed the new `picker.md` (`cp` of named files) under the old rule (`cp -r` only) and was
 refused, and answered `none`; the empty branch and an empty `.ai/work/0-197` were left for the owner. In the same
-session the picker's Grep tool was missing ("No such tool available: Grep"), though `picker.md` lists it; a fresh
-session's picker used it (run 20261106-214534). The preflight cannot see either: what it would need is the session's
+session the picker's Grep tool was missing ("No such tool available: Grep"), though `picker.md` lists it. That was
+not the stale session (corrected 2026-11-12, from the transcripts): the next run's picker, in a fresh session
+(20261106-214534, `wf_fa3d791c-5a0`), lost it too, as has every agent with Bash that called Grep in an autopilot run
+(#0-223), so only the `cp` refusal is this item's. The preflight cannot see the stale settings: what it would need
+is the session's
 settings as loaded, compared with the base commit's (e.g. a hash of `settings.autopilot.json` set in its `env` and
 checked against the file, a third signal for AC2).
 
@@ -4391,10 +4395,9 @@ AC3. `audit-data.sh` puts the summaries of the period's runs into its output; `t
 
 ### 0-207. The picker spends its turns on commands its session refuses
 
-**Type:** ci · **Priority:** Medium · **Status:** In progress — AC1 (PRs #588, #589), AC3 and AC4 done (2026-11-08);
-AC2 one run of two (PR #590): the next autopilot run's picker closes it. Since #0-209 the picker composes no command
-that writes (it checks and names the branch; `start-item.sh` starts the item), so AC2's second run shows the reading
-commands only.
+**Type:** ci · **Priority:** Medium · **Status:** Done — AC1 (PRs #588, #589), AC3 and AC4 (PR #593), AC2 the
+pickers of runs 20261106-214534 (PR #590) and `wf_f965afb4-b5e` (PR #601, 2026-11-11; "Closing run" below). Kept in
+full as the record of the command forms and why each is what it is, which the agent definitions and ADR-0050 refer to.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/picker.md, .claude/agents/implementer.md, .claude/agents/implementer-light.md,
 .claude/agents/shipper.md, .claude/agents/defect-seeder.md, .claude/settings.autopilot.json, .claude/hooks/_lib.sh,
@@ -4490,6 +4493,28 @@ allows, before any run did. Review round 1 (`/review`, 2026-11-08): the decision
 every one with Bash, derived from `tools:` with a named `EXEMPT` list (not a fixed list); the rules of both settings
 files are read, as the session merges them; an agent of `ALSO_FOR` is checked with its own frontmatter hooks. Running
 the lists through Claude Code's own check in `dontAsk` is #0-214.
+
+**Closing run (2026-11-11, `wf_f965afb4-b5e`, #0-189, PR #601).** The first run after #0-209 and #0-215 (the picker
+only reads, under `readonly-bash.sh --picker`), in a session started at 15:45Z, after the last change to
+`settings.autopilot.json` (2026-11-10), Claude Code 2.1.295. The picker ran 5 commands and gave its answer, and
+none was refused: AC2's second run. Its one failed call, `ls .ai/work/0-189` (exit 2, "No such file or
+directory"), is the check `picker.md` prescribes answering "no leftover directory"; the hook-path risk #0-215's
+review round 3 accepted did not happen. The branch it named, `refactor/0-189-…` for a `tech-debt` item, is the
+table's prefix (not a #0-195 case). The other agents' failed calls, each in the transcript:
+- architect, 1: `git grep -n -E "^#+ |^\*\*[A-Z]+-[0-9]+" -- .ai/rules/review/…` refused by `readonly-bash.sh
+  --architect` ("a | inside quotes counts too"), the refusal #0-123 decided to keep; `architect.md` ("Tools") already
+  names `-e <pattern> -e <other>`. Its next call used that form for another search and it did not list the rule ids
+  again. Nothing to change.
+- implementer-light, 2: the Grep tool missing ("No such tool available: Grep. Grep is not available in this session"),
+  #0-223; and `./mvnw -q test -pl oncall-service -Dtest=…`, the form `implementer.md` prescribes, failing on
+  "Could not find artifact com.incidentplatform:shared:jar:1.0.0-SNAPSHOT" (not refused: it ran), #0-222. It went on
+  with `git grep` and with `-am -Dsurefire.failIfNoSpecifiedTests=false`.
+- implementer-light (self-check performance), 1: a Read of `com/example/oncall/…` (the package is
+  `com.incidentplatform`; probably taken from the example paths of `implementer.md`'s command list), followed by the
+  right one. A one-off.
+- acceptance-reviewer, 2: `git grep --no-index … -- /workspace/.ai/runs/0-189/tests-r1-0.log` refused ("git option
+  not allowed here"), as it should be; then a Read of that log at `offset` 1400, `limit` 600 over Read's 25 000-token
+  cap. Its task names `gate-r*.json` for the counts (#0-160); recorded here, a rule only if it repeats.
 
 **Acceptance criteria (draft).**
 AC1. `picker.md` names the allowed form of every command it needs; each passes `guard-protected-bash.sh` and runs in
@@ -4866,6 +4891,77 @@ in the ledger for no gain.
 AC1. `.ai/rules/audit.md` "Format of a recommendation" gives both forms and the continued `NN` for a same-day re-run.
 AC2. A Factory guards step fails when two rows of `.ai/audit/decisions.md` carry the same id, or an id matches neither
 form; its test shows both failures and a valid ledger.
+
+### 0-222. The implementer's prescribed test command does not build in the devcontainer
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601;
+#0-207 "Closing run").
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/agents/implementer.md), root (BACKLOG.md)
+
+**Problem.** `implementer.md` ("How commands run here" and its marked command list) prescribes
+`./mvnw -q test -pl <module> -Dtest=<Class>` and `./mvnw -q verify -pl <module>`, without `-am`. Maven then resolves
+`shared` from the local repository, and the devcontainer's `~/.m2` (the `incident-platform-m2` volume) never had it
+installed: implementer-light's first test run failed with "Could not find artifact
+com.incidentplatform:shared:jar:1.0.0-SNAPSHOT", and it went on only because it found
+`./mvnw -q test -pl oncall-service -am -Dtest=… -Dsurefire.failIfNoSpecifiedTests=false` by itself (both forms are in
+the transcript). Every service module depends on `shared`, so the prescribed form fails for each of them in a fresh
+container; on the owner's host it works only because an earlier `./mvnw install` left a `shared` jar, possibly older
+than the branch's. `check-agent-commands.rb` (#0-207 AC4) checks that a form is allowed, not that it builds, so
+Factory guards passed it. The test gate already builds with `-am` (`run-tests.sh:108`, `verify -pl "$mods" -am`).
+
+**Approach.** Prescribe the gate's form: `-am`, and with `-Dtest=` also `-Dsurefire.failIfNoSpecifiedTests=false`
+(otherwise `shared`, built first, fails on "No tests matching pattern"). Installing `shared` into `~/.m2` once (a
+`postCreateCommand`) was considered and not taken: a stale jar would hide a change the item makes to `shared`.
+
+**Acceptance criteria (draft).**
+AC1. `implementer.md` prescribes `-am` in its test and verify forms (and `-Dsurefire.failIfNoSpecifiedTests=false`
+     with `-Dtest=`), in its prose and its marked command list; Factory guards' `check-agent-commands.rb` passes them.
+AC2. Both forms run in the devcontainer with an `~/.m2` that holds no `shared` jar (shown by hand, the output in the
+     PR).
+
+### 0-223. The implementers are told to use a Grep tool their session may not have
+
+**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601;
+#0-207 "Closing run"); the first case is #0-194's third.
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
+**Touches:** factory (.claude/agents/implementer.md, .claude/agents/picker.md), root (BACKLOG.md)
+
+**Problem.** Every agent lists Grep in its `tools:`, yet in an autopilot run an agent that also has Bash never got
+it. The devcontainer keeps the transcripts of 31 workflow runs (2026-10-09 to 2026-11-11, all Claude Code
+2.1.295); read on 2026-11-12, every Grep or Glob call in them:
+
+| Agent | Bash in `tools:` | Calls | Result |
+|---|---|---|---|
+| picker | yes | 7 Grep, in `wf_8abc9297-e9e`, `wf_cd369594-aef`, `wf_a2e7e1c8-3d2` (2), `wf_c1597fde-23e`, `wf_0a53ed01-13c`, `wf_fa3d791c-5a0` | all "No such tool available" |
+| implementer-light | yes | 1 Grep, in `wf_f965afb4-b5e` | "No such tool available" |
+| audit-synthesis | no (`Read, Grep, Glob, Write`) | 2 Grep and 4 Glob, in `wf_fd96a770-4d1` and `wf_bd883dfd-e1f` | all ran |
+
+The message in full (`wf_f965afb4-b5e`): "No such tool available: Grep. Grep is not available in this session —
+search file contents with `grep` via the Bash tool instead." It is not a stale session: #0-194's third case was put
+down to one, but the next run's picker (`wf_fa3d791c-5a0`) and implementer-light (a session started at 15:45Z, a day
+after the last change to `settings.autopilot.json`) were in fresh ones. So it looks as if Claude Code 2.1.295 does not
+give Grep to an agent that has Bash, and the message points to Bash instead. That is a reading of 14 calls, not a
+documented rule; no agent with Bash called Glob, so whether it loses Glob too is not shown. Each agent went on with
+Read or `git grep`. The advice in the message is wrong here: no allow rule of `settings.autopilot.json` lets `grep` run
+in Bash. #0-123 settled this for the reading agents: "the Grep and Glob tools do not exist in every Claude Code
+version", so `git grep` and `git ls-files` are the search, and six definitions say it (`architect.md:28`,
+`acceptance-reviewer.md:20`, `planner.md`, `ready-checker.md` and the two audit analysts). Two do not:
+`implementer.md:72` (and so implementer-light) names "the Grep tool (or `git grep …`)" and Glob first, and
+`picker.md:37` "the Grep and Read tools". A lost Grep call costs a turn; a model that takes the message's advice
+spends another on a refused `grep`.
+
+**Approach.** Align the two with the rest, as #0-123 decided: `git grep -n -e <pattern> -e <other> -- <paths>` to
+search and `git ls-files <path>` to list, with the same parenthesis. Confirming why the tool is missing (Claude
+Code's documentation or a `claude -p` check of an agent with and without Bash, as #0-214 would run) is not needed for
+the fix: `git grep` works either way.
+
+**Acceptance criteria (draft).**
+AC1. `implementer.md` and `picker.md` name `git grep` and `git ls-files` as the search and listing, not the Grep and
+     Glob tools, with #0-123's reason; their marked command lists already hold `git grep` forms, which Factory
+     guards' `check-agent-commands.rb` keeps passing.
+AC2. No agent definition under `.claude/agents/` prescribes the Grep or Glob tool as the one way to search or list
+     (a `git grep` over the definitions, in the PR).
 
 ### 0-121. A pipeline audit traces problems to the stage that introduced them
 
