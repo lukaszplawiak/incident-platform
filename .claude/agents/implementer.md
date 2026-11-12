@@ -69,8 +69,10 @@ retried for you (backlog #0-207: the implementer of run 20261106-214534 lost ten
 - one plain command per Bash call, from the repository root, with relative paths: no `|`, `;`, `&&`, `>`, `$(`,
   no `git -C`, no `/workspace/…`, no `cd`;
 - the shell has no `cat`, `grep`, `sed`, `head`, `find` or `python3`: read a file with the Read tool, search with
-  the Grep tool (or `git grep -n -e <pattern> -- <paths>`), list files with Glob or `git ls-files <path>`, change a
-  file with Edit or Write;
+  `git grep -n -e <pattern> -e <other> -- <paths>`, list files with `git ls-files <path>`, change a file with Edit or
+  Write. The Grep and Glob tools do not exist in every Claude Code version (#0-123), and no autopilot run has given
+  Grep to an agent with Bash (#0-223); a "No such tool" message that suggests `grep` via Bash does not apply here,
+  since that command is refused;
 - a test run is `./mvnw -q test -pl <module> -am -Dtest=<Class>` (or `./mvnw -q verify -pl <module> -am`), run as it
   is: its output reaches you whole, with a failing test's message; for more, Read
   `<module>/target/surefire-reports/<Class>.txt`. Never pipe or redirect Maven's output to cut it. Keep `-am`: without

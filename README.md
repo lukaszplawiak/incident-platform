@@ -641,7 +641,9 @@ hook stays for that, ADR-0041), and the autopilot's implementer, implementer-lig
 of their own: in an interactive session (not the autopilot's) only that session's denies and hooks bound them
 (#0-186); the reviewers read the rules from `origin/main` by instruction (`review-procedure`), which no hook
 enforces (#0-165); `/research` and `/ship` still pre-approve `git diff *` (and `/research` `git log/show *`), and no
-hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167).
+hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167); the autopilot's settings allow the
+Grep and Glob tools, which no secret deny rule (`Read(…)` only) or hook names: harmless while Claude Code gives them
+to no agent with Bash, unchecked if a version does (#0-225).
 Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images
