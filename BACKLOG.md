@@ -3328,10 +3328,11 @@ AC3. `/seed-bugs` P-10 on `76379e806fb4` plants the pattern and records a row (w
 ### 0-175. The other workflows cannot start from their commands, and read untyped factory-ops answers
 
 **Type:** ci · **Priority:** Medium (Low until review round 2 of #0-174: once FAC-A06 is on main, `:481` breaks it) ·
-**Status:** In progress — PR 1 (AC2 for `backlog-autopilot.js`, 2026-11-01); found with #0-174 (2026-10-25)
+**Status:** In progress — PR 1 (AC2 for `backlog-autopilot.js`, 2026-11-01), PR 2 (AC2 for every workflow, 2026-11-12);
+AC1 left (PR 3); found with #0-174 (2026-10-25)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-174
 **Touches:** factory (.claude/workflows/audit.js, .claude/workflows/docs-audit.js,
-.claude/workflows/backlog-autopilot.js), .ai/rules/review/factory.md (owner: FAC-A06 to "Enforced by checks"), ci
+.claude/workflows/backlog-autopilot.js, .claude/workflows/seed-bugs.js), .ai/rules/review/factory.md (owner: FAC-A06 to "Enforced by checks"), ci
 (.github/scripts/test-autopilot-workflow.mjs), docs (docs/ai-factory.md)
 
 **Problem.** Like `/seed-bugs` before #0-174: Claude Code passes the words typed after the command as one string, and
@@ -3354,7 +3355,9 @@ every such call's schema types what it reads (a structural check, so FAC-A06 mov
 violation, without its reason. One failure shape for `_common.sh` and every script, or `reasons` in each schema.
 
 **Acceptance criteria.**
-AC1. Each of `/audit` and `/docs-audit` starts from its command's words, and refuses a wrong count, shown by tests.
+AC1. Each of `/audit`, `/docs-audit` and `/backlog-autopilot` starts from its command's words, and refuses a wrong
+     count, shown by tests (`/backlog-autopilot`: `#0-N`, or `#0-N <branch>` to resume; `acceptUnverifiable` stays an
+     object field). Widened by the owner (2026-11-12): `/backlog-autopilot #0-25` ran the queue's next item instead.
 AC2. Every factory-ops answer a workflow reads has a typed schema, and a test fails when one does not.
 
 **It happened (2026-11-01).** The first autopilot run in the devcontainer since #0-174, `wf_8c632098-97c` on #0-191,
@@ -3375,6 +3378,28 @@ what the agent answered. FAC-A06 stays "Backed by", not "Enforced by" as Touches
 copies differ; and `backlog-autopilot.js`' `PREFLIGHT`, `TESTS`, `PATHS` and `NEXT`, typed by `required` keys but
 not closed (`additionalProperties: false`, as FAC-A06 says, needs each script's full output checked first), whose
 `TESTS` and `PATHS` also refuse `_common.sh`'s failure, so that stop has no reason (review round 1 of PR 1).
+
+**PR 2 (owner, 2026-11-12, `/research`): AC2 for every workflow.** Decided: two PRs (this, then AC1), the schemas
+closed with a structural check (not examples alone), and AC1 widened to `/backlog-autopilot`.
+- `backlog-autopilot.js`' `PREFLIGHT`, `TESTS`, `PATHS` and `NEXT` are `answerOf`, with every field their script prints
+  (`PREFLIGHT` lacked `state`; `PATHS` lacked `base`, `delta`, `pomSupplyChainLines`, `allModules`, `readyFlagAdded`,
+  `buildConfigChanged` and `claudeMdOutsideBlocks`, three of which the path gate reads). With no `required` keys left,
+  each call checks what it decides on, and a failure stops with its reason (`failureOf`): the path gate refuses an
+  answer without a boolean `needsHuman`, which would otherwise read as "nothing needs a human".
+- `audit.js` calls factory-ops through one `ops()`, with `AUDIT_DATA` (was typed by `required` keys) and `NOTIFIED`
+  (was `{ type: 'object' }`); a failure of `audit-data.sh` is `FAILED` with its reason. `seed-bugs.js`' `ERROR_FIELDS`
+  takes `ok` and `reasons`. The three copies of `ERROR_FIELDS`/`answerOf` (and two of `failureOf`) are compared by a test.
+- A test reads the keys of each script's jq output (`preflight.sh`, `run-tests.sh`, `changed-paths.sh`,
+  `next-item.sh`, `start-item.sh`, `resume-item.sh`, `return-to-main.sh`, `audit-data.sh`) and fails on one its schema
+  does not name: a closed schema would otherwise stop every run on a field added to a script. FAC-A06 says so
+  (`factory.md`); it stays "Backed by".
+- Known and kept (review round 1): with no `required` keys, an answer the agent sends with a key *left out* passes the
+  schema and stops the item, with its reason, where the runtime used to ask again. The asks again that the runs needed
+  stay: a wrapped answer and a value sent as a string are still refused by `additionalProperties: false` and the types;
+  no run has left a key out. An `anyOf` (the script's shape with its keys required, or a failure) would keep that ask
+  too, but Claude Code's structured output is not checked to honour it. No ADR: FAC-A06 and this entry hold the
+  decision, as for PR 1. `audit.js` checks every field its decisions rest on (`ownerIsAutopilot`, the label and escape
+  counts, `cases`), so a missing one is no "nothing to warn of"; the preflight's refusal keeps one reason per check.
 
 ---
 
