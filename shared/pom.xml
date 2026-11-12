@@ -169,6 +169,21 @@
                     <skip>true</skip>
                 </configuration>
             </plugin>
+            <!-- Backlog #0-222: a service's tests are run as `./mvnw test -pl <service> -am -Dtest=<Class>`,
+                 so that `shared` comes from the reactor (the branch's own code), not from a jar in ~/.m2 that
+                 may be missing (a fresh devcontainer) or older than the branch. With -am the -Dtest filter
+                 reaches `shared` too, which holds no such class, and surefire would fail it on "No tests
+                 matching pattern". Set here, for this module only, and not as -Dsurefire.failIfNoSpecifiedTests=false
+                 on the command line: that would apply to the service too, where a misspelt class must still
+                 fail loudly (under -q a run of no test prints nothing, as a passing one does). The explicit
+                 value wins over the user property; merged with the root's surefire configuration (@{argLine}). -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <failIfNoSpecifiedTests>false</failIfNoSpecifiedTests>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
 

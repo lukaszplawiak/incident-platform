@@ -43,7 +43,7 @@ In every mode:
   `backlog #<item>`, and the `Co-Authored-By` trailer your session's attribution names, as
   `--trailer "Co-Authored-By: <name> <noreply@anthropic.com>"`, as every commit of an autopilot run (backlog #0-203). Never push, never open a PR — the shipper publishes
   once the loop is over.
-- You may run the tests you need (`./mvnw test -pl <module> -Dtest=…`), but the gate the autopilot trusts
+- You may run the tests you need (`./mvnw -q test -pl <module> -am -Dtest=…`), but the gate the autopilot trusts
   is its own `scripts/factory/run-tests.sh` run after you; do not claim results you did not see.
 - Run every command in the foreground, never with `run_in_background` (a hook refuses it): the call returns
   when the command ends, with its output. For a long run give the Bash call a `timeout` (up to 600000 ms)
@@ -71,9 +71,12 @@ retried for you (backlog #0-207: the implementer of run 20261106-214534 lost ten
 - the shell has no `cat`, `grep`, `sed`, `head`, `find` or `python3`: read a file with the Read tool, search with
   the Grep tool (or `git grep -n -e <pattern> -- <paths>`), list files with Glob or `git ls-files <path>`, change a
   file with Edit or Write;
-- a test run is `./mvnw -q test -pl <module> -Dtest=<Class>` (or `verify`), run as it is: its output reaches you
-  whole, with a failing test's message; for more, Read `<module>/target/surefire-reports/<Class>.txt`. Never pipe
-  or redirect Maven's output to cut it;
+- a test run is `./mvnw -q test -pl <module> -am -Dtest=<Class>` (or `./mvnw -q verify -pl <module> -am`), run as it
+  is: its output reaches you whole, with a failing test's message; for more, Read
+  `<module>/target/surefire-reports/<Class>.txt`. Never pipe or redirect Maven's output to cut it. Keep `-am`: without
+  it Maven takes `shared` from `~/.m2`, where the devcontainer has none and the owner's machine may hold an older one
+  than your branch (backlog #0-222). Under `-q` a passing run prints nothing; a misspelt class in a service fails, but
+  in `shared` (`-pl shared`) it runs no test and also prints nothing, so there check that its report file exists;
 - `ls <directory>` to see a directory; `mkdir -p .ai/runs/<item>` is the only `mkdir` (create a file with Write,
   its directory comes with it).
 
@@ -92,8 +95,8 @@ goes into the list too.
 - `git grep -n -e TenantContext -e TenantRecords -- incident-service`
 - `ls incident-service/target/surefire-reports`
 - `mkdir -p .ai/runs/0-25`
-- `./mvnw -q test -pl incident-service -Dtest=IncidentFsmTest`
-- `./mvnw -q verify -pl incident-service`
+- `./mvnw -q test -pl incident-service -am -Dtest=IncidentFsmTest`
+- `./mvnw -q verify -pl incident-service -am`
 - `git add incident-service/src/main/java/com/example/A.java incident-service/src/test/java/com/example/ATest.java`
 - `git rm incident-service/src/main/java/com/example/Old.java`
 - `git mv incident-service/src/main/java/com/example/B.java incident-service/src/main/java/com/example/C.java`

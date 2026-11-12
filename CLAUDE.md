@@ -16,8 +16,8 @@ make dev-reset              # stop + wipe volumes (clean DB)
 # Build / test
 ./mvnw clean install -DskipTests        # full build; required after changing `shared`
 ./mvnw test -pl incident-service        # one module
-./mvnw test -pl incident-service -Dtest=IncidentFsmTest        # one class
-./mvnw test -pl incident-service -Dtest=IncidentFsmTest#methodName
+./mvnw test -pl incident-service -am -Dtest=IncidentFsmTest    # one class (-am: `shared` from the branch, not ~/.m2, backlog #0-222)
+./mvnw test -pl incident-service -am -Dtest=IncidentFsmTest#methodName
 ./mvnw verify -pl shared,service-parent,auth-service,ingestion-service,incident-service,notification-service,escalation-service,postmortem-service,oncall-service
                                         # what CI runs (tests + JaCoCo)
 
