@@ -139,7 +139,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
 | [0-220](#0-220-the-pipeline-audits-data-attaches-the-wrong-ready-pr-to-a-case) | The pipeline audit's data attaches the wrong `/ready` PR to a case | ci | Medium | Open |
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
-| [0-223](#0-223-the-implementers-are-told-to-use-a-grep-tool-their-session-may-not-have) | The implementers are told to use a Grep tool their session may not have | ci | Medium | Open |
 | [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
 | [0-225](#0-225-the-autopilot-allows-the-grep-and-glob-tools-and-no-secret-rule-or-hook-names-them) | The autopilot allows the Grep and Glob tools, and no secret rule or hook names them | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -4915,8 +4914,9 @@ form; its test shows both failures and a valid ledger.
 
 ### 0-223. The implementers are told to use a Grep tool their session may not have
 
-**Type:** ci · **Priority:** Medium · **Status:** Open. Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601;
-#0-207 "Closing run"); the first case is #0-194's third.
+**Type:** ci · **Priority:** Medium · **Status:** Done, PR #608 (kept for the evidence of the 31 runs, which #0-225
+rests on). Found 2026-11-11 in run `wf_f965afb4-b5e` (#0-189, PR #601; #0-207 "Closing run"); the first case is
+#0-194's third.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/agents/implementer.md, .claude/agents/picker.md), root (BACKLOG.md)
 
