@@ -121,7 +121,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
-| [0-189](#0-189-the-oncall-schedules-optional-status-query-has-no-repository-test) | The on-call schedules' optional-status query has no repository test | tech-debt | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
 | [0-194](#0-194-the-autopilots-preflight-does-not-refuse-a-session-outside-the-devcontainer-or-without-its-settings) | The autopilot's preflight does not refuse a session outside the devcontainer or without its settings | security | High | Open |
@@ -4088,36 +4087,6 @@ AC1. A decision, as an ADR, on what a logged throwable may carry.
 AC2. If it filters, a test per service type of exception shows a foreign message absent from `error.message` and
 `error.stack_trace`, and the platform's own message kept.
 AC3. README's known gap sentence names the outcome.
-
-### 0-189. The on-call schedules' optional-status query has no repository test
-
-**Type:** tech-debt · **Priority:** Medium · **Status:** Open. Found in #0-180's `/research` (2026-10-31): review-general
-raised it as blocking (GEN-04) in four `/seed-bugs` runs on host `47b95294`, each time in the host's own code, not in
-the plant.
-**Autopilot:** ready · **Risk:** low · **Complexity:** low · **Depends on:** —
-**Touches:** oncall-service (src/test: oncall/repository)
-
-**Problem.** `OncallScheduleRepository.findByTenantIdAndOptionalStatus` (line 122) filters with
-`(:status IS NULL OR s.status = :status)` on an enum parameter. Its only tests mock the repository
-(`OncallScheduleServiceTest`), so no test runs the query against PostgreSQL. A nullable parameter in an
-`IS NULL OR` clause is where Hibernate 6 and the JDBC driver disagree on the bound type of a null. A wrong binding
-fails only at run time, on the path without a status.
-
-**Approach.** A Testcontainers test (`postgres:16-alpine`, as the module's `OncallScheduleOverlapIntegrationTest`)
-that runs the query with a status and without one, on schedules of two tenants and both statuses. It asserts the
-tenant filter holds and the status filter applies only when given.
-
-**Acceptance criteria.**
-AC1. A new Testcontainers repository integration test class (`postgres:16-alpine`, in
-`oncall-service/src/test/java/com/incidentplatform/oncall/repository/`, its own class rather than a nested one in
-`OncallScheduleOverlapIntegrationTest`) runs `findByTenantIdAndOptionalStatus` against PostgreSQL with a status and
-with `null`; both calls return a page (a wrongly bound `null` fails the test), and it passes in
-`./mvnw verify -pl oncall-service`.
-AC2. With schedules of two tenants, each holding `ACTIVE`, `SUPERSEDED` and `CANCELLED` rows: `status = ACTIVE`
-returns only the queried tenant's `ACTIVE` rows; `status = null` returns all three statuses of the queried tenant; in
-neither case does a row of the other tenant appear.
-AC3. With a page of size 1, the first row is the matching schedule with the latest `startsAt`, and `totalElements`
-equals the number of matching rows of the queried tenant.
 
 ### 0-190. A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited
 
