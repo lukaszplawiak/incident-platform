@@ -190,7 +190,7 @@ A multi-tenant platform onboards customers while it runs. A Flyway seed gave eve
 | Framework | Spring Boot 3.5 | Production-grade auto-configuration, actuator |
 | Messaging | Apache Kafka (KRaft) | Durable, ordered, replayable event stream |
 | Database | PostgreSQL 16 + Flyway | ACID, versioned schema migrations |
-| Cache / Dedup | Redis 7 (AOF) | Sub-millisecond SETNX dedup, AOF for durability |
+| Cache / Dedup | Redis 8 (AOF) | Sub-millisecond SETNX dedup, AOF for durability |
 | Security | Spring Security + JWT (HS512) | Stateless auth, service-to-service tokens |
 | Real-time | WebSocket (STOMP) | Live incident dashboard updates |
 | Email | Spring Mail + Mailtrap SMTP | Real SMTP integration, safe sandbox |

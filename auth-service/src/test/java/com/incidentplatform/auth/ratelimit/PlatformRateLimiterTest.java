@@ -54,7 +54,7 @@ class PlatformRateLimiterTest {
 
         @Container
         private static final GenericContainer<?> REDIS =
-                new GenericContainer<>("redis:7-alpine").withExposedPorts(6379);
+                new GenericContainer<>("redis:8-alpine").withExposedPorts(6379);
 
         private static RedisClient client;
         private static StatefulRedisConnection<String, byte[]> connection;
