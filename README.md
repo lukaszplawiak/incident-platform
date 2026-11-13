@@ -468,8 +468,8 @@ security boundary, so every rule that matters is also enforced outside the model
   (`.github/scripts/check-protected-paths.sh`; it runs the hook against every entry rather than reading its
   regex), and, the other way (#0-168), when the deny rules or the hook protect a path the list lacks: a copy
   cannot claim a protection the code reading the list does not apply. The list also names the autopilot's
-  runtime state (`.git/`, `.ai/runs/LOCK`, `.ai/runs/state.json`, `.ai/STOP`), so dropping its deny or hook
-  entry fails too.
+  runtime state (`.git/`, `.ai/runs/LOCK`, `.ai/runs/state.json`, `.ai/runs/ops-calls/`, `.ai/STOP`), so
+  dropping its deny or hook entry fails too.
 - **The next item is chosen by code** (`scripts/factory/next-item.sh`), from the files on the run's base
   commit: only `ready` items, dependencies done, no open PR or branch, in the order of the owner-approved
   queue. An item whose `**Touches:**` names a protected path (or a bare `ci`) never starts and cannot be
@@ -584,17 +584,18 @@ security boundary, so every rule that matters is also enforced outside the model
   (`<type>/<item>-…`, and on resume to the branch the owner gave). Only the factory-ops agent runs
   `scripts/factory/` (`guard-factory-scripts.sh`, on `agent_type`), one command per task: `factory-ops-bash.sh` refuses
   every call of a factory-ops run after its first allowed one (keyed on `agent_id`, backlog #0-169, ADR-0053), so text
-  a script printed from the branch cannot steer it into `state.sh unlock`, `branch` or `record`; and the autopilot refuses an agent's writes to
-  the lock itself (the denies, `guard-protected-bash.sh`, git's `--output` included); not covered: code run through
-  `./mvnw` (#0-116) and a command shaped past the shell guard's text match, such as a quoted or spliced option
-  word (#0-167); `.ai/runs/ops-calls/` is not on the protected list, so another agent's Bash can delete a
-  factory-ops run's mark and give it a second call (#0-233), and a refused second call is not recorded for the audit
-  (#0-234). Before #0-131 any feature branch was allowed, the owner's open PR included; and the bot account (Write) cannot push to
-  `main` or merge around a red check or a code owner's path, whatever runs in the session: the ruleset of
-  `main` (#0-113, above in "GitHub and CI"). A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which
-  the preflight honours. Both read main's CI result from a push to this repository only (backlog #0-148): a
-  fork pull request from a branch named `main` matches a `main` branch filter, and it neither opens the issue
-  nor counts as main's result in the preflight.
+  a script printed from the branch cannot steer it into `state.sh unlock`, `branch` or `record`; and the autopilot
+  refuses an agent's writes to the lock itself and to the factory-ops runs' marks (`.ai/runs/ops-calls/`, #0-233)
+  (the denies, `guard-protected-bash.sh`, git's `--output` included); not covered: code run through `./mvnw`
+  (#0-116), a command shaped past the shell guard's text match, such as a quoted or spliced option word (#0-167),
+  a command that removes them without naming them, through their parent `.ai/runs` (#0-235), and a refused second
+  factory-ops call, which is not recorded for the audit (#0-234). Before #0-131 any feature branch was allowed, the
+  owner's open PR included; and the bot account (Write) cannot push to `main` or merge around a red check or a code
+  owner's path, whatever runs in the session: the ruleset of `main` (#0-113, above in "GitHub and CI"). A red
+  `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which the preflight honours.
+  Both read main's CI result from a push to this repository only (backlog #0-148): a fork pull request from a
+  branch named `main` matches a `main` branch filter, and it neither opens the issue nor counts as main's result
+  in the preflight.
 - **Owner labels are verified** (backlog #0-126): the audits count a `human:*` label only when the repository
   owner added it (`scripts/factory/audit-data.sh` reads each PR's label events; a label by another account, with
   no event, or while the owner cannot be read counts for nothing, and so does every label while the autopilot runs on

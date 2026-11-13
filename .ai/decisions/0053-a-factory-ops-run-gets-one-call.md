@@ -82,7 +82,10 @@ Every call after it, with the same `agent_id`, is refused, whatever its command.
 - What the hook does not cover (review round 1, backlog #0-233 and #0-234): another agent with Bash is not refused
   deleting a mark (`.ai/runs/ops-calls/` is not on the protected list, as `.ai/runs/LOCK` is), which would give a
   running factory-ops a second call; and a refused second call is recorded only in the agent's transcript, so the
-  audit cannot count how often a factory-ops was steered.
+  audit cannot count how often a factory-ops was steered. The first is closed by #0-233 for the commands that name
+  the marks: `.ai/runs/ops-calls/` is on the runtime list of `.ai/rules/protected-paths.md`, with its denies and
+  `guard-protected-bash.sh`, as the lock is. The guard matches text, so a command that removes the marks through
+  their parent (`rm -rf .ai/runs`, `find .ai/runs -type l -delete`) is not seen, as for the lock (#0-235).
 - The control rests on Claude Code sending `agent_id` and `tool_use_id` in a subagent's PreToolUse input. If it
   stops, every factory-ops call is refused and the run stops at its preflight: visible, never silent. Checked live on
   2026-11-13 with this hook in the working tree: a factory-ops of the Agent tool ran `check-queue.sh` through both

@@ -72,6 +72,7 @@ and `check-protected-paths.sh` checks that they do (backlog #0-168).
 - `.git/` — the repository itself: refs, config, hooks
 - `.ai/runs/LOCK` — the lock that keeps a second autopilot run away
 - `.ai/runs/state.json` — the run state and the breaker's count
+- `.ai/runs/ops-calls/` — one mark per factory-ops run, which gives it its one call (backlog #0-169, ADR-0053; protected since #0-233)
 - `.ai/STOP` — the autopilot's stop switch (set by the breaker, the audit trigger or the owner)
 <!-- runtime:end -->
 
