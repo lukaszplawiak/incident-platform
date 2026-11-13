@@ -258,8 +258,8 @@ history (for a BLOCKED item also its draft PR and the phase that stopped it, whi
 | sometimes | do an item yourself, then `/review` and `/ship` — the knowledge should end up in you, not only in the repository | — |
 
 Spot checks must be real (read the diff, run the tests), or the `human:*` labels measure nothing.
-Add the labels from your own GitHub account: the audits count a `human:*` label only when the repository owner
-added it (backlog #0-126) — one added by the bot counts for nothing, and while the autopilot runs on your own login
+Add the labels from your own GitHub account: the audits count a `human:*` label only when the owner (the one
+admin of `.github/repository-settings/repository.json`, backlog #0-237) added it (backlog #0-126) — one added by the bot counts for nothing, and while the autopilot runs on your own login
 (shadow mode before the bot account) no label counts at all, since the autopilot then acts with your token. To
 confirm a label someone else added, remove it and add it again yourself.
 

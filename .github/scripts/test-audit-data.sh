@@ -20,8 +20,9 @@ expect_jq() {   # expect_jq <name> <file> <jq expression that must be true>
     if jq -e "$3" "$2" >/dev/null 2>&1; then ok "$1"; else fail "$1: '$3' is false for: $(jq -c '.cases' "$2" | head -c 900)"; fi
 }
 
-mkdir -p "$WORK/repo/scripts/factory" "$WORK/repo/.ai/runs" "$WORK/bin"
+mkdir -p "$WORK/repo/scripts/factory" "$WORK/repo/.ai/runs" "$WORK/repo/.github/repository-settings" "$WORK/bin"
 cp "$SRC/scripts/factory/_common.sh" "$SRC/scripts/factory/_backlog.sh" "$SRC/scripts/factory/_marker.sh" "$SRC/scripts/factory/audit-data.sh" "$WORK/repo/scripts/factory/"
+cp "$SRC/scripts/factory/owner-login.sh" "$WORK/repo/scripts/factory/"
 
 body() {   # body <rounds> <scope> <acceptance verdict>
     printf 'Backlog: #0-x\\n\\n## Review\\nRounds: %s. Tests: PASS.\\nScope: %s — Touches a · plan a · diff a.\\n<details>{\\"item\\":\\"#0-1\\",\\"verdict\\":\\"%s\\",\\"criteria\\":[]}</details>' "$1" "$2" "$3"
@@ -68,12 +69,16 @@ cat > "$WORK/bin/gh" <<EOF
 case "\$*" in
     *"--label autopilot"*) if [ -n "\${GH_OWNER_PR:-}" ]; then cat "$WORK/autopilot-owner.json"; else cat "$WORK/autopilot.json"; fi ;;
     *"head:docs/backlog-ready"*) cat "$WORK/ready.json" ;;
-    "repo view"*) [ -n "\${GH_FAIL_REPO:-}" ] && exit 1; echo "o/r" ;;
-    "api repos/o/r/issues/"*"/events"*)
+    "repo view"*) [ -n "\${GH_FAIL_REPO:-}" ] && exit 1; echo "org/r" ;;
+    # repository.json on GitHub's main (owner-login.sh --github, backlog #0-237): \$GH_REPO_JSON, else a 404.
+    "api -H Accept: application/vnd.github.raw repos/org/r/contents/.github/repository-settings/repository.json?ref=refs/heads/main")
+        [ -f "\${GH_REPO_JSON:-$WORK/repository.json}" ] || exit 1
+        cat "\${GH_REPO_JSON:-$WORK/repository.json}" ;;
+    "api repos/org/r/issues/"*"/events"*)
         n=\$(printf '%s' "\$*" | sed -E 's#.*issues/([0-9]+)/events.*#\\1#')
         [ -f "$WORK/events-\$n.json" ] || exit 1
         cat "$WORK/events-\$n.json" ;;
-    "api repos/o/r/commits/"*"/pulls"*)   # the PRs of a commit (backlog #0-129): a fixture per sha, none = no PR
+    "api repos/org/r/commits/"*"/pulls"*)   # the PRs of a commit (backlog #0-129): a fixture per sha, none = no PR
         sha=\$(printf '%s' "\$*" | sed -E 's#.*commits/([0-9a-f]+)/pulls.*#\\1#')
         [ -f "$WORK/pulls-\$sha.fail" ] && exit 1
         if [ -f "$WORK/pulls-\$sha.json" ]; then cat "$WORK/pulls-\$sha.json"; else echo '[]'; fi ;;
@@ -98,6 +103,9 @@ marker() { printf '### %s. x\n**Type:** bug · **Fixes:** #%s · **Escaped from:
 # The old commit also carries an escape pushed with no PR: vouched by nobody, so not in the raw list either.
 printf '### 0-9. old\n**Type:** bug · **Fixes:** #0-9 · **Escaped from:** review-general\n' > BACKLOG.md
 : > BACKLOG-DONE.md
+# The repository is an organisation's ("org/r", the stub's `gh repo view`); its owner is the one admin of
+# repository.json on GitHub's main, "o" (backlog #0-237): the organisation's name never adds a label or opens a PR.
+printf '{"settings":{},"admins":["o"],"repository_secrets":[]}\n' > "$WORK/repository.json"
 git add .gitignore
 old_a=$(GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z commit "old, owner's PR")
 prs_of "$old_a" "$(pr 1 o yes main)"
@@ -236,6 +244,25 @@ expect_jq "and no case rests on a human label"          "$F" '[.cases[].signals[
 
 expect_jq "AC6: every marker says why"                 "$F" 'all(.unverifiedEscapes[]; .reason == "the repository owner is unknown")'
 expect_jq "AC6: and no case rests on a marker"           "$F" '([.cases[].signals[] | select(startswith("escaped"))] == []) and .escaped == []'
+
+echo "audit-data: the owner is the one admin of repository.json on GitHub's main (backlog #0-237)"
+scripts/factory/audit-data.sh 2026-10-09 >/dev/null
+expect_jq "in an organisation's repository the owner is the admin, not the organisation" "$F" '.owner == "o" and (.escaped | length) > 0'
+# Code run in a session writes the bot's login into the clone: the working tree, a local origin/main, a replace ref of
+# that commit. None of them is read (review round 1, arc-3c71).
+RS=.github/repository-settings/repository.json
+printf '{"admins":["bot"]}\n' > "$RS"; git add "$RS"; git -c user.email=o@o -c user.name=o commit -q -m "the bot as admin"
+forged=$(git rev-parse HEAD); git reset -q --hard HEAD^
+git update-ref refs/remotes/origin/main "$forged"
+git replace HEAD "$forged"
+scripts/factory/audit-data.sh 2026-10-09 >/dev/null
+expect_jq "a login in the clone (working tree, origin/main, a replace ref) does not make the owner" "$F" '.owner == "o"'
+git replace -d HEAD >/dev/null; git update-ref -d refs/remotes/origin/main
+GH_REPO_JSON=$WORK/none.json scripts/factory/audit-data.sh 2026-10-09 >/dev/null
+expect_jq "GitHub's file cannot be read: the owner is unknown, nothing is vouched (fails closed)" "$F" '.owner == null and .escaped == [] and all(.unverifiedEscapes[]; .reason == "the repository owner is unknown")'
+printf '{"admins":["o","bot"]}\n' > "$WORK/two.json"
+GH_REPO_JSON=$WORK/two.json scripts/factory/audit-data.sh 2026-10-09 >/dev/null
+expect_jq "two admins on GitHub's main: the owner is unknown" "$F" '.owner == null and .escaped == []'
 
 echo "audit-data: a replace ref cannot make the owner's commit add the bot's marker (review round 1)"
 # A replacement for the owner's commit that also adds 0-22's marker: honoured, the owner's PR would vouch for it.

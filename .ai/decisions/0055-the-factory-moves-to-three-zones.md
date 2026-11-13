@@ -1,7 +1,9 @@
 # ADR-0055: The factory moves to three zones, a GitHub queue and a ruleset merge, one stage at a time
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-13, by the owner, with the amendment of #0-237: the factory as a product of its own,
+  stages T and N)
 - **Backlog:** stage 0 of this migration (the freeze below); each later stage gets its own item when its turn comes
+  (stage 1: #0-237)
 - **Date:** 2026-11-13
 - **Author:** human (owner's decisions of 2026-11-13, drafted in an interactive session)
 - **Reversible:** yes, stage by stage — every stage names its rollback, and one that needs more than a switch or a
@@ -21,6 +23,11 @@ after merge). Companies that publish how they do this (Stripe's devboxes, Ramp's
 sandbox) isolate each task in a fresh environment and keep credentials out of it; Claude Code's own documentation calls
 argument-constraining Bash rules fragile and the sandbox the stronger layer.
 
+incident-platform is the factory's proving ground, not its only product (owner, 2026-11-13): the factory is to build a
+second application from nothing, a Java and Spring Boot backend with a React frontend, alongside this one. A factory
+whose code, rules and gate know this repository's modules, tenants and Kafka topics would have to be copied for it, and
+two copies drift (the three copies of the protected paths needed a check of their own, #0-168).
+
 ## Decision
 
 **Target.**
@@ -30,7 +37,7 @@ argument-constraining Bash rules fragile and the sandbox the stronger layer.
   credential); a review VM without Docker or Maven (panel, verifier, acceptance; it reads CI's artifacts, never the
   build VM's local gate).
 - **Identities.** The owner; `bc-app`, `builder-app` and `review-app`, three GitHub Apps (short-lived installation
-  tokens bound to the repository; the builder is an App, not the `lukaszplawiakbot` PAT); GitHub's ruleset is the only
+  tokens bound to the repositories each is installed on; the builder is an App, not the `lukaszplawiakbot` PAT); GitHub's ruleset is the only
   one that merges (required checks pinned to their app, `factory/review` from review-app, CODEOWNERS and
   `factory/human-gate` on the high-risk lane). No agent approves or merges. **No status the ruleset requires is set
   with builder-app's credential:** `factory/lane`, `factory-trace` and `factory/human-gate` come from GitHub Actions, and
@@ -46,6 +53,25 @@ argument-constraining Bash rules fragile and the sandbox the stronger layer.
 - **The audit record stays in the repository.** Escape markers (`**Fixes:**` / `**Escaped from:**`), decision history and
   the owner's audit decisions stay in files changed only by the owner's PRs (ADRs, `.ai/audit/`): an issue's text can be
   edited by apps and leaves no history git keeps, so issues hold work state only (#0-129, #0-126 stay the model).
+- **The factory is a product of its own, apart from the products it builds.** One organisation, `profitbuild`, holds
+  the factory and its products; incident-platform moves into it in stage 1 (its Angular frontend stays on the owner's
+  account, outside the factory). From stage 4 the factory's code lives in its own repository, `factory`: dispatchers,
+  VM provisioning, the base task image, agent definitions, skills, the hooks that survive 6c, the review rules' core and
+  one profile per stack (`spring-boot`, later `react`), the template of a product repository, and the ADRs about the
+  factory written from then on (ADR-0050 to ADR-0055 stay where they were decided). A product repository holds only its
+  adapter: its `CLAUDE.md` and `.ai/` knowledge, its own review rules (here: tenants, Kafka, outbox), a gate script
+  with the one contract every gate keeps (the JSON of `run-tests.sh` today: `pass`, `fixable` or `stop` and an
+  artifact), its task image, its protected paths, and the factory version and profile it runs, pinned and bumped by
+  Renovate in a pull request the owner reviews. **builder-app is never installed on `factory`**: no agent can change
+  its own rules, reviewers or dispatcher, by permission rather than by a hook's text match; `factory` is the
+  organisation's most protected repository. How a product session loads the factory's agents and skills (a Claude Code
+  plugin from `factory` is the first candidate) is decided in stage 4.
+- **A new product starts with a foundation the owner leads.** Its first decisions (domain model, service boundaries,
+  authentication, schema, frontend structure, the API contract) are irreversible, the kind the architect stops on;
+  the owner makes them in interactive sessions, as ADRs, with a walking skeleton (one endpoint through every layer, one
+  screen, CI green). The factory takes items once that skeleton exists. The new application is one repository
+  (`backend/` and `frontend/`): a change to the API is one pull request and one review, not an order kept between two
+  repositories.
 - **Local first, portable from the first VM**: the VM is provisioned as code (cloud-init, which Lima and a cloud provider
   both read); the task image is built in CI and pulled from GHCR; dispatchers read their configuration from the
   environment only and keep no state of their own (it is in GitHub); logs and transcripts leave the machine. The move to
@@ -57,15 +83,17 @@ its turn comes:
 | # | Stage | Exit | Rollback |
 |---|---|---|---|
 | 0 | Freeze hook hardening (below) | this ADR merged and set to Accepted by the owner | revert the statuses |
-| 1 | Organisation and repository transfer; `repository-settings.rb check` | one item merged the usual way | transfer back |
+| 1 | Organisation `profitbuild`, incident-platform transferred (its frontend not); the owner read from `repository.json`, not the repository's owner (#0-237); `repository-settings.rb check` | one item merged the usual way | transfer back |
 | 2 | Build VM (provisioned as code) running today's devcontainer | 3 items with no environment problem | the devcontainer on the Mac |
 | 3 | Baseline metrics: agent calls, stage times, model, transcripts kept (#0-204, #0-205); a seed pattern for a removed positive control (PR #572; the next free id after #0-218's P-25 and P-26) | numbers for 3 items | revert |
-| 4 | Dispatcher v0: the container has no token; push, PR and commit trailers by the dispatcher (#0-212); builder-app | 3 PRs opened by it | `shipBy: shipper` |
-| 5 | review-app and the review VM, in shadow, then required | a `/seed-bugs` series on the new path catches at least what the old one did | drop the required check |
+| 4 | Dispatcher v0, in the new `factory` repository: the container has no token; push, PR and commit trailers by the dispatcher (#0-212); builder-app (not on `factory`); the gate contract, incident-platform's adapter the first | 3 PRs opened by it | `shipBy: shipper` |
+| 5 | review-app and the review VM, in shadow, then required; the review rules split into the factory's core, the `spring-boot` profile and the product's own | a `/seed-bugs` series on the new path catches at least what the old one did | drop the required check |
 | 6a | `factory/lane`, `factory-trace`, `factory/human-gate`, CODEOWNERS (#0-153), `/human-review`; not required at first | lane agrees with the owner on 3 PRs | not required |
 | 6b | Deterministic gates one at a time (#0-108 ArchUnit, Squawk, commitlint, TODO); each removes its rule from the prompts | each catches its seeded case | revert that gate |
 | 7 | Issues + Project, all open items at once; dispatcher v1 reads the Project | 3 items taken, claimed and closed | export, switch back to the frozen file |
+| T | Template of a product repository and its bootstrap: the baseline (ruleset, CODEOWNERS, protected paths, pinned tools, Renovate, secret scan, `repository-settings`) applied to a new repository in one command | a new empty repository passes `repository-settings.rb check` and Factory guards | delete the repository |
 | 8 | Backlog Creator and features (sub-issues, flags), on a technical feature | one feature Done | tasks written by hand |
+| N | The new application: its foundation led by the owner (may run from stage 2 on, it needs no factory), then onboarded from the template with the `react` profile | one backend and one frontend task through the factory, while incident-platform's run too | the owner's sessions only |
 | 6c | Hook cleanup (after 8): boundary hooks removed; quality hooks (`guard-tests`, `guard-migrations`) become required CI checks first | a seeded series still caught | revert |
 | H | Holdout: two jobs (image built without secrets, scenarios run with them), the service's logs never go back to the implementer | a feature's holdout green | not required |
 | 9 | Private repository on GitHub Team; CI minutes measured first; no merge queue on Team private | a red check blocks a merge | public again, only before briefs reach issues |
@@ -74,7 +102,8 @@ its turn comes:
 
 **Rules of the migration.** One factory change at a time, then 2–3 application items; the old path stays behind a
 switch until the new one has passed; a review or security stage exits on a measure with known answers (`/seed-bugs`), not
-on two panels agreeing; at least two application items for each factory item, counted by `audit-data.sh`.
+on two panels agreeing; at least two application items for each factory item, counted by `audit-data.sh`. A factory change is checked on
+incident-platform first, and, once stage N has passed, on the new application too, so it is not fitted to one product.
 
 **Stage 0, the freeze.** Open items that harden what a later stage removes wait as `Blocked` (superseded by the stage
 named): #0-236 (4), #0-225 (2 and 4), #0-211 (6c), #0-210 (6c), #0-214 (6c), #0-217 (4), #0-183 (5), #0-167 (6a),
@@ -98,6 +127,14 @@ The rest stay as they are; the `/seed-bugs` items (#0-171, #0-190, #0-218, #0-21
   login) change in stage 4.
 - **Audit markers in issues, counted by actor**: possible (as `human:*` labels are), but an issue body has no history git
   keeps, and the pipeline audit would read two sources.
+- **Finish the factory inside incident-platform, copy it for the new application**: faster to start, then two
+  factories, every fix made twice, and each copy's rules fitted to its product.
+- **incident-platform as the factory's home, an adapter only in other products**: no new repository, but the
+  factory's code stays in a repository builder-app writes to, guarded by text matches, and tied to this product's
+  history and rules.
+- **The new application as two repositories (backend, frontend)**: each could be versioned on its own, but every API
+  change becomes two pull requests in an order kept across repositories, and #0-111 (the OpenAPI diff) a required gate
+  from the first day; one team (the owner and the factory) gains nothing from the split.
 - **The cloud first**: no second move and a stronger firewall, but cost, unattended Claude authentication and secrets in
   the first VM stage at once.
 
@@ -115,6 +152,9 @@ The rest stay as they are; the `/seed-bugs` items (#0-171, #0-190, #0-218, #0-21
   `FACTORY_BOT_LOGIN`) and ADR-0034 (the ruleset's actors and bypass) at stage 4, when builder-app replaces the bot;
   ADR-0053 (factory-ops' one call) at stage 4, when the dispatcher replaces factory-ops; ADR-0054 (the allow list's
   closed list, `git_runtime_unsafe`) and ADR-0050 (the agents' command lists) at stage 6c.
+- Each stage from 4 on is written for more than one repository: configuration names the repository, the gate is the
+  contract, no path of incident-platform is assumed. Stage 10's auto-merge is decided per repository.
 - A reviewer recognises a violation as a stage started before its predecessor's exit, a stage without a rollback, a
-  credential inside a task container, a status the ruleset requires set by builder-app, or an audit marker written
-  outside the repository.
+  credential inside a task container, a status the ruleset requires set by builder-app, an audit marker written
+  outside the repository, builder-app installed on `factory`, or factory code that names a product's paths, modules
+  or rules.

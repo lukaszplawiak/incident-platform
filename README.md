@@ -466,7 +466,10 @@ security boundary, so every rule that matters is also enforced outside the model
 - **Factory guards** (`.github/workflows/factory-guards.yml`): a PR that deletes, renames away or disables
   tests, removes assertions, adds a Maven plugin, repository or dependency, changes what verification runs
   (`.mvn/`, `mvnw`, skip properties, the coverage check's threshold, rule, goal, phase or includes), edits or deletes an applied Flyway migration, or marks a backlog item
-  ready fails unless its author is the owner or the owner approved its current commit. The same workflow
+  ready fails unless its author is the owner (the one admin of `repository.json` at the PR's base, `owner-login.sh`,
+  backlog #0-237; not `github.repository_owner`, which in an organisation is the organisation) or the owner approved
+  its current commit (only the owner's approval counts, not any organisation member's; with no owner readable, nothing
+  passes). The same workflow
   validates the execution queue against the backlog (`scripts/factory/check-queue.sh`) and fails when the
   deny rules, the shell-write hook or CODEOWNERS stop covering an entry of the protected-path list
   (`.github/scripts/check-protected-paths.sh`; it runs the hook against every entry rather than reading its
@@ -603,8 +606,9 @@ security boundary, so every rule that matters is also enforced outside the model
   (`.github/workflows/main-guard.yml`), which the preflight honours. Both read main's CI result from a push to this
   repository only (backlog #0-148): a fork pull request from a branch named `main` matches a `main` branch filter, and
   it neither opens the issue nor counts as main's result in the preflight.
-- **Owner labels are verified** (backlog #0-126): the audits count a `human:*` label only when the repository
-  owner added it (`scripts/factory/audit-data.sh` reads each PR's label events; a label by another account, with
+- **Owner labels are verified** (backlog #0-126): the audits count a `human:*` label only when the owner added it
+  (the one admin of `repository.json` on main, read from GitHub by `owner-login.sh --github`, backlog #0-237;
+  `scripts/factory/audit-data.sh` reads each PR's label events; a label by another account, with
   no event, or while the owner cannot be read counts for nothing, and so does every label while the autopilot runs on
   the owner's own login; the report names them), and agents take labels only from that data, never from
   `gh pr view`. That check is the control. As a second line, the shell guard refuses an autopilot session's
@@ -615,7 +619,9 @@ security boundary, so every rule that matters is also enforced outside the model
   runs is not seen by it (the known gap below).
 - **Escape markers are verified** (backlog #0-129): the audits count a `**Fixes:** #0-N · **Escaped from:**
   <stage>` marker (a case, and a "hard fact" for confidence) only when the commit that first added the marker itself
-  (not its line, which a status change rewrites) reached `main` in a pull request the repository owner opened
+  (not its line, which a status change rewrites) reached `main` in a pull request the owner opened (the one admin of
+  `repository.json` on main, read from GitHub, `owner-login.sh`, backlog #0-237, so the move to an organisation
+  changes nothing)
   (`audit-data.sh`, `gh api .../commits/<sha>/pulls`; the history read without replace refs, grafts, textconv or
   external diff drivers, and a shallow clone vouches for nothing), and it is a new case only when that commit is in
   the audited period (a copy of an old marker is not). A marker pushed
