@@ -52,6 +52,13 @@ from it.
 | 4 | Audits every 10 items (the preflight stops with "audit due"): `/audit` runs both targets — `reviewers` (one analyst per dimension) and `pipeline` (backlog #0-121: every case traced from the stage that introduced it to the one that detected it, with why each stage between let it through) — one report each | acceptance of recommendations stays in 40–80% |
 | 5 | Later: cloud runs; a stage of the pipeline audit gets its own analyst only when the data shows it produces most of the cases. Never: two items at once (#0-114, decided against) | — |
 
+**Migration (ADR-0055, 2026-11-13).** Phase 3 as written above, auto-merge from today's devcontainer, is not taken:
+the factory moves stage by stage to three zones (the owner's Mac, a build VM where only the dispatcher holds a
+credential, a review VM), a GitHub Issues queue and a merge by the ruleset alone, with the owner's approval left on the
+high-risk lane and a sample after merge. Each stage gets its backlog item when its turn comes; until then this runbook
+describes the factory as it runs. Hook hardening that a stage removes is frozen (stage 0: the items marked
+`Blocked — superseded by migration stage N`).
+
 ## Setup (once)
 
 1. **Devcontainer** (`.devcontainer/`). Docker Desktop: give the VM 16–20 GB, and restrict *Settings →
@@ -366,7 +373,9 @@ next to it in 32 GB.
 Everything is files in the repository, so the same setup can run elsewhere: Claude Code routines (check
 first that the cloud environment can run Docker for Testcontainers) or GitHub Actions with this
 devcontainer image. Check the current rules for subscription usage of non-interactive runs before
-moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs.
+moving, and keep `--settings .claude/settings.autopilot.json` wherever it runs. ADR-0055 makes this stage C of the
+migration: the build and review VMs move to a cloud provider (its firewall outside the VM), provisioned from the same
+cloud-init as the local VMs, with a heartbeat and cost and token budgets.
 
 ## Troubleshooting
 
