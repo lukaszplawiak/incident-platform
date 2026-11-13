@@ -2362,7 +2362,7 @@ rule) still recognises the two actions under the new form, and delete the `self-
 ---
 ### 0-152. Refresh the Snyk CLI signing key before 2027-01-06
 
-**Type:** ci · **Priority:** Medium · **Status:** Open — C and D done (owner, after `/research 0-152`, 2026-11-13); B
+**Type:** ci · **Priority:** Medium · **Status:** Open — C and D done in PR #621 (owner, after `/research 0-152`, 2026-11-13); B
 waits for Snyk's next key (found in the review of #0-147, 2026-10-17; due before 2027-01-06)
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** ci (.github/scripts/check-pinned-tools.sh, .github/scripts/test-check-pinned-tools.sh,
