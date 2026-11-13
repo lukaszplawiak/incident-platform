@@ -149,7 +149,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Blocked (superseded, ADR-0055) |
-| [0-237](#0-237-migration-stage-1-the-organisation-profitbuild-and-the-transfer-of-incident-platform) | Migration stage 1: the organisation `profitbuild` and the transfer of incident-platform | ci | High | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -6254,7 +6253,8 @@ sample per pattern compares little).
 
 ### 0-237. Migration stage 1: the organisation `profitbuild` and the transfer of incident-platform
 
-**Type:** ci · **Priority:** High · **Status:** In progress — PR 1a (this item's code, PR #623) first, then the owner's transfer, then PR 1b. Stage 1 of ADR-0055 (owner, 2026-11-13).
+**Type:** ci · **Priority:** High · **Status:** Done, PRs #623 and #624 (2026-11-13). Kept in full for the transfer's
+findings and its rollback. Stage 1 of ADR-0055 (owner, 2026-11-13).
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (stage 0, ADR-0055 merged in PR #620)
 **Touches:** factory (scripts/factory/audit-data.sh, scripts/factory/owner-login.sh, .github/scripts/test-owner-login.sh,
 .github/scripts/test-audit-data.sh, .github/workflows/factory-guards.yml), root (.ai/decisions/ (ADR-0055, ADR-0034),
@@ -6312,10 +6312,15 @@ default and `sha_pinning_required`; the owner is still the repository's only adm
   not in the file; PR 1b writes today's value (`enabled: false`, unchanged). Restricting who may dismiss a review to
   the owner is a possible hardening (the machine account, with Write, can dismiss the owner's "changes requested",
   though that gives it no approval), recorded as point 4 of #0-153 (stage 6a).
-Still open: two-factor authentication required in the organisation (step 1), Dependabot alerts on the repository and
-the organisation's Actions settings, which the session's token cannot read; and whether the machine account's token
-still reaches the repository (a fine-grained token owned by `lukaszplawiak` does not cover an organisation's
-repository, a classic one does), checked by a test push from the rebuilt devcontainer.
+After PR #624 the owner turned on Dependabot alerts and set the organisation's Actions settings. The devcontainer was
+rebuilt (`devcontainer up --remove-existing-container`). There the machine account's token showed as classic
+(`repo`, `read:org`, no `workflow`), its permissions on the repository as `push` without `admin` or `maintain`, and a
+test branch it pushed (`3985c1c6`, author and committer `lukaszplawiakbot`) reached GitHub and was deleted. `main`'s CI
+and Factory guards on `91990164`, the merge of PR #624, were green: stage 1's exit.
+
+**Closed with one owner step left:** two-factor authentication required in the organisation (Settings → Access →
+Authentication security). It changes no file, and while the owner is the organisation's only member it changes nobody's
+access.
 
 **Rollback.** Transfer back to the owner's account (the redirects follow); `owner-login.sh` reads the same file there.
 Then the owner runs `repository-settings.rb check` before the next merge: a transfer may empty the bypass list again
