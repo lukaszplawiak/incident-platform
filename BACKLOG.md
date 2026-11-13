@@ -1108,7 +1108,7 @@ is wanted. Correct README "Security Scanning" either way.
 
 ### 0-69. The Snyk dependency scan fails on every run, so a new finding changes nothing
 
-**Type:** ci · **Priority:** High · **Status:** Open — A1 done (owner, after `/research 0-69`, 2026-11-13); A2, B1-B3 open
+**Type:** ci · **Priority:** High · **Status:** Open — A1 done in PR #622 (owner, after `/research 0-69`, 2026-11-13); A2, B1-B3 open
 (found in the 2026-09-30 infrastructure security audit; updated 2026-10-20 and 2026-11-13)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** #0-158 (the date B2's ignores expire on)
 **Touches:** root (pom.xml, .snyk, BACKLOG.md), ci (.github/workflows/snyk.yml), docs (README.md "Infrastructure Hardening")
