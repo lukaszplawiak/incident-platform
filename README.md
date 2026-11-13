@@ -1,6 +1,6 @@
 # Incident Platform
 
-[![CI](https://github.com/lukaszplawiak/incident-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/lukaszplawiak/incident-platform/actions/workflows/ci.yml)
+[![CI](https://github.com/profitbuild/incident-platform/actions/workflows/ci.yml/badge.svg)](https://github.com/profitbuild/incident-platform/actions/workflows/ci.yml)
 [![Java](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)](https://openjdk.org/projects/jdk/21/)
 [![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.5-6DB33F?logo=springboot&logoColor=white)](https://spring.io/projects/spring-boot)
 [![Kafka](https://img.shields.io/badge/Apache_Kafka-KRaft-231F20?logo=apachekafka&logoColor=white)](https://kafka.apache.org/)

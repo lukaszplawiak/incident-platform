@@ -138,7 +138,13 @@ that PR needs a new push or an update from `main`.
   repository settings and the admins. It names them in its summary; run by the owner it compares all three,
   and `plan`/`apply` refuse to run without an admin token. A bypass actor or an admin added in the UI is seen
   only there.
-- GitHub may add a parameter to a rule; `check` then fails until it is written in the file.
+- GitHub may add a parameter to a rule; `check` then fails until it is written in the file. (Seen at the move to an
+  organisation, #0-237: the `pull_request` rule gained `dismissal_restriction`, an organisation-only parameter.)
+- **A transfer empties the bypass list** (seen 2026-11-13, moving the repository to `profitbuild`, #0-237): GitHub kept
+  the ruleset and every rule but returned `bypass_actors: []`, so nobody, the owner included, could merge around it,
+  and the owner's own pull requests, which need a code owner's approval the owner cannot give, could not merge at
+  all. The owner's `check` saw it (CI's token cannot) and `apply` restored it from the file. After any transfer, the
+  owner runs `check` before the next merge.
 - On a push to `main`, too, `check` compares GitHub with the files: a setting changed in the UI, or GitHub's API
   down, turns `main` red, and `main-guard.yml` then stops the autopilot (`autopilot-stop`). That is meant: the
   factory must not run while what guards its merges differs from what was reviewed.
