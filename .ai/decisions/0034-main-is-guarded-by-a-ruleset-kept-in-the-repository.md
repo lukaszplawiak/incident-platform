@@ -1,6 +1,7 @@
 # ADR-0034: `main` is guarded by one ruleset kept in the repository, bypassed at merge only by the owner's admin role; CI compares GitHub with the files (backlog #0-113)
 
 - **Status:** Accepted (2026-10-18); amended by ADR-0035 (the files and the check also hold the environments and which secrets exist)
+  and by #0-237 (the admins list is also the owner's identity, below)
 - **Backlog:** #0-113 (follow-ups #0-153, #0-154)
 - **Date:** 2026-10-18
 - **Author:** human (owner chose one ruleset, every CI job as a required check, and that only their own account may bypass it, at merge; written up by Claude Code in the owner's session)
@@ -65,6 +66,12 @@ Around the bypass:
   differ, and `plan`/`apply` refuse to run (they never change who is an admin: that is the owner's decision,
   in Settings). A ruleset bypass for a `User` actor would name the login itself; the API documents it, but it
   was not verified on a personal repository, so the role and this check stand.
+  **Amended by #0-237 (2026-11-13): the same list names the owner.** Its one admin is who the audits
+  (`audit-data.sh`) and Factory guards' "Changes that need the owner" take as the owner
+  (`scripts/factory/owner-login.sh`), since in an organisation the repository's owner is the organisation (ADR-0055
+  stage 1). So a second admin, for instance a second owner of the organisation, leaves no owner: every owner label
+  and marker unverified, and Factory guards refusing the owner's own guarded pull requests until the file names one
+  admin again (fail closed). Adding an admin is therefore also a decision about who the owner is.
 - **The bypass is the owner's hand, not a session's.** `.claude/settings.json` denies interactive sessions
   `gh pr merge … --admin`, a merge through the API (which bypasses without asking), and every write that
   would remove the ruleset rather than bypass it: `gh api` on the rulesets (REST or GraphQL), a `PATCH` of the

@@ -149,6 +149,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Blocked (superseded, ADR-0055) |
+| [0-237](#0-237-migration-stage-1-the-organisation-profitbuild-and-the-transfer-of-incident-platform) | Migration stage 1: the organisation `profitbuild` and the transfer of incident-platform | ci | High | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -6243,3 +6244,65 @@ AC2. No id was reused or renumbered.
 AC3. Once each rewritten file is on main, `/seed-bugs` on its dimension's patterns has the panel catch each of them
 (reworded by the owner, 2026-10-25: the audit had too few autopilot PRs to compare, and a before-and-after of one
 sample per pattern compares little).
+
+### 0-237. Migration stage 1: the organisation `profitbuild` and the transfer of incident-platform
+
+**Type:** ci · **Priority:** High · **Status:** In progress — PR 1a (this item's code, PR #623) first, then the owner's transfer, then PR 1b. Stage 1 of ADR-0055 (owner, 2026-11-13).
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (stage 0, ADR-0055 merged in PR #620)
+**Touches:** factory (scripts/factory/audit-data.sh, scripts/factory/owner-login.sh, .github/scripts/test-owner-login.sh,
+.github/scripts/test-audit-data.sh, .github/workflows/factory-guards.yml), root (.ai/decisions/ (ADR-0055, ADR-0034),
+.ai/rules/audit.md (owner), BACKLOG.md), docs
+(README.md "Infrastructure Hardening": Factory guards, owner labels, escape markers; docs/ai-factory.md; README's links
+and badge in PR 1b)
+
+**Problem.** ADR-0055 moves the repository from the owner's account to an organisation, `profitbuild`, which will
+hold the factory's own repository (stage 4) and the next product (stage N). Two checks took the owner to be the
+repository's owner login, which after the transfer is the organisation's name, an account that never adds a label or
+opens a pull request: `audit-data.sh` (`gh repo view`) would mark every `human:*` label and every escape marker
+unverified, so the audits would count no owner decision at all, silently; factory-guards' "Changes that need the
+owner" (`github.repository_owner`) would no longer recognise the owner's own pull requests, which would then need an
+approval nobody else can give. The frontend (`incident-platform-frontend`) is not transferred: it stays outside the
+factory (ADR-0055).
+
+**Approach.** PR 1a: one script, `scripts/factory/owner-login.sh` (with the factory's helpers, so it moves with them in
+stage 4), prints the one admin of
+`.github/repository-settings/repository.json` read where the caller cannot be steered: `--github <owner/repo>` reads
+it on `refs/heads/main` from GitHub's API (not a bare `main`, which a tag could shadow, round 2) (`audit-data.sh`: code run in a session can move a local ref or add a replace ref, review
+round 1, arc-3c71), `<commit>` reads the blob with replace refs and grafts off (factory-guards: the pull request's base,
+in CI's fresh checkout); it fails with no owner on no file, zero or several admins, or a value that is no GitHub login.
+Factory guards counts only that owner's approval, not any organisation member's (ARC-02). The file is a `.github/`
+path only the owner's reviewed pull requests change; GitHub's admins are compared with it only by the owner's own
+`repository-settings.rb check` (CI's read-only token cannot see them, round 1, arc-9a04), so step 5 below is where it
+is proved true after the transfer. ADR-0034 records that its `admins` list is now also the owner's identity. Known and
+not changed here: `audit-data.sh` takes `<owner/repo>` from `gh repo view`, the clone's remote, which code run in a
+session can repoint (as before this item); stage 4's dispatcher names the repository from its environment. ADR-0055 is amended with the
+factory's purpose (a product of its own, stages T and N) before the owner accepts it.
+
+Then the owner, in this order (the transfer keeps issues, pull requests, stars and redirects the old URLs):
+1. Create the free organisation `profitbuild`, the owner its only owner; two-factor authentication required for members.
+2. Settings → Transfer of `lukaszplawiak/incident-platform` to `profitbuild`; then `git remote set-url origin
+   git@github.com:profitbuild/incident-platform.git` in every clone (the Mac, the devcontainer).
+3. Reinstall what is bound to the account rather than the repository: Renovate (the GitHub App, for the organisation,
+   this repository only), and check that Snyk's and the NVD key's secrets and the environments survived.
+4. Organisation settings: base permission "No permission"; members cannot create repositories or change visibility;
+   Actions' "Require actions to be pinned to a full-length commit SHA" at the organisation too, and the repository's own
+   `sha_pinning_required` (ADR-0020) checked still on after the move (ADR-0034 keeps it outside the files); the machine
+   account `lukaszplawiakbot` keeps Write on this repository only, as an outside collaborator, until builder-app replaces
+   it (stage 4).
+5. `ruby .github/scripts/repository-settings.rb check` with the owner's token: the ruleset, its bypass (the admin role:
+   now the organisation's owners too, which is the owner alone), environments, admins and secrets as in the files.
+PR 1b: README's links and badge to the new URL, whatever step 5 found, and one item merged the usual way (stage 1's exit).
+
+**Rollback.** Transfer back to the owner's account (the redirects follow); `owner-login.sh` reads the same file there.
+
+AC1. `audit-data.sh` and factory-guards read the owner from `repository.json` through `owner-login.sh`, on GitHub's main
+and at the pull request's base; neither reads `gh repo view`'s owner or `github.repository_owner` for it, and factory
+guards counts only the owner's approval.
+AC2. With the repository an organisation's, the owner's labels and markers are verified (test-audit-data.sh: the stub's
+repository is `org/r`, the owner `o`); the bot's login in the clone (working tree, origin/main, a replace ref) changes
+nothing, and GitHub's file unreadable or naming two admins leaves the owner unknown and nothing vouched (fail closed).
+AC3. `owner-login.sh` refuses zero or several admins, a non-list, a non-string, a value that is no login, a commit
+without the file, and honours no replace ref or textconv driver (test-owner-login.sh, in Factory guards).
+AC4. After the transfer `repository-settings.rb check` passes with the owner's token, and one item is merged the usual
+way (PR 1b).
+

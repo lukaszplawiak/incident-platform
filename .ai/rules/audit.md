@@ -28,7 +28,10 @@ keeps `verifiedLabels` apart from `unverifiedLabels`. Unverified, and worth noth
 account (the autopilot's machine account included), one with no event in the data, any label while the owner
 cannot be read, and every label on every PR while an autopilot PR is authored by the owner's own login (shadow mode
 on the owner's account: the autopilot then acts with the owner's token, so the actor proves nothing). The report
-names what did not count. An organisation-owned repository has no owner login, so every label is unverified there.
+names what did not count. The owner is the one admin of `.github/repository-settings/repository.json` on main
+(`owner-login.sh`, backlog #0-237), not the repository's owner, which in an organisation is the organisation; when
+GitHub cannot be read, the file is missing or holds no list of logins, or it names not exactly one admin, the owner
+cannot be read.
 A known limit: `ownerIsAutopilot` is read from the autopilot PRs of the audited period, so a session on the owner's
 login that opened none in it, yet labelled the bot's PRs through code it ran, would leave labels with the owner as
 actor; it needs the "code the session runs" gap (README, AI factory) and a period mixing both accounts.

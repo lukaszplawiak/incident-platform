@@ -14,14 +14,18 @@
 # A case's /ready PR is the newest that readied its item and was merged before the run started (backlog #0-220): see
 # "Which /ready PR" below.
 #
-# Owner labels (backlog #0-126): a `human:*` label counts only when the repository owner added it, read from the PR's
+# Owner labels (backlog #0-126): a `human:*` label counts only when the owner added it, read from the PR's
 # label events (the last `labeled` event of a label still on the PR). The data keeps `verifiedLabels` and
 # `unverifiedLabels` apart and strips `human:*` from the raw `labels`, so no reader can count an unchecked one; a
 # label by another account, with no event data, or with the owner unknown is unverified; and while any autopilot PR
 # is authored by the owner's own login, every label is (the autopilot then acts with the owner's token, so the actor
 # proves nothing on any PR — review round 1, sec-4c1e). It fails closed.
-# The owner is the repository's owner login (`gh repo view`), which the autopilot cannot change; an organisation's
-# repository has an organisation there, so every label would be unverified until this reads its members.
+# The owner is the one admin of .github/repository-settings/repository.json on main, read from GitHub (`owner-login.sh
+# --github`), which the autopilot cannot change: only the owner's reviewed pull requests change that file. Fixed
+# (backlog #0-237): it was the repository's owner login (`gh repo view`), which in an organisation's repository is the
+# organisation, so after the move to one (ADR-0055 stage 1) every label and every marker would have been unverified.
+# Not from the local clone: code run in a session can move refs/remotes/origin/main or add a replace ref (review
+# round 1 of #0-237, arc-3c71). The file unreadable, or not exactly one admin: the owner is unknown.
 #
 # Escape markers (backlog #0-129): a `**Fixes:** #0-N · **Escaped from:** <stage>` line counts only when GitHub
 # vouches for who wrote it: the commit that first added the marker itself (from `**Fixes:**` to the stage, found with
@@ -58,8 +62,10 @@ if command -v gh >/dev/null 2>&1; then
     # Who added each label, only for the PRs that carry a human:* one. A failed call leaves that PR without events:
     # its human labels stay unverified, never trusted.
     repo=$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) || repo=""
-    case "$repo" in */*) owner=${repo%%/*} ;; *) repo="" ;; esac
+    case "$repo" in */*) ;; *) repo="" ;; esac
+    # Only with a repository to ask: without one no label event or PR can be read, so an owner would vouch for nothing.
     if [ -n "$repo" ]; then
+        owner=$("$(dirname "$0")/owner-login.sh" --github "$repo" 2>/dev/null) || owner=""
         for n in $(jq -r '.[] | select(any(.labels[]?; .name | ascii_downcase | startswith("human:"))) | .number' "$prs_file"); do
             ev=$(gh api "repos/$repo/issues/$n/events" --paginate 2>/dev/null \
                  | jq -s '[.[][]? | select(.event == "labeled") | {label: .label.name, actor: .actor.login}]' 2>/dev/null) || continue
