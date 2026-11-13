@@ -23,23 +23,25 @@ ignore:
   # which fixes them and the 2026-10-20 findings. A new Tomcat finding is fixed there, not ignored here.
 
   # ── Netty (via Spring Boot 3.x / Lettuce / Redis) ─────────────────────────
-  # Fix requires upgrade to Spring Boot 4.0 (lettuce-core 6.x -> 7.x -> netty 4.2.x).
-  # Redis connection is internal-only, not exposed to untrusted network.
+  # Written when Netty was Spring Boot 3.5's 4.1.135 and the fix was said to need Netty 4.2 (Spring Boot 4).
+  # Since backlog #0-69 (A1) the root POM overrides Netty to 4.1.140, which Netty still patches, so these
+  # may be fixed already: #0-69's B3 re-checks them (drop the ignore if Snyk no longer reports the id)
+  # before they expire. Redis connection is internal-only, not exposed to untrusted network.
 
   SNYK-JAVA-IONETTY-16438322:
     - '*':
         reason: >
-          Netty CVE requires upgrade to Spring Boot 4.0 via lettuce-core.
-          Tracked for resolution during Spring Boot 4.x migration.
-          Redis connection is internal network only, not reachable from untrusted clients.
+          Recorded as needing Netty 4.2 (Spring Boot 4); Netty is 4.1.140 since backlog #0-69, which may
+          fix it, re-checked in #0-69 B3. Redis connection is internal network only, not reachable from
+          untrusted clients.
         expires: '2027-01-01T00:00:00.000Z'
 
   SNYK-JAVA-IONETTY-16438930:
     - '*':
         reason: >
-          Netty CVE requires upgrade to Spring Boot 4.0 via lettuce-core.
-          Tracked for resolution during Spring Boot 4.x migration.
-          Redis connection is internal network only.
+          Recorded as needing Netty 4.2 (Spring Boot 4); Netty is 4.1.140 since backlog #0-69, which may
+          fix it, re-checked in #0-69 B3. Redis connection is internal network only, not reachable from
+          untrusted clients.
         expires: '2027-01-01T00:00:00.000Z'
 
   # ── lz4-java (via kafka-clients) ──────────────────────────────────────────

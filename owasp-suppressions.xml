@@ -172,7 +172,8 @@
          of version — netty-transport, netty-transport-native-unix-common, and
          netty-codec each in turn were flagged at 4.1.135.Final, even though
          4.1.135.Final is past the 4.1.133.Final release that fixed this CVE
-         upstream.
+         upstream. Since backlog #0-69 the root POM overrides Netty to
+         4.1.140.Final, past that fix too.
 
          Narrower regexes were tried (netty-transport@.*, then
          netty-transport.*@.*) but this is whack-a-mole: Netty has dozens of
@@ -189,7 +190,8 @@
             project does not use (no HTTP/3). OWASP maps every io.netty:* artifact
             to the same broad cpe:2.3:a:netty:netty:* CPE. netty-transport,
             netty-transport-native-unix-common, and netty-codec each appeared in
-            turn at 4.1.135.Final (past the 4.1.133.Final fix). Suppression widened
+            turn at 4.1.135.Final (past the 4.1.133.Final fix; 4.1.140.Final since
+            backlog #0-69). Suppression widened
             to full io.netty groupId to stop the whack-a-mole.
             Tracked upstream: dependency-check/DependencyCheck#8576
         </notes>
