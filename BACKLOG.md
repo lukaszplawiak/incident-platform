@@ -147,6 +147,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-233](#0-233-no-guard-protects-the-marks-of-factory-ops-runs) | No guard protects the marks of factory-ops runs | security | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Open |
+| [0-235](#0-235-the-shell-guard-does-not-see-a-protected-runtime-path-removed-through-its-parent) | The shell guard does not see a protected runtime path removed through its parent | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -5416,6 +5417,37 @@ analyst reads the count as a case.
 **Acceptance criteria.**
 AC1. A refused second call adds one line to the record and an allowed call adds none, shown by test cases; the
 audit's data lists the count of the period.
+
+---
+
+### 0-235. The shell guard does not see a protected runtime path removed through its parent
+
+**Type:** security · **Priority:** Low · **Status:** Open. From the security review (FAC-S03, and its rule gap) of #0-233
+(2026-11-13).
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
+**Touches:** factory (.claude/hooks/guard-protected-bash.sh, .claude/hooks/test-hooks.sh), root (.ai/rules/review/factory.md
+(owner), BACKLOG.md), docs (README.md "Infrastructure Hardening", ADR-0053)
+
+**Problem.** `guard-protected-bash.sh` refuses a shell write that names a protected path. `.ai/runs/LOCK`,
+`.ai/runs/state.json` and `.ai/runs/ops-calls/` (#0-233) sit under `.ai/runs/`, which is not protected (an item's own
+`.ai/runs/<item>/` is the implementer's), so a command that removes them without naming them passes: `rm -rf
+.ai/runs`, `rm -rf .ai/runs/*`, a glob (`rm .ai/runs/ops-call?/*`), `find .ai/runs -type l -delete`, `cd .ai/runs &&
+rm -rf ops-calls`. Deleting the lock lets a second run start; deleting a mark gives a running factory-ops a second
+call. Low today: the autopilot's allow list has no `rm`, `find` or `cd` (`dontAsk`), so only code run through
+`./mvnw` (#0-116) reaches them, and no agent with Bash runs alongside a factory-ops (`parallel()` runs only the
+read-only review panels). It matters once an allow rule widens. No review rule asks whether a protected path can be
+removed through a parent the list does not cover.
+
+**Proposed, to decide with the item.** (a) The guard also refuses a write verb whose argument is an ancestor of a
+runtime entry (`.ai/runs`, `.ai/runs/`, `.ai/runs/*`, `.ai`) or a glob that could expand to one, and `find` with
+`-delete`/`-exec` under `.ai/runs`; or (b) move the runtime state into a directory of its own (`.ai/runs/.state/`)
+that is protected whole, so a parent is a protected path itself (changes `state.sh`, the hooks and ADR-0053's mark
+path); with (a) or (b), a `factory.md` rule (owner) for the reviewers.
+
+**Acceptance criteria.**
+AC1. A shell command that removes `.ai/runs/LOCK`, `.ai/runs/state.json` or a mark of `.ai/runs/ops-calls/` through a
+parent or a glob is refused, and the implementer's `mkdir -p .ai/runs/<item>` still passes, shown by test cases.
+AC2. README "Infrastructure Hardening" and ADR-0053 no longer name it as not covered.
 
 ---
 

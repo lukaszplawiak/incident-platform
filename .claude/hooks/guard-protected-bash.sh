@@ -6,11 +6,15 @@
 # CODEOWNERS on the PR and the autopilot's changed-paths check before review.
 #
 # Protected: the paths of .ai/rules/protected-paths.md (their one list), its runtime-state list among them (.git/,
-#            .ai/runs/LOCK and state.json, .ai/STOP). This copy stays a literal regex, so the last line does not
+#            .ai/runs/LOCK and state.json, .ai/runs/ops-calls/, .ai/STOP). This copy stays a literal regex, so the last line does not
 #            depend on parsing that file; .github/scripts/check-protected-paths.sh fails CI when it misses an
 #            entry, and when it holds one the list lacks (backlog #0-168): it reads `protected=` below as a flat
 #            alternation, one path per alternative, so keep it on one line with no group inside.
 #            Fixed (backlog #0-122): .ai/audit/decisions.md was denied to Edit/Write but not covered here.
+#            Fixed (backlog #0-233): .ai/runs/ops-calls/, the marks that give a factory-ops run its one call
+#            (#0-169, ADR-0053), was not protected, so another agent's Bash could delete a mark and give a running
+#            factory-ops a second call. Matched without its trailing `/`, so `rm -rf .ai/runs/ops-calls` counts
+#            too. The marks themselves are made by factory-ops-bash.sh, a hook, which this guard does not see.
 # A command that only reads (git diff/log/show, cat, grep, ls, head, tail, wc) passes.
 # Also refused, whatever the verb: commands naming a secret (docker/.env, docker/secrets, application-local,
 # credentials files, gh/ssh config) and `git diff --no-index`, which reads any file around the Read denies.
@@ -48,7 +52,7 @@ if finds "$cmd" '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-p
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi
 
-protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/LOCK|\.ai/runs/state\.json|\.ai/STOP)'
+protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/LOCK|\.ai/runs/state\.json|\.ai/runs/ops-calls|\.ai/STOP)'
 finds "$cmd" "$protected" || exit 0
 
 # git's own writing options count as writes (backlog #0-131, review round 3): `--output=<file>` writes the file, and

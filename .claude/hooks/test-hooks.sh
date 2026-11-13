@@ -313,6 +313,13 @@ expect 0 "git log without --output"      "$P" -- "$(bash_call 'git log -1 -- .ai
 expect 2 "write the run state"            "$P" -- "$(bash_call 'echo {} > .ai/runs/state.json')"
 expect 2 "write into .git"               "$P" -- "$(bash_call 'echo x > .git/hooks/pre-commit')"
 expect 0 "another file in .ai/runs"      "$P" -- "$(bash_call 'echo x > .ai/runs/notes.txt')"
+# Backlog #0-233: the marks of factory-ops runs (#0-169) — deleting one would give a running factory-ops a second
+# call, and a directory or a file at a mark's name refuses that run's call. The implementer's own run directory passes.
+expect 2 "delete a factory-ops mark"      "$P" -- "$(bash_call 'rm .ai/runs/ops-calls/a1')"
+expect 2 "delete the marks' directory"    "$P" -- "$(bash_call 'rm -rf .ai/runs/ops-calls')"
+expect 2 "repoint a factory-ops mark"     "$P" -- "$(bash_call 'ln -sfn tu9 .ai/runs/ops-calls/a1')"
+expect 2 "a directory at a mark's name"   "$P" -- "$(bash_call 'mkdir -p .ai/runs/ops-calls/a1')"
+expect 0 "the implementer's run directory" "$P" -- "$(bash_call 'mkdir -p .ai/runs/0-25')"
 expect 2 "rewrite the queue"              "$P" -- "$(bash_call 'sed -i s/A/B/ .ai/plan/queue.md')"
 expect 2 "delete STOP"                    "$P" -- "$(bash_call 'rm .ai/STOP')"
 
