@@ -6247,7 +6247,7 @@ sample per pattern compares little).
 
 ### 0-237. Migration stage 1: the organisation `profitbuild` and the transfer of incident-platform
 
-**Type:** ci · **Priority:** High · **Status:** In progress — PR 1a (this item's code) first, then the owner's transfer, then PR 1b. Stage 1 of ADR-0055 (owner, 2026-11-13).
+**Type:** ci · **Priority:** High · **Status:** In progress — PR 1a (this item's code, PR #623) first, then the owner's transfer, then PR 1b. Stage 1 of ADR-0055 (owner, 2026-11-13).
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** — (stage 0, ADR-0055 merged in PR #620)
 **Touches:** factory (scripts/factory/audit-data.sh, scripts/factory/owner-login.sh, .github/scripts/test-owner-login.sh,
 .github/scripts/test-audit-data.sh, .github/workflows/factory-guards.yml), root (.ai/decisions/ (ADR-0055, ADR-0034),
