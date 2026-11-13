@@ -1,0 +1,82 @@
+# ============================================================
+# Signing key watch (backlog #0-152, ADR-0033)
+#
+# Every Monday, compares each signing key committed under .github/keys/ with the one its publisher publishes
+# (watch-signing-keys.sh, each key's <fingerprint>.source names where). Snyk rotates its code-signing key, a new
+# fingerprint every two years, and published its 2025 key two days after the 2023 one expired: a rotation must
+# be seen the week it happens. A rotated, revoked or extended key opens (once) an issue for the owner; refreshing
+# the key file still takes ADR-0033's three-way fingerprint check, in the owner's pull request. A watch that
+# cannot look (a key without its source, a publisher's file moved or unreadable) opens its own issue and fails
+# this job: that is the case of a publisher moving its key, which must not pass as quiet.
+#
+# Runs on main only (schedule and dispatch run on the default branch); no pull_request trigger, so no
+# concurrency block (the rule of .ai/context/infrastructure.md "CI gotchas" is for pull_request workflows).
+# ============================================================
+
+name: Signing key watch
+
+on:
+  schedule:
+    # Every Monday 08:30 Warsaw time (06:30 UTC), between the OWASP and Snyk scans
+    - cron: '30 6 * * 1'
+  workflow_dispatch:
+
+# GITHUB_TOKEN scope (backlog #0-59): nothing at the workflow level; the job asks for what it uses.
+permissions: {}
+
+jobs:
+  watch:
+    name: Signing keys match their publishers
+    # contents: read for the checkout and the publishers' public files; issues: write for the one issue.
+    permissions:
+      contents: read
+      issues: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # No step pushes; a later step must not find GITHUB_TOKEN in .git/config (backlog #0-60).
+          persist-credentials: false
+
+      - name: Compare the committed keys with their publishers
+        id: watch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          rc=0
+          .github/scripts/watch-signing-keys.sh > "$RUNNER_TEMP/watch.txt" 2>&1 || rc=$?
+          cat "$RUNNER_TEMP/watch.txt"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          case "$rc" in 0|3) ;; *) echo "::error::the watch could not check every key (exit $rc)" ;; esac
+
+      # One open issue at a time, found by its label and its author: only a collaborator can set a label and only
+      # this workflow's token writes as github-actions, so an issue someone else opens with the same title cannot
+      # silence the watch (the repository is public; review round 1 of #0-152). A watch that could not look (exit 1:
+      # a key without its source, a publisher's file moved or unreadable) opens one too, then fails the job.
+      - name: Open the signing key issue
+        if: steps.watch.outputs.rc != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RC: ${{ steps.watch.outputs.rc }}
+        run: |
+          set -euo pipefail
+          if [ "$RC" = 3 ]; then
+            title="A signing key changed at its publisher: refresh .github/keys/ (backlog #0-152)"
+            next="Refresh the key file after ADR-0033's three-way fingerprint check (the publisher's repository, its documentation, keys.openpgp.org): for a new key add its file and .source, change the pin's verify=gpg: and bump the pin to a release that key signed, in one pull request; for a revoked key refresh the file at once. Close this issue when it is merged."
+          else
+            title="The signing key watch could not check every key (backlog #0-152)"
+            next="The watch could not read a key, its .source or the publisher's file (moved, renamed, unreachable). Find where the publisher keeps the key now and fix the .source, or the key file, in a pull request. Close this issue when the watch is green."
+          fi
+          # The exact title, compared by jq: a search query would have to escape its colons and parentheses.
+          open=$(gh issue list --state open --label security --author app/github-actions --limit 200 --json title |
+            jq --arg t "$title" '[.[] | select(.title == $t)] | length')
+          if [ "$open" -gt 0 ]; then
+            echo "the issue is already open"
+          else
+            body=$(printf 'watch-signing-keys.sh (exit %s):\n\n~~~\n%s\n~~~\n\n%s\n' "$RC" "$(cat "$RUNNER_TEMP/watch.txt")" "$next")
+            gh issue create --title "$title" --label security --body "$body"
+          fi
+          [ "$RC" = 3 ]

@@ -320,7 +320,11 @@ with `gh api repos/{owner}/{repo}/...` after changing anything in Settings).
   named by the pin's `verify=`: a GitHub artifact attestation (actionlint, zizmor), the asset in an immutable
   release's attestation (betterleaks: nothing about how it was built, but neither tag nor asset replaceable since,
   ADR-0036), a `sha256sums.txt.asc` signed
-  by Snyk's code-signing key (committed under `.github/keys/`), the release's `CHECKSUMS` (kubeconform: same host,
+  by Snyk's code-signing key (committed under `.github/keys/`; once the key expires only a pin already on main before
+  the expiry, whose signature predates it, still passes, so the jobs that hold `SNYK_TOKEN` decide it on the full
+  history, and a weekly watch, `signing-keys.yml`, opens an issue when Snyk publishes a new, revoked or extended
+  key: #0-152), the release's
+  `CHECKSUMS` (kubeconform: same host,
   catches a swapped file, not a malicious release), or GitHub's digest alone (shellcheck signs nothing). Until
   #0-147 every bump was by hand and no tool was tracked. Since #0-149 `check-downloads.rb` refuses a download
   that would bypass the pins: curl, wget, a release asset's URL or `gh release download` in any workflow's or

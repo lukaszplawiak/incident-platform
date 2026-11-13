@@ -54,8 +54,8 @@ applied by `.github/scripts/repository-settings.rb apply` with the owner's token
   `main`): with one person and Renovate it mostly forces rebases; the push to `main` runs CI again, and a red
   `main` stops the autopilot (`main-guard.yml`);
 - **bypass: the repository admin role, in `pull_request` mode.** The owner may merge their own PR without a
-  review and, when CI is red or missing for an outside reason (GitHub's API down, the Snyk key, #0-152, a flaky
-  test), with a red check; GitHub records the bypass on the PR and in the audit log. Nobody pushes to `main`
+  review and, when CI is red or missing for an outside reason (GitHub's API down, a flaky test; the Snyk key's
+  expiry was one until #0-152), with a red check; GitHub records the bypass on the PR and in the audit log. Nobody pushes to `main`
   directly, the owner included, and nobody force-pushes or deletes it. The bot (Write) has no bypass.
 
 Around the bypass:
