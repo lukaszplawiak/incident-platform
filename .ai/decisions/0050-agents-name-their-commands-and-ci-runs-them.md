@@ -32,7 +32,9 @@ The precedent for a check that keeps the agents' definitions and the settings co
    glob, `..`, `git -C`, `cd`); the allow and deny rules of both settings files, merged as the session merges them;
    and every PreToolUse Bash hook of both settings files plus that agent's own frontmatter, in a throwaway repository
    with a run lock.
-4. The families are a model learnt from refusals, not Claude Code's own check. Running the lists in a real `dontAsk`
+4. Extended by ADR-0054 (#0-235): the same check holds every `Bash(...)` allow rule, and a preloaded skill's
+   `allowed-tools`, to a list of safe prefixes, so no rule lets an agent remove a path it does not name.
+5. The families are a model learnt from refusals, not Claude Code's own check. Running the lists in a real `dontAsk`
    session is the owner's tool, after a Claude Code update (#0-214), not a CI step: CI holds no Claude credentials.
 
 ## Alternatives considered

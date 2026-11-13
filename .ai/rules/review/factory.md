@@ -50,12 +50,26 @@ a new channel, a new combination of powers).
   is a finding. No allow rule or skill's `allowed-tools` entry is a wildcard over a command with an option that
   writes a file or runs a program (`git show *` and `git diff *` take `--output=<file>`, `--ext-diff`), unless a
   hook of that session refuses the option: pre-approved means no prompt, in a session that reads the change (review
-  round 2 of #0-161; #0-165 removed them from `/review` and `/accept`, #0-167 is the rest). A mode of a guard hook
+  round 2 of #0-161; #0-165 removed them from `/review` and `/accept`, #0-167 is the rest). No allow rule or
+  `allowed-tools` entry of an autopilot session runs a program that can remove or move a path it does not name
+  (`rm`, `find`, `mv`, an interpreter, `git clean`, a wrapper such as `env`): the runtime state the factory trusts
+  (`.ai/runs/LOCK`, `state.json`, the factory-ops marks, `.ai/STOP`) is gitignored, out of every diff, and the shell
+  guard sees only a command that names it (#0-235, ADR-0054). A new `SAFE_PREFIXES` entry of
+  `check-agent-commands.rb` whose program can, that acts on the working tree the state lives in (git's `add`, `rm`,
+  `mv`, `switch`: exemptions until #0-236 moves the state out), or that is wider than the allow rules it covers, an
+  allow rule whose text holds a shell operator, or an `EXEMPT_RULES` entry without a concrete reason, is a finding.
+  `git_runtime_unsafe` (`_lib.sh`) is a heuristic over git's forms, not this control: a change that calls it one, or
+  drops a form it refuses, is a finding. A guard that matches a protected path as text resolves the spellings a path
+  takes without changing first (`//`, `/./`; `..` where Claude Code does not refuse it): one that checks the literal
+  spelling only is a finding (review round 3 of #0-235: `git log --output=.ai/runs//LOCK` overwrote the lock).
+  A mode of a guard hook
   that lets a command through by its first words allows its options and arguments too, so it names the forms it
   allows, and an argument that reads outside the repository's tracked files (a directory whose own files a tool
   loads, `kubectl kustomize .`) is one of them only when the hook checks where it leads (#0-182). Backed by:
   `check-web-access.sh` (every agent declares `tools:`, the verifier's exact read scope in its frontmatter and in
-  both settings files) and `check-hook-entries.rb` (each frontmatter guard has its twin in both settings files).
+  both settings files), `check-hook-entries.rb` (each frontmatter guard has its twin in both settings files) and
+  `check-agent-commands.rb` rule 4 (every Bash allow rule starts with a safe prefix or is a reasoned exemption, and
+  holds no shell operator) and `test-hooks.sh` (the forms `git_runtime_unsafe` refuses).
   Check: a widened `tools:`, scope or prefix, or a scope dropped from one of its places; a new allow rule,
   `allowed-tools` entry or hook mode, and every option and argument of the command it lets through.
 - **FAC-S04 A guard fails closed.** Every way a PreToolUse guard can fail ends in `exit 2`: its helper does not

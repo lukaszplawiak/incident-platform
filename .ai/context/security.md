@@ -82,7 +82,11 @@ on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are w
   its frontmatter and a twin in both settings files keyed on `agent_type` (`--agent`, `applies_to_agent` in
   `_lib.sh`), kept equal by `check-hook-entries.rb`, which also checks that the session-wide guards are wired
   (#0-164, ADR-0041). Every command form an agent with Bash is told to run is in a marked list of its definition,
-  and `check-agent-commands.rb` runs each through the hooks and both settings files' rules (#0-207, ADR-0050).
+  and `check-agent-commands.rb` runs each through the hooks and both settings files' rules (#0-207, ADR-0050); it
+  also holds every Bash allow rule (and a preloaded skill's `allowed-tools`) to prefixes that cannot remove a path
+  they are not given, or a reasoned exemption, since the gitignored runtime state is out of every diff (#0-235,
+  ADR-0054). git's `add`/`rm`/`mv`/`switch` are such exemptions: they act on the working tree the state lives in, and
+  `git_runtime_unsafe` refuses only the plain forms of `add`/`rm`/`mv` until the state leaves it (#0-236).
   `/review` and `/accept` pre-approve exact commands only (git's `--output`, `--ext-diff`,
   `--textconv` write or run; a hook for the skills that keep wildcards is #0-167), and reviewers read
   `.ai/rules/review/` from `refs/remotes/origin/main` (the full name: a local branch called `origin/main`
