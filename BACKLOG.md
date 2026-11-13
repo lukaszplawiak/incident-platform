@@ -116,7 +116,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-112](#0-112-mutation-testing-on-the-classes-a-pr-changes) | Mutation testing on the classes a PR changes | ci | Low | Open |
 | [0-116](#0-116-the-devcontainer-firewall-does-not-bind-code-an-agent-runs) | The devcontainer firewall does not bind code an agent runs | design | High | Open |
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
-| [0-169](#0-169-a-factory-ops-call-is-not-bound-to-the-command-the-workflow-named) | A factory-ops call is not bound to the command the workflow named | security | Medium | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
 | [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
@@ -3069,8 +3068,9 @@ cannot is recorded, with the case shown either way.
 
 ### 0-169. A factory-ops call is not bound to the command the workflow named
 
-**Type:** security · **Priority:** Medium · **Status:** Open — `nonBlocking` of review-security in round 2 of the
-`/review` of #0-131 (2026-10-25)
+**Type:** security · **Priority:** Medium · **Status:** Done, PR #617 (2026-11-13). Kept in full for the decision, the
+spike and the live check (ADR-0053). From the `nonBlocking` of review-security in round 2 of the `/review` of #0-131
+(2026-10-25)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-131
 **Touches:** factory (.claude/agents/factory-ops.md, .claude/hooks/factory-ops-bash.sh, .claude/hooks/test-hooks.sh),
 docs (README.md "Infrastructure Hardening", .ai/decisions/0053)
