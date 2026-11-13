@@ -167,7 +167,7 @@ Who writes and who reads each file. One writer per file per stage; `progress.md`
 | `BACKLOG.md` (`**Touches:**`, added `**Depends on:**`) | planner, ready-checker (drafts) — owner approves by merge | planner, `next-item.sh`, `check-queue.sh` |
 | `BACKLOG.md` (new `proposed` follow-up items) | shipper, from `handoff.md` "Follow-up needed" | owner (`/ready`) |
 | `.ai/plan/queue.md` | planner (proposal, `/plan-backlog`) — **owner approves by merge**; autopilot never | `next-item.sh`, `check-queue.sh`, planner |
-| `BACKLOG-DONE.md` (new row) + removal from `BACKLOG.md` | shipper, `/ship` | everyone resolving `backlog #N` |
+| `BACKLOG-DONE.md` (new row, and the item's section moved to its "Details") + removal from `BACKLOG.md` | shipper, `/ship` | everyone resolving `backlog #N` |
 | `CLAUDE.md` inside `agent-editable` blocks | implementer | everyone |
 | `CLAUDE.md` elsewhere, `AGENTS.md` | owner | everyone |
 | `.ai/context/*` | owner; implementer in the same PR when the change creates the knowledge (reviewed by `review-docs`) | per reading order |

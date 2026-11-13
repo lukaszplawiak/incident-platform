@@ -191,6 +191,15 @@ expect_jq "no queue file is valid"         "$($CQ)" '.valid and (.present | not)
 queue 0-1 0-2 0-3;                         expect_jq "dependency before dependant"   "$($CQ)" '.valid and .openRows == 3'
 queue 0-2 0-1;                             expect_jq "dependency queued after"       "$($CQ)" '(.valid | not) and (.errors | any(test("queued after")))'
 queue 0-2;                                 expect_jq "dependency missing"            "$($CQ)" '(.valid | not) and (.errors | any(test("neither done nor queued")))'
+# A finished item's section under "## Details" that holds a table row of the open 0-1: not a done row.
+cp BACKLOG-DONE.md BACKLOG-DONE.bak
+printf '\n## Details\n\n### 0-9. Nine\n\n| 0-1 | quoted in a table of its own | PR #2 |\n' >> BACKLOG-DONE.md
+queue 0-2;                                 expect_jq "a row under Details is not done" "$($CQ)" '(.valid | not) and (.errors | any(test("neither done nor queued")))'
+# Details long enough that a reader which stops at the heading would close the pipe on `cat` (SIGPIPE): the done table
+# above it must still be read (0-9 done, so queueing it alone is valid).
+for _ in $(seq 20000); do echo "filler line of a long finished section"; done >> BACKLOG-DONE.md
+queue 0-9;                                 expect_jq "a long Details still reads the table" "$($CQ)" '.valid and .openRows == 0'
+mv BACKLOG-DONE.bak BACKLOG-DONE.md
 queue 0-7 0-3;                             expect_jq "shared next to others is fine" "$($CQ)" '.valid'
 queue 0-5;                                 expect_jq "human-only queued"             "$($CQ)" '(.valid | not) and (.errors | any(test("human-only")))'
 queue 0-6;                                 expect_jq "design item queued"            "$($CQ)" '(.valid | not) and (.errors | any(test("design item")))'

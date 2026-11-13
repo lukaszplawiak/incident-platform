@@ -59,8 +59,10 @@ The one exception is step 7's `gh pr merge <number> --squash --auto`: denied in 
 ## Mode `ship`
 
 1. `git status` must be clean and the branch must be the item's branch; otherwise stop with an error.
-2. `BACKLOG.md`: remove the item's section and its row in the open-items table. `BACKLOG-DONE.md`: add a
-   row `| <n> | <one-line summary of what was delivered> | PR #pending |`.
+2. `BACKLOG.md`: remove the item's row in the open-items table, and move its section, unchanged apart from its
+   status (`Done, PR #pending (<date>)`), to the end of `BACKLOG-DONE.md` (its "Details" part). `BACKLOG-DONE.md`:
+   add a row `| <n> | <one-line summary of what was delivered>; details in [the section](#<anchor>) | PR #pending |`
+   to its table (the anchor of the moved `### <n>. <title>` heading, as `/ship` writes it).
    **Follow-ups** (`.ai/rules/planning.md`, "Follow-ups"): for each entry under "Follow-up needed" in
    `.ai/work/<item>/handoff.md` (at most 3; more → stop with an error, the item was mis-scoped), add a
    backlog item:
@@ -89,8 +91,8 @@ The one exception is step 7's `gh pr merge <number> --squash --auto`: denied in 
    If a draft PR exists: `gh pr edit <number> --body-file <file> --remove-label blocked --add-label
    autopilot` (plus `shadow` / `risk-high` as above), then `gh pr ready <number>`. Never create labels; the
    preflight refuses to start while one is missing.
-6. Replace `PR #pending` in `BACKLOG-DONE.md` with the PR number, commit `chore(factory): record PR for
-   backlog #<item>`, `git push -u origin <branch>`.
+6. Replace both `PR #pending` in `BACKLOG-DONE.md` (the row and the moved section's status) with the PR number,
+   commit `chore(factory): record PR for backlog #<item>`, `git push -u origin <branch>`.
 7. Merge: only when your task says `merge: true` (not shadow, not risk-high):
    `gh pr merge <number> --squash --auto` — GitHub merges once every required check is green. In shadow
    mode the session's settings deny `gh pr merge` anyway. If the merge command is refused or fails, the
