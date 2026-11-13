@@ -12,9 +12,11 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
   from GitHub issue/PR numbers, which use the same `#N` form.
 - **Every `TODO`/`FIXME` in code must reference an item** (`TODO (backlog #N)`), per CLAUDE.md.
   Add the item here first, then reference it.
-- **Status:** `Open` · `In progress` · `Blocked` · `Done`. A finished item leaves this file: its row
-  moves to [`BACKLOG-DONE.md`](BACKLOG-DONE.md) with the PR, so references in code stay resolvable.
-  `Blocked` names its reason in one line (`**Status:** Blocked — <reason> (autopilot run <id>)`).
+- **Status:** `Open` · `In progress` · `Blocked` · `Done`. A finished item leaves this file: its row moves to
+  [`BACKLOG-DONE.md`](BACKLOG-DONE.md) with the PR, so references in code stay resolvable. `Blocked` names its reason
+  in one line (`**Status:** Blocked — <reason> (autopilot run <id>)`); an item the owner freezes because a later
+  change replaces it reads `**Status:** Blocked — superseded by <what> (ADR-NNNN, <date>); was <old status>`, and its
+  index row `Blocked (superseded, ADR-NNNN)`.
 - **Type:** `bug` · `security` · `design` (a decision is needed before implementation) · `tech-debt` ·
   `performance` · `ci` · `docs`. The type gives an autopilot item's branch prefix; the table is `BRANCH_PREFIX_OF` in
   `scripts/factory/_backlog.sh`, and an item of a type it does not list is never chosen (backlog #0-195).
@@ -118,35 +120,35 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-117](#0-117-the-escalation-level-bound-is-hard-coded-in-three-services) | The escalation level bound is hard-coded in three services | tech-debt | Low | Open |
 | [0-171](#0-171-a-seed-bugs-run-that-measured-nothing-leaves-no-record) | A `/seed-bugs` run that measured nothing leaves no record | ci | Low | Open |
 | [0-178](#0-178-a-real-defect-the-panel-missed-never-becomes-a-seeded-pattern) | A real defect the panel missed never becomes a seeded pattern | design | Medium | Open |
-| [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Open |
+| [0-183](#0-183-the-k8s-reviewer-could-render-a-tracked-only-snapshot-with-no-network) | The k8s reviewer could render a tracked-only snapshot with no network | security | Low | Blocked (superseded, ADR-0055) |
 | [0-188](#0-188-a-logged-exceptions-message-reaches-the-log-as-the-library-wrote-it) | A logged exception's message reaches the log as the library wrote it | security | Medium | Open |
 | [0-190](#0-190-a-failed-seed-bugs-run-leaves-the-tree-on-its-branch-once-the-seeder-has-edited) | A failed `/seed-bugs` run leaves the tree on its branch once the seeder has edited | ci | Low | Open |
 | [0-193](#0-193-four-forked-security-chains-do-not-add-apikeyauthfilter-as-sec-12-says-they-do) | Four forked security chains do not add `ApiKeyAuthFilter`, as SEC-12 says they do | security | Medium | Open |
-| [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Open |
+| [0-201](#0-201-a-ready-items-touches-line-is-validated-only-once-it-is-queued) | A `ready` item's Touches line is validated only once it is queued | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-202](#0-202-the-owner-and-the-bot-share-one-working-tree) | The owner and the bot share one working tree | design | Low | Open |
 | [0-204](#0-204-a-runs-record-keeps-no-run-id-no-agent-calls-and-no-stage-of-each-commit) | A run's record keeps no run id, no agent calls and no stage of each commit | ci | Low | Open |
 | [0-205](#0-205-a-runs-transcripts-expire-after-90-days-and-nothing-reads-them-per-agent) | A run's transcripts expire after 90 days and nothing reads them per agent | ci | Low | Open |
 | [0-208](#0-208-five-route-walks-hold-five-copies-of-isexempt) | Five route walks hold five copies of `isExempt` | tech-debt | Low | Open |
-| [0-210](#0-210-twenty-one-deny-rules-of-the-autopilot-settings-never-match) | Twenty-one deny rules of the autopilot settings never match | ci | Low | Open |
-| [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Open |
+| [0-210](#0-210-twenty-one-deny-rules-of-the-autopilot-settings-never-match) | Twenty-one deny rules of the autopilot settings never match | ci | Low | Blocked (superseded, ADR-0055) |
+| [0-211](#0-211-two-lists-of-secret-paths-and-nothing-keeps-them-equal) | Two lists of secret paths, and nothing keeps them equal | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-212](#0-212-a-factory-commit-does-not-say-which-run-and-which-agent-wrote-it) | A factory commit does not say which run and which agent wrote it | ci | Low | Open |
-| [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Open |
-| [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Open |
-| [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Open |
+| [0-213](#0-213-an-exception-ends-the-autopilot-and-the-audit-workflows-with-no-outcome) | An exception ends the autopilot and the audit workflows with no outcome | ci | Low | Blocked (superseded, ADR-0055) |
+| [0-214](#0-214-the-agents-command-lists-are-not-run-through-claude-codes-own-permission-check) | The agents' command lists are not run through Claude Code's own permission check | ci | Low | Blocked (superseded, ADR-0055) |
+| [0-217](#0-217-start-itemsh-copies-the-work-template-without-checking-it-for-symlinks) | start-item.sh copies the work template without checking it for symlinks | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-218](#0-218-no-seeded-pattern-measures-security-on-a-weakened-forked-chain-or-an-idor) | No seeded pattern measures security on a weakened forked chain or an IDOR | ci | Low | Open |
 | [0-219](#0-219-performances-seeded-results-predate-the-blind-panel-and-no-clean-run-measures-its-false-alarms) | performance's seeded results predate the blind panel, and no clean run measures its false alarms | ci | Low | Open |
 | [0-221](#0-221-two-audit-reports-of-one-day-can-give-the-same-recommendation-id) | Two audit reports of one day can give the same recommendation id | ci | Low | Open |
 | [0-224](#0-224-no-reviewer-is-told-to-read-the-log-pipelines-rules-when-a-change-touches-docker) | No reviewer is told to read the log pipeline's rules when a change touches `docker/` | ci | Low | Open |
-| [0-225](#0-225-the-autopilot-allows-the-grep-and-glob-tools-and-no-secret-rule-or-hook-names-them) | The autopilot allows the Grep and Glob tools, and no secret rule or hook names them | security | Low | Open |
-| [0-226](#0-226-a-resumed-run-records-no-scope) | A resumed run records no scope | ci | Low | Open |
-| [0-227](#0-227-a-risk-high-items-real-needs_human-ships-as-a-pr-instead-of-stopping) | A risk-high item's real `NEEDS_HUMAN` ships as a PR instead of stopping | ci | Low | Open |
-| [0-228](#0-228-a-blocked-draft-writes-scope-not-measured-and-the-audit-reads-scopenot) | A BLOCKED draft writes "Scope: not measured." and the audit reads `scope:not` | ci | Low | Open |
+| [0-225](#0-225-the-autopilot-allows-the-grep-and-glob-tools-and-no-secret-rule-or-hook-names-them) | The autopilot allows the Grep and Glob tools, and no secret rule or hook names them | security | Low | Blocked (superseded, ADR-0055) |
+| [0-226](#0-226-a-resumed-run-records-no-scope) | A resumed run records no scope | ci | Low | Blocked (superseded, ADR-0055) |
+| [0-227](#0-227-a-risk-high-items-real-needs_human-ships-as-a-pr-instead-of-stopping) | A risk-high item's real `NEEDS_HUMAN` ships as a PR instead of stopping | ci | Low | Blocked (superseded, ADR-0055) |
+| [0-228](#0-228-a-blocked-draft-writes-scope-not-measured-and-the-audit-reads-scopenot) | A BLOCKED draft writes "Scope: not measured." and the audit reads `scope:not` | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-229](#0-229-ingestions-redis-dedup-and-rate-limits-are-tested-only-against-mocks) | ingestion's Redis dedup and rate limits are tested only against mocks | tech-debt | Low | Open |
 | [0-230](#0-230-renovate-rebases-every-open-pr-on-every-merge-58-of-the-actions-minutes) | Renovate rebases every open PR on every merge: 58% of the Actions minutes | ci | Medium | Open |
 | [0-231](#0-231-a-new-push-to-a-pull-request-does-not-cancel-its-running-ci) | A new push to a pull request does not cancel its running CI | ci | Low | Open |
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
-| [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Open |
-| [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Open |
+| [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Blocked (superseded, ADR-0055) |
+| [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Blocked (superseded, ADR-0055) |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -161,7 +163,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-156](#0-156-secrets-are-scanned-only-after-the-push) | Secrets are scanned only after the push | security | Medium | Open |
 | [0-158](#0-158-spring-boot-35-is-out-of-open-source-support-decide-the-move-to-4x) | Spring Boot 3.5 is out of open-source support; decide the move to 4.x | design | High | Open |
 | [0-159](#0-159-security-version-overrides-in-the-root-pom-are-bumped-and-checked-by-hand) | Security version overrides in the root POM are bumped and checked by hand | ci | Medium | Open |
-| [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Open |
+| [0-167](#0-167-no-hook-of-the-owners-session-refuses-gits-writing-options) | No hook of the owner's session refuses git's writing options | security | Medium | Blocked (superseded, ADR-0055) |
 
 ---
 
@@ -2028,7 +2030,7 @@ AC2. Once required, a score under the threshold fails the check.
 
 ### 0-116. The devcontainer firewall does not bind code an agent runs
 
-**Type:** design · **Priority:** High · **Status:** Open — accepted for shadow mode (decision 2026-10-09); must be done before phase 3 (auto-merge)
+**Type:** design · **Priority:** High · **Status:** Open (carried out by migration stage 2, then C, ADR-0055); accepted for shadow mode (decision 2026-10-09); must be done before phase 3 (auto-merge)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** —
 
 **Problem.** The devcontainer's firewall (`.devcontainer/init-firewall.sh`) is `iptables` in the same network
@@ -2381,7 +2383,7 @@ human-only.
 
 ### 0-153. Decide which paths need the owner's review, before auto-merge
 
-**Type:** design · **Priority:** Medium · **Status:** Open — noted 2026-10-16 (PR #499) in #0-113, moved here from it and widened by its security review (2026-10-18); a precondition of phase 3 (auto-merge, `docs/ai-factory.md`)
+**Type:** design · **Priority:** Medium · **Status:** Open (carried out by migration stage 6a, ADR-0055); noted 2026-10-16 (PR #499) in #0-113, moved here from it and widened by its security review (2026-10-18); a precondition of phase 3 (auto-merge, `docs/ai-factory.md`)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 
 **Problem.** Since #0-113 (ADR-0034) the code owner review of `.github/CODEOWNERS` is enforced, so what it does not
@@ -2991,7 +2993,7 @@ as the CI job that runs the `.rb` checks, shown by both printing their versions.
 
 ### 0-167. No hook of the owner's session refuses git's writing options
 
-**Type:** security · **Priority:** Medium · **Status:** Open — moved out of #0-165 (2026-10-25), whose round-1
+**Type:** security · **Priority:** Medium · **Status:** Blocked — superseded by migration stage 6a (ADR-0055, 2026-11-13); was Open — moved out of #0-165 (2026-10-25), whose round-1
 review found the first version of the hook passable
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-165
 **Touches:** factory (.claude/hooks/ (a session-level Bash guard, `_lib.sh`), .claude/hooks/readonly-bash.sh,
@@ -4014,7 +4016,7 @@ AC3. README "Infrastructure Hardening" names the narrowed guard, and the gap lea
 
 ### 0-183. The k8s reviewer could render a tracked-only snapshot with no network
 
-**Type:** security · **Priority:** Low · **Status:** Open. From #0-182 (owner, 2026-10-27): B took the render away
+**Type:** security · **Priority:** Low · **Status:** Blocked — superseded by migration stage 5 (ADR-0055, 2026-11-13); was Open. From #0-182 (owner, 2026-10-27): B took the render away
 from the k8s reviewer; this is how to bring it back safely, if the owner's manual review misses it.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-182
 **Touches:** factory (scripts/factory/ or .claude/hooks/: a render script and its test, readonly-bash.sh,
@@ -4377,7 +4379,7 @@ scripts/factory/next-item.sh, scripts/factory/start-item.sh, .github/scripts/tes
 
 ### 0-201. A `ready` item's Touches line is validated only once it is queued
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Found by `/plan-backlog` on 2026-11-02 (owner: record it in the
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 7 (ADR-0055, 2026-11-13); was Open. Found by `/plan-backlog` on 2026-11-02 (owner: record it in the
 queue PR).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** ci (scripts/factory/_backlog.sh, scripts/factory/check-queue.sh, .github/scripts/test-queue.sh, .github/workflows/factory-guards.yml), root (BACKLOG.md)
@@ -4404,7 +4406,7 @@ AC2. A Touches line with a parenthesis inside a module's parentheses is either r
 
 ### 0-202. The owner and the bot share one working tree
 
-**Type:** design · **Priority:** Low · **Status:** Open. To consider (owner, 2026-11-02, before the first autopilot
+**Type:** design · **Priority:** Low · **Status:** Open (carried out by migration stage 2, ADR-0055); To consider (owner, 2026-11-02, before the first autopilot
 run of the #0-199 queue).
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** root (.devcontainer/devcontainer.json, .ai/decisions/ an ADR), docs (docs/ai-factory.md)
@@ -4449,7 +4451,7 @@ preflight, and the cost of a second Maven/Docker cache.
 
 ### 0-204. A run's record keeps no run id, no agent calls and no stage of each commit
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Owner, 2026-11-03 (what the factory keeps of a run, for the audits).
+**Type:** ci · **Priority:** Low · **Status:** Open (carried out by migration stage 3, ADR-0055); Owner, 2026-11-03 (what the factory keeps of a run, for the audits).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** ci (.claude/workflows/backlog-autopilot.js, scripts/factory/state.sh, .github/scripts/test-autopilot-workflow.mjs,
 .github/scripts/test-factory-state.sh, .claude/agents/shipper.md, .claude/skills/ship-record/), docs (docs/ai-factory.md)
@@ -4485,7 +4487,7 @@ AC3. `docs/ai-factory.md`'s phase 3 says `--merge --auto`, with the reason (the 
 
 ### 0-205. A run's transcripts expire after 90 days and nothing reads them per agent
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Owner, 2026-11-03 (what each agent touched, for the audits).
+**Type:** ci · **Priority:** Low · **Status:** Open (carried out by migration stage 3, ADR-0055); Owner, 2026-11-03 (what each agent touched, for the audits).
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** #0-204 (the run id in the record)
 **Touches:** ci (scripts/factory/ a new archive-and-summary script and its test, .claude/workflows/backlog-autopilot.js,
 scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh, .gitignore if the archive is in the workspace),
@@ -4739,7 +4741,7 @@ AC4. The start and the choice read an item the same way: `start-item.sh` takes i
 
 ### 0-210. Twenty-one deny rules of the autopilot settings never match
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Seen 2026-11-06 (#0-207's third case): every
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 6c (ADR-0055, 2026-11-13); was Open. Seen 2026-11-06 (#0-207's third case): every
 `claude --settings .claude/settings.autopilot.json` session prints these warnings at start.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/settings.autopilot.json, possibly .github/scripts/ for a check), root (BACKLOG.md)
@@ -4772,7 +4774,7 @@ AC3. A session started with the settings prints no permission-rule warning; a Fa
 
 ### 0-211. Two lists of secret paths, and nothing keeps them equal
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From the security reviewer's rule gap in review round 1 of #0-207
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 6c (ADR-0055, 2026-11-13); was Open. From the security reviewer's rule gap in review round 1 of #0-207
 (2026-11-06).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/hooks/guard-protected-bash.sh, .claude/hooks/test-hooks.sh, .claude/settings.json,
@@ -4799,7 +4801,7 @@ AC2. A check (Factory guard or `test-hooks.sh`) derives the list from the deny r
 
 ### 0-212. A factory commit does not say which run and which agent wrote it
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Split from #0-203 (owner, 2026-11-03; split 2026-11-07, when
+**Type:** ci · **Priority:** Low · **Status:** Open (carried out by migration stage 4, ADR-0055); Split from #0-203 (owner, 2026-11-03; split 2026-11-07, when
 #0-203 shipped the attribution trailer and the architect's commit form).
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** #0-204 (the run id in the record)
 **Touches:** ci (the commit guard of each committing agent and its twin in both settings files, `.claude/hooks/test-hooks.sh`, `.github/scripts/check-hook-entries.rb` if the guard is new, a Factory guards check of the trailers on a factory PR's commits), docs (docs/ai-factory.md).
@@ -4829,7 +4831,7 @@ AC2. Factory guards fails a PR from the bot's account with a commit that lacks e
 
 ### 0-213. An exception ends the autopilot and the audit workflows with no outcome
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From #0-206 (2026-11-07): the same class of defect, outside its
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 4 (ADR-0055, 2026-11-13); was Open. From #0-206 (2026-11-07): the same class of defect, outside its
 Touches.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/workflows/backlog-autopilot.js, .claude/workflows/audit.js,
@@ -4854,7 +4856,7 @@ AC2. `audit.js` and `docs-audit.js` end with an outcome naming the agent and the
 
 ### 0-214. The agents' command lists are not run through Claude Code's own permission check
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From #0-207's AC4 (owner, 2026-11-08: the static check in CI
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 6c (ADR-0055, 2026-11-13); was Open. From #0-207's AC4 (owner, 2026-11-08: the static check in CI
 now, this one later).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
 **Touches:** factory (scripts/factory-admin/ a new script and its test), docs (docs/ai-factory.md)
@@ -4917,7 +4919,7 @@ AC3. On resume the workflow runs `resume-item.sh` once, before the picker, and n
 
 ### 0-217. start-item.sh copies the work template without checking it for symlinks
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From the review of #0-209 (round 2), named in ADR-0051.
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 4 (ADR-0055, 2026-11-13); was Open. From the review of #0-209 (round 2), named in ADR-0051.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (scripts/factory/start-item.sh, .github/scripts/test-start-item.sh)
 
@@ -5120,7 +5122,7 @@ AC2. If (C) is taken, `test-log-collection.sh` fails when Loki accepts a delete 
 
 ### 0-225. The autopilot allows the Grep and Glob tools, and no secret rule or hook names them
 
-**Type:** security · **Priority:** Low · **Status:** Open. From the `/research` of #0-223 (owner, 2026-11-12).
+**Type:** security · **Priority:** Low · **Status:** Blocked — superseded by migration stage 2 and 4 (ADR-0055, 2026-11-13); was Open. From the `/research` of #0-223 (owner, 2026-11-12).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/settings.autopilot.json, .claude/settings.json, possibly .claude/agents/*.md `tools:`,
 .claude/hooks/test-hooks.sh), root (BACKLOG.md, README.md "Infrastructure Hardening")
@@ -5145,7 +5147,7 @@ started (#0-194).
 
 ### 0-226. A resumed run records no scope
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Split from #0-195's second case (owner, 2026-11-12).
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 4 (ADR-0055, 2026-11-13); was Open. Split from #0-195's second case (owner, 2026-11-12).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/workflows/backlog-autopilot.js, possibly scripts/factory/next-item.sh,
 .github/scripts/test-autopilot-workflow.mjs), root (BACKLOG.md)
@@ -5164,7 +5166,7 @@ was skipped, not that it predicted nothing.
 
 ### 0-227. A risk-high item's real `NEEDS_HUMAN` ships as a PR instead of stopping
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From the review of #0-220 (architecture, round 1, 2026-11-12).
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 6a (ADR-0055, 2026-11-13); was Open. From the review of #0-220 (architecture, round 1, 2026-11-12).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-220
 **Touches:** factory (.claude/workflows/backlog-autopilot.js, .github/scripts/test-autopilot-workflow.mjs), docs (docs/ai-factory.md)
 
@@ -5190,7 +5192,7 @@ AC2. The acceptance prompt does not name the item's Risk; `docs/ai-factory.md` d
 
 ### 0-228. A BLOCKED draft writes "Scope: not measured." and the audit reads `scope:not`
 
-**Type:** ci · **Priority:** Low · **Status:** Open. Found while implementing #0-220 (2026-11-12), on PR #581.
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 4 (ADR-0055, 2026-11-13); was Open. Found while implementing #0-220 (2026-11-12), on PR #581.
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** ci (scripts/factory/audit-data.sh, .github/scripts/test-audit-data.sh), factory (.claude/agents/shipper.md,
 .claude/skills/ship-record/SKILL.md)
@@ -5385,7 +5387,7 @@ each case is a test of the check.
 
 ### 0-234. A refused second factory-ops call leaves no record the audit reads
 
-**Type:** ci · **Priority:** Low · **Status:** Open. From the architecture review (FAC-A03) of #0-169 (2026-11-13).
+**Type:** ci · **Priority:** Low · **Status:** Blocked — superseded by migration stage 4 (ADR-0055, 2026-11-13); was Open. From the architecture review (FAC-A03) of #0-169 (2026-11-13).
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-169
 **Touches:** factory (.claude/hooks/factory-ops-bash.sh, .claude/hooks/test-hooks.sh, scripts/factory/audit-data.sh,
 .claude/agents/audit-pipeline.md)
@@ -5479,7 +5481,7 @@ a heuristic; `factory.md` FAC-S03 names the rule (owner).
 
 ### 0-236. The factory's runtime state lives in the working tree the agents' git commands act on
 
-**Type:** security · **Priority:** Medium · **Status:** Open. From review round 2 of #0-235 (owner, 2026-11-13).
+**Type:** security · **Priority:** Medium · **Status:** Blocked — superseded by migration stage 4 (ADR-0055, 2026-11-13); was Open. From review round 2 of #0-235 (owner, 2026-11-13).
 **Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** —
 **Touches:** factory (scripts/factory/ (state.sh, preflight.sh, seed-branch.sh, return-to-main.sh, _common.sh and their
 tests), .claude/hooks/ (_lib.sh `base_ref`/`run_branch`/`seed_record`, guard-git-push.sh, factory-ops-bash.sh,

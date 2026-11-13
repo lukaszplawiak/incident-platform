@@ -69,30 +69,28 @@ on are in `.ai/rules/review/factory.md` (backlog #0-161); this is why they are w
   `WebFetch(domain:…)` rules, the firewall's `ALLOWED_DOMAINS`, the prefixes in `verifier.md` — checked by
   `check-web-access.sh`). The pinned CI tools: their `# renovate:` comments in the workflows
   (`check-pinned-tools.sh`).
-- **Layers, and what each one is worth.** Permission rules in the settings files match a tool and a host,
-  for every agent alike. Hooks are code: they can tell agents apart (`agent_type`), and they block only by
-  exiting 2 — any other exit is a non-blocking error and the call runs, so every hook starts with an `EXIT`
-  trap and a guarded load of `_lib.sh`, and reads the call through `json_checked` (#0-162; a new hook gets a row
-  in `test-hooks.sh`'s fail-closed table). A hook that cannot start or times out is blocked by Claude Code:
-  every hook entry says `"onFailure": "block"` (Factory guards checks it, `check-hook-entries.rb`), which needs
-  Claude Code 2.1.295 or newer; an older one ignores it silently, and only the autopilot's preflight refuses one
-  (ADR-0039). Frontmatter hooks are documented
-  for agents of the Agent tool, an @-mention or `--agent`, not for the agents a `Workflow` spawns and never
-  in `claude -p`; session-level hooks are documented for every subagent, so every agent's guard runs in both:
-  its frontmatter and a twin in both settings files keyed on `agent_type` (`--agent`, `applies_to_agent` in
-  `_lib.sh`), kept equal by `check-hook-entries.rb`, which also checks that the session-wide guards are wired
-  (#0-164, ADR-0041). Every command form an agent with Bash is told to run is in a marked list of its definition,
-  and `check-agent-commands.rb` runs each through the hooks and both settings files' rules (#0-207, ADR-0050); it
-  also holds every Bash allow rule (and a preloaded skill's `allowed-tools`) to prefixes that cannot remove a path
-  they are not given, or a reasoned exemption, since the gitignored runtime state is out of every diff (#0-235,
-  ADR-0054). git's `add`/`rm`/`mv`/`switch` are such exemptions: they act on the working tree the state lives in, and
-  `git_runtime_unsafe` refuses only the plain forms of `add`/`rm`/`mv` until the state leaves it (#0-236).
-  `/review` and `/accept` pre-approve exact commands only (git's `--output`, `--ext-diff`,
-  `--textconv` write or run; a hook for the skills that keep wildcards is #0-167), and reviewers read
-  `.ai/rules/review/` from `refs/remotes/origin/main` (the full name: a local branch called `origin/main`
-  would win), never from the branch under review (#0-165). The devcontainer's
-  firewall opens hosts by IP for every process in it, and binds the agents' commands, not the code they run
-  through Docker (#0-116).
+- **Layers, and what each one is worth.** Permission rules in the settings files match a tool and a host, for every
+  agent alike. Hooks are code: they can tell agents apart (`agent_type`), and they block only by exiting 2 — any other
+  exit is a non-blocking error and the call runs, so every hook starts with an `EXIT` trap and a guarded load of
+  `_lib.sh`, and reads the call through `json_checked` (#0-162; a new hook gets a row in `test-hooks.sh`'s fail-closed
+  table). A hook that cannot start or times out is blocked by Claude Code: every hook entry says `"onFailure":
+  "block"` (Factory guards checks it, `check-hook-entries.rb`), which needs Claude Code 2.1.295 or newer; an older one
+  ignores it silently, and only the autopilot's preflight refuses one (ADR-0039). Frontmatter hooks are documented for
+  agents of the Agent tool, an @-mention or `--agent`, not for the agents a `Workflow` spawns and never in `claude
+  -p`; session-level hooks are documented for every subagent, so every agent's guard runs in both: its frontmatter and
+  a twin in both settings files keyed on `agent_type` (`--agent`, `applies_to_agent` in `_lib.sh`), kept equal by
+  `check-hook-entries.rb`, which also checks that the session-wide guards are wired (#0-164, ADR-0041). Every command
+  form an agent with Bash is told to run is in a marked list of its definition, and `check-agent-commands.rb` runs
+  each through the hooks and both settings files' rules (#0-207, ADR-0050); it also holds every Bash allow rule (and a
+  preloaded skill's `allowed-tools`) to prefixes that cannot remove a path they are not given, or a reasoned
+  exemption, since the gitignored runtime state is out of every diff (#0-235, ADR-0054). git's
+  `add`/`rm`/`mv`/`switch` are such exemptions: they act on the working tree the state lives in, and
+  `git_runtime_unsafe` refuses only the plain forms of `add`/`rm`/`mv` until the state leaves it (#0-236, ADR-0055
+  stage 4). `/review` and `/accept` pre-approve exact commands only (git's `--output`, `--ext-diff`, `--textconv`
+  write or run; a hook for the skills that keep wildcards is #0-167, frozen until ADR-0055 stage 6a), and reviewers
+  read `.ai/rules/review/` from `refs/remotes/origin/main` (the full name: a local branch called `origin/main` would
+  win), never from the branch under review (#0-165). The devcontainer's firewall opens hosts by IP for every process
+  in it, and binds the agents' commands, not the code they run through Docker (#0-116).
 - **Shadow mode is a set of denies.** A session cannot merge past the ruleset, approve a PR, or change the
   rulesets, environments, secrets or collaborators (ADR-0034, `.claude/settings.json`); the autopilot cannot
   merge at all until phase 3 (`docs/ai-factory.md`).
