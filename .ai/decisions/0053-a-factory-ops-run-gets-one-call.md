@@ -85,7 +85,10 @@ Every call after it, with the same `agent_id`, is refused, whatever its command.
   audit cannot count how often a factory-ops was steered. The first is closed by #0-233 for the commands that name
   the marks: `.ai/runs/ops-calls/` is on the runtime list of `.ai/rules/protected-paths.md`, with its denies and
   `guard-protected-bash.sh`, as the lock is. The guard matches text, so a command that removes the marks through
-  their parent (`rm -rf .ai/runs`, `find .ai/runs -type l -delete`) is not seen, as for the lock (#0-235).
+  their parent (`rm -rf .ai/runs`, `find .ai/runs -type l -delete`) is not seen, as for the lock; no allow rule runs
+  such a program, which `check-agent-commands.rb` holds (#0-235, ADR-0054). git's commands on the working tree still
+  reach them (`git add` once `.gitignore` is edited, then `git rm`; `git mv`), the guard refusing only their plain
+  forms, until the state leaves the working tree (#0-236); so does code run through `./mvnw` (#0-116).
 - The control rests on Claude Code sending `agent_id` and `tool_use_id` in a subagent's PreToolUse input. If it
   stops, every factory-ops call is refused and the run stops at its preflight: visible, never silent. Checked live on
   2026-11-13 with this hook in the working tree: a factory-ops of the Agent tool ran `check-queue.sh` through both

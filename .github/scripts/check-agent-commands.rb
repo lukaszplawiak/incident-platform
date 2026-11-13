@@ -21,6 +21,14 @@
 #      (the `--agent` twins included, with the call's agent_type) and the Bash entries of that agent's own
 #      frontmatter, run in a throwaway repository whose `.ai/runs/LOCK` records the branch the list pushes
 #      (`fix/0-25-notification-queue-version`), as a run's lock does.
+#   4. no allow rule lets an agent run a program that can remove or move a path it does not name (backlog #0-235,
+#      ADR-0054): every `Bash(...)` allow rule of both settings files, and of the `allowed-tools` of every skill an
+#      autopilot agent preloads (`skills:`), starts with a prefix of SAFE_PREFIXES, or is in EXEMPT_RULES with its
+#      reason. A closed list, not a list of dangerous commands: a program nobody has judged (`rsync --delete`,
+#      `python3 -c`, `git clean`, `env rm`, a bare `Bash`) fails until it is. The runtime state the factory trusts
+#      (.ai/runs/LOCK, state.json, the factory-ops marks, .ai/STOP) is gitignored, so no diff shows its removal, and
+#      guard-protected-bash.sh only sees a command that names it: this list is what keeps `rm -rf .ai/runs` out.
+#      An exemption whose rule is no longer allowed is stale and fails.
 # Which agents: every definition whose `tools:` holds Bash (none named: every tool) has a list, follows another's
 # (ALSO_FOR), or is in EXEMPT with its reason; an exemption that names no such agent, or one that has a list after all,
 # is stale and fails, as check-hook-entries.rb's UNGUARDED (backlog #0-186). A list that names no command fails.
@@ -57,6 +65,39 @@ EXEMPT = {
   'audit-reviewers' => "#{READ_ONLY}, plus gh's read commands (--gh-read)",
   'architect' => "#{READ_ONLY}, plus git add of its own paths and its one commit form (--architect, #0-203)",
   'factory-ops' => 'runs exactly the scripts/factory/ command the workflow names (factory-ops-bash.sh), never a form of its own'
+}.freeze
+# Rule 4 (backlog #0-235): the word prefixes an allow rule may start with, each with why the program it lets run
+# cannot remove or move a path it does not name. A rule's words up to its first `*` must begin with one of them. Each
+# prefix is as narrow as the rules it was judged on (review round 1 of #0-235): `gh pr checkout` (a git checkout) or
+# `gh run download -D <dir>`, `git fetch --upload-pack=<cmd>` were never judged, so a rule allowing them fails.
+SAFE_PREFIXES = {
+  %w[ls] => 'lists', %w[jar tf] => 'lists a jar', %w[mkdir -p] => 'creates directories, removes nothing',
+  %w[git status] => 'reads', %w[git log] => 'reads (--output as for git diff)', %w[git show] => 'reads (--output as for git diff)', %w[git rev-parse] => 'reads',
+  %w[git merge-base] => 'reads', %w[git ls-files] => 'reads', %w[git blame] => 'reads', %w[git branch --list] => 'reads',
+  %w[git diff] => 'reads; its --output writes the file it names, which guard-protected-bash.sh refuses into a protected path after resolving // and /./ (a quoted or spliced option word is #0-167)',
+  %w[git grep] => 'reads tracked files; -O/--open-files-in-pager, --no-index and --untracked are refused by git_grep_unsafe (_lib.sh, #0-123)',
+  %w[git commit] => 'records the index',
+  %w[git fetch origin main] => "updates origin/main; guard-git-push.sh refuses another remote or a refspec into a ref (#0-131)",
+  %w[git push -u origin] => "sends the run's branch, the only one guard-git-push.sh lets through (#0-131)",
+  %w[gh pr create] => 'acts on GitHub', %w[gh pr edit] => 'acts on GitHub', %w[gh pr view] => 'reads GitHub',
+  %w[gh pr list] => 'reads GitHub', %w[gh pr ready] => 'acts on GitHub', %w[gh pr diff] => 'reads GitHub',
+  %w[gh issue view] => 'reads GitHub', %w[gh issue list] => 'reads GitHub', %w[gh run view] => 'reads GitHub',
+  %w[gh run list] => 'reads GitHub', %w[gh label list] => 'reads GitHub'
+}.freeze
+# Allow rules outside SAFE_PREFIXES, each with its reason.
+# git's commands that act on the working tree reach the gitignored runtime state, which lives in it: `git add` stages
+# it once .gitignore no longer names it (or with -f), `git rm`/`mv` then delete, move or overwrite it, `git switch`
+# overwrites it from a commit that tracks it. git_runtime_unsafe (_lib.sh) refuses the plain forms, a heuristic
+# (review rounds 1-2 of #0-235); moving the state out of the working tree is backlog #0-236.
+GIT_TREE = "acts on the working tree, where the gitignored runtime state lives; git_runtime_unsafe (_lib.sh) refuses its plain forms (add -f, a path into or above the state), a heuristic until the state leaves the working tree: backlog #0-236"
+GIT_SWITCH = "overwrites or removes an ignored file from a commit that tracks it (one made after git add -f, refused, or a reviewed commit on main); no guard refuses any form of it: open until the state leaves the working tree, backlog #0-236"
+FACTORY_SCRIPTS = 'only factory-ops runs them (guard-factory-scripts.sh), as they are on the base commit, one call per run (ADR-0053); state.sh is what writes the lock'
+EXEMPT_RULES = {
+  'Bash(./mvnw *)' => "Maven runs the build's own code, which can remove any path; no rule can bound it: backlog #0-116",
+  'Bash(scripts/factory/*)' => FACTORY_SCRIPTS,
+  'Bash(./scripts/factory/*)' => FACTORY_SCRIPTS,
+  'Bash(git add *)' => GIT_TREE, 'Bash(git rm *)' => GIT_TREE, 'Bash(git mv *)' => GIT_TREE,
+  'Bash(git switch *)' => GIT_SWITCH, 'Bash(git checkout -b *)' => GIT_SWITCH
 }.freeze
 LOCK_BRANCH = 'fix/0-25-notification-queue-version'
 START = '<!-- commands:start -->'
@@ -132,6 +173,26 @@ def run_hook(command, input, repo)
   [status.exitstatus, out.strip]
 end
 
+# The entries of a skill's `allowed-tools`: a string of space-separated tools (a `Bash(...)` may hold spaces) or a list.
+def allowed_tools(value)
+  return value.map(&:to_s) if value.is_a?(Array)
+  value.to_s.scan(/[A-Za-z_][\w-]*(?:\([^)]*\))?/)
+end
+
+# Rule 4: why an allow rule may let a program remove or move a path it does not name, or nil when it cannot.
+def removal_refusal(rule)
+  return 'it allows every Bash command' if rule == 'Bash'
+  body = rule[/\ABash\((.*)\)\z/m, 1]
+  return nil unless body
+  body = body[0..-3] if body.end_with?(':*')
+  # A separator, pipe, redirect or substitution in the rule itself: a safe first word would carry any command after it.
+  return "its text holds a shell operator (#{body[/[;&|<>`\n]|\$\(/].inspect}), so a safe first word would carry another command" if body =~ /[;&|<>`\n]|\$\(/
+  words = body.split(/\s+/).reject(&:empty?)
+  fixed = words.take_while { |w| !w.include?('*') }
+  return nil if SAFE_PREFIXES.keys.any? { |prefix| fixed.first(prefix.size) == prefix }
+  "it runs #{fixed.empty? ? 'any program' : fixed.join(' ')}, which is not in SAFE_PREFIXES: a program that can remove or move a path it does not name (rm -rf .ai/runs) is never allowed"
+end
+
 settings = SETTINGS.map { |f| JSON.parse(read_utf8(f)) }
 allow = settings.flat_map { |s| s.dig('permissions', 'allow') || [] }
 deny = settings.flat_map { |s| s.dig('permissions', 'deny') || [] }
@@ -139,6 +200,7 @@ session_hooks = settings.flat_map { |s| bash_hooks(s.dig('hooks', 'PreToolUse'))
 
 lists = {}
 own_hooks = {}
+preloaded = {}
 bash_agents = []
 Dir.glob(File.join(AGENTS_DIR, '**', '*.md')).sort.each do |path|
   rel = path.sub("#{ROOT}/", '')
@@ -147,6 +209,7 @@ Dir.glob(File.join(AGENTS_DIR, '**', '*.md')).sort.each do |path|
   tools = front['tools'].to_s.split(',').map(&:strip)
   bash_agents << name if tools.empty? || tools.any? { |t| t == 'Bash' || t.start_with?('Bash(') }
   own_hooks[name] = bash_hooks(front.dig('hooks', 'PreToolUse'))
+  Array(front['skills']).each { |skill| (preloaded[skill] ||= []) << name }
   cmds = listed_commands(body, rel)
   next if cmds.nil?
   fail!("#{rel}: the command list names no command") if cmds.empty?
@@ -168,6 +231,31 @@ ALSO_FOR.each do |lead, names|
     fail!("ALSO_FOR names #{n} for #{lead}, and #{n} is no agent with Bash") unless bash_agents.include?(n)
     fail!("ALSO_FOR names #{n} for #{lead}, and #{n} has a command list of its own: remove the stale entry") if lists.key?(n)
   end
+end
+
+# Rule 4 (backlog #0-235): the allow rules of both settings files, and the allow-listed tools of every skill an
+# autopilot agent preloads.
+rule_sources = SETTINGS.zip(settings).flat_map do |file, s|
+  (s.dig('permissions', 'allow') || []).map { |r| [r, file.sub("#{ROOT}/", '')] }
+end
+preloaded.each do |skill, agents|
+  path = File.join(ROOT, '.claude', 'skills', skill, 'SKILL.md')
+  unless File.file?(path)
+    fail!("#{agents.join(', ')} preload#{agents.size == 1 ? 's' : ''} the skill #{skill}, which has no #{path.sub("#{ROOT}/", '')}")
+    next
+  end
+  front, = split_definition(path)
+  allowed_tools(front['allowed-tools']).each { |r| rule_sources << [r, "#{path.sub("#{ROOT}/", '')} (allowed-tools, preloaded by #{agents.join(', ')})"] }
+rescue StandardError => e
+  fail!(e.message)
+end
+rule_sources.each do |rule, where|
+  next if EXEMPT_RULES.key?(rule)
+  why = removal_refusal(rule)
+  fail!("#{where}: the allow rule #{rule}: #{why}; add its prefix to SAFE_PREFIXES with why it cannot, or the rule to EXEMPT_RULES with its reason (backlog #0-235)") if why
+end
+EXEMPT_RULES.each_key do |rule|
+  fail!("EXEMPT_RULES names #{rule}, which no allow rule holds: remove the stale exemption") unless rule_sources.any? { |r, _| r == rule }
 end
 
 checked = 0
@@ -202,7 +290,7 @@ Dir.mktmpdir('agent-commands') do |repo|
 end
 
 if @failures.empty?
-  puts "Agent commands: #{checked} command form(s) of #{lists.size} definition(s) (#{lists.keys.sort.join(', ')}) pass their hooks and an allow rule of the two settings files, no deny rule, none of a refused family; #{EXEMPT.size} agent(s) with Bash exempt with a reason."
+  puts "Agent commands: #{checked} command form(s) of #{lists.size} definition(s) (#{lists.keys.sort.join(', ')}) pass their hooks and an allow rule of the two settings files, no deny rule, none of a refused family; #{EXEMPT.size} agent(s) with Bash exempt with a reason; of #{rule_sources.count { |r, _| r == 'Bash' || r.start_with?('Bash(') }} Bash allow rule(s), #{EXEMPT_RULES.size} exempt with a reason and none of the others runs a program that removes a path it does not name."
 else
   @failures.each { |f| puts "::error::#{f}" }
   exit 1

@@ -588,12 +588,15 @@ security boundary, so every rule that matters is also enforced outside the model
   refuses an agent's writes to the lock itself and to the factory-ops runs' marks (`.ai/runs/ops-calls/`, #0-233)
   (the denies, `guard-protected-bash.sh`, git's `--output` included); not covered: code run through `./mvnw`
   (#0-116), a command shaped past the shell guard's text match, such as a quoted or spliced option word (#0-167),
-  a command that removes them without naming them, through their parent `.ai/runs` (#0-235), and a refused second
-  factory-ops call, which is not recorded for the audit (#0-234). Before #0-131 any feature branch was allowed, the
-  owner's open PR included; and the bot account (Write) cannot push to `main` or merge around a red check or a code
-  owner's path, whatever runs in the session: the ruleset of `main` (#0-113, above in "GitHub and CI"). A red
-  `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which the preflight honours.
-  Both read main's CI result from a push to this repository only (backlog #0-148): a fork pull request from a
+  git's commands on the working tree, where the gitignored state lives (`git add` once `.gitignore` no longer names
+  it, then `git rm`; `git mv`; `git switch` from a commit that tracks it): `git_runtime_unsafe` refuses their plain
+  forms but none of `switch`, a heuristic until the state leaves the working tree (#0-236), and a refused second
+  factory-ops call, which is not recorded for the audit (#0-234). `rm`, `find`, an interpreter or a wrapper is kept
+  out by the allow list ("An agent's prescribed commands run in its session" below, #0-235). Before #0-131 any feature
+  branch was allowed, the owner's open PR included; and the bot account (Write) cannot push to `main` or merge around
+  a red check or a code owner's path, whatever runs in the session: the ruleset of `main` (#0-113, above in "GitHub
+  and CI"). A red `main` opens an `autopilot-stop` issue (`.github/workflows/main-guard.yml`), which the preflight
+  honours. Both read main's CI result from a push to this repository only (backlog #0-148): a fork pull request from a
   branch named `main` matches a `main` branch filter, and it neither opens the issue nor counts as main's result
   in the preflight.
 - **Owner labels are verified** (backlog #0-126): the audits count a `human:*` label only when the repository
@@ -629,7 +632,20 @@ security boundary, so every rule that matters is also enforced outside the model
   each form through the session's hooks and the agent's own, against the allow and deny rules of both settings
   files, and fails a form Claude Code refuses whatever a rule says (a recursive `cp`, an absolute path, a pipe or
   chain, an unquoted glob, `..`, `git -C`). It matches the rules' text, not Claude Code's own permission check,
-  which only a `dontAsk` session shows (#0-214).
+  which only a `dontAsk` session shows (#0-214). The same check holds the allow list itself (backlog #0-235,
+  ADR-0054): every `Bash(...)` allow rule of both settings files, and of the `allowed-tools` of a skill an autopilot
+  agent preloads, starts with a prefix judged unable to remove or move a path it does not name (`SAFE_PREFIXES`, each
+  as narrow as the rules it was judged on), holds no shell operator, or is an exemption with its reason (`./mvnw`,
+  #0-116; `scripts/factory/`, factory-ops only; git's commands on the working tree, #0-236). The runtime state
+  (`.ai/runs/LOCK`, `state.json`, the factory-ops marks, `.ai/STOP`) is gitignored, so this is what keeps
+  `rm -rf .ai/runs` out; `guard-protected-bash.sh` only sees a command that names a path. git's `add`, `rm`, `mv` and
+  `switch` act on the working tree the state lives in, so they reach it without naming it: `git_runtime_unsafe`
+  (`_lib.sh`, review rounds 1-3 of #0-235) refuses `git add -f` in every spelling and a `git add`/`rm`/`mv` path that
+  resolves, from the repository's root, into the state or, for `mv`, above it (`.//.ai`, `.ai/runs//LOCK`; `git -C`
+  and `--work-tree`, which would change that root, match no allow rule and are forms Claude Code refuses), but an
+  agent that edits `.gitignore` makes a plain `git add .ai/runs` stage it, and no form of `git switch` is refused.
+  That is a heuristic; the fix is the state out of the working tree (#0-236). The shell guard matches a protected path
+  after resolving `//` and `/./`, so `git log --output=.ai/runs//LOCK` is refused too.
 
 **Known gaps**: a bypass actor or an admin added in the UI is seen only when the owner runs
 `repository-settings.rb check` (#0-113, ADR-0034), and so is a secret added in the UI (ADR-0035); a scan that

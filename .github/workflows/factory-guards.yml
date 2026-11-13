@@ -173,6 +173,9 @@ jobs:
       # Every command form the picker, the implementers, the shipper and the defect-seeder are told to run passes their
       # hooks and an allow rule of settings.autopilot.json, and is none of the forms Claude Code refuses whatever a
       # rule says (a recursive cp, an absolute path, a pipe): in dontAsk a refused call costs a turn (backlog #0-207).
+      # And no allow rule runs a program that can remove a path it does not name, but the exemptions it lists with
+      # their reasons (./mvnw, #0-116; scripts/factory/; git's commands on the working tree, #0-236), so the gitignored
+      # runtime state (.ai/runs/LOCK, the factory-ops marks) stays out of reach of `rm -rf .ai/runs` (#0-235, ADR-0054).
       - name: Agent commands run in an autopilot session
         run: |
           set -euo pipefail

@@ -18,7 +18,9 @@
 # A command that only reads (git diff/log/show, cat, grep, ls, head, tail, wc) passes.
 # Also refused, whatever the verb: commands naming a secret (docker/.env, docker/secrets, application-local,
 # credentials files, gh/ssh config) and `git diff --no-index`, which reads any file around the Read denies.
-# `git grep` options that run a program or read files git does not track (the secrets) are refused too.
+# `git grep` options that run a program or read files git does not track (the secrets) are refused too, and so are the
+# git forms that remove or move the gitignored runtime state without naming it: `git add -f`, `git mv .ai`
+# (git_runtime_unsafe, backlog #0-235).
 # A label an agent may not set on a PR (`human:*`, the owner's; anything off the shipper's list) is refused on
 # `gh pr|issue create|new|edit` in the forms gh accepts (gh_label_unsafe, backlog #0-126).
 # Fails closed without jq or python3, when the git grep or gh label check itself fails (backlog #0-130), and when a
@@ -48,12 +50,24 @@ why=$(git_grep_unsafe "$cmd") || block "the git grep check failed, so the comman
 [ -z "$why" ] || block "$why"
 why=$(gh_label_unsafe "$cmd") || block "the gh label check failed, so the command is refused${why:+: $why}"
 [ -z "$why" ] || block "$why"
+# Backlog #0-235 (sec-4a1d): git's own way to the ignored runtime state, without naming it (`git add -f .ai/runs`, then
+# `git rm -r -f .ai/runs`; `git mv .ai x`). The pattern check below only sees a command that names a protected path.
+why=$(git_runtime_unsafe "$cmd") || block "the git runtime-state check failed, so the command is refused${why:+: $why}"
+[ -z "$why" ] || block "$why"
 if finds "$cmd" '(>|[[:space:]]tee[[:space:]]|sed[[:space:]]+(-[a-zA-Z]*i|--in-place)|(^|[[:space:];&|])(cp|mv|rm|chmod|ln)[[:space:]])[^;&|]*[[:space:]](\./)?mvnw(\.cmd)?([[:space:]]|$)'; then
     block "the command may write to the Maven wrapper (mvnw), which every verification runs"
 fi
 
 protected='(\.ai/rules|\.ai/plan/|\.ai/audit/decisions\.md|\.claude/|\.github/|architecture-tests|AGENTS\.md|scripts/factory|\.devcontainer|\.mvn/|\.ruby-version|\.node-version|\.git/|\.ai/runs/LOCK|\.ai/runs/state\.json|\.ai/runs/ops-calls|\.ai/STOP)'
-finds "$cmd" "$protected" || exit 0
+# The paths are matched as text, after the spellings a path resolves through without changing (review round 3 of
+# #0-235): `//` is `/`, `/./` is `/`. Without it `git log --output=.ai/runs//LOCK`, an allowed read, overwrote the lock
+# with a branch and a base the agent chose, and `mkdir -p .ai/runs//ops-calls/<id>` blocked a factory-ops run. `..`
+# is not resolved here: Claude Code refuses a path through `..` whatever a rule says, and git_runtime_unsafe resolves
+# git's own path arguments.
+norm=$cmd
+while [[ $norm == *//* ]]; do norm=${norm//\/\//\/}; done
+while [[ $norm == */./* ]]; do norm=${norm//\/.\//\/}; done
+finds "$norm" "$protected" || exit 0
 
 # git's own writing options count as writes (backlog #0-131, review round 3): `--output=<file>` writes the file, and
 # `--ext-diff`/`--textconv` run a program; an allow-listed read (`git log`, `git diff`, `git show`) could otherwise

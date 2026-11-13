@@ -147,6 +147,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Open |
 | [0-235](#0-235-the-shell-guard-does-not-see-a-protected-runtime-path-removed-through-its-parent) | The shell guard does not see a protected runtime path removed through its parent | security | Low | Open |
+| [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -2060,6 +2061,16 @@ Hardening". Not accepted for unattended merging: this item is a precondition of 
 - **C. The boundary outside the container**: a separate VM (Lima, Colima) or cloud runner whose egress is
   filtered at the host or hypervisor. A second Docker daemon for the tests (dind) on Docker Desktop needs
   `--privileged`, from which escaping into Docker Desktop's VM, which has the internet, is easy.
+
+**Also: Claude Code's Bash sandbox** (found in `/research 0-235`, 2026-11-13; not measured). `sandbox.filesystem.denyWrite`
+binds the commands an agent runs and the processes they start, Maven's included, and `sandbox.network` proxies their
+egress; hooks run outside it, so `factory-ops-bash.sh` keeps its marks; `failIfUnavailable` and
+`allowUnsandboxedCommands: false` in `--settings` keep a session from running without it (code.claude.com/docs/en/sandboxing).
+Neither settings file has a `sandbox` key today. Three things to measure before it counts as a boundary here: the
+Testcontainers tests need the Docker socket (`allowUnixSockets`), which the documentation names as access to the host,
+the hole this item is about; bubblewrap in an unprivileged container needs `enableWeakerNestedSandbox`; and the factory
+scripts write the lock and the state, so they would be `excludedCommands`, outside it. A spike in the devcontainer
+decides whether it is an option D next to A-C or a layer under one of them.
 
 **Acceptance criteria** (for the option chosen).
 AC1. From inside the devcontainer, code run as `dev` cannot change the firewall's rules or reach a host
@@ -5397,31 +5408,116 @@ audit's data lists the count of the period.
 ### 0-235. The shell guard does not see a protected runtime path removed through its parent
 
 **Type:** security · **Priority:** Low · **Status:** Open. From the security review (FAC-S03, and its rule gap) of #0-233
-(2026-11-13).
-**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
-**Touches:** factory (.claude/hooks/guard-protected-bash.sh, .claude/hooks/test-hooks.sh), root (.ai/rules/review/factory.md
-(owner), BACKLOG.md), docs (README.md "Infrastructure Hardening", ADR-0053)
+(2026-11-13); approach decided by the owner after `/research 0-235` (2026-11-13), ADR-0054.
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
+**Touches:** ci (.github/scripts/check-agent-commands.rb, .github/scripts/test-agent-commands.sh,
+.github/workflows/factory-guards.yml), factory (.claude/hooks/_lib.sh, .claude/hooks/guard-protected-bash.sh,
+.claude/hooks/test-hooks.sh), root (.ai/rules/review/factory.md (owner), .ai/decisions/ (ADR-0054, ADR-0050,
+ADR-0053), .ai/context/security.md, BACKLOG.md), docs (README.md "Infrastructure Hardening")
 
 **Problem.** `guard-protected-bash.sh` refuses a shell write that names a protected path. `.ai/runs/LOCK`,
 `.ai/runs/state.json` and `.ai/runs/ops-calls/` (#0-233) sit under `.ai/runs/`, which is not protected (an item's own
-`.ai/runs/<item>/` is the implementer's), so a command that removes them without naming them passes: `rm -rf
-.ai/runs`, `rm -rf .ai/runs/*`, a glob (`rm .ai/runs/ops-call?/*`), `find .ai/runs -type l -delete`, `cd .ai/runs &&
-rm -rf ops-calls`. Deleting the lock lets a second run start; deleting a mark gives a running factory-ops a second
-call. Low today: the autopilot's allow list has no `rm`, `find` or `cd` (`dontAsk`), so only code run through
-`./mvnw` (#0-116) reaches them, and no agent with Bash runs alongside a factory-ops (`parallel()` runs only the
-read-only review panels). It matters once an allow rule widens. No review rule asks whether a protected path can be
-removed through a parent the list does not cover.
+`.ai/runs/<item>/` is the implementer's), and `.ai/STOP` under `.ai`, so a command that removes them without naming
+them passes it: `rm -rf .ai/runs`, a glob, `find .ai/runs -type l -delete`, `cd .ai/runs && rm -rf ops-calls`. They are
+gitignored, so no diff shows it. Without the lock `base_ref()` falls back to a ref; the marks and the breaker's count
+reset. Today the allow list of `settings.autopilot.json` (`dontAsk`) holds none of these programs, so only code run
+through `./mvnw` (#0-116) reaches them; but nothing checked that the allow list stays so.
 
-**Proposed, to decide with the item.** (a) The guard also refuses a write verb whose argument is an ancestor of a
-runtime entry (`.ai/runs`, `.ai/runs/`, `.ai/runs/*`, `.ai`) or a glob that could expand to one, and `find` with
-`-delete`/`-exec` under `.ai/runs`; or (b) move the runtime state into a directory of its own (`.ai/runs/.state/`)
-that is protected whole, so a parent is a protected path itself (changes `state.sh`, the hooks and ADR-0053's mark
-path); with (a) or (b), a `factory.md` rule (owner) for the reviewers.
+**Decided (owner, after `/research`).** The allow list is the control, the guard a heuristic. Rule 4 of
+`check-agent-commands.rb` (ADR-0054): every `Bash(...)` allow rule of both settings files, and of the `allowed-tools` of
+a skill an autopilot agent preloads, starts with a prefix of `SAFE_PREFIXES` (a program that cannot remove or move a
+path it does not name, with why), or is in `EXEMPT_RULES` with its reason (`./mvnw *`, #0-116; `scripts/factory/*`,
+factory-ops only). A closed list, so a program nobody judged fails. Rejected: (a) the guard recognising parents, globs,
+`find -delete` and `cd` (text matching with no end of forms, and `./mvnw` stays); (b) the state in one protected
+directory (its parent can still go, and it moves the lock under every hook, script and ADR that names it); a list of
+dangerous commands (an unjudged program passes); detecting the removal (`./mvnw` can rewrite lock and marks
+consistently). Claude Code's sandbox, which binds child processes, is #0-116's ("Also").
+
+**Review round 1 (2026-11-13).** Security (sec-4a1d, blocking) found two allowed git forms that reach the state
+without naming it, both passing every hook of the shipper and the implementer (checked in a scratch repository):
+`git add -f .ai/runs` then `git rm -r -f .ai/runs` deletes it, `git mv .ai x` moves it; and `git switch` overwrites an
+ignored file from a commit that tracks it. The first version's `SAFE_PREFIXES` said `git add`/`rm`/`mv` touch "tracked
+files only", which was untrue. Owner: close the route, not only name it. `git_runtime_unsafe` (`_lib.sh`) refuses
+`git add -f`/`--force` in any spelling and a `git mv` of `.ai`, `.ai/runs` or `.`; the prefixes' reasons name it; the
+`switch` case, which needs a commit made with `add -f` or reviewed on `main`, is a named gap. With it: each prefix as
+narrow as the rules judged (architecture and security), no shell operator in a rule's text (security).
+
+**Review round 2 (2026-11-13).** Security upheld sec-4a1d with three more forms, checked in a scratch repository:
+`.gitignore` is not protected, so an implementer that removes `.ai/runs/` from it makes a plain `git add .ai/runs`
+stage the state (no `-f`); `git mv .//.ai x` moves it and `git mv -f f .ai/runs//LOCK` overwrites the lock (paths were
+not resolved); a quoted subcommand in a compound command slipped past the text fallback. Each round found another
+form of the same thing: the state lives in the working tree every allowed git command acts on. Owner: option 3 of
+the round-2 report. git's `add`, `rm`, `mv`, `switch` and `checkout -b` leave `SAFE_PREFIXES` for `EXEMPT_RULES`, with
+that reason; `git_runtime_unsafe` stays as a heuristic and resolves paths (`//`, `.`, `..`), checks `add`/`rm`/`mv`
+paths into the state and `mv` paths above it, and matches the unquoted text of a part it cannot split; a newline in a
+rule's text fails rule 4; the docs name the git route open until #0-236 moves the state out of the working tree.
+Rejected: patching the guard further (a heuristic with no end, as `/research` said), and moving the state now (the
+fix, but a refactor of its own: #0-236).
+
+**Review round 3 (2026-11-13).** No blocking finding; sec-4a1d resolved under the owner's decision. Fixed with it
+(owner: all in this PR): the shell guard matched protected paths as literal text, so the allowed
+`git log --output=.ai/runs//LOCK` overwrote the lock with a branch and a base of the agent's (checked in a scratch
+repository; older than this item) and `mkdir -p .ai/runs//ops-calls/<id>` blocked a factory-ops run: it now resolves
+`//` and `/./` first. `runtime_path` splits without globbing; `git switch`/`checkout -b` have their own reason (no form
+refused); the paths are resolved from the root (`git -C`, `--work-tree` match no rule).
 
 **Acceptance criteria.**
-AC1. A shell command that removes `.ai/runs/LOCK`, `.ai/runs/state.json` or a mark of `.ai/runs/ops-calls/` through a
-parent or a glob is refused, and the implementer's `mkdir -p .ai/runs/<item>` still passes, shown by test cases.
-AC2. README "Infrastructure Hardening" and ADR-0053 no longer name it as not covered.
+AC1. Factory guards fails when an allow rule of either settings file, or of a preloaded skill's `allowed-tools`, runs a
+program outside `SAFE_PREFIXES` that is not in `EXEMPT_RULES` (`rm`, `find`, an interpreter, `git clean`, any git
+subcommand, a wrapper, `Bash(*)`, a bare `Bash`), and when an exemption is stale; the repository's rules pass; shown by
+`test-agent-commands.sh`; a prefix wider than the rules judged (`gh pr checkout`, `git fetch *`) and a rule holding a
+shell operator fail too.
+AC1b. `guard-protected-bash.sh` refuses `git add -f` in every spelling, a `git add`/`rm`/`mv` path that resolves into
+the state and a `git mv` path that resolves above it (`.//.ai`, `.ai/runs//LOCK`, `x/../.ai`), and passes `git add`,
+`rm` and `mv` of tracked paths, shown by `test-hooks.sh`; git's commands on the working tree are `EXEMPT_RULES`
+entries naming #0-236.
+AC2. README "Infrastructure Hardening", ADR-0053 and `.ai/context/security.md` name the allow list as what keeps the
+runtime state out of reach of every program but the exemptions, the git route as open until #0-236, and the guard as
+a heuristic; `factory.md` FAC-S03 names the rule (owner).
+
+---
+
+### 0-236. The factory's runtime state lives in the working tree the agents' git commands act on
+
+**Type:** security · **Priority:** Medium · **Status:** Open. From review round 2 of #0-235 (owner, 2026-11-13).
+**Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** —
+**Touches:** factory (scripts/factory/ (state.sh, preflight.sh, seed-branch.sh, return-to-main.sh, _common.sh and their
+tests), .claude/hooks/ (_lib.sh `base_ref`/`run_branch`/`seed_record`, guard-git-push.sh, factory-ops-bash.sh,
+guard-protected-bash.sh, test-hooks.sh), .claude/settings.autopilot.json, .devcontainer/), root (.ai/rules/protected-paths.md
+(owner), .ai/decisions/ (ADR-0034, 0044, 0047, 0052, 0053, 0054 and a new one), .gitignore), docs (README.md
+"Infrastructure Hardening", docs/ai-factory.md)
+
+**Problem.** What the factory trusts during a run, `.ai/runs/LOCK` (its base commit and branch), `.ai/runs/state.json`
+(the breaker's counts), `.ai/runs/ops-calls/` (one call per factory-ops run, ADR-0053), `.ai/runs/SEED` and `.ai/STOP`,
+lives in the working tree, ignored by `.gitignore`. Every allowed git command acts on that tree, so an agent reaches the
+state without naming it (#0-235's two review rounds, each form checked): `git add -f .ai/runs` then `git rm -r -f`
+deletes it; an agent that edits `.gitignore` (not protected) makes a plain `git add .ai/runs` stage it; `git mv .//.ai`
+moves it; `git mv -f f .ai/runs//LOCK` overwrites the lock with a base the agent chose; `git switch` overwrites it from
+a commit that tracks it. `git_runtime_unsafe` refuses the plain forms, a text heuristic that each round of review found
+another way past (and `git log --output=.ai/runs//LOCK` forged the lock until the shell guard resolved `//`, round 3).
+Round 4 named one more: `git log --format=… --output .ai/run?/LOCK` (git takes `--output <file>` as two words, checked)
+names no protected path as text, and bash expands the glob to the lock; it is kept out only if Claude Code in `dontAsk`
+refuses an unquoted glob under `Bash(git log *)`, as `check-agent-commands.rb` models it and as it models a path through
+`..`, unmeasured (#0-214). With the state out of the working tree no glob of an allowed command reaches it. Without the lock `base_ref()` compares against a ref, the breaker's counts reset and a factory-ops
+run gets a second call, with nothing in the PR's diff.
+
+**Approach, to decide with the item.** Move the state out of the working tree, to a directory no allowed command can
+name: Claude Code refuses an absolute or `~` path in `dontAsk` (the families of `check-agent-commands.rb`), git acts on
+the working tree only, and the file tools' `guard-write-in-repo.sh` keeps writes inside the repository. Candidates: a
+directory beside `/workspace` in the devcontainer (`/var/lib/factory/<repo>/`, owned by the same user) or
+`$XDG_STATE_HOME/incident-platform/`; the scripts and hooks find it through one variable set by the devcontainer and
+`preflight.sh` refuses a run without it. Then git's commands return to `SAFE_PREFIXES`, `git_runtime_unsafe` can go
+(or stay a second line), and the runtime list of `protected-paths.md` names the new place. Code run through `./mvnw`
+reaches it still (#0-116; the sandbox's `denyWrite`, #0-116's "Also", would bind it). Related: #0-202 (one working tree
+for the owner and the bot).
+
+**Acceptance criteria.**
+AC1. The lock, the run state, the factory-ops marks, the seed record and the stop switch live outside the working tree,
+found through one setting; a run without it stops at its preflight; shown by the factory scripts' and hooks' tests.
+AC2. git's `add`, `rm`, `mv`, `switch` and `checkout -b` are `SAFE_PREFIXES` again with a reason that holds, and
+`test-hooks.sh` shows that none of #0-235's forms reaches the state.
+AC3. README "Infrastructure Hardening", ADR-0054 and `protected-paths.md` (owner) describe where the state lives and
+what still reaches it (`./mvnw`, #0-116).
 
 ---
 

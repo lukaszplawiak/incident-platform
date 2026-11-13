@@ -440,6 +440,118 @@ seed_record() {
     printf '%s %s\n' "$base" "$head"
 }
 
+# runtime_path <word> — the repository-relative form of a path argument, resolved as git resolves it (`//`, `.` and
+# `..` components), on stdout; exit 3 when it cannot be resolved inside the repository (an absolute or `~` path, a
+# `..` above the root). The root itself is the empty string.
+runtime_path() {
+    local w=$1 part out=""
+    local -a parts=()
+    case "$w" in /*|~*) return 3 ;; esac
+    # Split by read, not by an unquoted $w: a word bash would glob (`.ai/*`, quoted in the command) must stay as written
+    # (security review round 3 of #0-235), not expand against the hook's working directory.
+    IFS=/ read -r -a parts <<<"$w"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "$part" in
+            ""|.) ;;
+            ..) [ -n "$out" ] || return 3
+                case "$out" in */*) out=${out%/*} ;; *) out="" ;; esac ;;
+            *) out=${out:+$out/}$part ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+# git_runtime_unsafe <command> — the reason a git command could remove, move or overwrite the gitignored runtime state
+# (.ai/runs/LOCK, state.json, the factory-ops marks, .ai/STOP), or nothing (backlog #0-235, review rounds 1 and 2,
+# sec-4a1d). A heuristic second line, not the control: the state lives in the working tree every allowed git command
+# acts on, and an agent that edits .gitignore makes a plain `git add .ai/runs` stage it; moving the state out of the
+# working tree is backlog #0-236. What it refuses:
+#   - `git add -f`/`--force`, which stages ignored files (then `git rm -r -f` deletes them): `-f` in a cluster of short
+#     options and every abbreviation of `--force` (git takes a unique prefix: `--forc`), up to a `--`;
+#   - a `git add`, `rm` or `mv` path that resolves to the state or under .ai/runs (`.ai/runs//LOCK`, `.ai/./runs`),
+#     and a `git mv` path that resolves to an ancestor of it (`.ai`, `.ai/runs`, the root; `.//.ai`, `x/../.ai`):
+#     git renames the directory with the ignored files in it, and `git mv -f f .ai/runs/LOCK` overwrites the lock;
+#   - such a path that cannot be resolved inside the repository (absolute, `~`, `..` above the root); a glob in
+#     `git mv`, and in `git add`/`rm` one that can reach a dot directory (`.a*`).
+# The subcommand is the first word after `git` and its global options (`-c <x>`, `-C <dir>` take a value). A compound
+# command is cut at its separators and redirects and each part is checked; a part shell_words still refuses (a
+# substitution, a quote across a separator) is refused when its text, quotes and backslashes removed as bash removes
+# them, holds `git … add|rm|mv`. Exit 0 always but on a failure of its own (2).
+git_runtime_unsafe() {
+    local cmd=$1 words rc w sub="" i=0 n opts=1 path part why plain tab
+    local -a list=()
+    tab=$(printf '\t')
+    words=$(shell_words "$cmd"); rc=$?
+    if [ "$rc" -eq 3 ]; then
+        matches "$cmd" '[;&|()<>]'; rc=$?
+        [ "$rc" -le 1 ] || return 2
+        if [ "$rc" -eq 0 ]; then
+            while IFS= read -r part; do
+                [ -n "${part//[[:space:]]/}" ] || continue
+                [ "$part" != "$cmd" ] || break
+                why=$(git_runtime_unsafe "$part") || return 2
+                [ -z "$why" ] || { echo "$why"; return 0; }
+            done <<<"${cmd//[;&|()<>]/$'\n'}"
+            return 0
+        fi
+        plain=$(printf '%s' "$cmd" | tr -d "'\"\\\\") || return 2
+        if matches "$plain" '(^|[^[:alnum:]_.-])git([[:space:]][^;&|]*)?[[:space:]](add|rm|mv)([[:space:]]|$)'; then
+            echo "git add, rm or mv in a command shell_words cannot split ($words): run it as one plain command"
+        else
+            [ $? -eq 1 ] || return 2
+        fi
+        return 0
+    fi
+    [ "$rc" -eq 0 ] || return 2
+    while IFS= read -r w; do list+=("$w"); done <<<"$words"
+    n=${#list[@]}
+    [ "$n" -gt 0 ] && [ "${list[0]##*/}" = git ] || return 0
+    i=1
+    while [ "$i" -lt "$n" ]; do
+        w=${list[$i]}
+        case "$w" in
+            -c|-C|--git-dir|--work-tree|--namespace) i=$((i + 2)) ;;
+            -*) i=$((i + 1)) ;;
+            *) sub=$w; i=$((i + 1)); break ;;
+        esac
+    done
+    case "$sub" in add|rm|mv) ;; *) return 0 ;; esac
+    while [ "$i" -lt "$n" ]; do
+        w=${list[$i]}; i=$((i + 1))
+        if [ "$opts" = 1 ]; then
+            [ "$w" = -- ] && { opts=0; continue; }
+            if [ "$sub" = add ]; then
+                case "$w" in
+                    --f|--fo|--for|--forc|--force|--force=*) echo "git add $w stages ignored files, which the runtime state is (.ai/runs/LOCK, the factory-ops marks): no agent adds an ignored file (backlog #0-235)"; return 0 ;;
+                    --*) continue ;;
+                    -*f*) echo "git add $w holds -f, which stages ignored files, which the runtime state is (.ai/runs/LOCK, the factory-ops marks): no agent adds an ignored file (backlog #0-235)"; return 0 ;;
+                esac
+            fi
+            case "$w" in -*) continue ;; esac
+        fi
+        # A glob: for git mv any (it could expand into .ai), for add and rm one that can reach a dot directory (bash's
+        # glob reaches a name starting with a dot only through a segment that starts with one: `src/*.java` cannot
+        # become .ai/runs, `.a*` can).
+        case "$w" in
+            "$tab"*)
+                if [ "$sub" = mv ] || matches "${w#?}" '(^|/)[.]'; then
+                    echo "git $sub with a glob (${w#?}), which could expand into the runtime state or a directory that holds it: name the paths (backlog #0-235)"; return 0
+                fi
+                continue ;;
+        esac
+        path=$(runtime_path "$w") || { echo "git $sub of $w, a path that does not resolve inside the repository: name it relative to the root, without .. (backlog #0-235)"; return 0; }
+        case "$path" in
+            .ai/runs|.ai/runs/*|.ai/STOP) echo "git $sub of $w reaches the gitignored runtime state ($path), which no diff shows (backlog #0-235)"; return 0 ;;
+        esac
+        if [ "$sub" = mv ]; then
+            case "$path" in
+                ""|.ai) echo "git mv of $w moves the gitignored runtime state with it (.ai/runs/LOCK, the factory-ops marks, .ai/STOP), which no diff shows (backlog #0-235)"; return 0 ;;
+            esac
+        fi
+    done
+    return 0
+}
+
 # The base an autopilot run compares against is the commit the preflight recorded in .ai/runs/LOCK
 # (`<runId> <sha>`), not a ref: a ref can be moved by the session (`git fetch . HEAD:refs/remotes/origin/main`,
 # a local branch named origin/main), a recorded sha cannot. Outside a run: $FACTORY_BASE_REF, origin/main, main.
