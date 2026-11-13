@@ -145,7 +145,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-230](#0-230-renovate-rebases-every-open-pr-on-every-merge-58-of-the-actions-minutes) | Renovate rebases every open PR on every merge: 58% of the Actions minutes | ci | Medium | Open |
 | [0-231](#0-231-a-new-push-to-a-pull-request-does-not-cancel-its-running-ci) | A new push to a pull request does not cancel its running CI | ci | Low | Open |
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
-| [0-233](#0-233-no-guard-protects-the-marks-of-factory-ops-runs) | No guard protects the marks of factory-ops runs | security | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Open |
 | [0-235](#0-235-the-shell-guard-does-not-see-a-protected-runtime-path-removed-through-its-parent) | The shell guard does not see a protected runtime path removed through its parent | security | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
@@ -5371,31 +5370,6 @@ comment the check reads.
 AC1. Lint Workflows fails on a `pull_request` workflow without the block, with a group that does not end in
 `github.run_id` off a pull request, or with `cancel-in-progress` true on a push, and passes on today's two workflows;
 each case is a test of the check.
-
----
-
-### 0-233. No guard protects the marks of factory-ops runs
-
-**Type:** security · **Priority:** Low · **Status:** Open. From the security review (sec-9b27) of #0-169 (2026-11-13).
-**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** #0-169
-**Touches:** factory (.ai/rules/protected-paths.md, .claude/hooks/guard-protected-bash.sh, .claude/settings.autopilot.json,
-.claude/hooks/test-hooks.sh), docs (README.md "Infrastructure Hardening")
-
-**Problem.** #0-169 (ADR-0053) gives a factory-ops run one call, counted by a symlink `.ai/runs/ops-calls/<agent_id>`.
-`.ai/runs/LOCK` and `.ai/runs/state.json` are on the protected list (`.ai/rules/protected-paths.md`, runtime state):
-the denies and `guard-protected-bash.sh` refuse an agent's writes to them. `.ai/runs/ops-calls/` is not, so another
-agent with Bash (the implementer, the shipper) that runs while a factory-ops does is not refused `rm` of a mark, which
-gives that factory-ops a second call. Low: it needs two agents at once, both steered, and those agents already reach
-`./mvnw` (#0-116).
-
-**Approach.** Add `.ai/runs/ops-calls/` to the runtime list next to `LOCK`, to the denies of
-`settings.autopilot.json` and to `guard-protected-bash.sh`'s pattern, as `LOCK` is; Factory guards' "Protected paths
-are covered" then keeps the three equal.
-
-**Acceptance criteria.**
-AC1. An agent's Bash write or delete under `.ai/runs/ops-calls/` is refused, and factory-ops-bash.sh's own marks still
-work, shown by test cases.
-AC2. README "Infrastructure Hardening" names it.
 
 ---
 
