@@ -146,7 +146,6 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-231](#0-231-a-new-push-to-a-pull-request-does-not-cancel-its-running-ci) | A new push to a pull request does not cancel its running CI | ci | Low | Open |
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Open |
-| [0-235](#0-235-the-shell-guard-does-not-see-a-protected-runtime-path-removed-through-its-parent) | The shell guard does not see a protected runtime path removed through its parent | security | Low | Open |
 | [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
@@ -5407,8 +5406,9 @@ audit's data lists the count of the period.
 
 ### 0-235. The shell guard does not see a protected runtime path removed through its parent
 
-**Type:** security · **Priority:** Low · **Status:** Open. From the security review (FAC-S03, and its rule gap) of #0-233
-(2026-11-13); approach decided by the owner after `/research 0-235` (2026-11-13), ADR-0054.
+**Type:** security · **Priority:** Low · **Status:** Done, PR #619 (kept for the decision history: the options of
+`/research`, four review rounds, the git route left to #0-236). From the security review (FAC-S03, and its rule gap) of
+#0-233 (2026-11-13); approach decided by the owner after `/research 0-235` (2026-11-13), ADR-0054.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** —
 **Touches:** ci (.github/scripts/check-agent-commands.rb, .github/scripts/test-agent-commands.sh,
 .github/workflows/factory-guards.yml), factory (.claude/hooks/_lib.sh, .claude/hooks/guard-protected-bash.sh,
