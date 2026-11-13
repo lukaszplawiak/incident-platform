@@ -151,6 +151,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Blocked (superseded, ADR-0055) |
+| [0-238](#0-238-migration-stage-2-a-build-vm-provisioned-as-code-runs-todays-devcontainer) | Migration stage 2: a build VM, provisioned as code, runs today's devcontainer | ci | High | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3303,3 +3304,66 @@ AC3. README "Infrastructure Hardening", ADR-0054 and `protected-paths.md` (owner
 what still reaches it (`./mvnw`, #0-116).
 
 ---
+
+### 0-238. Migration stage 2: a build VM, provisioned as code, runs today's devcontainer
+
+**Type:** ci · **Priority:** High · **Status:** Open. Stage 2 of ADR-0055 (owner, 2026-11-13); its first step is a spike
+of UTM, the owner's VM tool.
+**Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** #0-237
+**Touches:** factory (the VM's provisioning and scripts, proposed under `scripts/factory-admin/build-vm/`, an owner-only
+path that moves to the `factory` repository in stage 4; `.devcontainer/` only if the VM needs it), root
+(.ai/decisions/ (a new ADR: the VM tool and the VM's layout), BACKLOG.md), docs (docs/ai-factory.md, README.md
+"Infrastructure Hardening": where the autopilot runs and what isolates it)
+
+**Problem.** The factory runs as a devcontainer on the owner's Mac. Three known gaps come from that place, not from the
+factory's logic:
+- **#0-116:** code an agent runs reaches the host's Docker, so a test can leave the devcontainer's firewall and read
+  or start anything Docker on the Mac can;
+- **#0-202:** the container bind-mounts the owner's checkout, so the owner and the bot share one `.git`, HEAD, index and
+  every gitignored file (`docker/.env`, the `application-local.yml` files);
+- **#0-225, the part frozen for this stage:** a secret file in that tree is one file tool away from an agent.
+ADR-0055 moves the factory off the Mac in stages. Stage 2 is the first: the same devcontainer, unchanged, inside a VM
+that holds only what the factory needs, created from code that a cloud VM can later read unchanged (stage C).
+
+**Approach.**
+1. **Spike: UTM** (UTM 4.7.4 on the owner's M1 Pro, 32 GB). `utmctl` has `start`, `stop`, `clone`, `delete`, `exec`
+   and `ip-address`, but no `create`. Try, in this order, to create the VM from a script with no click in UTM's window:
+   (a) AppleScript, if UTM's scripting creates a VM with a disk and a cloud-init seed; (b) `utmctl clone` of a base VM
+   holding only Ubuntu's cloud image, with the seed attached by the script. The criteria, fixed now:
+   - S1. The VM is created, and recreated from nothing, by one script in the repository, with no step in the GUI.
+   - S2. Its contents come from one cloud-init `user-data` file (NoCloud seed, Ubuntu cloud image) that a cloud VM
+     could read unchanged: no UTM-specific step inside the guest.
+   - S3. In it, today's devcontainer starts (`devcontainer up`), its firewall comes up, and a test gate with
+     Testcontainers passes (`./mvnw verify` of one module with a repository test).
+   If S1 fails, the tool is Lima (a YAML file, `limactl create/start/delete`, the same cloud image and
+   Virtualization.framework), checked against S1–S3 the same way. The ADR records the tool, the criteria and what the
+   spike showed.
+2. **The VM**: Ubuntu cloud image; `user-data` installs Docker Engine (in the VM, not Docker Desktop), git, the
+   devcontainer CLI and its runtime; the repository is cloned from `origin` inside the VM, a tree of its own with no
+   gitignored file of the owner's (#0-202: the owner's checkout is no longer mounted); the bot's `gh` login and
+   Claude Code's login are entered once into the VM's volumes, as today's devcontainer documents. Resources sized
+   for the test gate (around 12–16 GB, `devcontainer.json`'s `hostRequirements` asks 16).
+3. **The autopilot starts there**, the owner's sessions stay on the Mac. How Claude Code authenticates unattended stays
+   open (ADR-0055 "Consequences"): in this stage the owner logs in interactively, as today, and starts each run.
+4. **Exit (ADR-0055):** 3 autopilot items run on the VM with no environment problem. **Rollback:** the devcontainer on
+   the Mac, unchanged, as it is today.
+
+**Not this item.** The dispatcher and builder-app (stage 4), metrics (stage 3), the review VM (stage 5), the cloud
+(stage C), a Docker API proxy or a firewall outside the container (#0-116's own options, decided with stage 4 and C).
+What stage 2 changes for #0-116 is where Docker's root reaches: the VM, which holds no owner file, instead of the Mac;
+#0-116 stays open until a boundary holds the code an agent runs. Sysbox in the build VM, which ADR-0055 leaves to its
+stage, is decided with that boundary, not here: it is one of the ways to run the test gate's Docker without root over
+the container (beside #0-116's Docker API proxy), and in stage 2 Docker runs on the VM itself.
+
+AC1. The spike's result is in a new ADR: the VM tool, S1–S3 each passed or failed with what was run, and the reason
+for the choice.
+AC2. One script in the repository creates the build VM from nothing and another deletes it; the VM's contents come only
+from its `user-data` file and that script (S1, S2), and the steps the owner does by hand (logins, the bot's token) are
+listed in `docs/ai-factory.md`.
+AC3. The repository inside the VM is a clone of its own: no mount of the owner's checkout, no gitignored file of the
+owner's (#0-202's concern, checked in the VM).
+AC4. In the VM the devcontainer starts with its firewall and a test gate with Testcontainers passes (S3).
+AC5. Three autopilot items run on the VM with no environment problem (ADR-0055's exit), each named here with its run id.
+AC6. README "Infrastructure Hardening" and `docs/ai-factory.md` say where the autopilot runs and what isolates it;
+#0-202 and #0-225 point at what this stage settled for them, and #0-116 at what it did not.
+
