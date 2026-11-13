@@ -55,8 +55,11 @@ unfinished or untested, stop and say so instead of finishing it here.
       `## Notes for reviewers` (anything that could look like a mistake but
       isn't, discrepancies with docs, etc.)
 
-7. **Backlog.** If this change finishes a backlog item, the same PR moves it: remove its section and its
-   row from `BACKLOG.md`, and add a row to `BACKLOG-DONE.md` (`| <n> | <what was delivered> | PR #<number> |`)
+7. **Backlog.** If this change finishes a backlog item, the same PR moves it: remove its row from
+   `BACKLOG.md`'s table, move its section, unchanged apart from its status (`Done, PR #<number> (<date>)`),
+   to the end of `BACKLOG-DONE.md`'s "Details", and add a row to `BACKLOG-DONE.md`'s table
+   (`| <n> | <what was delivered>; details in [the section](#<anchor>) | PR #<number> |`, where `<anchor>` is
+   GitHub's slug of the moved `### <n>. <title>` heading: lower case, punctuation dropped, spaces as `-`)
    — commit that as `chore: close backlog #<n>` after the PR exists, so the number is known.
 
 Stop and ask before any step if:

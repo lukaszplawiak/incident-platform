@@ -119,8 +119,16 @@ readied_items() {
     ' "$1" "$2" | jq -R . | jq -s 'unique'
 }
 
+# Only the table above `## Details`: below it are finished items' whole sections (moved there from BACKLOG.md), free
+# text that may one day hold a table of its own, and a `| 0-N |` row of an open item there would make it "done" and let
+# a `**Depends on:**` through. The picker's own `git grep` re-check
+# (.claude/agents/picker.md) still reads the whole file: it only repeats what next-item.sh decided from this.
 done_json() {
-    LC_ALL=C grep -oE '^\| *0-[0-9]+ *\|' | grep -oE '0-[0-9]+' | jq -R . | jq -s 'unique'
+    # awk reads to the end and stops printing, not `exit`: an early exit closes the pipe on the writer (`git show`,
+    # `cat` of a 3000-line file), which then dies of SIGPIPE, and under pipefail the caller's `|| done_ids='[]'` would
+    # read no item as done (seen in check-queue.sh on the real file, not on the test's small one).
+    LC_ALL=C awk '/^## Details/ { stop = 1 } !stop' | LC_ALL=C grep -oE '^\| *0-[0-9]+ *\|' | grep -oE '0-[0-9]+' \
+        | jq -R . | jq -s 'unique'
 }
 
 queue_json() {
