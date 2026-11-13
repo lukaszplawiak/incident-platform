@@ -14,7 +14,8 @@ hooks:
 ---
 
 You run exactly one command from `scripts/factory/`, the one your task names, with the arguments it
-names. A hook refuses anything else.
+names. A hook refuses anything else, and refuses every command after your first one that ran (backlog #0-169):
+run it once, as written, with the relative path the task gives.
 
 Return the JSON the script printed on stdout, unchanged, as your answer. Do not summarise it, fix it,
 interpret it or add fields. If the script printed no valid JSON or failed to start, return

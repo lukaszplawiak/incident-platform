@@ -146,6 +146,8 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-230](#0-230-renovate-rebases-every-open-pr-on-every-merge-58-of-the-actions-minutes) | Renovate rebases every open PR on every merge: 58% of the Actions minutes | ci | Medium | Open |
 | [0-231](#0-231-a-new-push-to-a-pull-request-does-not-cancel-its-running-ci) | A new push to a pull request does not cancel its running CI | ci | Low | Open |
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
+| [0-233](#0-233-no-guard-protects-the-marks-of-factory-ops-runs) | No guard protects the marks of factory-ops runs | security | Low | Open |
+| [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3070,8 +3072,8 @@ cannot is recorded, with the case shown either way.
 **Type:** security · **Priority:** Medium · **Status:** Open — `nonBlocking` of review-security in round 2 of the
 `/review` of #0-131 (2026-10-25)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-131
-**Touches:** factory (.claude/agents/factory-ops.md, .claude/hooks/factory-ops-bash.sh, .claude/hooks/test-hooks.sh,
-.claude/workflows/backlog-autopilot.js, .claude/workflows/audit.js), docs (README.md "Infrastructure Hardening")
+**Touches:** factory (.claude/agents/factory-ops.md, .claude/hooks/factory-ops-bash.sh, .claude/hooks/test-hooks.sh),
+docs (README.md "Infrastructure Hardening", .ai/decisions/0053)
 
 **Problem.** Since #0-131 only the `factory-ops` agent runs `scripts/factory/` in an autopilot session, and the
 lock (the run's base commit and its branch, the one the autopilot may push) moves only through those scripts. The
@@ -3084,9 +3086,26 @@ several. Part of what it relays is text the branch controls (`changed-paths.sh` 
 hook checks (it cannot see the prompt), or one command per task (`maxTurns` after a spike of what one turn allows),
 or `state.sh` refusing a second `preflight`/`branch` in one run by a record the hook keeps.
 
-**Acceptance criteria.**
-AC1. A `factory-ops` call that runs a factory command other than the one its task named is refused, shown by test
-cases.
+**Decided (owner, 2026-11-12, after `/research 0-169`; spike 2026-11-13; ADR-0053).** The hook allows one call per
+factory-ops run, keyed on `agent_id`: the first call that passes its other rules; every later one is refused, whatever
+its command. That first call comes before the agent has read any script's output, from the prompt the workflow's code
+builds, so it is the task's; nothing the branch printed can add a second. A refused call does not use it up; the mark
+is `ln -s <tool_use_id> .ai/runs/ops-calls/<agent_id>`, so the hook's two copies of one call (frontmatter and session
+twin, possibly at once) both pass; no `agent_id` or `tool_use_id` refuses. Rejected: comparing with the prompt read
+from the transcript (`transcript_path` is the main session's, spike fact 3), a one-time token (no store the agent
+cannot read), a lower `maxTurns` (it counts messages, not calls), hardening `state.sh` (one script at a time).
+**Spike, 2026-11-13** (run `wf_913b1a7d-375` + one Agent-tool factory-ops, a session-level hook logging the input):
+`agent_id` new for every `agent()` call and Agent-tool spawn, the same for every call of one run (two in a row, two in
+one message, a retry after a refusal); `agent_type` as #0-160's spike found; factory-ops sent an absolute path first
+(refused by the twin), then the relative one, and the Agent-tool one retried twice after its command had run. **Live
+check** (the change in the working tree, an Agent-tool factory-ops): its first command passed both copies of the hook
+and left the mark; a second command sent to the same agent was refused.
+
+**Acceptance criteria.** AC1 reworded with the decision (it said "a call other than the one its task named"; no hook
+input carries the task, and the first call is the task's).
+AC1. Every `factory-ops` call after the first allowed one of its run (`agent_id`) is refused, a refused call does not
+use the run's one call, and two copies of one call (`tool_use_id`) pass, shown by test cases (`test-hooks.sh`,
+"factory-ops: one call per run", parallel copies included).
 AC2. README "Infrastructure Hardening" names the control.
 
 ---
@@ -5351,6 +5370,52 @@ comment the check reads.
 AC1. Lint Workflows fails on a `pull_request` workflow without the block, with a group that does not end in
 `github.run_id` off a pull request, or with `cancel-in-progress` true on a push, and passes on today's two workflows;
 each case is a test of the check.
+
+---
+
+### 0-233. No guard protects the marks of factory-ops runs
+
+**Type:** security · **Priority:** Low · **Status:** Open. From the security review (sec-9b27) of #0-169 (2026-11-13).
+**Autopilot:** human-only · **Risk:** high · **Complexity:** low · **Depends on:** #0-169
+**Touches:** factory (.ai/rules/protected-paths.md, .claude/hooks/guard-protected-bash.sh, .claude/settings.autopilot.json,
+.claude/hooks/test-hooks.sh), docs (README.md "Infrastructure Hardening")
+
+**Problem.** #0-169 (ADR-0053) gives a factory-ops run one call, counted by a symlink `.ai/runs/ops-calls/<agent_id>`.
+`.ai/runs/LOCK` and `.ai/runs/state.json` are on the protected list (`.ai/rules/protected-paths.md`, runtime state):
+the denies and `guard-protected-bash.sh` refuse an agent's writes to them. `.ai/runs/ops-calls/` is not, so another
+agent with Bash (the implementer, the shipper) that runs while a factory-ops does is not refused `rm` of a mark, which
+gives that factory-ops a second call. Low: it needs two agents at once, both steered, and those agents already reach
+`./mvnw` (#0-116).
+
+**Approach.** Add `.ai/runs/ops-calls/` to the runtime list next to `LOCK`, to the denies of
+`settings.autopilot.json` and to `guard-protected-bash.sh`'s pattern, as `LOCK` is; Factory guards' "Protected paths
+are covered" then keeps the three equal.
+
+**Acceptance criteria.**
+AC1. An agent's Bash write or delete under `.ai/runs/ops-calls/` is refused, and factory-ops-bash.sh's own marks still
+work, shown by test cases.
+AC2. README "Infrastructure Hardening" names it.
+
+---
+
+### 0-234. A refused second factory-ops call leaves no record the audit reads
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From the architecture review (FAC-A03) of #0-169 (2026-11-13).
+**Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** #0-169
+**Touches:** factory (.claude/hooks/factory-ops-bash.sh, .claude/hooks/test-hooks.sh, scripts/factory/audit-data.sh,
+.claude/agents/audit-pipeline.md)
+
+**Problem.** Since #0-169 the hook refuses every factory-ops call after the run's first one. A refusal is the signal
+that a script's output steered the agent (or that it retried), but it is written only to the hook's stderr in the
+agent's transcript: the PR, the run's state and the pipeline audit cannot count it.
+
+**Approach.** On that refusal, the hook appends one line (time, `agent_id`, the refused command's script name, never
+its arguments) to a file under `.ai/runs/`; `audit-data.sh` counts the lines of the audited period, and the pipeline
+analyst reads the count as a case.
+
+**Acceptance criteria.**
+AC1. A refused second call adds one line to the record and an allowed call adds none, shown by test cases; the
+audit's data lists the count of the period.
 
 ---
 
