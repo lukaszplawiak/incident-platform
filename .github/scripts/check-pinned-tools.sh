@@ -20,8 +20,10 @@
 #                          verify-asset <tag>`: GitHub's release attestation lists its digest), so neither the tag
 #                          nor the asset can be replaced since; says nothing of how it was built (backlog #0-109)
 #       gpg:<fingerprint>  the release's sha256sums.txt.asc is signed by that key (committed under
-#                          .github/keys/, the file named by the fingerprint), which is neither expired nor
-#                          revoked in that file, and lists the asset's SHA-256
+#                          .github/keys/, the file named by the fingerprint), which is not revoked in that
+#                          file, and lists the asset's SHA-256. The key must not be expired either, except for
+#                          a pin already on main before the key expired, whose signature was made before then
+#                          (backlog #0-152, below)
 #       checksums:<file>   the release's <file> lists the asset's SHA-256 (same host as the asset: catches
 #                          a mismatch, not a malicious release)
 #       digest             nothing beyond GitHub's digest (the publisher signs nothing)
@@ -29,7 +31,9 @@
 # check), a `<NAME>_SHA256` after another name's `_VERSION`, a pin without `verify=`, and an unknown method.
 #
 # Run: GH_TOKEN=... .github/scripts/check-pinned-tools.sh [--expect <n>] [files]   (default: every workflow,
-# and every composite action's action.yml: the same places renovate.json's custom manager reads).
+# and every composite action's action.yml: the same places renovate.json's custom manager reads). A file is read
+# through the git repository that holds it when a key has expired (backlog #0-152): that needs the history back
+# to the key's expiry, so CI checks out with fetch-depth 0; a shallow clone makes every pin new.
 # --expect fails unless exactly <n> distinct pins are found: a job that checks its own pin before using a
 # secret (snyk.yml) must not pass on a pin renamed out of the `_SHA256` form, which this would not see.
 # Needs gh (any token: reads public releases and attestations), jq, sha256sum or shasum; gpg for a
@@ -60,12 +64,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 # --- parse: every *_SHA256 line must close a three-line pin ---------------------------------------
-pins="$work/pins"
-: > "$pins"
-for f in "${files[@]}"; do
-    [ -f "$f" ] || continue
-    rel=${f#"$ROOT"/}
-    awk -v file="$rel" '
+# parse_pins <file label> — reads a workflow on stdin, prints BAD, PAIR and PIN lines.
+parse_pins() {
+    awk -v file="$1" '
         { line[NR] = $0 }
         END {
             for (i = 1; i <= NR; i++) {
@@ -87,8 +88,33 @@ for f in "${files[@]}"; do
                 sub(/^[ \t]*[A-Z0-9_]+_SHA256: /, "", s); sub(/[ \t]+$/, "", s)
                 printf "PIN\t%s\t%d\t%s\t%s\t%s\t%s\n", file, i, repo, v, s, meth
             }
-        }' "$f" >> "$pins"
+        }'
+}
+pins="$work/pins"
+: > "$pins"
+for f in "${files[@]}"; do
+    [ -f "$f" ] || continue
+    rel=${f#"$ROOT"/}
+    parse_pins "$rel" < "$f" >> "$pins"
 done
+# on_main_before <file> <epoch> <repo> <tag> <sha> <method> — the pin was in <file> at the last merge commit of the
+# first-parent history (main's: a pull request's merge commit has the base branch first) dated before <epoch>, word
+# for word. A pin that was on main before its key expired was verified then, with the key still valid; one that came
+# later was not. Merge commits only: GitHub makes them when it merges, with its own date, while a rebased or squashed
+# commit could carry one its author set (the ruleset allows all three methods; the owner merges with --merge). So a
+# pin squashed onto main just before the expiry, with no merge after it, counts as new: the strict side. No git, a
+# file outside a repository, a history too shallow to reach that date, or a file the commit lacks: false (fail
+# closed; review round 2 of #0-152).
+on_main_before() {
+    local f=$1 when=$2 dir name at content
+    case "$f" in /*) ;; *) f="$ROOT/$f" ;; esac
+    dir=$(dirname "$f"); name=$(basename "$f")
+    at=$(git -C "$dir" rev-list -1 --first-parent --merges --before="@$when" HEAD 2>/dev/null </dev/null) || return 1
+    [ -n "$at" ] || return 1
+    content=$(git -C "$dir" show "$at:./$name" 2>/dev/null </dev/null) || return 1
+    printf '%s\n' "$content" | parse_pins "x" |
+        awk -F'\t' -v r="$3" -v t="$4" -v s="$5" -v m="$6" '$1 == "PIN" && $4 == r && $5 == t && $6 == s && $7 == m { ok = 1 } END { exit !ok }'
+}
 
 while IFS=$'\t' read -r kind file line vname sname; do
     case "$kind" in
@@ -127,6 +153,7 @@ while IFS=$'\t' read -r repo tag sha meth file line; do
         err "$loc" "$what: no asset of the release has GitHub's digest sha256:$sha"; continue
     fi
 
+    note=""
     d="$work/pin$n"
     mkdir -p "$d"
     case "$meth" in
@@ -176,12 +203,13 @@ while IFS=$'\t' read -r repo tag sha meth file line; do
             if ! gpg --homedir "$g" --batch --quiet --import "$key" 2>/dev/null </dev/null; then
                 err "$loc" "$what: gpg cannot import ${key#"$ROOT"/}"; continue
             fi
-            # A key with an expiry fails every pin that names it on the day it expires (fail closed: a
-            # signature by an expired key is refused below), so this warns 30 days ahead. Refresh the file
-            # from the publisher, after the same three-way fingerprint check (ADR-0033).
+            # A key with an expiry fails every new pin that names it from the day it expires, so this warns 30
+            # days ahead. A pin already on main keeps passing after that (below), so the warning is about the next bump:
+            # it needs the publisher's next key, after the same three-way fingerprint check (ADR-0033). The
+            # weekly key watch (watch-signing-keys.sh) says when the publisher has one.
             expires=$(gpg --homedir "$g" --batch --with-colons --list-keys "$fpr" 2>/dev/null </dev/null | awk -F: '$1 == "pub" { print $7; exit }')
             if is_int "$expires" && [ "$expires" -gt 0 ] && [ $((expires - $(date +%s))) -lt $((30 * 86400)) ]; then
-                echo "::warning file=${key#"$ROOT"/}::$what: the signing key $fpr expires on $(utc_date "$expires"): refresh this file from the publisher before then (ADR-0033)"
+                echo "::warning file=${key#"$ROOT"/}::$what: the signing key $fpr expires on $(utc_date "$expires"): a pin changed after that needs the publisher's next key (ADR-0033, backlog #0-152)"
             fi
             # One clearsigned message, no more: a second block appended to the file (unsigned, or signed by
             # another key) must not get its lines into what lists() reads.
@@ -190,15 +218,45 @@ while IFS=$'\t' read -r repo tag sha meth file line; do
             fi
             # VALIDSIG's last field is the primary key's fingerprint: the signature must be by the pinned key
             # (or one of its subkeys), whatever else the key file holds. gpg also reports VALIDSIG for a
-            # signature by an expired or revoked key, so either of those refuses it: a key Snyk revokes
+            # signature by an expired or revoked key. A revoked one always refuses it: a key Snyk revokes
             # is caught once the key file is refreshed with the revocation. Any bad or unverifiable
             # signature in the file, or a non-zero exit, refuses it too. The exit is what refuses an unsigned
             # armored message (`gpg --store`) next to the signed one: gpg 2.4.4 writes its text to --output
             # when it comes first, and exits 2 either way ("no signature found", "multiple plaintexts").
             status=$(gpg --homedir "$g" --batch --status-fd 1 --output "$d/signed" --verify "$d/sha256sums.txt.asc" 2>/dev/null </dev/null)
             rc=$?
-            if grep -Eq '^\[GNUPG:\] (EXPKEYSIG|REVKEYSIG) ' <<<"$status"; then
-                err "$loc" "$what: sha256sums.txt.asc is signed by an expired or revoked key"; continue
+            # A revoked key refuses every pin. gpg reports REVKEYSIG only for a key that is revoked and not expired:
+            # one both expired and revoked reads EXPKEYSIG plus KEYREVOKED (checked with gpg 2.4.7, review round 2 of
+            # #0-152), so the expired path below would pass it. The key's own validity (`r` on its pub or sub line)
+            # and of the key that made the signature (VALIDSIG field 3) is read too, whatever gpg reports for the
+            # signature; a revoked subkey that signs nothing (Snyk's encryption subkey) refuses nothing.
+            signer=$(awk '$2 == "VALIDSIG" { print $3; exit }' <<<"$status")
+            revoked=$(gpg --homedir "$g" --batch --with-colons --list-keys "$fpr" 2>/dev/null </dev/null |
+                awk -F: -v p="$fpr" -v k="$signer" '$1 == "pub" || $1 == "sub" { v = $2 } $1 == "fpr" && ($10 == p || $10 == k) && v == "r" { print "r"; exit }')
+            if grep -Eq '^\[GNUPG:\] (REVKEYSIG|KEYREVOKED)( |$)' <<<"$status" || [ "$revoked" = r ]; then
+                err "$loc" "$what: sha256sums.txt.asc is signed by a revoked key"; continue
+            fi
+            # An expired key (backlog #0-152). gpg judges the key at verification time, so the day a key expires
+            # every signature it ever made reads EXPKEYSIG, the old releases' too; Snyk publishes its next key
+            # only around that day (its 2025 key came two days after the 2023 one expired). Expiry limits what a
+            # key may sign from then on, not what it signed before; but a signature's time is the signer's to
+            # set, so a stolen expired key could backdate one. Hence a pin passes only if it was already on main
+            # before the key expired, so verified then with a valid key, and only for a signature dated before
+            # that expiry. A pin that reached main later, through a bypass merge or not, never does: the anchor is
+            # the expiry, not the commit before this one (review round 1 of #0-152: HEAD^ let such a pin pass
+            # from the next commit on, in the jobs that hold SNYK_TOKEN).
+            if grep -Eq '^\[GNUPG:\] EXPKEYSIG ' <<<"$status"; then
+                sigkey=$(awk '$2 == "VALIDSIG" { print $3; exit }' <<<"$status")
+                sigtime=$(awk '$2 == "VALIDSIG" { print $5; exit }' <<<"$status")
+                keyexp=$(gpg --homedir "$g" --batch --with-colons --list-keys "$fpr" 2>/dev/null </dev/null |
+                    awk -F: -v k="$sigkey" '$1 == "pub" || $1 == "sub" { e = $7 } $1 == "fpr" && $10 == k { print e; exit }')
+                if ! is_int "$sigtime" || ! is_int "$keyexp" || [ "$keyexp" -le 0 ] || [ "$sigtime" -ge "$keyexp" ]; then
+                    err "$loc" "$what: sha256sums.txt.asc is signed by an expired key, and the signature is not dated before the key expired"; continue
+                fi
+                if ! on_main_before "$file" "$keyexp" "$repo" "$tag" "$sha" "$meth"; then
+                    err "$loc" "$what: sha256sums.txt.asc is signed by a key that expired on $(utc_date "$keyexp"), and the pin was not on main before then (or the history does not reach that date): a new pin needs the publisher's current key (ADR-0033, backlog #0-152)"; continue
+                fi
+                note=", on main before the key expired on $(utc_date "$keyexp"), signed on $(utc_date "$sigtime")"
             fi
             if [ "$rc" -ne 0 ] || grep -Eq '^\[GNUPG:\] (BADSIG|ERRSIG|NO_PUBKEY) ' <<<"$status"; then
                 err "$loc" "$what: sha256sums.txt.asc is not validly signed by $fpr"; continue
@@ -211,7 +269,7 @@ while IFS=$'\t' read -r repo tag sha meth file line; do
             fi
             ;;
     esac
-    echo "  ok: $what $asset ($meth)"
+    echo "  ok: $what $asset ($meth${note:-})"
     checked=$((checked+1))
 done < <(awk -F'\t' '$1 == "PIN" && !seen[$4 FS $5 FS $6 FS $7]++ { print $4 "\t" $5 "\t" $6 "\t" $7 "\t" $2 "\t" $3 }' "$pins")
 

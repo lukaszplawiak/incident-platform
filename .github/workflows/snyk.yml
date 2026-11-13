@@ -111,13 +111,18 @@ jobs:
           # no step pushes, and any later step (a compromised action, a CLI
           # installed at run time) could read it from there (backlog #0-60).
           persist-credentials: false
+          # The whole history: once a key has expired, check-pinned-tools.sh
+          # looks for the pin on main before the expiry date (#0-152).
+          fetch-depth: 0
 
       # The pin above against Snyk's signed checksums (backlog #0-147,
       # ADR-0033), before the build so a bad pin fails in seconds. --expect 1:
       # a pin renamed out of the *_SHA256 form would otherwise pass unseen.
       # The script uses the token only to read public releases (it also
       # carries this job's security-events: write); SNYK_TOKEN does not exist
-      # yet.
+      # yet. Once Snyk's key has expired, the pin passes only if it was on main
+      # before the expiry (the full history, fetch-depth 0 above), so this job,
+      # which then gets SNYK_TOKEN, decides it itself (#0-152).
       - name: The pinned Snyk CLI matches Snyk's signed checksums
         env:
           GH_TOKEN: ${{ github.token }}
@@ -201,7 +206,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
+      # The same check as the first job's, on the full history too (#0-152).
       - name: The pinned Snyk CLI matches Snyk's signed checksums
         env:
           GH_TOKEN: ${{ github.token }}

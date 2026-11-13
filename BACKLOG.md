@@ -2362,22 +2362,60 @@ rule) still recognises the two actions under the new form, and delete the `self-
 ---
 ### 0-152. Refresh the Snyk CLI signing key before 2027-01-06
 
-**Type:** ci · **Priority:** Medium · **Status:** Open (found in the review of #0-147, 2026-10-17; due before 2027-01-06)
+**Type:** ci · **Priority:** Medium · **Status:** Open — C and D done (owner, after `/research 0-152`, 2026-11-13); B
+waits for Snyk's next key (found in the review of #0-147, 2026-10-17; due before 2027-01-06)
+**Autopilot:** human-only · **Risk:** low · **Complexity:** medium · **Depends on:** —
+**Touches:** ci (.github/scripts/check-pinned-tools.sh, .github/scripts/test-check-pinned-tools.sh,
+.github/scripts/watch-signing-keys.sh, .github/scripts/test-watch-signing-keys.sh, .github/workflows/ci.yml,
+.github/workflows/snyk.yml, .github/workflows/signing-keys.yml, .github/keys/), docs (ADR-0033, README.md
+"Infrastructure Hardening", .ai/context/infrastructure.md)
 
 **Problem.** `check-pinned-tools.sh` checks the Snyk CLI pin against `sha256sums.txt.asc`, signed by the key
-committed as `.github/keys/467717A30B2B4658415975629691DA64D0025194.asc` (ADR-0033). That key (the primary,
-which signs) and its encryption subkey expire on 2027-01-06. From that day gpg reports every signature by it as
-`EXPKEYSIG`, the checker refuses it, and Lint Workflows is red on every pull request and on `main`, where
-`main-guard.yml` then opens the `autopilot-stop` issue; both `snyk.yml` jobs, which run the same check before
-installing the CLI, stop too, so no Snyk scan runs. The checker warns (`::warning` on a green job) only from 30
-days ahead.
+committed as `.github/keys/467717A30B2B4658415975629691DA64D0025194.asc` (ADR-0033). That key and its subkey expire
+on 2027-01-06, and the checker refused `EXPKEYSIG`: from that day Lint Workflows would be red on every pull request
+and on `main` (`main-guard.yml` then opens `autopilot-stop`), and both `snyk.yml` jobs would stop before the scan.
+What `/research` found (2026-11-13, `gh api` on snyk/cli, gpg in a container):
+- **Snyk rotates, it does not extend**: the key file's history holds three keys, `68BF…9569` (2022, no expiry),
+  `A226…296E` (2023-01-05 to **2025-01-04**) and ours, `4677…5194` (**2025-01-06** to 2027-01-06): the new key came two
+  days after the old one expired. In December there would be no new key to take, as the first Approach assumed.
+- **gpg judges the key at verification time**: v1.1294.2 (2024-11-26), signed by the 2023 key before it expired, now
+  reads `EXPKEYSIG` (exit 0, `VALIDSIG` with the signature's date in field 5). Every old release fails with the key,
+  so no older pin is a way round.
+- Snyk publishes no GitHub attestation (404) and its releases are not immutable: `gpg:` stays the only method.
 
-**Approach.** In December 2026: take the key from the snyk/cli repository
-(`help/_about-this-project/snyk-code-signing-public.pgp`) and from keys.openpgp.org; if Snyk extended it (same
-fingerprint, later expiry), replace the armor in the committed file; if Snyk rotated it, add the new key's file and
-change `verify=gpg:` in `snyk.yml`, after checking the new fingerprint against docs.snyk.io. Either way the three
-sources must agree, as on 2026-10-17. Run `check-pinned-tools.sh` with gpg before merging. Touches `.github/`, so
-human-only.
+**Decided (owner, after `/research`).**
+- **C (done):** an expired key passes only for a pin that was already on main before the key expired (same file,
+  word for word, at the last first-parent merge commit dated before the expiry; `fetch-depth: 0` in lint-workflows and both
+  `snyk.yml` jobs) and whose signature is dated before that expiry. A pin that reached main later, a shallow history,
+  no git or a file the commit lacks needs an unexpired key; a revoked key refuses every pin. Why it holds: a stolen
+  expired key could backdate a signature, but only for a pin that reaches main after the expiry (ADR-0033 amended).
+  Review round 1 (security sec-5b1e, architecture arc-5c1e) replaced the first anchor, `HEAD^`: in `snyk.yml`, which
+  runs on main only, a bypass-merged pin would have been "unchanged" from the next commit on and got `SNYK_TOKEN`.
+  Review round 2 (security): a key both expired and revoked read `EXPKEYSIG` plus `KEYREVOKED`, not `REVKEYSIG`, and
+  passed (checked with gpg 2.4.7), so the checker also refuses `KEYREVOKED` and a key whose validity is `r`; and the
+  anchor takes merge commits only, since the ruleset allows rebase and squash, whose commits carry their author's dates.
+- **D (done):** `signing-keys.yml` runs `watch-signing-keys.sh` every Monday: each key file's `<fingerprint>.source`
+  names the publisher's file (`snyk/cli help/_about-this-project/snyk-code-signing-public.pgp`); a new primary
+  fingerprint, a revocation or a later expiry there opens one issue, and a key it cannot fetch or read opens another
+  and fails the job (both labelled `security`, found by label and author `app/github-actions`, so an outsider's issue
+  with the same title cannot silence it). lint-workflows checks offline that every key has its `.source`.
+- **B (open):** when the watch's issue opens (or Renovate's bump fails on the old key), one owner PR: the new key
+  file and its `.source`, after the three-way fingerprint check (snyk/cli, docs.snyk.io, keys.openpgp.org), the new
+  `verify=gpg:` in `snyk.yml`, and the pin bumped to a release the new key signed.
+- Rejected: refreshing in December (no key yet), accepting `EXPKEYSIG` without the base condition (a backdated
+  signature for a new pin would pass), a new install method (no Snyk attestation; npm provenance unverified).
+
+**Acceptance criteria.**
+AC1. An expired key passes for a pin on main before its expiry, signed before it, also after later changes to the
+file; it refuses a pin that reached main after the expiry, a backdated side-branch commit merged after it, a
+backdated commit straight on main (a rebase), a shallow history, no history, and a signature dated after the expiry;
+a revoked key refuses a pin long on main, and so does a key both expired and revoked; shown by
+`test-check-pinned-tools.sh`. (done)
+AC2. `watch-signing-keys.sh` reports a rotated, a revoked and an extended key (exit 3), passes the committed one
+(exit 0), fails closed on a missing source, a failed fetch or an unreadable key (exit 1), and `--sources-only` fails a
+key without its source; shown by `test-watch-signing-keys.sh`. (done)
+AC3. Snyk's next key is committed after the three-way check and the Snyk CLI pin names it and a release it signed,
+with `check-pinned-tools.sh` green on that pull request. (open)
 
 ---
 

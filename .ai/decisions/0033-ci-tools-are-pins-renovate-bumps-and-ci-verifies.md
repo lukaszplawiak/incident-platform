@@ -1,7 +1,7 @@
 # ADR-0033: Every CI tool downloaded from a GitHub release is a pin Renovate bumps and CI checks against its publisher, installed by one script; zizmor audits the workflows (backlog #0-147)
 
-- **Status:** Accepted (2026-10-17); amended by #0-149 (the one installer is enforced: `check-downloads.rb`) and by
-  ADR-0036 (a fifth method, `release`, for betterleaks)
+- **Status:** Accepted (2026-10-17); amended by #0-149 (the one installer is enforced: `check-downloads.rb`), by
+  ADR-0036 (a fifth method, `release`, for betterleaks) and by #0-152 (an expired signing key, below)
 - **Backlog:** #0-147 (follow-ups #0-149, #0-150)
 - **Date:** 2026-10-17
 - **Author:** human (owner chose the pattern and asked for it in all places; written up by Claude Code in the owner's session)
@@ -55,6 +55,24 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
 - **Today's pins**: actionlint `attestation`, zizmor `attestation`, Snyk CLI `gpg:4677…5194`, kubeconform
   `checksums:CHECKSUMS`, shellcheck `digest`; betterleaks `release` (ADR-0036). Snyk's key was committed after its fingerprint matched in three
   places: docs.snyk.io, the snyk/cli repository and keys.openpgp.org.
+- **Amended by #0-152 (2026-11-13): an expired signing key.** gpg judges a key at verification time, so the day a
+  key expires every signature it made reads `EXPKEYSIG`, the old releases' too, and Snyk rotates its key (a new
+  fingerprint every two years, its 2025 key published two days after the 2023 one expired). So `gpg:` accepts an
+  expired key only for a pin that was already on main before the key expired (in the same file, word for word, at
+  the last merge commit of the first-parent history dated before the expiry) and whose signature is dated before that
+  expiry: such a pin was verified then, with the key still valid. A signature's date is the signer's to set, so a
+  stolen expired key could backdate one, but only for a pin that reaches main after the expiry, which never passes,
+  through a bypass merge or not; the anchor is the expiry, not the commit before this one (review round 1: `HEAD^`
+  let such a pin pass from the next commit on, in the very jobs that get `SNYK_TOKEN`). Merge commits only: GitHub
+  makes them when it merges, with its own date, while a rebased or squashed commit can carry its author's (the
+  ruleset allows all three methods; review round 2), and a pull request's own commits are not on the first-parent
+  history. It needs the history back to the expiry, so lint-workflows and both `snyk.yml` jobs check out with
+  `fetch-depth: 0`; a shallow history, no git or a file the commit lacks makes the pin new (fail closed). A revoked
+  key refuses every pin, also when it has expired too: gpg then reports `EXPKEYSIG` and `KEYREVOKED`, not
+  `REVKEYSIG`, so the checker also reads the key's own validity (review round 2). `signing-keys.yml` compares each committed key weekly with its publisher's file
+  (`<fingerprint>.source`, `watch-signing-keys.sh`) and opens one issue (label `security`, by github-actions) on a
+  rotation, a revocation or an extension, and another when it cannot look; lint-workflows checks offline that every
+  key has its `.source`. The refresh keeps the three-way fingerprint check above.
 - **zizmor** (zizmorcore) audits the workflows and the composite actions in lint-workflows: v1.30.1 (five weeks
   old; 1.31.1 gives the same findings here), default persona, `--offline`, `--format github`, any finding fails.
   Offline, its five audits that need GitHub's API do not run (`impostor-commit`, `ref-confusion`,
@@ -92,20 +110,22 @@ computes the new SHA-256 from the file it downloads: trust on first use, as #0-1
   binary pass it, and stay with the owner's review of `.github/`).
 - Renovate opens a PR per tool bump; a red `check-pinned-tools.sh` on it means the bytes are not the publisher's:
   close it, do not copy a sum.
-- A new Snyk signing key is a new `.github/keys/<fingerprint>.asc` and a `verify=gpg:` change, after the same
-  three-way check. The current key expires on 2027-01-06: a signature by an expired (or revoked) key is refused,
-  so the file must be refreshed before then; the checker warns from 30 days ahead. Accepting an expired key's
-  signatures instead was rejected: a leaked expired key could sign a new file with an earlier date. The signed
-  file must be exactly one clearsigned message, and any bad or unverifiable signature in it refuses it.
+- A new Snyk signing key is a new `.github/keys/<fingerprint>.asc` (with its `.source`) and a `verify=gpg:` change,
+  after the same three-way check. The current key expires on 2027-01-06: from then a pin that was on main before
+  keeps passing (amendment #0-152, above), a new or changed pin needs Snyk's next key, and a revoked key refuses
+  every pin; the checker warns from 30 days ahead, and the weekly watch says when Snyk has published the next key.
+  Accepting an expired key's signatures without that anchor was rejected: a leaked expired key could sign a new
+  file with an earlier date. The signed file must be exactly one clearsigned message, and any bad or unverifiable
+  signature in it refuses it.
   shellcheck stays on GitHub's digest alone until it signs releases.
 - A pin's `verify=` is read from the workflow, so a change that weakens it (`gpg:` to `digest`) passes the checker:
   it is a `.github/` diff the owner reviews (CODEOWNERS), and Renovate never rewrites `verify=`. A second list
   of minimum methods in the script was rejected: one more copy to keep equal to the comments.
 - `check-pinned-tools.sh` downloads the attested assets (actionlint, zizmor) on every run, and reads GitHub's API:
   a GitHub outage makes lint-workflows red, and both Snyk scans, which run the same check first.
-- A red Lint Workflows on `main` (the Snyk key expired, GitHub's API down) makes `main-guard.yml` open the
-  `autopilot-stop` issue with no change in the repository: the autopilot stops until it is green again. The key's
-  refresh before 2027-01-06 is backlog #0-152.
+- A red Lint Workflows on `main` (GitHub's API down) makes `main-guard.yml` open the `autopilot-stop` issue with no
+  change in the repository: the autopilot stops until it is green again. A signing key's expiry no longer does
+  (#0-152); taking Snyk's next key once it is published is #0-152's last step.
 - Knowingly left open: kubectl (`azure/setup-kubectl`, version only: #0-135), `diff-cover` (#0-134), an impostor
   commit behind an action's pinned SHA (zizmor's online audit, #0-62). Outside this pattern by design: the Maven distribution (Apache, ADR-0031) and the
   container images, pinned by tag (#0-71). (The NVD key inline in `owasp-dependency-check.yml`'s command line,

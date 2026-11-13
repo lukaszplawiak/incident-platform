@@ -677,13 +677,14 @@ jobs:
       ZIZMOR_SHA256: e65324f4430c2717591937edcec90ccbefaf14c174f8ec9415e03ca875b46e1a
 
     steps:
-      # Depth 2: on a pull request HEAD is GitHub's merge commit, and the
-      # settings step (repository-settings.rb --main) compares it with its
-      # first parent (main).
+      # The whole history: once a signing key has expired, check-pinned-tools.sh
+      # looks for the pin on main before the expiry date (backlog #0-152). On a
+      # pull request HEAD is GitHub's merge commit, and the settings step
+      # (repository-settings.rb --main) compares it with its first parent (main).
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
 
       # Backlog #0-166 (ADR-0040): Ruby from .ruby-version for the .rb checks of this job, before any of them
@@ -702,16 +703,27 @@ jobs:
           set -euo pipefail
           .github/scripts/test-install-pinned-tool.sh
           .github/scripts/test-check-pinned-tools.sh
+          .github/scripts/test-watch-signing-keys.sh
 
       # Every `*_SHA256` pin in every workflow (this job's, kubeconform's,
       # the Snyk CLI's), each against its release: GitHub's digest, then the
       # pin's `verify=` method. Renovate computes the SHA-256 it writes by
       # downloading the asset itself, so its PRs are trusted only from here.
-      # The token reads public releases and attestations only.
+      # The token reads public releases and attestations only. Once a signing
+      # key has expired, a pin passes only if it was on main before the expiry
+      # (the job's checkout has the full history), and a new one needs the
+      # publisher's current key (backlog #0-152).
       - name: The pinned CI tools match their publishers
         env:
           GH_TOKEN: ${{ github.token }}
         run: .github/scripts/check-pinned-tools.sh
+
+      # Every key under .github/keys/ names where its publisher keeps it (a
+      # <fingerprint>.source), offline: the weekly watch, signing-keys.yml,
+      # needs it, and a key added without one fails its pull request here, not
+      # the next Monday's run (backlog #0-152).
+      - name: Every signing key names where its publisher keeps it
+        run: .github/scripts/watch-signing-keys.sh --sources-only
 
       - name: Install actionlint, shellcheck and zizmor (pinned, checksum verified)
         run: |

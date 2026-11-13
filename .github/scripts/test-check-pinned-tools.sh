@@ -228,8 +228,9 @@ if command -v gpg >/dev/null 2>&1; then
     sign "$SOON" "$WORK/sums" "$FIX/o/soon/v1.0.0/serve/sha256sums.txt.asc"
     pin "$W/v.yml" o/soon v1.0.0 "$TOOL" "gpg:$SOON"
     expect "a key that expires within 30 days passes, with a warning" 0 "::warning file=" "$W/v.yml"
-    # A key made in 2020, valid one year, expired today: gpg still verifies its signature (dated 2020 here),
-    # reporting EXPKEYSIG, and the checker refuses it.
+    # A key made in 2020, valid one year (to 2020-12-31), expired today: gpg still verifies its signature (dated
+    # 2020-06-01 here), reporting EXPKEYSIG. A file outside any git repository has no history, so the pin cannot have
+    # been on main before the expiry: refused.
     OLD=$(gpg --homedir "$G" --batch --quiet --faked-system-time 20200101T000000 --passphrase '' --quick-gen-key "Old <old@example.org>" ed25519 sign 1y 2>/dev/null
           gpg --homedir "$G" --batch --with-colons --fingerprint "Old <old@example.org>" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
     gpg --homedir "$G" --armor --export "$OLD" > "$WORK/keys/$OLD.asc"
@@ -239,15 +240,75 @@ if command -v gpg >/dev/null 2>&1; then
     gpg --homedir "$G" --batch --quiet --yes --faked-system-time 20200601T000000 --local-user "$OLD" --clearsign \
         --output "$FIX/o/old/v1.0.0/serve/sha256sums.txt.asc" "$WORK/sums"
     pin "$W/x.yml" o/old v1.0.0 "$TOOL" "gpg:$OLD"
-    expect "signed by a key that has since expired" 1 "signed by an expired or revoked key" "$W/x.yml"
+    expect "signed by a key that has since expired, no history: refused" 1 "and the pin was not on main before then" "$W/x.yml"
+    # Backlog #0-152: a pin passes an expired key only if it was on main at the last merge commit of the first-parent
+    # history dated before the key expired, and its signature predates that expiry. commit_at lands a change the way
+    # GitHub merges a pull request: a commit on a branch, merged into main with --no-ff, both dated <when>.
+    B="$WORK/based"; mkdir -p "$B"; git -C "$B" init -q -b main
+    gitb() { git -C "$B" -c user.name=t -c user.email=t@example.invalid "$@"; }
+    GIT_AUTHOR_DATE=2020-01-01T00:00:00Z GIT_COMMITTER_DATE=2020-01-01T00:00:00Z gitb commit -q --allow-empty -m root
+    n_pr=0
+    commit_at() { local when=$1 msg=$2; shift 2; n_pr=$((n_pr+1))
+        gitb switch -q -c "pr$n_pr" && gitb add "$@" &&
+        GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" gitb commit -q -m "$msg" && gitb switch -q main &&
+        GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" gitb merge -q --no-ff -m "Merge pr$n_pr: $msg" "pr$n_pr"; }
+    cp "$W/x.yml" "$B/x.yml"
+    commit_at 2020-11-01T00:00:00Z "pin before the expiry" x.yml
+    pin "$B/y.yml" o/old v1.0.0 "$TOOL" "gpg:$OLD"
+    commit_at 2021-02-01T00:00:00Z "the same pin, added after the expiry" y.yml
+    expect "expired key, the pin on main before the expiry, signed before it: passes" 0 "on main before the key expired on 2020-12-31, signed on 2020-06-01" "$B/x.yml"
+    expect "expired key, the pin reached main after the expiry: refused" 1 "the pin was not on main before then" "$B/y.yml"
+    printf '# a comment\n' >> "$B/x.yml"
+    commit_at 2021-03-01T00:00:00Z "the file changes, not the pin" x.yml
+    expect "expired key, the file changed later but not the pin: passes" 0 "on main before the key expired" "$B/x.yml"
+    # A pull request's own commit can carry any date: only the first-parent history counts. A side branch commit
+    # dated before the expiry, merged after it, does not make its pin one that was on main before then.
+    gitb switch -q -c side
+    pin "$B/z.yml" o/old v1.0.0 "$TOOL" "gpg:$OLD"
+    gitb add z.yml && GIT_AUTHOR_DATE=2020-10-01T00:00:00Z GIT_COMMITTER_DATE=2020-10-01T00:00:00Z gitb commit -q -m "a backdated commit on a side branch"
+    gitb switch -q main
+    GIT_AUTHOR_DATE=2021-04-01T00:00:00Z GIT_COMMITTER_DATE=2021-04-01T00:00:00Z gitb merge -q --no-ff -m "merge side" side
+    expect "expired key, a backdated side commit merged after the expiry: refused" 1 "the pin was not on main before then" "$B/z.yml"
+    # A rebase or squash merge puts a commit with its author's dates straight on the first-parent history (the ruleset
+    # allows them, review round 2 of #0-152): only merge commits anchor, so a backdated one there does not count.
+    pin "$B/w.yml" o/old v1.0.0 "$TOOL" "gpg:$OLD"
+    gitb add w.yml && GIT_AUTHOR_DATE=2020-10-15T00:00:00Z GIT_COMMITTER_DATE=2020-10-15T00:00:00Z gitb commit -q -m "a backdated commit rebased onto main"
+    expect "expired key, a backdated commit straight on main (rebase): refused" 1 "the pin was not on main before then" "$B/w.yml"
+    # A clone too shallow to reach the expiry date cannot tell: refused (CI checks out with fetch-depth 0).
+    git clone -q --depth 1 "file://$B" "$WORK/shallow" 2>/dev/null
+    expect "expired key, a shallow history: refused" 1 "the history does not reach that date" "$WORK/shallow/x.yml"
+    # A signature dated after its key's expiry (what a stolen expired key could make): the key's expiry is moved
+    # before the signature, as a later self-signature would; even with the pin on main before, it is refused.
+    LATE=$(gpg --homedir "$G" --batch --quiet --faked-system-time 20200101T000000 --passphrase '' --quick-gen-key "Late <late@example.org>" ed25519 sign 1y 2>/dev/null
+           gpg --homedir "$G" --batch --with-colons --fingerprint "Late <late@example.org>" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')
+    mkdir -p "$FIX/o/late/v1.0.0/serve"
+    cp "$FIX/o/gpg/v1.0.0/release.json" "$FIX/o/late/v1.0.0/release.json"
+    cp "$FIX/o/gpg/v1.0.0/serve/tool-linux" "$FIX/o/late/v1.0.0/serve/"
+    gpg --homedir "$G" --batch --quiet --yes --faked-system-time 20200601T000000 --local-user "$LATE" --clearsign \
+        --output "$FIX/o/late/v1.0.0/serve/sha256sums.txt.asc" "$WORK/sums"
+    gpg --homedir "$G" --batch --quiet --faked-system-time 20200201T000000 --quick-set-expire "$LATE" 2020-03-01 2>/dev/null
+    gpg --homedir "$G" --armor --export "$LATE" > "$WORK/keys/$LATE.asc"
+    pin "$B/late.yml" o/late v1.0.0 "$TOOL" "gpg:$LATE"
+    commit_at 2020-02-15T00:00:00Z "late pin" late.yml
+    expect "expired key, signed after the key expired: refused" 1 "the signature is not dated before the key expired" "$B/late.yml"
     # gpg writes a revocation certificate for every key it generates; importing it revokes the key, and the
     # key file committed after that carries the revocation.
     printf '%s  tool-linux\n' "$TOOL" > "$WORK/sums"
     sign "$FPR" "$WORK/sums" "$FIX/o/gpg/v1.0.0/serve/sha256sums.txt.asc"
     expect "signed again by the pinned key (control for the next case)" 0 "(gpg:$FPR)" "$W/r.yml"
+    cp "$W/r.yml" "$B/r.yml"
+    commit_at 2020-11-02T00:00:00Z "a pin of the key revoked below" r.yml
     sed 's/^:-----/-----/' "$G/openpgp-revocs.d/$FPR.rev" | gpg --homedir "$G" --batch --quiet --import 2>/dev/null
     gpg --homedir "$G" --armor --export "$FPR" > "$WORK/keys/$FPR.asc"
-    expect "signed by a key since revoked" 1 "signed by an expired or revoked key" "$W/r.yml"
+    expect "signed by a key since revoked" 1 "signed by a revoked key" "$W/r.yml"
+    # A revoked key refuses even a pin long on main (backlog #0-152 eases expiry only).
+    expect "a revoked key, the pin on main for long: refused" 1 "signed by a revoked key" "$B/r.yml"
+    # Expired and revoked: gpg reports EXPKEYSIG and KEYREVOKED, not REVKEYSIG (review round 2 of #0-152). The pin was
+    # on main before the expiry and passed above; with the revocation in the key file it is refused.
+    expect "expired key, the pin on main before the expiry (control for the next case)" 0 "on main before the key expired" "$B/x.yml"
+    sed 's/^:-----/-----/' "$G/openpgp-revocs.d/$OLD.rev" | gpg --homedir "$G" --batch --quiet --import 2>/dev/null
+    gpg --homedir "$G" --armor --export "$OLD" > "$WORK/keys/$OLD.asc"
+    expect "a key both expired and revoked, the pin on main before the expiry: refused" 1 "signed by a revoked key" "$B/x.yml"
 else
     echo "  skipped: gpg is not installed (CI's runner runs these)"
 fi
