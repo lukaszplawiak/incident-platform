@@ -16,6 +16,8 @@ trap 'rm -rf "$WORK"' EXIT
 failures=0
 
 bash_call() { printf '{"tool_name":"Bash","tool_input":{"command":%s}}' "$(printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"; }
+# run_call <agent_id> <tool_use_id> <command> — a Bash call of a factory-ops run, as its hooks see it (backlog #0-169).
+run_call() { jq -cn --arg a "$1" --arg t "$2" --arg c "$3" '{agent_type: "factory-ops", agent_id: $a, tool_use_id: $t, tool_name: "Bash", tool_input: {command: $c}}'; }
 file_call() { printf '{"tool_name":"%s","tool_input":{"file_path":"%s"}}' "$1" "$2"; }
 
 # expect <0|2> <name> <hook and args...> -- <json>
@@ -354,8 +356,58 @@ expect 2 "a git read chained to a run"                 "$FS" -- "$(ops_call impl
 expect 2 "a quoted command word"                       "$FS" -- "$(ops_call shipper '"scripts/factory/state.sh" unlock')"
 expect 2 "a git read that writes with --output"        "$FS" -- "$(ops_call implementer 'git diff HEAD --output=x.txt -- scripts/factory/state.sh')"
 expect 2 "a git read over two lines"                   "$FS" -- "$(ops_call implementer $'git log -1\nscripts/factory/state.sh unlock')"
-expect 0 "factory-ops with quoted args"   "$HOOKS/factory-ops-bash.sh" -- "$(bash_call "scripts/factory/preflight.sh '0-25' 'origin/main'")"
-expect 2 "factory-ops with a comment"     "$HOOKS/factory-ops-bash.sh" -- "$(bash_call 'scripts/factory/preflight.sh #0-25')"
+expect 0 "factory-ops with quoted args"   "$HOOKS/factory-ops-bash.sh" -- "$(run_call q1 t1 "scripts/factory/preflight.sh '0-25' 'origin/main'")"
+expect 2 "factory-ops with a comment"     "$HOOKS/factory-ops-bash.sh" -- "$(run_call q2 t1 'scripts/factory/preflight.sh #0-25')"
+
+# Backlog #0-169: one allowed call per factory-ops run (agent_id), the first; a refused call does not use it up, and
+# the second copy of the same call (frontmatter hook and session twin, tool_use_id) passes.
+echo "factory-ops: one call per run"
+OPS="$HOOKS/factory-ops-bash.sh"
+expect 0 "the run's first call"                          "$OPS" -- "$(run_call a1 tu1 'scripts/factory/preflight.sh')"
+expect 0 "the same call, the hook's second copy"         "$OPS" -- "$(run_call a1 tu1 'scripts/factory/preflight.sh')"
+expect 0 "the same call, through the session twin"       "$OPS" --agent factory-ops -- "$(run_call a1 tu1 'scripts/factory/preflight.sh')"
+expect 2 "a second call of the run"                      "$OPS" -- "$(run_call a1 tu2 'scripts/factory/preflight.sh')"
+expect 2 "a second call of the run, through the twin"    "$OPS" --agent factory-ops -- "$(run_call a1 tu3 'scripts/factory/preflight.sh')"
+expect 0 "another run's first call"                      "$OPS" -- "$(run_call a2 tu4 'scripts/factory/preflight.sh')"
+expect 2 "a refused form first (chained)"                "$OPS" -- "$(run_call a3 tu5 'scripts/factory/preflight.sh; rm -rf x')"
+expect 2 "a refused form first (an absolute path)"       "$OPS" -- "$(run_call a3 tu6 "$WORK/repo/scripts/factory/preflight.sh")"
+expect 0 "then the run's first allowed call"             "$OPS" -- "$(run_call a3 tu7 'scripts/factory/preflight.sh')"
+expect 2 "and nothing after it"                          "$OPS" -- "$(run_call a3 tu8 'scripts/factory/preflight.sh')"
+expect 2 "no agent_id"                                   "$OPS" -- "$(jq -cn '{agent_type: "factory-ops", tool_use_id: "tu9", tool_name: "Bash", tool_input: {command: "scripts/factory/preflight.sh"}}')"
+expect 2 "no tool_use_id"                                "$OPS" -- "$(jq -cn '{agent_type: "factory-ops", agent_id: "a4", tool_name: "Bash", tool_input: {command: "scripts/factory/preflight.sh"}}')"
+expect 2 "an agent_id that is a path"                    "$OPS" -- "$(run_call '../a5' tu10 'scripts/factory/preflight.sh')"
+expect 2 "a tool_use_id that is a path"                  "$OPS" -- "$(run_call a6 '../../x' 'scripts/factory/preflight.sh')"
+expect 0 "the shipper is not counted (twin)"             "$OPS" --agent factory-ops -- "$(jq -cn '{agent_type: "shipper", tool_name: "Bash", tool_input: {command: "git status"}}')"
+# A day-old mark is pruned: it refuses nothing a new run asks, and its own id is free again.
+(cd "$WORK/repo" && ln -s tu-old .ai/runs/ops-calls/a7 && touch -h -t 202001010000 .ai/runs/ops-calls/a7)
+expect 0 "a day-old mark is pruned"                      "$OPS" -- "$(run_call a7 tu11 'scripts/factory/preflight.sh')"
+# Review round 1: a mark that is a directory, or a link to one, is not entered; a tool_use_id starting with `-` is
+# not an option of ln.
+(cd "$WORK/repo" && mkdir -p .ai/runs/ops-calls/a8 .ai/runs/ops-calls-elsewhere && ln -s "$WORK/repo/.ai/runs/ops-calls-elsewhere" .ai/runs/ops-calls/a9)
+expect 2 "a mark that is a directory"                    "$OPS" -- "$(run_call a8 tu12 'scripts/factory/preflight.sh')"
+expect 2 "a mark that is a directory, again"             "$OPS" -- "$(run_call a8 tu13 'scripts/factory/preflight.sh')"
+expect 2 "a mark that links to a directory"              "$OPS" -- "$(run_call a9 tu14 'scripts/factory/preflight.sh')"
+if [ -z "$(ls -A "$WORK/repo/.ai/runs/ops-calls/a8")" ] && [ -z "$(ls -A "$WORK/repo/.ai/runs/ops-calls-elsewhere")" ]; then
+    echo "  ok: nothing was linked inside them"
+else echo "::error::a link was created inside a directory mark"; failures=$((failures+1)); fi
+expect 0 "a tool_use_id starting with -"                 "$OPS" -- "$(run_call a10 -tu15 'scripts/factory/preflight.sh')"
+expect 0 "the same call, the hook's second copy (-)"     "$OPS" -- "$(run_call a10 -tu15 'scripts/factory/preflight.sh')"
+expect 2 "and a second call of that run"                 "$OPS" -- "$(run_call a10 -tu16 'scripts/factory/preflight.sh')"
+# Two copies of one call at once both pass; two different calls of one run at once: exactly one passes.
+race() {
+    local id=$1 t1=$2 t2=$3 r1 r2
+    (cd "$WORK/repo" && run_call "$id" "$t1" 'scripts/factory/preflight.sh' | "$OPS" >/dev/null 2>&1; echo $? > "$WORK/race1") &
+    (cd "$WORK/repo" && run_call "$id" "$t2" 'scripts/factory/preflight.sh' | "$OPS" >/dev/null 2>&1; echo $? > "$WORK/race2") &
+    wait; r1=$(cat "$WORK/race1"); r2=$(cat "$WORK/race2"); echo "$r1$r2"
+}
+for i in 1 2 3 4 5; do
+    got=$(race "s$i" "tus$i" "tus$i")
+    if [ "$got" = 00 ]; then echo "  ok: two copies of one call at once ($i)"
+    else echo "::error::two copies of one call at once ($i): got $got"; failures=$((failures+1)); fi
+    got=$(race "d$i" "tud$i-1" "tud$i-2")
+    case "$got" in 02|20) echo "  ok: two calls of one run at once, one passes ($i)" ;;
+        *) echo "::error::two calls of one run at once ($i): got $got, want exactly one 0"; failures=$((failures+1)) ;; esac
+done
 
 echo "more guards"
 expect 2 "mvnw exec plugin"               "$T" -- "$(bash_call './mvnw -q exec:exec -Dexec.executable=sh')"
@@ -770,7 +822,7 @@ expect 2 "write twin: the planner writes outside its scope" "$W" --agent planner
 expect 0 "write twin: the planner writes the queue"         "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call planner Write file_path .ai/plan/queue.md)"
 expect 0 "write twin: the implementer is not its business"  "$W" --agent planner .ai/plan/ BACKLOG.md -- "$(agent_call implementer Write file_path svc/src/main/java/A.java)"
 expect 2 "factory-ops twin: factory-ops runs git push"      "$O" --agent factory-ops -- "$(agent_call factory-ops Bash command 'git push')"
-expect 0 "factory-ops twin: factory-ops runs a gate"        "$O" --agent factory-ops -- "$(agent_call factory-ops Bash command 'scripts/factory/preflight.sh')"
+expect 0 "factory-ops twin: factory-ops runs a gate"        "$O" --agent factory-ops -- "$(run_call tw1 tw1 'scripts/factory/preflight.sh')"
 expect 0 "factory-ops twin: the shipper is not its business" "$O" --agent factory-ops -- "$(agent_call shipper Bash command 'git push')"
 expect 2 "factory-ops: an argument but --agent is refused"  "$O" --gh-read -- "$(agent_call factory-ops Bash command 'scripts/factory/preflight.sh')"
 expect 2 "--agent with an empty name in the list"           "$R" --agent review-general,,review-docs -- "$(agent_call implementer Bash command 'git status')"
@@ -863,7 +915,7 @@ FAILS_CLOSED=(
     "guard-protected-bash.sh||$(bash_call 'git status')"
     "readonly-bash.sh||$(bash_call 'git status')"
     "write-scope.sh|.ai/audit/|$(file_call Write .ai/audit/2026-11-03.md)"
-    "factory-ops-bash.sh||$(bash_call 'scripts/factory/preflight.sh')"
+    "factory-ops-bash.sh||$(run_call fc1 fc1 'scripts/factory/preflight.sh')"
     "guard-git-push.sh||$(bash_call 'git status')"
     "guard-factory-scripts.sh||$(bash_call 'git status')"
     "guard-write-in-repo.sh||$(file_call Write svc/src/main/java/A.java)"
