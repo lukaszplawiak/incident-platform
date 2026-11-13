@@ -6301,7 +6301,7 @@ Then the owner, in this order (the transfer keeps issues, pull requests, stars a
    now the organisation's owners too, which is the owner alone), environments, admins and secrets as in the files.
 PR 1b: README's links and badge to the new URL, whatever step 5 found, and one item merged the usual way (stage 1's exit).
 
-**What the transfer found (2026-11-13, PR 1b).** The transfer kept the issues, pull requests, environments, the
+**What the transfer found (2026-11-13, PR 1b, PR #624).** The transfer kept the issues, pull requests, environments, the
 machine account (outside collaborator, Write), secret scanning and push protection, the workflow token's read-only
 default and `sha_pinning_required`; the owner is still the repository's only admin (`plan` refuses otherwise).
 `check` found two differences:
