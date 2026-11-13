@@ -2469,6 +2469,13 @@ phase 3 removes `*`, decide whether those paths get lines of their own.
 so every PR needs the owner's approval (the machine account's own approval would otherwise count). Phase 3
 removes that line; what this item decides is what stays owned once it is gone.
 
+**4. Who may dismiss a review (#0-237, 2026-11-13).** In an organisation the ruleset's `pull_request` rule has
+`dismissal_restriction`; `rulesets/main.json` keeps GitHub's default, `enabled: false`, so any account with Write, the
+machine account included, can dismiss the owner's "changes requested". It gives that account no approval, so while
+the owner approves every PR it only removes a block the owner can set again. Once a PR can merge on another approval
+(review-app, stage 5; auto-merge, phase 3), decide whether dismissals are restricted to the owner (`enabled: true`,
+`allowed_actors` naming the owner) and how that actor's id is written in the file.
+
 **Acceptance criteria.**
 AC1. Each path above is either code-owned (CODEOWNERS, and `.ai/rules/protected-paths.md` when an agent must not
 write it) or the reason it is not is recorded here and in `docs/ai-factory.md`.
@@ -6281,7 +6288,8 @@ factory's purpose (a product of its own, stages T and N) before the owner accept
 Then the owner, in this order (the transfer keeps issues, pull requests, stars and redirects the old URLs):
 1. Create the free organisation `profitbuild`, the owner its only owner; two-factor authentication required for members.
 2. Settings → Transfer of `lukaszplawiak/incident-platform` to `profitbuild`; then `git remote set-url origin
-   git@github.com:profitbuild/incident-platform.git` in every clone (the Mac, the devcontainer).
+   https://github.com/profitbuild/incident-platform.git` in every clone (the Mac, the devcontainer; HTTPS, which `gh`
+   authenticates, not SSH: the SSH form of an earlier draft of this step was refused with "Permission denied (publickey)").
 3. Reinstall what is bound to the account rather than the repository: Renovate (the GitHub App, for the organisation,
    this repository only), and check that Snyk's and the NVD key's secrets and the environments survived.
 4. Organisation settings: base permission "No permission"; members cannot create repositories or change visibility;
@@ -6293,7 +6301,26 @@ Then the owner, in this order (the transfer keeps issues, pull requests, stars a
    now the organisation's owners too, which is the owner alone), environments, admins and secrets as in the files.
 PR 1b: README's links and badge to the new URL, whatever step 5 found, and one item merged the usual way (stage 1's exit).
 
+**What the transfer found (2026-11-13, PR 1b, PR #624).** The transfer kept the issues, pull requests, environments, the
+machine account (outside collaborator, Write), secret scanning and push protection, the workflow token's read-only
+default and `sha_pinning_required`; the owner is still the repository's only admin (`plan` refuses otherwise).
+`check` found two differences:
+- **The ruleset's bypass list was empty** on GitHub (`bypass_actors: []`, confirmed in the UI), which made every PR of
+  the owner unmergeable (CODEOWNERS covers every path, and nobody else approves); `apply` restored the admin role from
+  `rulesets/main.json`. Recorded in ADR-0034's consequences.
+- **`dismissal_restriction`**, a `pull_request` parameter GitHub returns only for an organisation's repository, was
+  not in the file; PR 1b writes today's value (`enabled: false`, unchanged). Restricting who may dismiss a review to
+  the owner is a possible hardening (the machine account, with Write, can dismiss the owner's "changes requested",
+  though that gives it no approval), recorded as point 4 of #0-153 (stage 6a).
+Still open: two-factor authentication required in the organisation (step 1), Dependabot alerts on the repository and
+the organisation's Actions settings, which the session's token cannot read; and whether the machine account's token
+still reaches the repository (a fine-grained token owned by `lukaszplawiak` does not cover an organisation's
+repository, a classic one does), checked by a test push from the rebuilt devcontainer.
+
 **Rollback.** Transfer back to the owner's account (the redirects follow); `owner-login.sh` reads the same file there.
+Then the owner runs `repository-settings.rb check` before the next merge: a transfer may empty the bypass list again
+(ADR-0034), and if GitHub no longer returns `dismissal_restriction` on a personal account's repository, that key comes
+out of `rulesets/main.json` first, so that `apply` sends only parameters GitHub accepts and can restore the bypass.
 
 AC1. `audit-data.sh` and factory-guards read the owner from `repository.json` through `owner-login.sh`, on GitHub's main
 and at the pull request's base; neither reads `gh repo view`'s owner or `github.repository_owner` for it, and factory
