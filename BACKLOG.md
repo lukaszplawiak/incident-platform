@@ -1108,44 +1108,56 @@ is wanted. Correct README "Security Scanning" either way.
 
 ### 0-69. The Snyk dependency scan fails on every run, so a new finding changes nothing
 
-**Type:** ci · **Priority:** High · **Status:** Open (found in the 2026-09-30 infrastructure security audit; updated
-2026-10-20)
+**Type:** ci · **Priority:** High · **Status:** Open — A1 done (owner, after `/research 0-69`, 2026-11-13); A2, B1-B3 open
+(found in the 2026-09-30 infrastructure security audit; updated 2026-10-20 and 2026-11-13)
+**Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** #0-158 (the date B2's ignores expire on)
+**Touches:** root (pom.xml, .snyk, BACKLOG.md), ci (.github/workflows/snyk.yml), docs (README.md "Infrastructure Hardening")
 
-**Problem.** `snyk test --severity-threshold=high` reports 42 issues (run of 2026-09-30; 37–45 on earlier runs), so the
-dependency job is red on every push to `main` and every weekly run. A red job that is always red carries no signal: a
-new critical CVE would not change its status. OWASP Dependency-Check, by contrast, is green.
+**Problem.** `snyk test --severity-threshold=high` is red on every push to `main` and every weekly run, so a new
+critical CVE would not change its status. The `.snyk` ignores were no sound baseline either: the Tomcat ones
+(removed by #0-157) justified the risk with "All endpoints require JWT authentication", which is false (login,
+health, Swagger #0-73 and the Slack webhook are public, ingestion takes API keys) and no mitigation for a Tomcat CVE,
+reached before any Spring Security filter.
 
-The existing `.snyk` ignores are not a sound baseline either. The Tomcat entries (comment at `.snyk:22`, reasons at
-lines 30, 38 and 125; all removed by #0-157) justify the risk with "All endpoints require JWT authentication. No unauthenticated access",
-which is false: login, health, Swagger (#0-73) and the Slack webhook are public, and ingestion-service takes API keys,
-not JWTs. It would not be a mitigation even if it were true, since a Tomcat CVE is reached at the HTTP layer, before
-any Spring Security filter runs. The same false claim was in `owasp-suppressions.xml`'s DOMPurify note, corrected
-on 2026-10-01.
+**State on 2026-11-13 (run 43451054483, `/research 0-69`).** 34-42 issues in each of the eight projects, 295 entries.
+`.snyk` holds 9 ignores, expiring 2026-12-31 or 2027-01-01. By how each can be fixed (versions: Maven Central today):
 
-**Approach.** Triage each finding: upgrade where a fixed version exists (overrides go in the root `pom.xml` properties
-with the CVE named, per CLAUDE.md), suppress in `.snyk` with a reason and an expiry where the vulnerable code is not
-reachable, until the job is green; then keep it green. Re-check every existing `.snyk` ignore the same way and rewrite
-the Tomcat reasons on what actually limits exposure (which Tomcat feature the CVE needs and whether the services use
-it), or drop the ignore where nothing does.
+| Group | Newest open-source release of our line | Fix |
+|---|---|---|
+| Spring Framework 6.2 (`spring-webmvc` Critical Arbitrary Code Injection, `spring-web` XSS / cookie without `Secure` / DoS, `spring-expression`, `spring-beans`, `spring-context-support` Directory Traversal) | 6.2.19, ours: the line's last | 7.x only, Spring Boot 4 (#0-158) |
+| Spring Security 6.5 (Timing Attack, Predictable IV with CBC) | 6.5.11, ours: the last | 7.x only |
+| spring-kafka 3.3, kafka-clients 3.9 (data amplification, sequential allocation) | 3.3.16, 3.9.2: the last | 4.x (Kafka 4, Renovate #165) |
+| Micrometer 1.15 (CRLF Injection, memory not released), reactor-core 3.7 | 1.15.12, 3.7.19: the last | 1.16.x (a minor above what Boot 3.5 manages) / Boot 4 |
+| jaxb-core 4.0.9 (XXE) | 4.0.9: the last 4.0 | Boot 4 |
+| Jackson 2.21 (databind Critical deserialization, DoS), also through Flyway's `jackson-dataformat-toml` | 2.21.8 | **A1, done**: `jackson-bom.version` (Flyway needs no bump) |
+| PostgreSQL JDBC (failing open) | 42.7.14 | **A1, done**: `postgresql.version` |
+| Netty 4.1 through Lettuce (Critical, host mismatch, infinite loop) | 4.1.140 | **A1, done**: `netty.version` (GitHub's advisories fix the Critical and the loop by 4.1.137; Snyk names no fixed version, so the next run on main shows what it clears) |
+| zstd-jni 1.5.6-4, snappy-java 1.1.10.5, at.yawk lz4-java 1.10.1, from kafka-clients | 1.5.7-26, 1.1.10.12, 1.14.0 | A2: overrides, if kafka-clients 3.9.2 takes them |
+| zookeeper 3.8.6 through `spring-kafka-test` (scope `test`, not in any jar) | 3.8.8 | A2: override, or the gate leaves test scope out (check Snyk's Maven options) |
 
-**State on 2026-10-20 (run 39431317669, the first authenticated scan after #0-154).** 50–58 issues per project
-(eight projects). Tomcat is #0-157 (fixed by a `tomcat.version` override, its four `.snyk` ignores removed); what Snyk fixes only through Spring Boot 4 is #0-158. Fixed within the current
-line, by a version override:
+No producer enables Kafka compression (`git grep compression`), so the compression issues need a compressed batch
+from someone else; Kafka in k8s has no authentication (#0-66), so that is a limit, not a fix.
 
-| Dependency | Now | Fixed in | Issues |
-|---|---|---|---|
-| `bcprov-jdk18on` | 1.87 (was 1.84; 2026-11-12) | 1.86 | 15, among them Critical Improper Certificate Validation (`-18512779`, `-18519194`) and Improper Input Validation (`-18512810`); Renovate PR #402 offered 1.85 only (the minimum of its alert, CVE-2026-8763), so the override went to 1.87, the newest on Maven Central (PR #613). Snyk on `main` after it (run 43294099841): no bcprov finding, 14 issues fewer in each of the eight projects (48–56 → 34–42) |
-| `postgresql` | 42.7.12 | 42.7.14 | Not Failing Securely (`SNYK-JAVA-ORGPOSTGRESQL-20571163`) |
-| `flyway-core` | 11.7.2 | 11.8.1 | per Snyk's upgrade advice |
-| `jackson-databind` / `jackson-core` | 2.21.5 | 2.21.7 | resource exhaustion, DoS |
-| `micrometer-core` | 1.15.12 | 1.16.7 | CRLF Injection, memory not released |
-| `jaxb-core` | 4.0.9 | Snyk: only through Boot 4 (`spring-boot-starter-data-jpa` 4.0.0, #0-158); check whether a later 4.0.x `jaxb-core` override works with Hibernate 6 | XXE (`SNYK-JAVA-ORGGLASSFISHJAXB-20883142`) |
+**Plan (owner, after `/research`).**
+- **A1 (done):** the overrides of the table, each with its Snyk ids in the root `pom.xml` comment (the #0-157 pattern).
+- **A2:** zstd-jni, snappy-java and lz4-java overrides with a Kafka test that sends compressed batches; zookeeper 3.8.8
+  or test scope out of the gate.
+- **B1, first of B:** triage `spring-webmvc`'s Critical (Arbitrary Code Injection): what it needs and whether a service
+  reaches it. Reachable: #0-158 becomes urgent and no ignore is written for it.
+- **B2:** for each issue only Boot 4 fixes, an ignore in `.snyk` with a reason from reachability (which feature it
+  needs, whether a service uses it), expiring on the date #0-158's ADR sets (its AC1: the migration plan, or a deferral
+  with a date). An ignore "tracked for the 4.x migration" without that date is what this item exists against.
+- **B3:** before 2026-12-31, re-check the 9 ignores that expire then, so the job does not turn red again for that;
+  among them the two Netty ones (`SNYK-JAVA-IONETTY-16438322`, `-16438930`), whose reason, "requires Spring Boot 4 /
+  Netty 4.2", may be false since 4.1 is patched up to 4.1.140 (security review of A1).
+- Find out why OWASP Dependency-Check is green where Snyk reports Critical issues (another database, CPE matching, a
+  suppression) before a green OWASP run is read as clean.
 
-The compression libraries kafka-clients brings (`zstd-jni` 1.5.6-4, `snappy-java` 1.1.10.5, `at.yawk.lz4:lz4-java`
-1.10.1; 11 issues) are separate artifacts, not shaded like the old `org.lz4` one: check whether an override works
-with kafka-clients 3.9.2 and whether any producer enables compression. OWASP Dependency-Check is green on the same
-`main` although Snyk reports Critical issues in `bcprov`: find out why (another database, a suppression, CPE
-matching) before a green OWASP run is read as clean.
+**Acceptance criteria.**
+AC1. Every issue with a fix in the current line is fixed by an override naming its Snyk ids (A1 done, A2 open).
+AC2. `spring-webmvc`'s Critical is triaged in this item, with what it needs and whether a service reaches it.
+AC3. Every remaining issue has an ignore with a reachability reason and an expiry no later than #0-158's decision date.
+AC4. The dependency job is green on `main`, and a new high issue turns it red.
 
 ---
 

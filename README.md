@@ -1052,7 +1052,10 @@ Open items from the audit and earlier, most important first within each area. Ea
     allows them: backlog #0-79.
 - **GitHub and CI**
   - No static analysis has ever run: Snyk Code is not enabled and CodeQL is not set up: backlog #0-68.
-  - The Snyk dependency scan is red on every run, so a new finding changes nothing: backlog #0-69.
+  - The Snyk dependency scan is red on every run, so a new finding changes nothing: backlog #0-69. What has a fix
+    within Spring Boot 3.5 is overridden in the root POM (Jackson, the PostgreSQL driver, Netty, 2026-11-13); most of
+    the rest is in lines whose open-source releases have ended (Spring 6.2, Security 6.5, spring-kafka 3.3), fixed
+    only by Spring Boot 4 (#0-158).
   - Spring Boot 3.5 is out of open-source support, and the ignores in `.snyk` that wait for 4.x wait on a migration
     no one has decided: backlog #0-158.
   - The root POM's security version overrides (`tomcat.version`, `postgresql.version`, ...) are bumped by hand, and
