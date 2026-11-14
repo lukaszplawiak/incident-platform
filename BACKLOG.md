@@ -154,6 +154,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-238](#0-238-migration-stage-2-a-build-vm-provisioned-as-code-runs-todays-devcontainer) | Migration stage 2: a build VM, provisioned as code, runs today's devcontainer | ci | High | In progress |
 | [0-239](#0-239-the-build-vms-scripts-have-no-repeatable-test) | The build VM's scripts have no repeatable test | ci | Low | Open |
 | [0-240](#0-240-the-build-vm-reaches-the-macs-loopback-services) | The build VM reaches the Mac's loopback services | security | Medium | Open |
+| [0-241](#0-241-the-agent-command-check-tests-run-on-every-pull-request-whatever-it-changes) | The agent command check tests run on every pull request, whatever it changes | ci | Low | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3449,3 +3450,43 @@ AC1. The decision and the test of each option tried are in ADR-0056 (amended) or
 AC2. If the path is closed: from the VM and from a container on its Docker, a server on the Mac's `127.0.0.1` does not
 answer, and `create.sh` refuses a VM where it does; the S3 gate still passes.
 AC3. README "Infrastructure Hardening", `docs/ai-factory.md` and #0-116 say what is closed and what is left.
+
+### 0-241. The agent command check tests run on every pull request, whatever it changes
+
+**Type:** ci · **Priority:** Low · **Status:** Open. The owner's question on PR #629 (2026-11-14): why Factory guards
+takes about 7 minutes.
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
+**Touches:** ci (.github/workflows/factory-guards.yml, owner-only), docs (docs/ai-factory.md if it names the step's
+cost)
+
+**Problem.** Of Factory guards' ~7 minutes, 265 s are one step, "Agent command check tests"
+(`.github/scripts/test-agent-commands.sh`, run 43577025809 of PR #628; the next step takes 25 s). Its 50 cases each
+run the whole `check-agent-commands.rb` on a copy of `.claude/` with one change, and one run spawns every hook for
+each of the 54 command forms of the agents' lists, plus a git repository: about 24 s each (measured on the owner's
+Mac, mostly system time, so process start-up). Run 4 at a time on the runner's cores, that is ~4.5 minutes on every
+pull request, though only a change to what the check reads can change its answer. Most pull requests change none of
+it (PR #628 and #629: a build VM, an ADR status). CI minutes are already a concern (#0-230, #0-232).
+
+**Approach.** Run the step only when one of its inputs changed, and fail closed when that cannot be told:
+- List the inputs from the code, not from memory: the check reads `.claude/agents/`, both settings files and the
+  preloaded skills' `SKILL.md`; it runs the hooks of `.claude/hooks/` with `CLAUDE_PROJECT_DIR` set to the
+  repository, and those read `.ai/rules/protected-paths.md` and name `scripts/factory/`; plus the check, its test
+  and `factory-guards.yml` itself. Anything a hook reads at run time that the list misses would let a change pass
+  untested, so the inventory is part of the item and goes in a comment beside the condition.
+- Decide the condition in the job from `git diff --name-only <base>...<head>` (Factory guards already has the PR's
+  base), not with a new action (`dorny/paths-filter` is pinned elsewhere, but a new `uses:` is a new supply-chain
+  entry, ADR-0033). A push to `main` and a run where the diff cannot be read run the step.
+- The job stays a required check: only the step is skipped, and its log says why ("no input of the agent command
+  check changed").
+Not this item: making the check itself faster (running only the hook cases with hooks, caching hook results by
+form and hook hash) — those change the boundary code that ADR-0055 stage 0 freezes and stage 6c removes, and this
+item does not.
+
+AC1. On a pull request that changes none of the listed inputs, "Agent command check tests" is skipped with a log line
+naming why, and Factory guards still passes or fails on its other steps.
+AC2. A change to any one listed input (a case per input class: an agent, a settings file, a hook, `protected-paths.md`,
+a factory script, the check, the test, the workflow) runs the step; a push to `main` always runs it; a base that
+cannot be read runs it.
+AC3. The inventory of inputs is a comment next to the condition, with how it was found.
+AC4. The saving is measured on the first pull requests after the change (Factory guards' duration before and
+after), in this item or `BACKLOG-DONE.md`.
