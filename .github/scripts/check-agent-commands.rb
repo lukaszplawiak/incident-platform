@@ -37,7 +37,7 @@
 # What it does not see: Claude Code's own permission check beyond the families above (only a session in dontAsk
 # shows it, by hand: #0-207's AC1), and whether the prose of a definition asks for a command its list leaves out
 # (a reviewer's to judge: the list must hold every form the definition names).
-# Usage: ruby check-agent-commands.rb [<repository root>] (Factory guards, after test-agent-commands.sh).
+# Usage: ruby check-agent-commands.rb [<repository root>] (Factory guards, after its tests, run-agent-command-tests.sh).
 # Runs on the Ruby of .ruby-version (ADR-0040).
 # ============================================================
 require 'fileutils'

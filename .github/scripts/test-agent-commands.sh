@@ -11,7 +11,8 @@
 # holds a shell operator, or an EXEMPT_RULES entry is stale.
 # Each case runs on a copy of .claude/ with one change.
 # Needs ruby, jq and git.
-# Run: .github/scripts/test-agent-commands.sh   (also run by .github/workflows/factory-guards.yml)
+# Run: .github/scripts/test-agent-commands.sh   (in Factory guards through run-agent-command-tests.sh, which skips it on
+# a pull request that changes none of its inputs, backlog #0-241: a new input of these cases goes on its list)
 # ============================================================
 # The cases write Markdown list lines as literal text: a backtick in single quotes is meant.
 # shellcheck disable=SC2016

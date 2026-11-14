@@ -15,7 +15,8 @@
 # runner, the owner's local run of this job and of lint-workflows (backlog #0-166), and the tests of the autopilot
 # workflow's logic against a fake agent(), on the Node of .node-version (backlog #0-163, ADR-0043); and that the
 # review rule files' labels, words and the seeded patterns' rule ids are true (backlog #0-184), and the tests of the
-# owner's scan of a seed run's transcripts (backlog #0-179).
+# owner's scan of a seed run's transcripts (backlog #0-179). The tests of the agent command check run only when a
+# pull request changes one of their inputs, or on any other event (backlog #0-241, run-agent-command-tests.sh).
 #
 # A required check of main (its ruleset, .github/repository-settings/rulesets/main.json, backlog #0-113,
 # ADR-0034). On its own it binds nobody who can change check-factory-guards.sh, since a pull request runs its
@@ -141,8 +142,14 @@ jobs:
       - name: Rule claims check tests
         run: .github/scripts/test-rule-claims.sh
 
+      # Backlog #0-241: this job's longest step (265 s of ~7 min), so a pull request that changes none of its inputs
+      # skips it; the inputs, and why it fails closed, are in run-agent-command-tests.sh. The check itself, on the
+      # repository as it is, runs on every event below ("Agent commands run in an autopilot session").
       - name: Agent command check tests
-        run: .github/scripts/test-agent-commands.sh
+        run: .github/scripts/run-agent-command-tests.sh
+
+      - name: Agent command test selector tests
+        run: .github/scripts/test-run-agent-command-tests.sh
 
       # The step runner of .github/scripts/ci-local.sh, the owner's local run of this job and of lint-workflows
       # (backlog #0-166): it must run these steps as the runner does, or a local green means nothing.
