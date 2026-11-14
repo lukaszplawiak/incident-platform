@@ -1,6 +1,6 @@
 # ADR-0056: The build VM is a Lima instance, created by a script, its contents from one provision file
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-11-14, by the owner, after PR #628 merged)
 - **Amends:** ADR-0055 ("Local first, portable from the first VM": Lima reads no raw cloud-init user-data; the
   portable part is one provision script, "S2, reworded" below)
 - **Backlog:** #0-238 (stage 2 of ADR-0055)
