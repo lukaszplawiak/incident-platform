@@ -656,13 +656,26 @@ security boundary, so every rule that matters is also enforced outside the model
   that edits `.gitignore` makes a plain `git add .ai/runs` stage it, and no form of `git switch` is refused. That is a
   heuristic; the fix is the state out of the working tree (#0-236, ADR-0055 stage 4). The shell guard matches a
   protected path after resolving `//` and `/./`, so `git log --output=.ai/runs//LOCK` is refused too.
+- **The autopilot moves to a build VM, off the owner's Mac** (backlog #0-238, ADR-0056, stage 2 of ADR-0055; until
+  #0-238's AC5, three items run there, the devcontainer on the Mac stays the way back): the Lima instance
+  `factory-build`, made from nothing by `scripts/factory-admin/build-vm/create.sh`, its contents from `provision.sh`
+  alone. Every download is pinned and checked: Ubuntu's cloud image by sha256 (Lima), Node and the devcontainer CLI by
+  sha256 and sha512 (`provision.sh`), and `verify-pins.sh` checks each pin against its publisher (Ubuntu's and Node's
+  signed sums, npm's integrity). Nothing of the Mac is mounted (no `base:` template, `mounts: []`), no SSH agent and
+  no VM port is forwarded to the Mac, nor X11, a network, the Mac's proxy variables or a copy of VM files onto the Mac: `create.sh` checks each on the
+  started VM and deletes it otherwise, when a check cannot answer, or when anything fails before the clone is done (Lima merges the Mac's `~/.lima/_config/` files into every instance). The repository there is
+  a clone of its own, with no gitignored file of the owner's (#0-202).
+  The devcontainer runs inside it unchanged, so the Docker a test gets root over (#0-116) is the VM's Docker
+  Engine, not Docker Desktop with the owner's files shared to it.
 
 **Known gaps**: a bypass actor or an admin added in the UI is seen only when the owner runs
 `repository-settings.rb check` (#0-113, ADR-0034), and so is a secret added in the UI (ADR-0035); a scan that
 cannot run on `main` (an expired token, an NVD outage) looks the same as one that found issues, and alerts no one
 (#0-155); the devcontainer's firewall binds the agents' own
 commands but not code they run, as Docker access (needed by Testcontainers) is root over the container
-(#0-116, accepted for shadow mode, required before auto-merge); secrets are scanned only after the push, when a
+(#0-116, accepted for shadow mode, required before auto-merge): in the build VM that code no longer reaches the
+owner's files, but it still holds the VM, where the bot's token and Claude Code's login live in the devcontainer's
+volumes, and the Mac's loopback services (Grafana with every tenant's logs, Ollama, anything bound to `127.0.0.1`) through Lima's user-mode network (ADR-0056, #0-240); secrets are scanned only after the push, when a
 branch is already public, and an allow comment passes whatever its line holds (#0-156, ADR-0036); no Maven Enforcer
 (#0-110); the shell guards are heuristics, the commit gates and the PR checks are the reliable lines; an owner's
 session on a Claude Code older than 2.1.295 ignores the hooks' `onFailure` without a word, so there a hook that
@@ -675,7 +688,8 @@ enforces (#0-165); `/research` and `/ship` still pre-approve `git diff *` (and `
 hook of the owner's session refuses `--output`, `--ext-diff`, `--textconv` (#0-167, frozen until ADR-0055 stage 6a);
 the autopilot's settings allow the Grep and Glob tools, which no secret deny rule (`Read(…)` only) or hook names:
 harmless while Claude Code gives them to no agent with Bash, unchecked if a version does (#0-225, frozen until
-ADR-0055 stages 2 and 4: no secret file in the task container).
+ADR-0055 stages 2 and 4: no secret file in the task container; in the build VM the clone holds none of the owner's,
+ADR-0056, and the gitignored files a task itself creates there wait for stage 4).
 Layers and their limits: docs/ai-factory.md, "What isolates what".
 
 ### Container images

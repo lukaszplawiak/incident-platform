@@ -1,0 +1,44 @@
+# ============================================================
+# The build VM as a Lima instance (backlog #0-238, ADR-0056). create.sh makes the instance from this file;
+# nothing of the VM is set anywhere else but provision.sh.
+#
+# No `base:` template on purpose: Lima's default template mounts the Mac's home directory, and this VM holds no
+# file of the owner's (#0-202). `mounts: []` states the intent; it is not a guarantee, since what Lima merges in (a
+# base, ~/.lima/_config/default.yaml, override.yaml) could still add a mount, so create.sh checks the started VM.
+# Ports the VM listens on are not forwarded to the Mac (`ignore`): nothing on the Mac needs to reach the VM but
+# `limactl shell`, which goes over Lima's own SSH forward, not this list.
+#
+# The image is pinned by its dated directory and its sha256: Lima checks the digest of what it downloads and refuses
+# a mismatch. The digest comes from Ubuntu's SHA256SUMS of that directory, whose signature verify-pins.sh checks;
+# changing the image: the two lines below, then `verify-pins.sh`, in the same PR. `@PROVISION_SH@` below is filled
+# with provision.sh's absolute path by create.sh: Lima reads that file when it creates the VM, before any `--set`.
+# ============================================================
+vmType: vz
+images:
+- location: "https://cloud-images.ubuntu.com/releases/noble/release-20261017/ubuntu-24.04-server-cloudimg-arm64.img"
+  arch: aarch64
+  digest: "sha256:50e24e1fb79e89116e939d90aa7738f7af48c442fa1bc2510131e0b39c50348e"
+# Sized for the test gate: Testcontainers' Postgres and Kafka beside a Maven build. 12 GiB is below
+# devcontainer.json's hostRequirements (16 GB) on purpose, to leave the Mac (32 GB) room; it passed
+# `verify -pl oncall-service -am` (Postgres only, ADR-0056 S3), and AC5 of #0-238 is where Kafka and several modules
+# show whether it holds.
+cpus: 6
+memory: 12GiB
+disk: 60GiB
+mounts: []
+portForwards:
+- guestPortRange: [1, 65535]
+  guestIP: "0.0.0.0"
+  ignore: true
+- guestPortRange: [1, 65535]
+  guestIP: "127.0.0.1"
+  ignore: true
+# Lima copies the Mac's proxy variables into the VM by default (a proxy URL can carry a credential): not here.
+propagateProxyEnv: false
+# The VM's Docker Engine comes from provision.sh, not from Lima's bundled containerd.
+containerd:
+  system: false
+  user: false
+provision:
+- mode: system
+  file: "@PROVISION_SH@"

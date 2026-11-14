@@ -13,8 +13,11 @@ ARG USERNAME=dev
 ARG USER_UID=1000
 ARG USER_GID=1000
 
+# unzip for ./mvnw (backlog #0-238): without it the wrapper downloads Maven's .tar.gz instead of the .zip
+# (mvnw, "select .zip or .tar.gz") and checks it against distributionSha256Sum, the .zip's hash, so every
+# fresh environment (a new VM, a new .m2 volume) failed the check; a Mac whose volume already held Maven never saw it.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git jq curl ca-certificates gnupg sudo less vim-tiny \
+        git jq curl ca-certificates gnupg sudo less vim-tiny unzip \
         iptables ipset iproute2 dnsutils \
     && rm -rf /var/lib/apt/lists/*
 

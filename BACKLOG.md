@@ -151,7 +151,9 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-232](#0-232-no-check-keeps-the-concurrency-block-of-the-pull-request-workflows) | No check keeps the concurrency block of the pull request workflows | ci | Low | Open |
 | [0-234](#0-234-a-refused-second-factory-ops-call-leaves-no-record-the-audit-reads) | A refused second factory-ops call leaves no record the audit reads | ci | Low | Blocked (superseded, ADR-0055) |
 | [0-236](#0-236-the-factorys-runtime-state-lives-in-the-working-tree-the-agents-git-commands-act-on) | The factory's runtime state lives in the working tree the agents' git commands act on | security | Medium | Blocked (superseded, ADR-0055) |
-| [0-238](#0-238-migration-stage-2-a-build-vm-provisioned-as-code-runs-todays-devcontainer) | Migration stage 2: a build VM, provisioned as code, runs today's devcontainer | ci | High | Open |
+| [0-238](#0-238-migration-stage-2-a-build-vm-provisioned-as-code-runs-todays-devcontainer) | Migration stage 2: a build VM, provisioned as code, runs today's devcontainer | ci | High | In progress |
+| [0-239](#0-239-the-build-vms-scripts-have-no-repeatable-test) | The build VM's scripts have no repeatable test | ci | Low | Open |
+| [0-240](#0-240-the-build-vm-reaches-the-macs-loopback-services) | The build VM reaches the Mac's loopback services | security | Medium | Open |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -1834,6 +1836,9 @@ AC2. Once required, a score under the threshold fails the check.
 
 **Type:** design · **Priority:** High · **Status:** Open (carried out by migration stage 2, then C, ADR-0055); accepted for shadow mode (decision 2026-10-09); must be done before phase 3 (auto-merge)
 **Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** —
+**Stage 2 (#0-238, ADR-0056):** narrowed, not closed. In the build VM the Docker that code an agent runs gets root
+over is the VM's, which mounts nothing of the Mac; that code still holds the VM (the bot's token and Claude Code's
+login in the devcontainer's volumes) and reaches the Mac's loopback services (Grafana with every tenant's logs, Ollama, anything bound to `127.0.0.1`) through Lima's user-mode network (#0-240).
 
 **Problem.** The devcontainer's firewall (`.devcontainer/init-firewall.sh`) is `iptables` in the same network
 namespace the agents run in, and it holds only while nothing there is root. Testcontainers needs Docker, so
@@ -2584,6 +2589,8 @@ AC2. A Touches line with a parenthesis inside a module's parentheses is either r
 run of the #0-199 queue).
 **Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** —
 **Touches:** root (.devcontainer/devcontainer.json, .ai/decisions/ an ADR), docs (docs/ai-factory.md)
+**Stage 2 (#0-238, ADR-0056):** settled for the build VM: the devcontainer there mounts the VM's own clone
+(`create.sh`), with no gitignored file of the owner's; it closes with #0-238's AC5, once the autopilot runs only there.
 
 **Problem.** The devcontainer bind-mounts the host's checkout (`devcontainer.json:21`, `workspaceMount …
 type=bind` → `/workspace`), so the owner's sessions on the host and the bot's in the container share one `.git`, one
@@ -2981,6 +2988,8 @@ AC2. If (C) is taken, `test-log-collection.sh` fails when Loki accepts a delete 
 **Autopilot:** human-only · **Risk:** low · **Complexity:** low · **Depends on:** —
 **Touches:** factory (.claude/settings.autopilot.json, .claude/settings.json, possibly .claude/agents/*.md `tools:`,
 .claude/hooks/test-hooks.sh), root (BACKLOG.md, README.md "Infrastructure Hardening")
+**Stage 2 (#0-238, ADR-0056):** the build VM's clone holds no secret file of the owner's (`docker/.env`, the
+`application-local.yml` files); what a task itself writes there is stage 4's (no secret file in the task container).
 
 **Problem.** `settings.autopilot.json` allows `Grep` and `Glob`, and every agent but `factory-ops` and the verifier
 lists them in `tools:`. The secret files are denied as `Read(…)` rules only (`./docker/.env`, `./docker/secrets/**`,
@@ -3307,8 +3316,9 @@ what still reaches it (`./mvnw`, #0-116).
 
 ### 0-238. Migration stage 2: a build VM, provisioned as code, runs today's devcontainer
 
-**Type:** ci · **Priority:** High · **Status:** Open. Stage 2 of ADR-0055 (owner, 2026-11-13); its first step is a spike
-of UTM, the owner's VM tool.
+**Type:** ci · **Priority:** High · **Status:** In progress. Stage 2 of ADR-0055 (owner, 2026-11-13); its first step is a
+spike of UTM, the owner's VM tool. Spike done 2026-11-13 (UTM failed S1, Lima passed S1–S3, ADR-0056); AC1–AC4 and
+AC6 in the PR of `feat/0-238-build-vm`; AC5 after it is merged and the owner has logged in inside the VM.
 **Autopilot:** human-only · **Risk:** high · **Complexity:** high · **Depends on:** #0-237
 **Touches:** factory (the VM's provisioning and scripts, proposed under `scripts/factory-admin/build-vm/`, an owner-only
 path that moves to the `factory` repository in stage 4; `.devcontainer/` only if the VM needs it), root
@@ -3332,13 +3342,14 @@ that holds only what the factory needs, created from code that a cloud VM can la
    holding only Ubuntu's cloud image, with the seed attached by the script. The criteria, fixed now:
    - S1. The VM is created, and recreated from nothing, by one script in the repository, with no step in the GUI.
    - S2. Its contents come from one cloud-init `user-data` file (NoCloud seed, Ubuntu cloud image) that a cloud VM
-     could read unchanged: no UTM-specific step inside the guest.
+     could read unchanged: no UTM-specific step inside the guest. (Reworded by ADR-0056: one provision script, which
+     Lima runs as a provision and a cloud VM takes as its user-data; Lima reads no raw user-data.)
    - S3. In it, today's devcontainer starts (`devcontainer up`), its firewall comes up, and a test gate with
      Testcontainers passes (`./mvnw verify` of one module with a repository test).
    If S1 fails, the tool is Lima (a YAML file, `limactl create/start/delete`, the same cloud image and
    Virtualization.framework), checked against S1–S3 the same way. The ADR records the tool, the criteria and what the
    spike showed.
-2. **The VM**: Ubuntu cloud image; `user-data` installs Docker Engine (in the VM, not Docker Desktop), git, the
+2. **The VM**: Ubuntu cloud image; `user-data` (a provision script, ADR-0056) installs Docker Engine (in the VM, not Docker Desktop), git, the
    devcontainer CLI and its runtime; the repository is cloned from `origin` inside the VM, a tree of its own with no
    gitignored file of the owner's (#0-202: the owner's checkout is no longer mounted); the bot's `gh` login and
    Claude Code's login are entered once into the VM's volumes, as today's devcontainer documents. Resources sized
@@ -3358,7 +3369,7 @@ the container (beside #0-116's Docker API proxy), and in stage 2 Docker runs on 
 AC1. The spike's result is in a new ADR: the VM tool, S1–S3 each passed or failed with what was run, and the reason
 for the choice.
 AC2. One script in the repository creates the build VM from nothing and another deletes it; the VM's contents come only
-from its `user-data` file and that script (S1, S2), and the steps the owner does by hand (logins, the bot's token) are
+from its `user-data` file (a provision script, ADR-0056) and that script (S1, S2), and the steps the owner does by hand (logins, the bot's token) are
 listed in `docs/ai-factory.md`.
 AC3. The repository inside the VM is a clone of its own: no mount of the owner's checkout, no gitignored file of the
 owner's (#0-202's concern, checked in the VM).
@@ -3367,3 +3378,74 @@ AC5. Three autopilot items run on the VM with no environment problem (ADR-0055's
 AC6. README "Infrastructure Hardening" and `docs/ai-factory.md` say where the autopilot runs and what isolates it;
 #0-202 and #0-225 point at what this stage settled for them, and #0-116 at what it did not.
 
+**Found by the spike.** The devcontainer image had no `unzip`, so in any fresh environment `./mvnw` downloaded
+Maven's `.tar.gz` and checked it against the `.zip`'s `distributionSha256Sum`, and failed; fixed in
+`.devcontainer/Dockerfile` with this item. S2 is reworded in ADR-0056: Lima takes no raw user-data, so the VM's
+contents come from one script (`provision.sh`) that a cloud VM takes unchanged as its user-data.
+
+### 0-239. The build VM's scripts have no repeatable test
+
+**Type:** ci · **Priority:** Low · **Status:** Open. From review round 1 of #0-238 (general, finding 2; owner, 2026-11-14).
+**Autopilot:** human-only · **Risk:** medium · **Complexity:** medium · **Depends on:** #0-238
+**Touches:** factory (scripts/factory-admin/build-vm/, .github/scripts/ a new test and its CI step, both owner-only
+paths), docs (docs/ai-factory.md "Build VM")
+
+**Problem.** `scripts/factory-admin/build-vm/` (#0-238, ADR-0056) holds the behaviour the build VM's isolation rests
+on, and nothing tests it but the runs recorded in ADR-0056: `create.sh` refusing an existing instance and a Node pin
+that differs from `.node-version`, filling `@PROVISION_SH@`, and deleting the VM when Lima reports a mount, agent
+forwarding or a port forward that is not ignored, the guest shows a host file system or an agent socket, or a check
+cannot answer; `delete.sh` treating a missing instance as success; `provision.sh` changing nothing on its second
+run; `verify-pins.sh` refusing a wrong digest, a wrong signer, a missing line or a declared dependency. An edit that
+breaks one of them is seen only when the owner next creates a VM, or never, for the isolation checks, which pass
+silently while Lima adds nothing. And `provision.sh`'s `NODE_VERSION` is a copy of `.node-version` that only
+`create.sh` compares: Renovate can bump `.node-version` with CI green, and the next `create.sh` refuses (review round 2
+of #0-238, architecture).
+
+**Approach.** The repository's pattern for a script that calls tools it cannot run in CI (`test-seed-scan.sh`,
+`test-owner-login.sh`): a test under `.github/scripts/` that puts fake `limactl`, `docker` and `curl` first on the
+`PATH`, each answering from a fixture and recording its calls, and runs the real script against them, one case per
+behaviour above, each with its negative. `provision.sh` is tested for idempotence in an `ubuntu:24.04` container
+with its downloads served from fixtures. Run in CI's Factory guards or Lint Workflows job, wherever the other
+`factory-admin` tests run. Stage 4 moves these scripts to the `factory` repository: if this item is not done by then,
+it moves with them.
+
+AC1. A test runs `create.sh` and `delete.sh` against a fake `limactl` and covers each behaviour named above, with
+the negative of each (a mount reported leads to `limactl delete` and exit 1).
+AC2. A test runs `verify-pins.sh`'s checks on fixtures: a good set passes, a changed digest, a sum missing from a
+signed file and a signature by another key each fail.
+AC3. `provision.sh` run twice in a container changes nothing the second time (no download, no install).
+AC4. The tests run in CI on every PR that touches `scripts/factory-admin/build-vm/`.
+AC5. CI fails a PR on which `provision.sh`'s `NODE_VERSION` and `.node-version` differ (a Renovate bump of
+`.node-version` then shows the pin to change in the same PR).
+
+### 0-240. The build VM reaches the Mac's loopback services
+
+**Type:** security · **Priority:** Medium · **Status:** Open. From review round 3 of #0-238 (security, finding 1),
+checked by hand the same day (owner, 2026-11-14).
+**Autopilot:** human-only · **Risk:** high · **Complexity:** medium · **Depends on:** #0-238
+**Touches:** factory (scripts/factory-admin/build-vm/, an owner-only path), root (.ai/decisions/ ADR-0056 amended or a
+new ADR), docs (docs/ai-factory.md "Build VM" and "What isolates what", README.md "Infrastructure Hardening")
+
+**Problem.** Lima's user-mode network forwards `host.lima.internal` (192.168.5.2) to the Mac's loopback. On
+2026-11-14 a server bound only to the Mac's `127.0.0.1` answered from the build VM and from a container started on
+the VM's Docker. Code an agent runs gets root over that Docker (#0-116), so it reaches every service the owner keeps
+on loopback to keep it private: Grafana with every tenant's logs (behind its password), Ollama, a service started by
+`spring-boot:run`, anything else. The devcontainer's firewall denies the path from inside the container, but not from
+a container the code starts beside it. Not a regression (Docker Desktop's `host.docker.internal` reaches the Mac's
+loopback the same way), but stage 2 is meant to take the Mac out of the reach of that code, and this path keeps it in.
+
+**Approach.** Decide between, by testing each on `factory-build` (`create.sh`, then the isolation checks and the S3
+gate still pass):
+1. A rule in the VM, from `provision.sh`, that drops traffic addressed to 192.168.5.2 except DNS (port 53): that
+   address is also the VM's gateway and resolver (checked 2026-11-14), so the rule matches the destination address,
+   not the route. Root in the VM can remove it, so it binds only code without root, and is a layer, not a boundary.
+2. A network for the VM in which the Mac's loopback is not forwarded (`vzNAT`, if Lima can then do without its
+   user-mode network for its own SSH and guest agent).
+3. Keep it open until stage C, where the VM runs off the Mac and a cloud firewall sits outside it, and say so where
+   the gap is listed.
+Whatever is chosen, `create.sh` checks it on the started VM, as it does the mounts.
+
+AC1. The decision and the test of each option tried are in ADR-0056 (amended) or a new ADR.
+AC2. If the path is closed: from the VM and from a container on its Docker, a server on the Mac's `127.0.0.1` does not
+answer, and `create.sh` refuses a VM where it does; the S3 gate still passes.
+AC3. README "Infrastructure Hardening", `docs/ai-factory.md` and #0-116 say what is closed and what is left.
