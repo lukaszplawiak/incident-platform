@@ -1,7 +1,8 @@
 # ADR-0055: The factory moves to three zones, a GitHub queue and a ruleset merge, one stage at a time
 
 - **Status:** Accepted (2026-11-13, by the owner, with the amendment of #0-237: the factory as a product of its own,
-  stages T and N)
+  stages T and N); amended by ADR-0056 (2026-11-14: the portable part of the VM is one provision script, not raw
+  cloud-init user-data)
 - **Backlog:** stage 0 of this migration (the freeze below); each later stage gets its own item when its turn comes
   (stage 1: #0-237)
 - **Date:** 2026-11-13
@@ -73,7 +74,8 @@ two copies drift (the three copies of the protected paths needed a check of thei
   (`backend/` and `frontend/`): a change to the API is one pull request and one review, not an order kept between two
   repositories.
 - **Local first, portable from the first VM**: the VM is provisioned as code (cloud-init, which Lima and a cloud provider
-  both read); the task image is built in CI and pulled from GHCR; dispatchers read their configuration from the
+  both read; amended by ADR-0056: Lima reads no raw user-data, so the portable part is one provision script, which Lima
+  runs as a provision and a cloud VM takes as its user-data); the task image is built in CI and pulled from GHCR; dispatchers read their configuration from the
   environment only and keep no state of their own (it is in GitHub); logs and transcripts leave the machine. The move to
   a cloud VM, where the provider's firewall sits outside the VM, is its own stage.
 
