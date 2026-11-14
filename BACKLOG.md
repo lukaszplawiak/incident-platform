@@ -154,7 +154,7 @@ Code, Javadoc, config comments and commits reference items as `backlog #N`.
 | [0-238](#0-238-migration-stage-2-a-build-vm-provisioned-as-code-runs-todays-devcontainer) | Migration stage 2: a build VM, provisioned as code, runs today's devcontainer | ci | High | In progress |
 | [0-239](#0-239-the-build-vms-scripts-have-no-repeatable-test) | The build VM's scripts have no repeatable test | ci | Low | Open |
 | [0-240](#0-240-the-build-vm-reaches-the-macs-loopback-services) | The build VM reaches the Mac's loopback services | security | Medium | Open |
-| [0-241](#0-241-the-agent-command-check-tests-run-on-every-pull-request-whatever-it-changes) | The agent command check tests run on every pull request, whatever it changes | ci | Low | Open |
+| [0-241](#0-241-the-agent-command-check-tests-run-on-every-pull-request-whatever-it-changes) | The agent command check tests run on every pull request, whatever it changes | ci | Low | In progress |
 | [0-133](#0-133-incidentresolvedevent-carries-no-openedat) | `IncidentResolvedEvent` carries no `openedAt` | tech-debt | Low | Open |
 | [0-134](#0-134-diff-cover-is-installed-by-version-without-hashes) | `diff-cover` is installed by version, without hashes | ci | Low | Open |
 | [0-135](#0-135-kubectl-in-ci-is-downloaded-unverified) | kubectl in CI is downloaded unverified | ci | Low | Open |
@@ -3453,11 +3453,14 @@ AC3. README "Infrastructure Hardening", `docs/ai-factory.md` and #0-116 say what
 
 ### 0-241. The agent command check tests run on every pull request, whatever it changes
 
-**Type:** ci · **Priority:** Low · **Status:** Open. The owner's question on PR #629 (2026-11-14): why Factory guards
-takes about 7 minutes.
+**Type:** ci · **Priority:** Low · **Status:** In progress. The owner's question on PR #629 (2026-11-14): why Factory guards
+takes about 7 minutes. AC1–AC3 in the PR of `ci/0-241-agent-command-tests-on-change`: `run-agent-command-tests.sh`
+decides, tested by `test-run-agent-command-tests.sh` (a case per decision path, each input class among them);
+ADR-0050 records the selector; AC4 is measured on the pull requests after it.
 **Autopilot:** human-only · **Risk:** medium · **Complexity:** low · **Depends on:** —
-**Touches:** ci (.github/workflows/factory-guards.yml, owner-only), docs (docs/ai-factory.md if it names the step's
-cost)
+**Touches:** ci (.github/workflows/factory-guards.yml, .github/scripts/run-agent-command-tests.sh and its test,
+the header of test-agent-commands.sh: owner-only), root (.ai/decisions/ ADR-0050 amended), docs (docs/ai-factory.md if
+it names the step's cost)
 
 **Problem.** Of Factory guards' ~7 minutes, 265 s are one step, "Agent command check tests"
 (`.github/scripts/test-agent-commands.sh`, run 43577025809 of PR #628; the next step takes 25 s). Its 50 cases each
@@ -3467,6 +3470,15 @@ Mac, mostly system time, so process start-up). Run 4 at a time on the runner's c
 pull request, though only a change to what the check reads can change its answer. Most pull requests change none of
 it (PR #628 and #629: a build VM, an ADR status). CI minutes are already a concern (#0-230, #0-232).
 
+**Found while doing it.** The tests read less than this item first said: each case runs the check on a copy of
+`.claude/` only, with `CLAUDE_PROJECT_DIR` set to that copy, so `.ai/rules/protected-paths.md` and `scripts/factory/`
+are not read by them today; they stay in the list so that a hook which starts reading them is covered. And the
+condition cannot be an `if:` or a `${{ }}` in the step: `ci-local.sh` skips such a step, and the owner's local run
+would lose the tests; the script reads GitHub's default environment (`GITHUB_EVENT_NAME`, `GITHUB_EVENT_PATH`)
+instead, absent locally, so a local run always runs them. The diff is `--no-renames`: a file moved out of `.claude/`
+shows only its new path otherwise; and `-z`: git quotes a name holding a byte outside ASCII, which then matches no
+input (review round 1).
+
 **Approach.** Run the step only when one of its inputs changed, and fail closed when that cannot be told:
 - List the inputs from the code, not from memory: the check reads `.claude/agents/`, both settings files and the
   preloaded skills' `SKILL.md`; it runs the hooks of `.claude/hooks/` with `CLAUDE_PROJECT_DIR` set to the
@@ -3474,8 +3486,9 @@ it (PR #628 and #629: a build VM, an ADR status). CI minutes are already a conce
   and `factory-guards.yml` itself. Anything a hook reads at run time that the list misses would let a change pass
   untested, so the inventory is part of the item and goes in a comment beside the condition.
 - Decide the condition in the job from `git diff --name-only <base>...<head>` (Factory guards already has the PR's
-  base), not with a new action (`dorny/paths-filter` is pinned elsewhere, but a new `uses:` is a new supply-chain
-  entry, ADR-0033). A push to `main` and a run where the diff cannot be read run the step.
+  base), not with `dorny/paths-filter` (pinned for ci.yml, ADR-0020): its answer reaches a step only through an `if:`
+  or a `${{ }}`, which `ci-local.sh` skips (corrected in review round 2: this said a new action to pin, ADR-0033,
+  which was wrong on both counts). A push to `main` and a run where the diff cannot be read run the step.
 - The job stays a required check: only the step is skipped, and its log says why ("no input of the agent command
   check changed").
 Not this item: making the check itself faster (running only the hook cases with hooks, caching hook results by

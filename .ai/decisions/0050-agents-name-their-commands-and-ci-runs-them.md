@@ -59,3 +59,15 @@ The precedent for a check that keeps the agents' definitions and the settings co
   for a form its list leaves out (a reviewer's to judge).
 - A reviewer recognises a violation as a command form in a definition's text with no line in its list, an `EXEMPT`
   entry without a reason, or a refused family in a list.
+- **Amended (backlog #0-241, 2026-11-14): the check's tests run only when their inputs change.** The check itself
+  runs on every Factory guards event; its tests (`test-agent-commands.sh`, 265 of the job's ~7 minutes) run through
+  `run-agent-command-tests.sh`, which skips them on a pull request whose diff touches none of their inputs, and runs
+  them on a push, outside GitHub Actions and whenever it cannot read the event or the diff. The decision is in that
+  script, not an `if:` or a `${{ }}` in the step: `ci-local.sh` skips such a step, and the owner's local run would
+  lose the tests. That is also why not `dorny/paths-filter` (already pinned for ci.yml's `detect-changes`, ADR-0020):
+  its answer reaches a step only through such an `if:` or `${{ }}`, while `git diff` of the event's two commits needs
+  neither. Its input list (`INPUTS`) is kept by hand: a new input of the check or its tests goes on it in the
+  same change, which a reviewer checks. Accepted risk: nothing verifies the list is complete; a change that adds an
+  input almost always edits the check or its tests, which are inputs themselves, and the push to `main` runs the
+  tests whatever changed, so a miss shows within one merge. If a second Factory guards step needs the same, the
+  selector becomes one shared helper, not a copy.
